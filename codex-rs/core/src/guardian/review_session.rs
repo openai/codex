@@ -721,6 +721,13 @@ async fn run_review_on_session(
         .await
         .unwrap_or_default();
     let guardian_permission_profile = PermissionProfile::read_only();
+    let parent_turn_environments = params.parent_turn.environments.to_selections();
+    let parent_turn_legacy_fallback_cwd = params
+        .parent_turn
+        .environments
+        .primary()
+        .map(|environment| environment.cwd.clone())
+        .unwrap_or_else(|| params.parent_turn.config.cwd.clone());
 
     let submit_result = run_before_review_deadline(
         deadline,
@@ -732,8 +739,8 @@ async fn run_review_on_session(
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
-                    params.parent_turn.cwd.clone(),
-                    params.parent_turn.environments.to_selections(),
+                    parent_turn_legacy_fallback_cwd,
+                    parent_turn_environments,
                 )),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: None,
