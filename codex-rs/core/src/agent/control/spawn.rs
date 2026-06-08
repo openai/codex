@@ -207,6 +207,9 @@ impl AgentControl {
                 &config,
             )
             .await;
+        if let Some(session_source) = session_source.as_ref() {
+            self.ensure_execution_capacity(multi_agent_version, session_source)?;
+        }
         let agent_max_threads = config.effective_agent_max_threads(multi_agent_version);
         let spawn_uses_v2_residency = multi_agent_version == MultiAgentVersion::V2
             && session_source
@@ -349,7 +352,7 @@ impl AgentControl {
         )
         .await;
 
-        self.send_input(new_thread.thread_id, initial_operation)
+        self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_operation)
             .await?;
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata

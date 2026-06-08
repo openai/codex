@@ -948,7 +948,12 @@ impl Session {
             } else {
                 SessionId::from(thread_id)
             };
-            let agent_control = agent_control.with_session_id(session_id);
+            let agent_control = agent_control.with_session_id(
+                session_id,
+                config
+                    .effective_agent_max_threads(MultiAgentVersion::V2)
+                    .unwrap_or(usize::MAX),
+            );
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             let thread_extension_data =
