@@ -12,6 +12,12 @@ struct LegacyFilePathField {
     path: PathUri,
 }
 
+fn file_view(uri: &PathUri) -> FileUriView<'_> {
+    match uri.view() {
+        PathUriView::File(view) => view,
+    }
+}
+
 #[test]
 fn file_uri_round_trips_an_absolute_path() {
     let path = AbsolutePathBuf::current_dir()
@@ -23,9 +29,7 @@ fn file_uri_round_trips_an_absolute_path() {
     let uri_string = uri.to_string();
     assert!(uri_string.starts_with("file:"));
     assert!(uri_string.ends_with("/a%20path/file.rs"));
-    let PathUriView::File(view) = uri.view() else {
-        panic!("expected file view");
-    };
+    let view = file_view(&uri);
     assert_eq!(
         PathUri::parse(&uri_string).expect("serialized URI should parse"),
         uri
@@ -41,9 +45,7 @@ fn file_uri_parses_a_windows_path_on_any_host() {
     let uri = PathUri::parse("file:///C:/Users/Alice%20Smith/src/main.rs")
         .expect("Windows file URI should parse on every host");
 
-    let PathUriView::File(view) = uri.view() else {
-        panic!("expected file view");
-    };
+    let view = file_view(&uri);
     assert_eq!(view.path().as_str(), "/C:/Users/Alice Smith/src/main.rs");
     assert_eq!(
         uri.to_string(),
@@ -60,9 +62,7 @@ fn file_uri_parses_a_posix_path_on_any_host() {
     let uri = PathUri::parse("file:///home/alice/src/main.rs")
         .expect("POSIX file URI should parse on every host");
 
-    let PathUriView::File(view) = uri.view() else {
-        panic!("expected file view");
-    };
+    let view = file_view(&uri);
     assert_eq!(view.path().as_str(), "/home/alice/src/main.rs");
     assert_eq!(uri.to_string(), "file:///home/alice/src/main.rs");
 }
@@ -72,9 +72,7 @@ fn file_uri_preserves_paths_that_resemble_windows_paths() {
     for (input, expected_path) in [("file:///C:/Project", "/C:/Project"), ("file:///C:", "/C:")] {
         let uri = PathUri::parse(input).expect("file URI should parse");
         let reparsed = PathUri::parse(&uri.to_string()).expect("file URI should reparse");
-        let PathUriView::File(view) = uri.view() else {
-            panic!("expected file view");
-        };
+        let view = file_view(&uri);
 
         assert_eq!(view.path().as_str(), expected_path);
         assert_eq!(reparsed, uri);
@@ -88,9 +86,7 @@ fn file_uri_accepts_non_utf8_posix_paths() {
     let path = AbsolutePathBuf::from_absolute_path_checked(path).expect("absolute POSIX path");
 
     let uri = PathUri::from_file_path(&path).expect("non-UTF-8 path should convert to a file URI");
-    let PathUriView::File(view) = uri.view() else {
-        panic!("expected file view");
-    };
+    let view = file_view(&uri);
     assert_eq!(
         view.to_native_path()
             .expect("URI should convert to native path"),
@@ -107,9 +103,7 @@ fn file_uri_round_trips_literal_percent_characters() {
     let uri = PathUri::parse("file:///tmp/100%25/file").expect("file URI should parse");
 
     assert_eq!(uri.to_string(), "file:///tmp/100%25/file");
-    let PathUriView::File(view) = uri.view() else {
-        panic!("expected file view");
-    };
+    let view = file_view(&uri);
     assert_eq!(view.path().as_str(), "/tmp/100%/file");
 }
 
@@ -119,9 +113,7 @@ fn file_uri_round_trips_windows_unc_paths() {
     let path = AbsolutePathBuf::from_absolute_path_checked(r"\\server\share\src\main.rs")
         .expect("absolute UNC path");
     let uri = PathUri::from_file_path(&path).expect("UNC path should convert to a file URI");
-    let PathUriView::File(view) = uri.view() else {
-        panic!("expected file view");
-    };
+    let view = file_view(&uri);
 
     assert_eq!(view.path().as_str(), "//server/share/src/main.rs");
 }
@@ -129,9 +121,7 @@ fn file_uri_round_trips_windows_unc_paths() {
 #[test]
 fn file_uri_path_view_retains_unc_authority() {
     let uri = PathUri::parse("file://server/share/src/main.rs").expect("valid file URI");
-    let PathUriView::File(view) = uri.view() else {
-        panic!("expected file view");
-    };
+    let view = file_view(&uri);
 
     assert_eq!(view.path().as_str(), "//server/share/src/main.rs");
     assert_eq!(uri.to_string(), "file://server/share/src/main.rs");
@@ -151,72 +141,9 @@ fn file_uri_spelling_aliases_have_one_canonical_form() {
 }
 
 #[test]
-fn environment_uri_round_trips_a_unix_path() {
-    let environment_id = "dev_box-1";
-    let path = EnvironmentPath::posix("/workspace/a path/file.rs").expect("valid POSIX path");
-
-    let uri = PathUri::from_environment_path(environment_id, &path)
-        .expect("path should convert to an environment URI");
-
-    assert_eq!(
-        uri.to_string(),
-        "codex-env:///dev_box-1/workspace/a%20path/file.rs"
-    );
-    assert_eq!(
-        uri.view(),
-        PathUriView::Environment(EnvironmentUriView {
-            environment_id,
-            path: &path,
-        })
-    );
-}
-
-#[test]
-fn environment_uri_round_trips_a_windows_path_on_any_host() {
-    let environment_id = "windows-dev";
-    let path = EnvironmentPath::windows(r"C:\Users\Alice Smith\src\..\main.rs")
-        .expect("valid Windows path");
-
-    let uri = PathUri::from_environment_path(environment_id, &path)
-        .expect("path should convert to an environment URI");
-    let reparsed = PathUri::parse(&uri.to_string()).expect("URI should parse");
-
-    assert_eq!(
-        uri.to_string(),
-        "codex-env:///windows-dev/c:/Users/Alice%20Smith/main.rs"
-    );
-    assert_eq!(path.as_str(), "/c:/Users/Alice Smith/main.rs");
-    assert_eq!(reparsed, uri);
-    assert_eq!(
-        uri.view(),
-        PathUriView::Environment(EnvironmentUriView {
-            environment_id,
-            path: &path,
-        })
-    );
-}
-
-#[test]
-fn environment_uri_round_trips_a_windows_unc_path_on_any_host() {
-    let environment_id = "windows-dev";
-    let path =
-        EnvironmentPath::windows(r"\\server\share\src\main.rs").expect("valid Windows UNC path");
-
-    let uri = PathUri::from_environment_path(environment_id, &path)
-        .expect("path should convert to an environment URI");
-    let reparsed = PathUri::parse(&uri.to_string()).expect("URI should parse");
-
-    assert_eq!(
-        uri.to_string(),
-        "codex-env:///windows-dev//server/share/src/main.rs"
-    );
-    assert_eq!(path.as_str(), "//server/share/src/main.rs");
-    assert_eq!(reparsed, uri);
-}
-
-#[test]
 fn unsupported_schemes_are_rejected_at_construction() {
     for (input, expected_scheme) in [
+        ("codex-env:///devbox/workspace", "codex-env"),
         ("artifact://store/object-1", "artifact"),
         ("http://example.com/file", "http"),
         ("https://example.com/file", "https"),
@@ -238,14 +165,14 @@ fn unsupported_schemes_are_rejected_at_construction() {
 
 #[test]
 fn path_uri_serializes_as_a_string() {
-    let uri: PathUri = "codex-env:///devbox/workspace/src/lib.rs"
+    let uri: PathUri = "file:///workspace/src/lib.rs"
         .parse()
-        .expect("valid environment URI");
+        .expect("valid file URI");
 
     let json = serde_json::to_string(&uri).expect("URI should serialize");
     let deserialized: PathUri = serde_json::from_str(&json).expect("URI should deserialize");
 
-    assert_eq!(json, r#""codex-env:///devbox/workspace/src/lib.rs""#);
+    assert_eq!(json, r#""file:///workspace/src/lib.rs""#);
     assert_eq!(deserialized, uri);
 }
 
@@ -289,30 +216,6 @@ fn legacy_file_path_serde_preserves_the_existing_wire_format() {
 }
 
 #[test]
-fn parsed_uri_serializes_from_typed_components() {
-    let uri = PathUri::parse("codex-env:///devbox/C:/workspace/./src/../lib.rs")
-        .expect("valid environment URI");
-
-    assert_eq!(uri.to_string(), "codex-env:///devbox/c:/workspace/lib.rs");
-}
-
-#[test]
-fn environment_uri_dot_segments_cannot_change_the_environment_id() {
-    for input in [
-        "codex-env:///devbox/../prod/secret",
-        "codex-env:///devbox/%2e%2e/prod/secret",
-    ] {
-        let uri = PathUri::parse(input).expect("environment URI should parse");
-        let PathUriView::Environment(view) = uri.view() else {
-            panic!("expected environment view");
-        };
-
-        assert_eq!(view.environment_id(), "devbox", "parsing {input}");
-        assert_eq!(view.path().as_str(), "/prod/secret", "parsing {input}");
-    }
-}
-
-#[test]
 fn unsupported_scheme_is_rejected_during_deserialization() {
     let error = serde_json::from_str::<PathUri>(r#""artifact://store/object-1""#)
         .expect_err("unsupported scheme should fail deserialization");
@@ -325,44 +228,11 @@ fn unsupported_scheme_is_rejected_during_deserialization() {
 }
 
 #[test]
-fn environment_uri_rejects_authority_syntax() {
-    let error = PathUri::parse("codex-env://devbox/workspace/file.rs")
-        .expect_err("environment id must be a path segment");
-
-    assert!(matches!(
-        error,
-        PathUriParseError::EnvironmentUriMustNotHaveAuthority
-    ));
-}
-
-#[test]
-fn environment_uri_rejects_missing_path() {
-    let error =
-        PathUri::parse("codex-env:///devbox").expect_err("environment URI should include a path");
-
-    assert!(matches!(
-        error,
-        PathUriParseError::InvalidEnvironmentUriPath
-    ));
-}
-
-#[test]
-fn environment_uri_accepts_the_root_path() {
-    let uri = PathUri::parse("codex-env:///devbox/").expect("root path should be valid");
-
-    let PathUriView::Environment(view) = uri.view() else {
-        panic!("expected environment view");
-    };
-    assert_eq!(view.environment_id(), "devbox");
-    assert_eq!(view.path().as_str(), "/");
-}
-
-#[test]
 fn known_path_uris_reject_queries_and_fragments() {
     let query_error =
         PathUri::parse("file:///tmp/file.rs?version=1").expect_err("query should be rejected");
-    let fragment_error = PathUri::parse("codex-env:///devbox/tmp/file.rs#L1")
-        .expect_err("fragment should be rejected");
+    let fragment_error =
+        PathUri::parse("file:///tmp/file.rs#L1").expect_err("fragment should be rejected");
 
     assert!(matches!(query_error, PathUriParseError::QueryNotAllowed));
     assert!(matches!(
@@ -373,111 +243,34 @@ fn known_path_uris_reject_queries_and_fragments() {
 
 #[test]
 fn path_uris_reject_percent_encoded_path_separators() {
-    for input in [
-        "file:///tmp/a%2Fb",
-        "file:///tmp/a%2fb",
-        "codex-env:///devbox/tmp/a%2Fb",
-        "codex-env:///devbox/tmp/a%2fb",
-    ] {
+    for input in ["file:///tmp/a%2Fb", "file:///tmp/a%2fb"] {
         assert!(PathUri::parse(input).is_err(), "accepting {input}");
     }
 }
 
 #[test]
 fn path_uris_reject_non_utf8_percent_encoding() {
-    for input in [
-        "file:///tmp/%00",
-        "file:///tmp/%ZZ",
-        "codex-env:///devbox/tmp/%F0%28%8C%28",
-        "codex-env:///devbox/tmp/%00",
-        "codex-env:///devbox/tmp/%",
-    ] {
+    for input in ["file:///tmp/%00", "file:///tmp/%ZZ", "file:///tmp/%"] {
         assert!(PathUri::parse(input).is_err(), "accepting {input}");
     }
 }
 
 #[test]
 fn encoded_filename_characters_round_trip_without_becoming_uri_metadata() {
-    let uri = PathUri::parse("codex-env:///devbox/tmp/a%3Fb%23c%25d")
+    let uri = PathUri::parse("file:///tmp/a%3Fb%23c%25d")
         .expect("encoded filename characters should parse");
 
-    assert_eq!(uri.to_string(), "codex-env:///devbox/tmp/a%3Fb%23c%25d");
-    let PathUriView::Environment(view) = uri.view() else {
-        panic!("expected environment view");
-    };
+    assert_eq!(uri.to_string(), "file:///tmp/a%3Fb%23c%25d");
+    let view = file_view(&uri);
     assert_eq!(view.path().as_str(), "/tmp/a?b#c%d");
 }
 
 #[test]
 fn double_encoded_separator_remains_filename_text() {
-    let uri = PathUri::parse("codex-env:///devbox/tmp/a%252Fb")
+    let uri = PathUri::parse("file:///tmp/a%252Fb")
         .expect("double-encoded separator should parse as filename text");
 
-    assert_eq!(uri.to_string(), "codex-env:///devbox/tmp/a%252Fb");
-    let PathUriView::Environment(view) = uri.view() else {
-        panic!("expected environment view");
-    };
+    assert_eq!(uri.to_string(), "file:///tmp/a%252Fb");
+    let view = file_view(&uri);
     assert_eq!(view.path().as_str(), "/tmp/a%2Fb");
-}
-
-#[test]
-fn environment_uri_round_trips_opaque_environment_ids() {
-    let path = EnvironmentPath::posix("/workspace").expect("valid path");
-    for id in [
-        "dev_box-1",
-        "local",
-        "none",
-        "dev.box",
-        "日本語/environment",
-        "a?b#c%d",
-    ] {
-        let uri = PathUri::from_environment_path(id, &path)
-            .expect("opaque environment id should serialize");
-        let reparsed = PathUri::parse(&uri.to_string()).expect("environment URI should reparse");
-        let PathUriView::Environment(view) = reparsed.view() else {
-            panic!("expected environment view");
-        };
-
-        assert_eq!(view.environment_id(), id, "round-tripping {id}");
-    }
-}
-
-#[test]
-fn environment_uri_enforces_the_environment_id_boundary() {
-    let path = EnvironmentPath::posix("/workspace").expect("valid path");
-    let max_length_id = "x".repeat(MAX_ENVIRONMENT_ID_LEN);
-    let too_long_id = "x".repeat(MAX_ENVIRONMENT_ID_LEN + 1);
-
-    assert!(
-        PathUri::from_environment_path(&max_length_id, &path).is_ok(),
-        "the exec-server maximum should remain accepted"
-    );
-    let error = PathUri::from_environment_path(&too_long_id, &path)
-        .expect_err("an overlong environment id should be rejected");
-    assert!(matches!(
-        error,
-        PathUriParseError::EnvironmentIdTooLong {
-            length,
-            max_length,
-        } if length == MAX_ENVIRONMENT_ID_LEN + 1
-            && max_length == MAX_ENVIRONMENT_ID_LEN
-    ));
-    assert!(matches!(
-        PathUri::parse(&format!("codex-env:///{too_long_id}/workspace")),
-        Err(PathUriParseError::EnvironmentIdTooLong {
-            length,
-            max_length,
-        }) if length == MAX_ENVIRONMENT_ID_LEN + 1
-            && max_length == MAX_ENVIRONMENT_ID_LEN
-    ));
-    assert!(matches!(
-        PathUri::from_environment_path("", &path),
-        Err(PathUriParseError::EmptyEnvironmentId)
-    ));
-    for id in [".", ".."] {
-        assert!(matches!(
-            PathUri::from_environment_path(id, &path),
-            Err(PathUriParseError::EnvironmentIdDotSegment(value)) if value == id
-        ));
-    }
 }
