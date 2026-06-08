@@ -68,16 +68,15 @@ fn write_global_file(
     AbsolutePathBuf::try_from(path).map_err(Into::into)
 }
 
-fn test_codex_with_home(home: Arc<TempDir>) -> TestCodexBuilder {
-    let codex_home = AbsolutePathBuf::try_from(home.path().to_path_buf())
-        .expect("temporary Codex home should be absolute");
+fn test_codex_with_home(home: Arc<TempDir>) -> Result<TestCodexBuilder> {
+    let codex_home = AbsolutePathBuf::try_from(home.path().to_path_buf())?;
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-    extensions.global_instructions_contributor(Arc::new(
-        CodexHomeInstructionsContributor::new(codex_home),
-    ));
-    test_codex()
+    extensions.global_instructions_contributor(Arc::new(CodexHomeInstructionsContributor::new(
+        codex_home,
+    )));
+    Ok(test_codex()
         .with_home(home)
-        .with_extensions(Arc::new(extensions.build()))
+        .with_extensions(Arc::new(extensions.build())))
 }
 
 fn test_instruction_extensions(
@@ -246,8 +245,8 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
     let home = Arc::new(TempDir::new()?);
     let global_source = write_global(home.as_ref(), GLOBAL_INSTRUCTIONS)?;
 
-    let mut builder = test_codex_with_home(Arc::clone(&home))
-        .with_workspace_setup(|cwd, fs| async move {
+    let mut builder =
+        test_codex_with_home(Arc::clone(&home))?.with_workspace_setup(|cwd, fs| async move {
             fs.write_file(
                 &cwd.join("AGENTS.md"),
                 PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
@@ -346,7 +345,7 @@ async fn global_instruction_context_item_is_currently_not_limited_by_project_doc
     let home = Arc::new(TempDir::new()?);
     let oversized_global = vec!["global instruction item remains uncapped"; 512].join("\n");
     let source = write_global(home.as_ref(), &oversized_global)?;
-    let mut builder = test_codex_with_home(Arc::clone(&home))
+    let mut builder = test_codex_with_home(Arc::clone(&home))?
         .with_config(|config| config.project_doc_max_bytes = 1);
     let test = builder.build(&server).await?;
 
@@ -386,7 +385,7 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
     let source = write_global(home.as_ref(), b"global\xFFinstructions")?;
 
     // Create the thread, capture its load warning, and submit one turn for rendered output.
-    let mut builder = test_codex_with_home(home);
+    let mut builder = test_codex_with_home(home)?;
     let test = builder.build(&server).await?;
     let warning = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::Warning(warning)
@@ -419,12 +418,15 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
 async fn contributor_warnings_surface_and_failure_aborts_fresh_thread_creation() -> Result<()> {
     let server = responses::start_mock_server().await;
     let warning_contributor = Arc::new(TestGlobalInstructionsContributor::new(vec![Ok(
-        contributed_instructions("global instructions", /*source*/ None, &["global warning"]),
+        contributed_instructions(
+            "global instructions",
+            /*source*/ None,
+            &["global warning"],
+        ),
     )]));
-    let mut warning_builder =
-        test_codex().with_extensions(test_instruction_extensions(Arc::clone(
-            &warning_contributor,
-        )));
+    let mut warning_builder = test_codex().with_extensions(test_instruction_extensions(
+        Arc::clone(&warning_contributor),
+    ));
     let warning_test = warning_builder.build(&server).await?;
 
     let warning = wait_for_event_match(&warning_test.codex, |event| match event {
@@ -440,10 +442,9 @@ async fn contributor_warnings_surface_and_failure_aborts_fresh_thread_creation()
     let failure_contributor = Arc::new(TestGlobalInstructionsContributor::new(vec![Err(
         "contributor failed".to_string(),
     )]));
-    let mut failure_builder =
-        test_codex().with_extensions(test_instruction_extensions(Arc::clone(
-            &failure_contributor,
-        )));
+    let mut failure_builder = test_codex().with_extensions(test_instruction_extensions(
+        Arc::clone(&failure_contributor),
+    ));
     let error = match failure_builder.build(&server).await {
         Ok(_) => panic!("thread creation should fail"),
         Err(error) => error,
@@ -479,7 +480,7 @@ async fn cold_resume_restores_persisted_instruction_sources() -> Result<()> {
     let old_source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
 
     // Create the initial thread and persist its creation-time instruction snapshot.
-    let mut initial_builder = test_codex_with_home(Arc::clone(&home));
+    let mut initial_builder = test_codex_with_home(Arc::clone(&home))?;
     let initial = initial_builder.build(&server).await?;
 
     // Assert the pre-resume thread reports the source used to create its snapshot.
@@ -503,7 +504,7 @@ async fn cold_resume_restores_persisted_instruction_sources() -> Result<()> {
     // Add a preferred override source, then cold-resume with freshly loaded configuration.
     let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
     assert_ne!(old_source, new_source);
-    let mut resume_builder = test_codex_with_home(Arc::clone(&home));
+    let mut resume_builder = test_codex_with_home(Arc::clone(&home))?;
     let resumed = resume_builder
         .resume(&server, Arc::clone(&home), rollout_path)
         .await?;
@@ -556,7 +557,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
 
     // Create the parent and persist its creation-time instruction snapshot.
-    let mut builder = test_codex_with_home(Arc::clone(&home));
+    let mut builder = test_codex_with_home(Arc::clone(&home))?;
     let parent = builder.build(&server).await?;
 
     // Assert the parent reports the source used to create its snapshot.
@@ -710,11 +711,10 @@ async fn run_subagent_global_instruction_case(fork_context: bool) -> Result<()> 
     // Create the parent thread, record its source, and seed the history inherited by the child.
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
-    let mut builder = test_codex_with_home(Arc::clone(&home))
-        .with_config(|config| {
-            let _ = config.features.enable(Feature::Collab);
-            let _ = config.features.disable(Feature::EnableRequestCompression);
-        });
+    let mut builder = test_codex_with_home(Arc::clone(&home))?.with_config(|config| {
+        let _ = config.features.enable(Feature::Collab);
+        let _ = config.features.disable(Feature::EnableRequestCompression);
+    });
     let test = builder.build(&server).await?;
 
     // Assert the parent reports the creation-time source before spawning.
@@ -754,8 +754,7 @@ async fn run_subagent_global_instruction_case(fork_context: bool) -> Result<()> 
 
     // The parent and forked child inherit the creation-time snapshot. A fresh child resolves the
     // contributor again and sees the new preferred override.
-    let parent_fragment =
-        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let parent_fragment = expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
     let (child_source, child_fragment) = if fork_context {
         (source.clone(), parent_fragment.clone())
     } else {
@@ -836,10 +835,9 @@ async fn manual_compaction_refreshes_global_instructions_on_the_next_full_rebuil
     let provider = local_compaction_provider(&server);
 
     // Create the thread with the old global source loaded into its instruction snapshot.
-    let mut builder = test_codex_with_home(Arc::clone(&home))
-        .with_config(move |config| {
-            config.model_provider = provider;
-        });
+    let mut builder = test_codex_with_home(Arc::clone(&home))?.with_config(move |config| {
+        config.model_provider = provider;
+    });
     let test = builder.build(&server).await?;
 
     // Assert the pre-compaction source list points at the creation-time file.
@@ -865,8 +863,7 @@ async fn manual_compaction_refreshes_global_instructions_on_the_next_full_rebuil
     // the contributor again and installs the current contents.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
-    let old_fragment =
-        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let old_fragment = expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
     let new_fragment = expected_instruction_fragment(&test.config.cwd, NEW_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &old_fragment);
     assert_single_instruction_fragment(&requests[1], &old_fragment);
@@ -907,12 +904,11 @@ async fn mid_turn_compaction_refreshes_global_instructions_for_the_resumed_reque
     let provider = local_compaction_provider(&server);
 
     // Create the thread with the old global source loaded into its instruction snapshot.
-    let mut builder = test_codex_with_home(Arc::clone(&home))
-        .with_config(move |config| {
-            config.model_provider = provider;
-            config.model_context_window = Some(100);
-            config.model_auto_compact_token_limit = Some(90);
-        });
+    let mut builder = test_codex_with_home(Arc::clone(&home))?.with_config(move |config| {
+        config.model_provider = provider;
+        config.model_context_window = Some(100);
+        config.model_auto_compact_token_limit = Some(90);
+    });
     let test = builder.build(&server).await?;
 
     // Assert the pre-compaction source list points at the creation-time file.
@@ -931,8 +927,7 @@ async fn mid_turn_compaction_refreshes_global_instructions_for_the_resumed_reque
     // contributor again and adopts the preferred override.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
-    let old_fragment =
-        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let old_fragment = expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
     let new_fragment = expected_instruction_fragment(&test.config.cwd, NEW_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &old_fragment);
     assert_single_instruction_fragment(&requests[1], &old_fragment);
@@ -966,10 +961,7 @@ async fn mid_turn_refresh_failure_warns_and_retains_the_previous_snapshot() -> R
             ]),
             responses::sse(vec![
                 responses::ev_assistant_message("final-message", "done"),
-                responses::ev_completed_with_tokens(
-                    "follow-up-response",
-                    /*total_tokens*/ 10,
-                ),
+                responses::ev_completed_with_tokens("follow-up-response", /*total_tokens*/ 10),
             ]),
         ],
     )
@@ -1024,8 +1016,7 @@ async fn mid_turn_refresh_failure_warns_and_retains_the_previous_snapshot() -> R
     assert_eq!(contributor.calls(), 2);
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
-    let old_fragment =
-        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let old_fragment = expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &old_fragment);
     assert_single_instruction_fragment(&requests[1], &old_fragment);
     assert_single_instruction_fragment(&requests[2], &old_fragment);
@@ -1066,7 +1057,7 @@ async fn cold_resume_then_full_context_rebuild_uses_current_instructions() -> Re
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
 
     // Create the initial thread and persist its creation-time instruction snapshot.
-    let mut initial_builder = test_codex_with_home(Arc::clone(&home)).with_config({
+    let mut initial_builder = test_codex_with_home(Arc::clone(&home))?.with_config({
         let provider = provider.clone();
         move |config| config.model_provider = provider
     });
@@ -1093,7 +1084,7 @@ async fn cold_resume_then_full_context_rebuild_uses_current_instructions() -> Re
     // Rewrite the selected AGENTS.md in place, then cold-resume with freshly loaded configuration.
     let rewritten_source = write_global(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
     assert_eq!(source, rewritten_source);
-    let mut resume_builder = test_codex_with_home(Arc::clone(&home))
+    let mut resume_builder = test_codex_with_home(Arc::clone(&home))?
         .with_config(move |config| config.model_provider = provider);
     let resumed = resume_builder
         .resume(&server, Arc::clone(&home), rollout_path)
@@ -1176,7 +1167,7 @@ async fn legacy_compaction_without_replacement_history_rebuilds_current_instruct
     let provider = local_compaction_provider(&server);
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
-    let mut initial_builder = test_codex_with_home(Arc::clone(&home)).with_config({
+    let mut initial_builder = test_codex_with_home(Arc::clone(&home))?.with_config({
         let provider = provider.clone();
         move |config| config.model_provider = provider
     });
@@ -1205,7 +1196,7 @@ async fn legacy_compaction_without_replacement_history_rebuilds_current_instruct
     // Rewrite the selected file in place and cold-resume with current configuration.
     let rewritten_source = write_global(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
     assert_eq!(source, rewritten_source);
-    let mut resume_builder = test_codex_with_home(Arc::clone(&home))
+    let mut resume_builder = test_codex_with_home(Arc::clone(&home))?
         .with_config(move |config| config.model_provider = provider);
     let resumed = resume_builder
         .resume(&server, Arc::clone(&home), rollout_path)
@@ -1258,7 +1249,7 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
     .await;
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
-    let mut builder = test_codex_with_home(Arc::clone(&home))
+    let mut builder = test_codex_with_home(Arc::clone(&home))?
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             let _ = config.features.enable(Feature::RemoteCompactionV2);
@@ -1316,7 +1307,7 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
     })
     .await;
     let resumed_cwd = test.config.cwd.clone();
-    let mut resume_builder = test_codex_with_home(Arc::clone(&home))
+    let mut resume_builder = test_codex_with_home(Arc::clone(&home))?
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config.cwd = resumed_cwd;

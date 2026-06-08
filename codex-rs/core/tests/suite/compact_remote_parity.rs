@@ -348,15 +348,17 @@ fn assert_capture_eq(
         &legacy.replacement_history,
         &v2.replacement_history,
     );
-    assert_user_instruction_messages_in_items(
+    assert_user_instruction_messages_in_items_with_contents(
         &legacy.replacement_history,
         &format!("legacy replacement history for {label}"),
         replacement_instruction_messages,
+        REFRESHED_USER_INSTRUCTIONS,
     );
-    assert_user_instruction_messages_in_items(
+    assert_user_instruction_messages_in_items_with_contents(
         &v2.replacement_history,
         &format!("v2 replacement history for {label}"),
         replacement_instruction_messages,
+        REFRESHED_USER_INSTRUCTIONS,
     );
 
     println!(
@@ -645,7 +647,8 @@ async fn run_persisted_history_resume(mode: Mode) -> Result<PersistedResumeCaptu
     };
     let replacement_history = replacement_history_from_rollout(&rollout_path)?;
 
-    let mut resume_builder = parity_builder(mode, settings, /*hooks*/ false);
+    let mut resume_builder = parity_builder(mode, settings, /*hooks*/ false)
+        .with_extensions(global_instruction_extensions());
     let resumed = resume_builder
         .resume(harness.server(), home, rollout_path)
         .await?;
