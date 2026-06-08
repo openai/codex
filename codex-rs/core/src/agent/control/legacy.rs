@@ -19,6 +19,7 @@ impl AgentControl {
             state.send_op(agent_id, Op::Shutdown {}).await
         };
         let _ = state.remove_thread(&agent_id).await;
+        self.forget_v2_residency(agent_id);
         self.state.release_spawned_thread(agent_id);
         result
     }

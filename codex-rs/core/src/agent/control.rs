@@ -42,9 +42,12 @@ use std::sync::Weak;
 use tokio::sync::watch;
 use tracing::warn;
 
+use self::residency::V2Residency;
+
 const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
 
 mod legacy;
+mod residency;
 mod spawn;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,6 +94,7 @@ pub(crate) struct AgentControl {
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
     state: Arc<AgentRegistry>,
+    v2_residency: Arc<V2Residency>,
 }
 
 impl AgentControl {
@@ -183,6 +187,7 @@ impl AgentControl {
     ) -> CodexResult<String> {
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
             let _ = state.remove_thread(&agent_id).await;
+            self.forget_v2_residency(agent_id);
             self.state.release_spawned_thread(agent_id);
         }
         result

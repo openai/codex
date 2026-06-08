@@ -1,3 +1,4 @@
+use super::residency::is_v2_resident_session_source;
 use super::*;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
@@ -116,6 +117,7 @@ impl AgentControl {
     ) -> CodexResult<()> {
         let state = self.upgrade()?;
         if state.get_thread(thread_id).await.is_ok() {
+            self.touch_loaded_v2_residency(&state, thread_id).await;
             return Ok(());
         }
         if self.state.agent_metadata_for_thread(thread_id).is_none() {
@@ -143,6 +145,9 @@ impl AgentControl {
         if initial_history.get_multi_agent_version() != Some(MultiAgentVersion::V2) {
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
+        let residency_slot = self
+            .reserve_v2_residency_slot(&state, &config, Some(thread_id))
+            .await?;
 
         let (session_source, _) = initial_history
             .get_resumed_session_sources()
@@ -170,11 +175,14 @@ impl AgentControl {
             .await
         {
             Ok(reloaded_thread) => {
+                residency_slot.commit(reloaded_thread.thread_id);
                 state.notify_thread_created(reloaded_thread.thread_id);
                 Ok(())
             }
             Err(err) => {
                 if state.get_thread(thread_id).await.is_ok() {
+                    drop(residency_slot);
+                    self.touch_loaded_v2_residency(&state, thread_id).await;
                     return Ok(());
                 }
                 Err(err)
@@ -200,7 +208,24 @@ impl AgentControl {
             )
             .await;
         let agent_max_threads = config.effective_agent_max_threads(multi_agent_version);
-        let mut reservation = self.state.reserve_spawn_slot(agent_max_threads)?;
+        let spawn_uses_v2_residency = multi_agent_version == MultiAgentVersion::V2
+            && session_source
+                .as_ref()
+                .is_some_and(is_v2_resident_session_source);
+        let residency_slot = if spawn_uses_v2_residency {
+            Some(
+                self.reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let reservation_max_threads = if spawn_uses_v2_residency {
+            None
+        } else {
+            agent_max_threads
+        };
+        let mut reservation = self.state.reserve_spawn_slot(reservation_max_threads)?;
         let inheritance = SpawnAgentThreadInheritance {
             shell_snapshot: self
                 .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
@@ -264,6 +289,9 @@ impl AgentControl {
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
+        if let Some(residency_slot) = residency_slot {
+            residency_slot.commit(new_thread.thread_id);
+        }
 
         if let Some(SessionSource::SubAgent(
             subagent_source @ SubAgentSource::ThreadSpawn {
