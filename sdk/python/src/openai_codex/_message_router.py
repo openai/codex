@@ -224,22 +224,8 @@ class MessageRouter:
             goal_operation.fail(exc)
         self._global_notifications.put(exc)
 
-    def _notification_login_id(self, notification: Notification) -> str | None:
-        """Extract the login attempt id from completion notifications."""
-        if notification.method != "account/login/completed":
-            return None
-
-        payload = notification.payload
-        if isinstance(payload, AccountLoginCompletedNotification):
-            return payload.login_id
-        if isinstance(payload, UnknownNotification):
-            raw_login_id = payload.params.get("loginId")
-            if isinstance(raw_login_id, str):
-                return raw_login_id
-        return None
-
     def _notification_turn_id(self, notification: Notification) -> str | None:
-        """Extract routing ids from known generated payloads or raw unknown payloads."""
+        """Extract routing ids from generated metadata or raw unknown payloads."""
         payload = notification.payload
         if isinstance(payload, UnknownNotification):
             raw_turn_id = payload.params.get("turnId")
@@ -254,9 +240,23 @@ class MessageRouter:
         return notification_turn_id(payload)
 
     def _notification_thread_id(self, notification: Notification) -> str | None:
-        """Extract thread ids from known generated payloads or raw payloads."""
+        """Extract thread ids from generated metadata or raw unknown payloads."""
         payload = notification.payload
         if isinstance(payload, UnknownNotification):
             raw_thread_id = payload.params.get("threadId")
             return raw_thread_id if isinstance(raw_thread_id, str) else None
         return notification_thread_id(payload)
+
+    def _notification_login_id(self, notification: Notification) -> str | None:
+        """Extract the login attempt id from completion notifications."""
+        if notification.method != "account/login/completed":
+            return None
+
+        payload = notification.payload
+        if isinstance(payload, AccountLoginCompletedNotification):
+            return payload.login_id
+        if isinstance(payload, UnknownNotification):
+            raw_login_id = payload.params.get("loginId")
+            if isinstance(raw_login_id, str):
+                return raw_login_id
+        return None

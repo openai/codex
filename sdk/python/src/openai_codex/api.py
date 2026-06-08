@@ -79,6 +79,15 @@ from .generated.v2_all import (
 from .models import InitializeResponse, JsonObject, Notification
 
 
+def _normalize_goal_objective(objective: str) -> str:
+    if not isinstance(objective, str):
+        raise TypeError("goal objective must be a string")
+    objective = objective.strip()
+    if not objective:
+        raise ValueError("goal objective must not be empty")
+    return objective
+
+
 def _active_turn_id_from_error(exc: InvalidRequestError) -> str | None:
     match = re.search(r" but found `?([^`]+)`?$", exc.message)
     return match.group(1) if match is not None else None
@@ -561,7 +570,6 @@ class Thread:
         self,
         input: RunInput,
         *,
-        goal: bool = False,
         approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
@@ -575,7 +583,6 @@ class Thread:
         """Run a complete turn and collect its final result."""
         turn = self.turn(
             input,
-            goal=goal,
             approval_mode=approval_mode,
             cwd=cwd,
             effort=effort,
@@ -592,12 +599,15 @@ class Thread:
         finally:
             stream.close()
 
+    def run_goal(self, objective: str) -> TurnResult:
+        """Run a persisted goal to completion as one logical turn."""
+        return self.start_goal(objective).run()
+
     # BEGIN GENERATED: Thread.flat_methods
     def turn(
         self,
         input: RunInput,
         *,
-        goal: bool = False,
         approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
@@ -625,18 +635,16 @@ class Thread:
             service_tier=service_tier,
             summary=summary,
         )
-        goal_state = self._client.register_goal_operation(self.id) if goal else None
-        try:
-            turn = self._client.turn_start(self.id, wire_input, params=params, goal=goal)
-        except BaseException:
-            if goal_state is not None:
-                self._client.unregister_goal_operation(goal_state)
-            raise
-        if goal_state is not None:
-            self._client.bind_goal_operation(goal_state, turn.turn.id)
-        return TurnHandle(self._client, self.id, turn.turn.id, _goal=goal_state)
+        turn = self._client.turn_start(self.id, wire_input, params=params)
+        return TurnHandle(self._client, self.id, turn.turn.id)
 
     # END GENERATED: Thread.flat_methods
+
+    def start_goal(self, objective: str) -> TurnHandle:
+        """Activate a persisted goal and return its logical turn handle."""
+        objective = _normalize_goal_objective(objective)
+        state, turn_id = self._client.start_goal_operation(self.id, objective)
+        return TurnHandle(self._client, self.id, turn_id, _goal=state)
 
     def read(self, *, include_turns: bool = False) -> ThreadReadResponse:
         """Read this thread, optionally including its turn history."""
@@ -660,7 +668,6 @@ class AsyncThread:
         self,
         input: RunInput,
         *,
-        goal: bool = False,
         approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
@@ -674,7 +681,6 @@ class AsyncThread:
         """Run a complete turn asynchronously and collect its final result."""
         turn = await self.turn(
             input,
-            goal=goal,
             approval_mode=approval_mode,
             cwd=cwd,
             effort=effort,
@@ -691,12 +697,16 @@ class AsyncThread:
         finally:
             await stream.aclose()
 
+    async def run_goal(self, objective: str) -> TurnResult:
+        """Run a persisted goal asynchronously as one logical turn."""
+        goal = await self.start_goal(objective)
+        return await goal.run()
+
     # BEGIN GENERATED: AsyncThread.flat_methods
     async def turn(
         self,
         input: RunInput,
         *,
-        goal: bool = False,
         approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
@@ -725,23 +735,21 @@ class AsyncThread:
             service_tier=service_tier,
             summary=summary,
         )
-        goal_state = self._codex._client.register_goal_operation(self.id) if goal else None
-        try:
-            turn = await self._codex._client.turn_start(
-                self.id,
-                wire_input,
-                params=params,
-                goal=goal,
-            )
-        except BaseException:
-            if goal_state is not None:
-                self._codex._client.unregister_goal_operation(goal_state)
-            raise
-        if goal_state is not None:
-            self._codex._client.bind_goal_operation(goal_state, turn.turn.id)
-        return AsyncTurnHandle(self._codex, self.id, turn.turn.id, _goal=goal_state)
+        turn = await self._codex._client.turn_start(
+            self.id,
+            wire_input,
+            params=params,
+        )
+        return AsyncTurnHandle(self._codex, self.id, turn.turn.id)
 
     # END GENERATED: AsyncThread.flat_methods
+
+    async def start_goal(self, objective: str) -> AsyncTurnHandle:
+        """Activate a persisted goal and return its async logical turn handle."""
+        await self._codex._ensure_initialized()
+        objective = _normalize_goal_objective(objective)
+        state, turn_id = await self._codex._client.start_goal_operation(self.id, objective)
+        return AsyncTurnHandle(self._codex, self.id, turn_id, _goal=state)
 
     async def read(self, *, include_turns: bool = False) -> ThreadReadResponse:
         """Read this thread, optionally including its turn history."""

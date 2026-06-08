@@ -204,7 +204,7 @@ class MockResponsesServer:
 
 
 class AppServerHarness:
-    """Test fixture that points an app-server process at MockResponsesServer."""
+    """Test fixture that points a pinned runtime app-server at MockResponsesServer."""
 
     def __init__(
         self,
@@ -232,10 +232,9 @@ class AppServerHarness:
         shutil.rmtree(self.codex_home, ignore_errors=True)
         shutil.rmtree(self.workspace, ignore_errors=True)
 
-    def app_server_config(self, *, codex_bin: str | None = None) -> CodexConfig:
-        """Build SDK config for an isolated app-server process."""
+    def app_server_config(self) -> CodexConfig:
+        """Build SDK config for an isolated pinned-runtime app-server process."""
         return CodexConfig(
-            codex_bin=codex_bin,
             cwd=str(self.workspace),
             env={
                 "CODEX_HOME": str(self.codex_home),

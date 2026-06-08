@@ -527,18 +527,6 @@ def _normalized_schema_bundle_text(schema_dir: Path) -> str:
     schema = json.loads(schema_bundle_path(schema_dir).read_text())
     definitions = schema.get("definitions", {})
     if isinstance(definitions, dict):
-        turn_start = definitions.get("TurnStartParams")
-        if isinstance(turn_start, dict):
-            properties = turn_start.get("properties")
-            if isinstance(properties, dict):
-                properties["goal"] = {
-                    "default": False,
-                    "description": (
-                        "Replace the thread's active goal with an objective derived "
-                        "from this turn's text input."
-                    ),
-                    "type": "boolean",
-                }
         for definition in definitions.values():
             if isinstance(definition, dict):
                 _flatten_string_enum_one_of(definition)
@@ -1121,7 +1109,6 @@ def _render_thread_block(
         "        self,",
         "        input: RunInput,",
         "        *,",
-        "        goal: bool = False,",
         *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(turn_fields),
         "    ) -> TurnHandle:",
@@ -1134,16 +1121,8 @@ def _render_thread_block(
         *_approval_mode_model_arg_lines(),
         *_model_arg_lines(turn_fields),
         "        )",
-        "        goal_state = self._client.register_goal_operation(self.id) if goal else None",
-        "        try:",
-        "            turn = self._client.turn_start(self.id, wire_input, params=params, goal=goal)",
-        "        except BaseException:",
-        "            if goal_state is not None:",
-        "                self._client.unregister_goal_operation(goal_state)",
-        "            raise",
-        "        if goal_state is not None:",
-        "            self._client.bind_goal_operation(goal_state, turn.turn.id)",
-        "        return TurnHandle(self._client, self.id, turn.turn.id, _goal=goal_state)",
+        "        turn = self._client.turn_start(self.id, wire_input, params=params)",
+        "        return TurnHandle(self._client, self.id, turn.turn.id)",
     ]
     return "\n".join(lines)
 
@@ -1156,7 +1135,6 @@ def _render_async_thread_block(
         "        self,",
         "        input: RunInput,",
         "        *,",
-        "        goal: bool = False,",
         *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(turn_fields),
         "    ) -> AsyncTurnHandle:",
@@ -1170,21 +1148,12 @@ def _render_async_thread_block(
         *_approval_mode_model_arg_lines(),
         *_model_arg_lines(turn_fields),
         "        )",
-        "        goal_state = self._codex._client.register_goal_operation(self.id) if goal else None",
-        "        try:",
-        "            turn = await self._codex._client.turn_start(",
-        "                self.id,",
-        "                wire_input,",
-        "                params=params,",
-        "                goal=goal,",
-        "            )",
-        "        except BaseException:",
-        "            if goal_state is not None:",
-        "                self._codex._client.unregister_goal_operation(goal_state)",
-        "            raise",
-        "        if goal_state is not None:",
-        "            self._codex._client.bind_goal_operation(goal_state, turn.turn.id)",
-        "        return AsyncTurnHandle(self._codex, self.id, turn.turn.id, _goal=goal_state)",
+        "        turn = await self._codex._client.turn_start(",
+        "            self.id,",
+        "            wire_input,",
+        "            params=params,",
+        "        )",
+        "        return AsyncTurnHandle(self._codex, self.id, turn.turn.id)",
     ]
     return "\n".join(lines)
 
@@ -1226,9 +1195,7 @@ def generate_public_api_flat_methods() -> None:
     turn_start_fields = _load_public_fields(
         "openai_codex.generated.v2_all",
         "TurnStartParams",
-        # `goal` has a stable bool default and private routing setup, so render
-        # it explicitly rather than inheriting the generated model default.
-        exclude={"thread_id", "input", "client_user_message_id", "goal", *approval_fields},
+        exclude={"thread_id", "input", "client_user_message_id", *approval_fields},
     )
     turn_start_fields = _replace_public_sandbox_field(turn_start_fields, wire_name="sandbox_policy")
 

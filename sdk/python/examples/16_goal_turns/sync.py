@@ -13,5 +13,5 @@ from openai_codex import Codex
 
 with Codex(config=runtime_config()) as codex:
     thread = codex.thread_start()
-    result = thread.run("Improve the benchmark coverage in this repository.", goal=True)
+    result = thread.run_goal("Improve the benchmark coverage in this repository.")
     print(result.final_response)

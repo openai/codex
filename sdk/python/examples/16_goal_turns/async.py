@@ -17,10 +17,8 @@ from openai_codex import AsyncCodex
 async def main() -> None:
     async with AsyncCodex(config=runtime_config()) as codex:
         thread = await codex.thread_start()
-        result = await thread.run(
-            "Improve the benchmark coverage in this repository.",
-            goal=True,
-        )
+        goal = await thread.start_goal("Improve the benchmark coverage in this repository.")
+        result = await goal.run()
         print(result.final_response)
 
 

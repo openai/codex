@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from ._goal import _GoalOperationState
 from ._message_router import MessageRouter
 from ._version import __version__ as SDK_VERSION
-from .errors import CodexError, TransportClosedError
+from .errors import CodexError, InvalidRequestError, TransportClosedError
 from .generated.notification_registry import NOTIFICATION_MODELS
 from .generated.v2_all import (
     AccountLoginCompletedNotification,
@@ -23,6 +23,7 @@ from .generated.v2_all import (
     ChatgptLoginAccountResponse,
     GetAccountParams as V2GetAccountParams,
     GetAccountResponse,
+    IdleThreadStatus,
     LoginAccountParams as V2LoginAccountParams,
     LoginAccountResponse,
     LogoutAccountResponse,
@@ -31,6 +32,7 @@ from .generated.v2_all import (
     ThreadCompactStartResponse,
     ThreadForkParams as V2ThreadForkParams,
     ThreadForkResponse,
+    ThreadGoalClearResponse,
     ThreadGoalSetResponse,
     ThreadGoalStatus,
     ThreadListParams as V2ThreadListParams,
@@ -60,6 +62,7 @@ from .retry import retry_on_overload
 ModelT = TypeVar("ModelT", bound=BaseModel)
 ApprovalHandler = Callable[[str, JsonObject | None], JsonObject]
 RUNTIME_PKG_NAME = "openai-codex-cli-bin"
+_GOAL_START_TIMEOUT_S = 30.0
 
 
 def _params_dict(
@@ -359,11 +362,6 @@ class CodexClient:
         """Register a private thread-scoped route for a logical goal turn."""
         return self._router.register_goal(thread_id)
 
-    def bind_goal_operation(self, state: _GoalOperationState, turn_id: str) -> None:
-        """Bind a pending goal route to its stable logical turn id."""
-        state.bind(turn_id)
-        self.unregister_turn_notifications(turn_id)
-
     def unregister_goal_operation(self, state: _GoalOperationState) -> None:
         """Release routing state for one logical goal turn."""
         self._router.unregister_goal(state)
@@ -472,21 +470,87 @@ class CodexClient:
             response_model=ThreadCompactStartResponse,
         )
 
-    def pause_goal(self, thread_id: str) -> ThreadGoalSetResponse:
-        """Pause the active goal used by a logical goal turn."""
+    def thread_goal_clear(self, thread_id: str) -> ThreadGoalClearResponse:
+        """Clear the persisted goal for a thread before replacing it."""
+        return self.request(
+            "thread/goal/clear",
+            {"threadId": thread_id},
+            response_model=ThreadGoalClearResponse,
+        )
+
+    def thread_goal_set(
+        self,
+        thread_id: str,
+        *,
+        objective: str | None = None,
+        status: ThreadGoalStatus | None = None,
+    ) -> ThreadGoalSetResponse:
+        """Create or update the persisted goal for a thread."""
+        payload: JsonObject = {"threadId": thread_id}
+        if objective is not None:
+            payload["objective"] = objective
+        if status is not None:
+            payload["status"] = status.value
         return self.request(
             "thread/goal/set",
-            {"threadId": thread_id, "status": ThreadGoalStatus.paused.value},
+            payload,
             response_model=ThreadGoalSetResponse,
         )
+
+    def pause_goal(self, thread_id: str) -> ThreadGoalSetResponse:
+        """Pause the active goal used by a logical goal turn."""
+        return self.thread_goal_set(thread_id, status=ThreadGoalStatus.paused)
+
+    def start_goal_operation(
+        self,
+        thread_id: str,
+        objective: str,
+    ) -> tuple[_GoalOperationState, str]:
+        """Start a logical goal and wait for its runtime-generated first turn."""
+        thread = self.thread_read(thread_id).thread
+        if not isinstance(thread.status.root, IdleThreadStatus):
+            raise InvalidRequestError(
+                -32600,
+                f"thread must be idle before starting a goal: {thread_id}",
+            )
+        if thread.ephemeral or thread.path is None:
+            raise InvalidRequestError(
+                -32600,
+                f"thread must be persisted before starting a goal: {thread_id}",
+            )
+
+        self.thread_goal_clear(thread_id)
+        state = self.register_goal_operation(thread_id)
+        activated = False
+        try:
+            self.thread_goal_set(
+                thread_id,
+                objective=objective,
+                status=ThreadGoalStatus.active,
+            )
+            activated = True
+            turn_id = state.wait_for_start(_GOAL_START_TIMEOUT_S)
+            if turn_id is None:
+                raise CodexError(
+                    "timed out waiting for goal turn to start after "
+                    f"{int(_GOAL_START_TIMEOUT_S)} seconds"
+                )
+            return state, turn_id
+        except BaseException:
+            if activated:
+                try:
+                    self.pause_goal(thread_id)
+                except Exception:
+                    pass
+            state.finish()
+            self.unregister_goal_operation(state)
+            raise
 
     def turn_start(
         self,
         thread_id: str,
         input_items: list[JsonObject] | JsonObject | str,
         params: V2TurnStartParams | JsonObject | None = None,
-        *,
-        goal: bool = False,
     ) -> TurnStartResponse:
         """Start a turn and register its notification queue as early as possible."""
         payload = {
@@ -494,11 +558,6 @@ class CodexClient:
             "threadId": thread_id,
             "input": self._normalize_input_items(input_items),
         }
-        params_goal = payload.pop("goal", False)
-        if not isinstance(params_goal, bool):
-            raise TypeError("turn/start goal must be a bool")
-        if goal or params_goal:
-            payload["goal"] = True
         started = self.request("turn/start", payload, response_model=TurnStartResponse)
         self.register_turn_notifications(started.turn.id)
         return started

@@ -1,5 +1,6 @@
 import queue
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Awaitable, Callable, Iterator
@@ -55,17 +56,12 @@ class _GoalOperationState:
     _failure: BaseException | None = None
     _finished: bool = False
 
-    def bind(self, logical_turn_id: str) -> None:
-        with self._condition:
-            self.logical_turn_id = logical_turn_id
-            if self.current_turn_id is None and self.completed_turn is None:
-                self.current_turn_id = logical_turn_id
-            self._condition.notify_all()
-
     def observe(self, notification: Notification) -> None:
         payload = notification.payload
         with self._condition:
             if isinstance(payload, TurnStartedNotification):
+                if self.logical_turn_id is None:
+                    self.logical_turn_id = payload.turn.id
                 self.current_turn_id = payload.turn.id
                 if self.started_turn is None:
                     self.started_turn = payload.turn
@@ -75,6 +71,8 @@ class _GoalOperationState:
                     self.current_turn_id = None
             elif isinstance(payload, ThreadGoalUpdatedNotification):
                 self.status = payload.goal.status
+                if self.status == ThreadGoalStatus.active:
+                    self.cleared = False
             elif isinstance(payload, ThreadGoalClearedNotification):
                 self.cleared = True
             elif isinstance(payload, ItemCompletedNotification):
@@ -92,6 +90,19 @@ class _GoalOperationState:
                 self._finished = True
             self._condition.notify_all()
         self._notifications.put(notification)
+
+    def wait_for_start(self, timeout: float) -> str | None:
+        """Wait for the runtime-generated first turn without consuming its event."""
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while self.started_turn is None or self.logical_turn_id is None:
+                if self._failure is not None:
+                    raise self._failure
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._condition.wait(remaining)
+            return self.logical_turn_id
 
     def fail(self, exc: BaseException) -> None:
         with self._condition:
@@ -256,6 +267,8 @@ class _GoalStreamCursor:
         events = [_logical_notification(notification, logical_turn_id)]
         if isinstance(payload, ThreadGoalUpdatedNotification):
             self.status = payload.goal.status
+            if self.status == ThreadGoalStatus.active:
+                self.cleared = False
             events = []
         elif isinstance(payload, ThreadGoalClearedNotification):
             self.cleared = True

@@ -22,7 +22,9 @@ from .generated.v2_all import (
     ThreadCompactStartResponse,
     ThreadForkParams as V2ThreadForkParams,
     ThreadForkResponse,
+    ThreadGoalClearResponse,
     ThreadGoalSetResponse,
+    ThreadGoalStatus,
     ThreadListParams as V2ThreadListParams,
     ThreadListResponse,
     ThreadReadResponse,
@@ -113,10 +115,6 @@ class AsyncCodexClient:
         """Register a logical goal route on the wrapped sync client."""
         return self._sync.register_goal_operation(thread_id)
 
-    def bind_goal_operation(self, state: _GoalOperationState, turn_id: str) -> None:
-        """Bind a logical goal route to its stable turn id."""
-        self._sync.bind_goal_operation(state, turn_id)
-
     def unregister_goal_operation(self, state: _GoalOperationState) -> None:
         """Release one logical goal route."""
         self._sync.unregister_goal_operation(state)
@@ -206,17 +204,63 @@ class AsyncCodexClient:
         """Start thread compaction using the wrapped sync client."""
         return await self._call_sync(self._sync.thread_compact, thread_id)
 
+    async def thread_goal_clear(self, thread_id: str) -> ThreadGoalClearResponse:
+        """Clear the persisted goal through the wrapped sync client."""
+        return await self._call_sync(self._sync.thread_goal_clear, thread_id)
+
+    async def thread_goal_set(
+        self,
+        thread_id: str,
+        *,
+        objective: str | None = None,
+        status: ThreadGoalStatus | None = None,
+    ) -> ThreadGoalSetResponse:
+        """Create or update a persisted goal through the wrapped sync client."""
+        return await self._call_sync(
+            self._sync.thread_goal_set,
+            thread_id,
+            objective=objective,
+            status=status,
+        )
+
     async def pause_goal(self, thread_id: str) -> ThreadGoalSetResponse:
         """Pause the active goal through the wrapped sync client."""
         return await self._call_sync(self._sync.pause_goal, thread_id)
+
+    async def start_goal_operation(
+        self,
+        thread_id: str,
+        objective: str,
+    ) -> tuple[_GoalOperationState, str]:
+        """Start a logical goal through the wrapped sync client."""
+        operation = asyncio.create_task(
+            asyncio.to_thread(
+                self._sync.start_goal_operation,
+                thread_id,
+                objective,
+            )
+        )
+        try:
+            return await asyncio.shield(operation)
+        except asyncio.CancelledError:
+            try:
+                state, _ = await operation
+            except BaseException:
+                pass
+            else:
+                try:
+                    await self.pause_goal(thread_id)
+                except Exception:
+                    pass
+                state.finish()
+                self.unregister_goal_operation(state)
+            raise
 
     async def turn_start(
         self,
         thread_id: str,
         input_items: list[JsonObject] | JsonObject | str,
         params: V2TurnStartParams | JsonObject | None = None,
-        *,
-        goal: bool = False,
     ) -> TurnStartResponse:
         """Start a turn using the wrapped sync client."""
         return await self._call_sync(
@@ -224,7 +268,6 @@ class AsyncCodexClient:
             thread_id,
             input_items,
             params,
-            goal=goal,
         )
 
     async def turn_interrupt(self, thread_id: str, turn_id: str) -> TurnInterruptResponse:
