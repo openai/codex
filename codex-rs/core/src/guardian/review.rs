@@ -18,8 +18,10 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
+use tokio::time::sleep_until;
 use tokio_util::sync::CancellationToken;
 
 use crate::session::session::Session;
@@ -59,7 +61,9 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
     "You may retry once, or ask the user for guidance or explicit approval.",
 );
 
-const GUARDIAN_REVIEW_MAX_ATTEMPTS: u64 = 2;
+const GUARDIAN_REVIEW_MAX_ATTEMPTS: u64 = 3;
+const GUARDIAN_REVIEW_FIRST_RETRY_DELAY: Duration = Duration::from_millis(/*millis*/ 200);
+const GUARDIAN_REVIEW_SECOND_RETRY_DELAY: Duration = Duration::from_millis(/*millis*/ 500);
 
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -871,8 +875,42 @@ async fn run_guardian_review_session_with_retry(
             .guardian_review_session
             .reset_trunk_for_retry()
             .await;
+        if let Some(error) =
+            wait_before_guardian_retry(attempt_count, deadline, external_cancel.as_ref()).await
+        {
+            return (GuardianReviewOutcome::Error(error), analytics_result);
+        }
     }
     unreachable!("guardian review retry loop always returns")
+}
+
+async fn wait_before_guardian_retry(
+    attempt_count: u64,
+    deadline: Instant,
+    external_cancel: Option<&CancellationToken>,
+) -> Option<GuardianReviewError> {
+    let retry_delay = guardian_retry_delay(attempt_count)?;
+    let retry_at = (Instant::now() + retry_delay).min(deadline);
+    tokio::select! {
+        _ = sleep_until(retry_at) => {
+            (Instant::now() >= deadline).then_some(GuardianReviewError::Timeout)
+        }
+        _ = async {
+            if let Some(cancel_token) = external_cancel {
+                cancel_token.cancelled().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Some(GuardianReviewError::Cancelled),
+    }
+}
+
+fn guardian_retry_delay(attempt_count: u64) -> Option<Duration> {
+    Some(match attempt_count {
+        1 => GUARDIAN_REVIEW_FIRST_RETRY_DELAY,
+        2 => GUARDIAN_REVIEW_SECOND_RETRY_DELAY,
+        _ => return None,
+    })
 }
 
 fn should_retry_guardian_review(outcome: &GuardianReviewOutcome, attempt_count: u64) -> bool {
@@ -917,7 +955,7 @@ mod review_tests {
     }
 
     #[test]
-    fn guardian_review_retry_only_retries_session_and_parse_errors_once() {
+    fn guardian_review_retry_only_retries_session_and_parse_errors_twice() {
         let assessment = GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             user_authorization: GuardianUserAuthorization::Unknown,
@@ -959,8 +997,57 @@ mod review_tests {
         ];
 
         for (outcome, expected) in outcomes {
-            assert_eq!(should_retry_guardian_review(&outcome, 1), expected);
-            assert!(!should_retry_guardian_review(&outcome, 2));
+            assert_eq!(
+                should_retry_guardian_review(&outcome, /*attempt_count*/ 1),
+                expected
+            );
+            assert_eq!(
+                should_retry_guardian_review(&outcome, /*attempt_count*/ 2),
+                expected
+            );
+            assert!(!should_retry_guardian_review(
+                &outcome, /*attempt_count*/ 3
+            ));
         }
+    }
+
+    #[test]
+    fn guardian_review_retry_delays_are_bounded() {
+        assert_eq!(
+            guardian_retry_delay(/*attempt_count*/ 1),
+            Some(GUARDIAN_REVIEW_FIRST_RETRY_DELAY)
+        );
+        assert_eq!(
+            guardian_retry_delay(/*attempt_count*/ 2),
+            Some(GUARDIAN_REVIEW_SECOND_RETRY_DELAY)
+        );
+        assert_eq!(guardian_retry_delay(/*attempt_count*/ 3), None);
+    }
+
+    #[tokio::test]
+    async fn guardian_review_retry_wait_honors_cancellation() {
+        let cancel_token = CancellationToken::new();
+        cancel_token.cancel();
+
+        let error = wait_before_guardian_retry(
+            /*attempt_count*/ 1,
+            Instant::now() + Duration::from_secs(/*secs*/ 1),
+            Some(&cancel_token),
+        )
+        .await;
+
+        assert!(matches!(error, Some(GuardianReviewError::Cancelled)));
+    }
+
+    #[tokio::test]
+    async fn guardian_review_retry_wait_honors_deadline() {
+        let error = wait_before_guardian_retry(
+            /*attempt_count*/ 1,
+            Instant::now(),
+            /*external_cancel*/ None,
+        )
+        .await;
+
+        assert!(matches!(error, Some(GuardianReviewError::Timeout)));
     }
 }

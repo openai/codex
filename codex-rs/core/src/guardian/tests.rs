@@ -2205,7 +2205,7 @@ async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_retries_parse_failure_then_approves() -> anyhow::Result<()> {
+async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -2220,9 +2220,14 @@ async fn guardian_review_retries_parse_failure_then_approves() -> anyhow::Result
         &server,
         vec![
             sse(vec![
-                ev_response_created("resp-parse-failure"),
-                ev_assistant_message("msg-parse-failure", "not valid guardian json"),
-                ev_completed("resp-parse-failure"),
+                ev_response_created("resp-parse-failure-1"),
+                ev_assistant_message("msg-parse-failure-1", "not valid guardian json"),
+                ev_completed("resp-parse-failure-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parse-failure-2"),
+                ev_assistant_message("msg-parse-failure-2", "still not valid guardian json"),
+                ev_completed("resp-parse-failure-2"),
             ]),
             sse(vec![
                 ev_response_created("resp-approved"),
@@ -2245,12 +2250,12 @@ async fn guardian_review_retries_parse_failure_then_approves() -> anyhow::Result
     .await;
 
     assert_eq!(decision, ReviewDecision::Approved);
-    assert_eq!(request_log.requests().len(), 2);
+    assert_eq!(request_log.requests().len(), 3);
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_exhausts_two_failures_with_one_terminal_event() -> anyhow::Result<()> {
+async fn guardian_review_exhausts_three_failures_with_one_terminal_event() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -2266,6 +2271,11 @@ async fn guardian_review_exhausts_two_failures_with_one_terminal_event() -> anyh
                 ev_response_created("resp-parse-failure-2"),
                 ev_assistant_message("msg-parse-failure-2", "invalid two"),
                 ev_completed("resp-parse-failure-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parse-failure-3"),
+                ev_assistant_message("msg-parse-failure-3", "invalid three"),
+                ev_completed("resp-parse-failure-3"),
             ]),
         ],
     )
@@ -2283,7 +2293,7 @@ async fn guardian_review_exhausts_two_failures_with_one_terminal_event() -> anyh
     .await;
 
     assert_eq!(decision, ReviewDecision::Denied);
-    assert_eq!(request_log.requests().len(), 2);
+    assert_eq!(request_log.requests().len(), 3);
     let mut statuses = Vec::new();
     while let Ok(event) = rx.try_recv() {
         if let EventMsg::GuardianAssessment(event) = event.msg {
