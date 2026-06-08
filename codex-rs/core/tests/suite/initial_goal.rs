@@ -123,7 +123,7 @@ async fn initial_goal_starts_one_turn_and_rejects_a_concurrent_goal() -> Result<
         _ => None,
     })
     .await;
-    server.wait_for_request_count(1).await;
+    server.wait_for_request_count(/*count*/ 1).await;
 
     let second_error = match test
         .codex

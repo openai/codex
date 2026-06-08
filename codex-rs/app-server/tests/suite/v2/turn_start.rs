@@ -476,7 +476,7 @@ async fn turn_start_goal_replaces_existing_goal_and_continues() -> Result<()> {
         ),
         (
             thread.id.clone(),
-            goal_cwd.try_into()?,
+            goal_cwd.clone().try_into()?,
             codex_app_server_protocol::AskForApproval::Never,
             codex_app_server_protocol::SandboxPolicy::DangerFullAccess,
             "mock-model".to_string(),
