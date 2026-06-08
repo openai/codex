@@ -1,12 +1,7 @@
 use anyhow::Result;
 use codex_core::CodexThread;
-use codex_core::StartThreadOptions;
 use codex_features::Feature;
 use codex_protocol::protocol::AgentStatus;
-use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -24,12 +19,10 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
 
-const SPAWN_PROMPT: &str = "spawn the worker";
-const BLOCKED_PROMPT: &str = "try the blocked followup";
-const ALLOWED_PROMPT: &str = "try the allowed followup";
-const INITIAL_TASK: &str = "initial worker task";
-const BLOCKED_TASK: &str = "blocked worker task";
-const ALLOWED_TASK: &str = "allowed worker task";
+const FIRST_PROMPT: &str = "spawn the first worker";
+const SECOND_PROMPT: &str = "spawn the second worker";
+const FIRST_TASK: &str = "first worker task";
+const SECOND_TASK: &str = "second worker task";
 
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
     serde_json::from_slice::<serde_json::Value>(&request.body)
@@ -59,38 +52,39 @@ fn tool_output(request: &ResponsesRequest, call_id: &str) -> (Option<String>, Op
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn v2_followup_task_starts_only_when_idle_and_capacity_is_available() -> Result<()> {
+async fn v2_spawn_checks_shared_active_execution_capacity() -> Result<()> {
     let server = start_mock_server().await;
-    let spawn_args = serde_json::to_string(&json!({
-        "message": INITIAL_TASK,
-        "task_name": "worker",
+    let first_args = serde_json::to_string(&json!({
+        "message": FIRST_TASK,
+        "task_name": "first",
     }))?;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| body_contains(request, SPAWN_PROMPT),
+        |request: &wiremock::Request| body_contains(request, FIRST_PROMPT),
         sse(vec![
-            ev_response_created("spawn-response"),
-            ev_function_call("spawn-call", "spawn_agent", &spawn_args),
-            ev_completed("spawn-response"),
+            ev_response_created("first-response"),
+            ev_function_call("first-call", "spawn_agent", &first_args),
+            ev_completed("first-response"),
         ]),
     )
     .await;
-    let initial_worker = mount_sse_once_match(
+    mount_response_once_match(
         &server,
-        |request: &wiremock::Request| body_contains(request, INITIAL_TASK),
-        sse(vec![
-            ev_response_created("initial-worker-response"),
-            ev_completed("initial-worker-response"),
-        ]),
+        |request: &wiremock::Request| body_contains(request, FIRST_TASK),
+        sse_response(sse(vec![
+            ev_response_created("first-worker-response"),
+            ev_completed("first-worker-response"),
+        ]))
+        .set_delay(Duration::from_secs(3)),
     )
     .await;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| body_contains(request, "spawn-call"),
+        |request: &wiremock::Request| body_contains(request, "first-call"),
         sse(vec![
-            ev_response_created("spawn-followup-response"),
-            ev_assistant_message("spawn-followup-message", "spawned"),
-            ev_completed("spawn-followup-response"),
+            ev_response_created("first-followup-response"),
+            ev_assistant_message("first-followup-message", "spawned"),
+            ev_completed("first-followup-response"),
         ]),
     )
     .await;
@@ -107,142 +101,55 @@ async fn v2_followup_task_starts_only_when_idle_and_capacity_is_available() -> R
         config.multi_agent_v2.max_concurrent_threads_per_session = 2;
     });
     let test = builder.build(&server).await?;
-    test.submit_turn(SPAWN_PROMPT).await?;
-    let _ = initial_worker.single_request();
+    test.submit_turn(FIRST_PROMPT).await?;
 
-    let worker_id = test
+    let first_worker_id = test
         .thread_manager
         .list_thread_ids()
         .await
         .into_iter()
         .find(|thread_id| *thread_id != test.session_configured.thread_id)
         .expect("spawned worker thread");
-    let worker = test.thread_manager.get_thread(worker_id).await?;
-    wait_for_status(worker.as_ref(), |status| {
-        matches!(status, AgentStatus::Completed(_))
-    })
-    .await?;
-
-    let permit_holder = test
-        .thread_manager
-        .start_thread_with_options(StartThreadOptions {
-            config: test.config.clone(),
-            initial_history: InitialHistory::New,
-            session_source: Some(SessionSource::SubAgent(SubAgentSource::Other(
-                "permit-holder".to_string(),
-            ))),
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-        })
-        .await?;
-    mount_response_once_match(
-        &server,
-        |request: &wiremock::Request| body_contains(request, "hold the permit"),
-        sse_response(sse(vec![
-            ev_response_created("permit-holder-response"),
-            ev_completed("permit-holder-response"),
-        ]))
-        .set_delay(Duration::from_secs(1)),
-    )
-    .await;
-    permit_holder
-        .thread
-        .submit(
-            vec![UserInput::Text {
-                text: "hold the permit".to_string(),
-                text_elements: Vec::new(),
-            }]
-            .into(),
-        )
-        .await?;
-    wait_for_status(permit_holder.thread.as_ref(), |status| {
+    let first_worker = test.thread_manager.get_thread(first_worker_id).await?;
+    wait_for_status(first_worker.as_ref(), |status| {
         matches!(status, AgentStatus::Running)
     })
     .await?;
 
-    let blocked_args = serde_json::to_string(&json!({
-        "target": "worker",
-        "message": BLOCKED_TASK,
+    let second_args = serde_json::to_string(&json!({
+        "message": SECOND_TASK,
+        "task_name": "second",
     }))?;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| body_contains(request, BLOCKED_PROMPT),
+        |request: &wiremock::Request| body_contains(request, SECOND_PROMPT),
         sse(vec![
-            ev_response_created("blocked-response"),
-            ev_function_call("blocked-call", "followup_task", &blocked_args),
-            ev_completed("blocked-response"),
+            ev_response_created("second-response"),
+            ev_function_call("second-call", "spawn_agent", &second_args),
+            ev_completed("second-response"),
         ]),
     )
     .await;
-    let blocked_followup = mount_sse_once_match(
+    let second_followup = mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| body_contains(request, "blocked-call"),
+        |request: &wiremock::Request| body_contains(request, "second-call"),
         sse(vec![
-            ev_response_created("blocked-followup-response"),
-            ev_assistant_message("blocked-followup-message", "blocked"),
-            ev_completed("blocked-followup-response"),
+            ev_response_created("second-followup-response"),
+            ev_assistant_message("second-followup-message", "blocked"),
+            ev_completed("second-followup-response"),
         ]),
     )
     .await;
-    test.submit_turn(BLOCKED_PROMPT).await?;
+    test.submit_turn(SECOND_PROMPT).await?;
+
     assert_eq!(
-        tool_output(&blocked_followup.single_request(), "blocked-call"),
+        tool_output(&second_followup.single_request(), "second-call"),
         (
-            Some("collab tool failed: agent thread limit reached".to_string()),
+            Some("collab spawn failed: agent thread limit reached".to_string()),
             Some(false),
         )
     );
-
-    wait_for_status(permit_holder.thread.as_ref(), |status| {
-        matches!(status, AgentStatus::Completed(_))
-    })
-    .await?;
-
-    let allowed_args = serde_json::to_string(&json!({
-        "target": "worker",
-        "message": ALLOWED_TASK,
-    }))?;
-    mount_sse_once_match(
-        &server,
-        |request: &wiremock::Request| body_contains(request, ALLOWED_PROMPT),
-        sse(vec![
-            ev_response_created("allowed-response"),
-            ev_function_call("allowed-call", "followup_task", &allowed_args),
-            ev_completed("allowed-response"),
-        ]),
-    )
-    .await;
-    let allowed_worker = mount_sse_once_match(
-        &server,
-        |request: &wiremock::Request| body_contains(request, ALLOWED_TASK),
-        sse(vec![
-            ev_response_created("allowed-worker-response"),
-            ev_completed("allowed-worker-response"),
-        ]),
-    )
-    .await;
-    let allowed_followup = mount_sse_once_match(
-        &server,
-        |request: &wiremock::Request| body_contains(request, "allowed-call"),
-        sse(vec![
-            ev_response_created("allowed-followup-response"),
-            ev_assistant_message("allowed-followup-message", "started"),
-            ev_completed("allowed-followup-response"),
-        ]),
-    )
-    .await;
-    test.submit_turn(ALLOWED_PROMPT).await?;
-
-    assert_eq!(
-        tool_output(&allowed_followup.single_request(), "allowed-call"),
-        (Some(String::new()), Some(true))
-    );
-    let allowed_request = allowed_worker.single_request();
-    assert!(allowed_request.body_contains_text(ALLOWED_TASK));
-    assert!(!allowed_request.body_contains_text(BLOCKED_TASK));
+    assert_eq!(test.thread_manager.list_thread_ids().await.len(), 2);
 
     Ok(())
 }

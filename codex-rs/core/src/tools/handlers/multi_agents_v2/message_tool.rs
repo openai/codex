@@ -1,7 +1,7 @@
 //! Shared argument parsing and dispatch for the v2 agent messaging tools.
 //!
-//! `send_message` queues its communication, while `followup_task` starts an idle target
-//! synchronously.
+//! `send_message` and `followup_task` share the same submission path and differ only in whether the
+//! resulting `InterAgentCommunication` should wake the target immediately.
 
 use super::*;
 use crate::tools::context::FunctionToolOutput;
@@ -118,23 +118,12 @@ pub(crate) async fn handle_message_string_tool(
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
     let communication = communication_from_tool_message(author, receiver_agent_path, message);
-    let communication = mode.apply(communication);
-    let result = match mode {
-        MessageDeliveryMode::QueueOnly => session
-            .services
-            .agent_control
-            .send_inter_agent_communication(receiver_thread_id, communication)
-            .await
-            .map(|_| ()),
-        MessageDeliveryMode::TriggerTurn => {
-            session
-                .services
-                .agent_control
-                .try_start_inter_agent_communication(receiver_thread_id, communication)
-                .await
-        }
-    }
-    .map_err(|err| collab_agent_error(receiver_thread_id, err));
+    let result = session
+        .services
+        .agent_control
+        .send_inter_agent_communication(receiver_thread_id, mode.apply(communication))
+        .await
+        .map_err(|err| collab_agent_error(receiver_thread_id, err));
     let status = session
         .services
         .agent_control

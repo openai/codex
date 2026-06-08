@@ -7,10 +7,7 @@ use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::error::CodexErr;
-use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::InterAgentCommunication;
 use std::sync::Arc;
 
 impl Session {
@@ -97,6 +94,22 @@ impl Session {
                 input,
             ));
         }
+        if self
+            .services
+            .agent_control
+            .ensure_execution_capacity(
+                turn_context.config.as_ref(),
+                turn_context.multi_agent_version,
+                &turn_context.session_source,
+            )
+            .is_err()
+        {
+            self.clear_reserved_idle_turn(&turn_state).await;
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::Busy,
+                input,
+            ));
+        }
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
         if self.input_queue.has_trigger_turn_mailbox_items().await {
@@ -121,63 +134,24 @@ impl Session {
             ));
         }
 
-        let task_input = input.iter().cloned().map(TurnInput::ResponseItem).collect();
-        if self
-            .start_task(turn_context, task_input, RegularTask::new())
-            .await
-            .is_err()
-        {
-            self.clear_reserved_idle_turn(&turn_state).await;
-            return Err(TryStartTurnIfIdleError::new(
-                TryStartTurnIfIdleRejectionReason::Busy,
-                input,
-            ));
-        }
+        self.input_queue
+            .extend_pending_input_for_turn_state(
+                turn_state.as_ref(),
+                input.into_iter().map(TurnInput::ResponseItem).collect(),
+            )
+            .await;
+        self.start_task(turn_context, Vec::new(), RegularTask::new())
+            .await;
         Ok(())
     }
 
-    pub(crate) async fn try_start_inter_agent_communication(
-        self: &Arc<Self>,
-        communication: InterAgentCommunication,
-    ) -> CodexResult<()> {
-        let turn_state = {
-            let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
-                return Err(CodexErr::InvalidRequest("agent is not idle".to_string()));
-            }
-            let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-            Arc::clone(&active_turn.turn_state)
-        };
-
-        let turn_context = self.new_default_turn().await;
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-            .await;
-        let result = self
-            .start_task(
-                turn_context,
-                vec![TurnInput::ResponseItem(communication.to_model_input_item())],
-                RegularTask::new(),
-            )
-            .await;
-        if result.is_err() {
-            self.clear_reserved_idle_turn(&turn_state).await;
-        }
-        result
-    }
-
-    pub(crate) async fn clear_reserved_idle_turn(
-        &self,
-        turn_state: &Arc<tokio::sync::Mutex<TurnState>>,
-    ) -> bool {
+    async fn clear_reserved_idle_turn(&self, turn_state: &Arc<tokio::sync::Mutex<TurnState>>) {
         let mut active_turn_guard = self.active_turn.lock().await;
         if let Some(active_turn) = active_turn_guard.as_ref()
             && active_turn.task.is_none()
             && Arc::ptr_eq(&active_turn.turn_state, turn_state)
         {
             *active_turn_guard = None;
-            true
-        } else {
-            false
         }
     }
 

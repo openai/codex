@@ -52,8 +52,6 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
 
 use codex_features::Feature;
-use codex_protocol::error::CodexErr;
-use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;
@@ -309,23 +307,10 @@ impl Session {
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
         task: T,
-    ) -> bool {
+    ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        match self
-            .start_task(Arc::clone(&turn_context), input, task)
-            .await
-        {
-            Ok(()) => true,
-            Err(err) => {
-                self.send_event(
-                    turn_context.as_ref(),
-                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
-                )
-                .await;
-                false
-            }
-        }
+        self.start_task(turn_context, input, task).await;
     }
 
     pub(crate) async fn start_task<T: SessionTask>(
@@ -333,12 +318,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
         task: T,
-    ) -> CodexResult<()> {
-        let agent_execution_permit = self.services.agent_control.try_acquire_execution_permit(
-            turn_context.config.as_ref(),
-            turn_context.multi_agent_version,
-            &turn_context.session_source,
-        )?;
+    ) {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -365,11 +345,7 @@ impl Session {
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
-            if turn.task.is_some() {
-                return Err(CodexErr::UnsupportedOperation(
-                    "turn already has an active task".to_string(),
-                ));
-            }
+            debug_assert!(turn.task.is_none());
             Arc::clone(&turn.turn_state)
         };
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
@@ -382,11 +358,12 @@ impl Session {
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
-        if turn.task.is_some() || !Arc::ptr_eq(&turn.turn_state, &turn_state) {
-            return Err(CodexErr::UnsupportedOperation(
-                "active turn changed before task start".to_string(),
-            ));
-        }
+        debug_assert!(turn.task.is_none());
+        let agent_execution_guard = self.services.agent_control.execution_guard(
+            turn_context.config.as_ref(),
+            turn_context.multi_agent_version,
+            &turn_context.session_source,
+        );
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),
@@ -458,11 +435,10 @@ impl Session {
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
             turn_extension_data,
-            _agent_execution_permit: agent_execution_permit,
+            _agent_execution_guard: agent_execution_guard,
             _timer: timer,
         };
         turn.task = Some(running_task);
-        Ok(())
     }
 
     /// Starts a regular turn when the session is idle and pending work is waiting.
@@ -489,29 +465,19 @@ impl Session {
             return;
         }
 
-        let turn_state = {
+        {
             let mut active_turn = self.active_turn.lock().await;
             if active_turn.is_some() {
                 return;
             }
-            let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-            Arc::clone(&active_turn.turn_state)
-        };
+            *active_turn = Some(ActiveTurn::default());
+        }
 
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
-        if let Err(err) = self
-            .start_task(Arc::clone(&turn_context), Vec::new(), RegularTask::new())
-            .await
-            && self.clear_reserved_idle_turn(&turn_state).await
-        {
-            self.send_event(
-                turn_context.as_ref(),
-                EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
-            )
+        self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
-        }
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {

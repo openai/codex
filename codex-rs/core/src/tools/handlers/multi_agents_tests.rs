@@ -1180,6 +1180,20 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         child_snapshot.session_source.get_agent_path().as_deref(),
         Some("/root/test_process")
     );
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == child_thread_id
+            && matches!(
+                op,
+                Op::InterAgentCommunication { communication }
+                    if communication.author == AgentPath::root()
+                        && communication.recipient.as_str() == "/root/test_process"
+                        && communication.other_recipients.is_empty()
+                        && communication.content.is_empty()
+                        && communication.encrypted_content.as_deref() == Some("encrypted-spawn-message")
+                        && communication.trigger_turn
+            )
+    }));
+
     SendMessageHandlerV2
         .handle(invocation(
             session.clone(),
@@ -1902,11 +1916,6 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .await
         .expect("worker thread should exist");
     let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
-    thread
-        .codex
-        .session
-        .abort_all_tasks(TurnAbortReason::Replaced)
-        .await;
 
     let first_turn = thread.codex.session.new_default_turn().await;
     thread
@@ -1936,11 +1945,6 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         ))
         .await
         .expect("followup_task should succeed");
-    thread
-        .codex
-        .session
-        .abort_all_tasks(TurnAbortReason::Replaced)
-        .await;
 
     let second_turn = thread.codex.session.new_default_turn().await;
     thread

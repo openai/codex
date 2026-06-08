@@ -207,6 +207,9 @@ impl AgentControl {
                 &config,
             )
             .await;
+        if let Some(session_source) = session_source.as_ref() {
+            self.ensure_execution_capacity(&config, multi_agent_version, session_source)?;
+        }
         let agent_max_threads = config.effective_agent_max_threads(multi_agent_version);
         let spawn_uses_v2_residency = multi_agent_version == MultiAgentVersion::V2
             && session_source
@@ -342,31 +345,15 @@ impl AgentControl {
         // TODO(jif) add helper for drain
         state.notify_thread_created(new_thread.thread_id);
 
-        let initial_result = match initial_operation {
-            Op::InterAgentCommunication { communication }
-                if multi_agent_version == MultiAgentVersion::V2 =>
-            {
-                self.try_start_inter_agent_communication(new_thread.thread_id, communication)
-                    .await
-            }
-            initial_operation => self
-                .send_input(new_thread.thread_id, initial_operation)
-                .await
-                .map(|_| ()),
-        };
-        if let Err(err) = initial_result {
-            if multi_agent_version == MultiAgentVersion::V2 {
-                let _ = self.shutdown_live_agent(new_thread.thread_id).await;
-            }
-            return Err(err);
-        }
-
         self.persist_thread_spawn_edge_for_source(
             new_thread.thread.as_ref(),
             new_thread.thread_id,
             notification_source.as_ref(),
         )
         .await;
+
+        self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_operation)
+            .await?;
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
                 .agent_path
