@@ -351,6 +351,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     cwd: &Path,
     env_map: &mut HashMap<String, String>,
     command: &[String],
+    proxy_enforced: bool,
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
     write_roots_override: Option<&[PathBuf]>,
@@ -410,7 +411,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
         } else {
             deny_write_paths_override
         },
-        /*proxy_enforced*/ false,
+        proxy_enforced,
     )?;
     let caps = load_or_create_cap_sids(codex_home)?;
     let (psid_to_use, cap_sids) = if uses_write_capabilities {

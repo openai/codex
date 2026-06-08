@@ -385,6 +385,7 @@ async fn run_command_under_windows_session(
             cwd.as_path(),
             env,
             None,
+            /*proxy_enforced*/ false,
             /*read_roots_override*/ None,
             /*read_roots_include_platform_defaults*/ false,
             /*write_roots_override*/ None,

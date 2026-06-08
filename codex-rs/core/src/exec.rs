@@ -113,7 +113,7 @@ pub(crate) struct WindowsSandboxFilesystemOverrides {
     pub(crate) additional_deny_write_paths: Vec<AbsolutePathBuf>,
 }
 
-fn windows_sandbox_uses_elevated_backend(
+pub(crate) fn windows_sandbox_uses_elevated_backend(
     sandbox_level: WindowsSandboxLevel,
     proxy_enforced: bool,
 ) -> bool {

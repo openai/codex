@@ -4,17 +4,37 @@ use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::sandbox_setup_is_complete;
+use codex_core::windows_sandbox::windows_sandbox_level_from_config;
+use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::PathExt;
+use core_test_support::managed_network_requirements_loader;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
+use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use serial_test::serial;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -318,5 +338,170 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
         sandbox_setup_is_complete(codex_home.path()),
         "setup should remain ready after the tamper attempt"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(codex_home)]
+async fn windows_unified_exec_managed_network_enforces_deny_read() -> anyhow::Result<()> {
+    let codex_home =
+        codex_home_for_windows_sandbox_test("windows-unified-exec-managed-network-codex-home")?;
+    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
+    stage_windows_sandbox_helpers()?;
+
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "**/*.env".to_string(),
+            },
+            access: FileSystemAccessMode::Deny,
+        },
+    ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Enabled,
+    );
+    let permission_profile_for_config = permission_profile.clone();
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_cloud_config_bundle(managed_network_requirements_loader())
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+            config.set_windows_sandbox_enabled(true);
+            config.set_windows_elevated_sandbox_enabled(false);
+            config
+                .permissions
+                .set_permission_profile(permission_profile_for_config)
+                .expect("set permission profile");
+        });
+    let test = builder.build(&server).await?;
+    assert!(
+        test.config.permissions.network.is_some(),
+        "expected managed network proxy config to be present"
+    );
+    assert_eq!(
+        windows_sandbox_level_from_config(&test.config),
+        WindowsSandboxLevel::RestrictedToken
+    );
+
+    std::fs::write(
+        test.config.cwd.join("secret.env"),
+        "managed network secret\n",
+    )?;
+    std::fs::write(test.config.cwd.join("public.txt"), "public ok\n")?;
+
+    let call_id = "windows-unified-exec-managed-network-deny-read";
+    let args = json!({
+        "cmd": "cmd.exe /D /C \"(type secret.env 1>NUL 2>NUL && echo SECRET-READ || echo SECRET-DENIED) & type public.txt\"",
+        "yield_time_ms": 10_000,
+    });
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.config.cwd.as_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "read the fixture files".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.config.cwd.clone()),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let output = wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::RawResponseItem(raw)
+                    if matches!(
+                        &raw.item,
+                        ResponseItem::FunctionCallOutput {
+                            call_id: output_call_id,
+                            ..
+                        } if output_call_id == call_id
+                    )
+            )
+        },
+        tokio::time::Duration::from_secs(30),
+    )
+    .await;
+    let EventMsg::RawResponseItem(raw) = output else {
+        unreachable!("matched raw response item");
+    };
+    let ResponseItem::FunctionCallOutput { output, .. } = raw.item else {
+        unreachable!("matched function call output");
+    };
+    let output = output
+        .text_content()
+        .expect("function call output should contain text");
+
+    assert!(
+        output.contains("SECRET-DENIED"),
+        "deny-read should block the secret: {output}"
+    );
+    assert!(
+        !output.contains("SECRET-READ") && !output.contains("managed network secret"),
+        "denied file contents leaked into unified exec output: {output}"
+    );
+    assert!(
+        output.contains("public ok"),
+        "allowed reads should still work: {output}"
+    );
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     Ok(())
 }
