@@ -147,6 +147,7 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut direct_model = remote_model("test-tool-mode-direct");
+    direct_model.supports_parallel_tool_calls = true;
     direct_model.tool_mode = Some(ToolMode::Direct);
     let direct_body = response_body_for_remote_model(direct_model, |config| {
         config
@@ -163,8 +164,10 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
                 && name != codex_code_mode::WAIT_TOOL_NAME),
         "direct mode should override enabled code mode flags: {direct_tools:?}"
     );
+    assert_eq!(direct_body["parallel_tool_calls"], true);
 
     let mut code_mode_only_model = remote_model("test-tool-mode-code-mode-only");
+    code_mode_only_model.supports_parallel_tool_calls = true;
     code_mode_only_model.tool_mode = Some(ToolMode::CodeModeOnly);
     code_mode_only_model.input_modalities = vec![InputModality::Text, InputModality::Image];
     let code_mode_only_body = response_body_for_remote_model(code_mode_only_model, |_| {}).await?;
@@ -179,6 +182,18 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
             "image_generation".to_string(),
         ]
     );
+    assert_eq!(code_mode_only_body["parallel_tool_calls"], false);
+
+    let mut local_code_mode_model = remote_model("test-tool-mode-local-code-mode");
+    local_code_mode_model.supports_parallel_tool_calls = true;
+    let local_code_mode_body = response_body_for_remote_model(local_code_mode_model, |config| {
+        config
+            .features
+            .enable(Feature::CodeMode)
+            .expect("test config should allow feature update");
+    })
+    .await?;
+    assert_eq!(local_code_mode_body["parallel_tool_calls"], false);
 
     Ok(())
 }
