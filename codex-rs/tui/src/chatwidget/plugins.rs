@@ -96,6 +96,8 @@ const SHARED_WITH_ME_SECTION_TAB_ORDER: u8 = 1;
 const SHARED_WITH_ME_LINK_SECTION_TAB_ORDER: u8 = 2;
 const LOCAL_MARKETPLACE_TAB_ORDER: u8 = 3;
 const OTHER_MARKETPLACE_TAB_ORDER: u8 = 4;
+const WORKSPACE_SECTION_FALLBACK_TAB_ORDER: u8 = 5;
+const SHARED_WITH_ME_SECTION_FALLBACK_TAB_ORDER: u8 = 6;
 const PLUGIN_ROW_PREFIX_WIDTH: usize = 6;
 const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
 const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
@@ -1757,7 +1759,7 @@ impl ChatWidget {
         if !has_workspace_tab {
             if self.plugin_remote_sections_loading {
                 additional_tabs.push((
-                    WORKSPACE_SECTION_TAB_ORDER,
+                    WORKSPACE_SECTION_FALLBACK_TAB_ORDER,
                     remote_section_loading_tab("workspace-loading", "Workspace"),
                 ));
             } else if self.plugin_remote_sections_loaded {
@@ -1771,13 +1773,13 @@ impl ChatWidget {
                         "No workspace directory plugins are available.",
                     )
                 };
-                additional_tabs.push((WORKSPACE_SECTION_TAB_ORDER, tab));
+                additional_tabs.push((WORKSPACE_SECTION_FALLBACK_TAB_ORDER, tab));
             }
         }
         if !has_shared_with_me_tab {
             if self.plugin_remote_sections_loading {
                 additional_tabs.push((
-                    SHARED_WITH_ME_SECTION_TAB_ORDER,
+                    SHARED_WITH_ME_SECTION_FALLBACK_TAB_ORDER,
                     remote_section_loading_tab("shared-with-me-loading", "Shared with me"),
                 ));
             } else if self.plugin_remote_sections_loaded {
@@ -1791,7 +1793,7 @@ impl ChatWidget {
                         "No plugins have been shared with you.",
                     )
                 };
-                additional_tabs.push((SHARED_WITH_ME_SECTION_TAB_ORDER, tab));
+                additional_tabs.push((SHARED_WITH_ME_SECTION_FALLBACK_TAB_ORDER, tab));
             }
         }
 
