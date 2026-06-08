@@ -67,6 +67,7 @@ use supports_color::Stream;
 
 mod background;
 mod git;
+mod legacy_rollout;
 mod output;
 mod progress;
 mod runtime;

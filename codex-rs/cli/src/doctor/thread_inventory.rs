@@ -4,6 +4,7 @@ use super::CheckStatus;
 use super::Config;
 use super::DoctorCheck;
 use super::DoctorIssue;
+use super::legacy_rollout::is_legacy_rollout;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -34,20 +35,25 @@ struct RolloutAuditFile {
 #[derive(Default)]
 struct RolloutScan {
     files: Vec<RolloutAuditFile>,
+    legacy_files: Vec<PathBuf>,
     scan_errors: Vec<String>,
     malformed_names: Vec<PathBuf>,
     reached_scan_cap: bool,
 }
 
-enum RolloutThreadId {
-    Id(String),
+enum RolloutClassification {
+    Current(String),
+    Legacy,
     MalformedName,
     Unusable(String),
 }
 
 impl RolloutScan {
     fn candidate_count(&self) -> usize {
-        self.files.len() + self.malformed_names.len() + self.scan_errors.len()
+        self.files.len()
+            + self.legacy_files.len()
+            + self.malformed_names.len()
+            + self.scan_errors.len()
     }
 
     fn reached_candidate_cap(&self) -> bool {
@@ -69,6 +75,15 @@ impl RolloutScan {
             return;
         }
         self.scan_errors.push(message);
+        self.reached_scan_cap = self.reached_candidate_cap();
+    }
+
+    fn record_legacy_file(&mut self, path: PathBuf) {
+        if self.reached_candidate_cap() {
+            self.reached_scan_cap = true;
+            return;
+        }
+        self.legacy_files.push(path);
         self.reached_scan_cap = self.reached_candidate_cap();
     }
 
@@ -102,6 +117,7 @@ async fn thread_inventory_check_for_roots(
         format!("default model provider: {default_provider}"),
         format!("rollout DB active files: {}", scan.active_count()),
         format!("rollout DB archived files: {}", scan.archived_count()),
+        format!("rollout DB legacy files: {}", scan.legacy_files.len()),
         format!("rollout DB scan errors: {}", scan.scan_errors.len()),
         format!(
             "rollout DB malformed file names: {}",
@@ -109,6 +125,11 @@ async fn thread_inventory_check_for_roots(
         ),
         format!("rollout DB scan cap reached: {}", scan.reached_scan_cap),
     ];
+    push_path_samples(
+        &mut details,
+        "rollout DB legacy file sample",
+        scan.legacy_files.iter().map(PathBuf::as_path),
+    );
     push_samples(
         &mut details,
         "rollout DB scan error sample",
@@ -158,13 +179,13 @@ fn missing_state_db_check(scan: RolloutScan, details: Vec<String>) -> DoctorChec
         && scan.malformed_names.is_empty()
         && !scan.reached_scan_cap
     {
-        return DoctorCheck::new(
-            CHECK_ID,
-            CHECK_CATEGORY,
-            CheckStatus::Ok,
-            "no rollout/state DB inventory to compare",
-        )
-        .details(details);
+        let summary = if scan.legacy_files.is_empty() {
+            "no rollout/state DB inventory to compare"
+        } else {
+            "legacy rollout files are not indexed"
+        };
+        return DoctorCheck::new(CHECK_ID, CHECK_CATEGORY, CheckStatus::Ok, summary)
+            .details(details);
     }
 
     let summary = if scan.files.is_empty() {
@@ -215,6 +236,15 @@ fn parity_check_from_scan_and_rows(
     rows: Vec<ThreadStateAuditRow>,
     mut details: Vec<String>,
 ) -> DoctorCheck {
+    let legacy_keys = scan
+        .legacy_files
+        .iter()
+        .map(|path| path_key(path))
+        .collect::<HashSet<_>>();
+    let rows = rows
+        .into_iter()
+        .filter(|row| !legacy_keys.contains(&path_key(&row.rollout_path)))
+        .collect::<Vec<_>>();
     let rollout_by_key = scan
         .files
         .iter()
@@ -343,7 +373,9 @@ fn parity_check_from_scan_and_rows(
         CheckStatus::Warning
     };
 
-    let summary = if status == CheckStatus::Ok {
+    let summary = if status == CheckStatus::Ok && !scan.legacy_files.is_empty() {
+        "indexed rollout files and state DB agree; legacy rollout files are not indexed"
+    } else if status == CheckStatus::Ok {
         "rollout files and state DB thread inventory agree"
     } else {
         "rollout files and state DB thread inventory differ"
@@ -481,13 +513,17 @@ async fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) 
                 scan.reached_scan_cap = true;
                 return;
             }
-            let thread_id = match thread_id_from_rollout(&path).await {
-                RolloutThreadId::Id(thread_id) => thread_id,
-                RolloutThreadId::MalformedName => {
-                    scan.record_malformed_name(path.clone());
+            let thread_id = match classify_rollout(&path).await {
+                RolloutClassification::Current(thread_id) => thread_id,
+                RolloutClassification::Legacy => {
+                    scan.record_legacy_file(path);
                     continue;
                 }
-                RolloutThreadId::Unusable(reason) => {
+                RolloutClassification::MalformedName => {
+                    scan.record_malformed_name(path);
+                    continue;
+                }
+                RolloutClassification::Unusable(reason) => {
                     scan.record_scan_error(format!("{} ({reason})", path.display()));
                     continue;
                 }
@@ -502,17 +538,21 @@ async fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) 
     }
 }
 
-async fn thread_id_from_rollout(path: &Path) -> RolloutThreadId {
+async fn classify_rollout(path: &Path) -> RolloutClassification {
     let items = match RolloutRecorder::load_rollout_items(path).await {
         Ok((items, _, _)) => items,
-        Err(err) => return RolloutThreadId::Unusable(err.to_string()),
+        Err(err) => return RolloutClassification::Unusable(err.to_string()),
     };
     if items.is_empty() {
-        return RolloutThreadId::Unusable("no parseable rollout items".to_string());
+        return match is_legacy_rollout(path).await {
+            Ok(true) => RolloutClassification::Legacy,
+            Ok(false) => RolloutClassification::Unusable("no parseable rollout items".to_string()),
+            Err(err) => RolloutClassification::Unusable(err.to_string()),
+        };
     }
     codex_rollout::builder_from_items(items.as_slice(), path)
-        .map(|builder| RolloutThreadId::Id(builder.id.to_string()))
-        .unwrap_or(RolloutThreadId::MalformedName)
+        .map(|builder| RolloutClassification::Current(builder.id.to_string()))
+        .unwrap_or(RolloutClassification::MalformedName)
 }
 
 fn is_rollout_file(path: &Path) -> bool {
@@ -713,12 +753,7 @@ mod tests {
             )
             .await;
 
-        let check = thread_inventory_check_for_roots(
-            fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
-            "test-provider",
-        )
-        .await;
+        let check = fixture.check().await;
 
         assert_eq!(check.status, CheckStatus::Ok);
         assert_eq!(check.category, CHECK_CATEGORY);
@@ -760,12 +795,7 @@ mod tests {
             )
             .await;
 
-        let check = thread_inventory_check_for_roots(
-            fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
-            "test-provider",
-        )
-        .await;
+        let check = fixture.check().await;
 
         assert_eq!(check.status, CheckStatus::Warning);
         assert_eq!(check.issues.len(), 3);
@@ -787,6 +817,173 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn thread_inventory_check_ok_for_legacy_rollout_with_empty_state_db() {
+        let fixture = Fixture::new().await;
+        let legacy_path = fixture.write_legacy_rollout(
+            /*archived*/ false,
+            "2025-08-13T15-22-56",
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000001",
+        );
+
+        let check = fixture.check().await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(
+            check.summary,
+            "indexed rollout files and state DB agree; legacy rollout files are not indexed"
+        );
+        assert!(check.issues.is_empty());
+        assert_detail(&check, "rollout DB active files", "0");
+        assert_detail(&check, "rollout DB archived files", "0");
+        assert_detail(&check, "rollout DB legacy files", "1");
+        assert_detail(&check, "rollout DB scan errors", "0");
+        assert!(
+            check
+                .details
+                .iter()
+                .any(|detail| detail.contains(legacy_path.to_string_lossy().as_ref()))
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_ok_when_modern_and_legacy_rollouts_coexist() {
+        let fixture = Fixture::new().await;
+        let active_path = fixture.write_rollout(
+            /*archived*/ false,
+            "2025-01-02T10-00-00",
+            "00000000-0000-0000-0000-000000000001",
+        );
+        fixture.write_legacy_rollout(
+            /*archived*/ false,
+            "2025-08-13T15-22-56",
+            "00000000-0000-0000-0000-000000000002",
+            "00000000-0000-0000-0000-000000000002",
+        );
+        fixture
+            .insert_thread_row(
+                "00000000-0000-0000-0000-000000000001",
+                active_path.as_path(),
+                /*archived*/ false,
+            )
+            .await;
+
+        let check = fixture.check().await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(
+            check.summary,
+            "indexed rollout files and state DB agree; legacy rollout files are not indexed"
+        );
+        assert!(check.issues.is_empty());
+        assert_detail(&check, "rollout DB active files", "1");
+        assert_detail(&check, "rollout DB active rows", "1");
+        assert_detail(&check, "rollout DB legacy files", "1");
+        assert_detail(&check, "rollout DB missing active rows", "0");
+        assert_detail(&check, "rollout DB stale rows", "0");
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_excludes_legacy_state_db_rows_from_parity() {
+        let fixture = Fixture::new().await;
+        let legacy_path = fixture.write_legacy_rollout(
+            /*archived*/ false,
+            "2025-08-13T15-22-56",
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000001",
+        );
+        fixture
+            .insert_thread_row(
+                "00000000-0000-0000-0000-000000000001",
+                legacy_path.as_path(),
+                /*archived*/ true,
+            )
+            .await;
+
+        let check = fixture.check().await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(
+            check.summary,
+            "indexed rollout files and state DB agree; legacy rollout files are not indexed"
+        );
+        assert!(check.issues.is_empty());
+        assert_detail(&check, "rollout DB active rows", "0");
+        assert_detail(&check, "rollout DB archived rows", "0");
+        assert_detail(&check, "rollout DB archive mismatches", "0");
+        assert_detail(&check, "rollout DB duplicate DB paths", "0");
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_ok_for_legacy_rollout_without_state_db() {
+        let fixture = Fixture::without_state_db();
+        fixture.write_legacy_rollout(
+            /*archived*/ false,
+            "2025-08-13T15-22-56",
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000001",
+        );
+
+        let check = fixture.check().await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(check.summary, "legacy rollout files are not indexed");
+        assert!(check.issues.is_empty());
+        assert_detail(&check, "rollout DB legacy files", "1");
+        assert_detail(&check, "rollout DB rows", "skipped (state DB missing)");
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_warns_for_nonempty_malformed_rollout() {
+        let fixture = Fixture::new().await;
+        fixture.write_rollout_contents(
+            /*archived*/ false,
+            "2025-08-13T15-22-56",
+            "00000000-0000-0000-0000-000000000001",
+            "{}\n",
+        );
+
+        let check = fixture.check().await;
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_detail(&check, "rollout DB legacy files", "0");
+        assert_detail(&check, "rollout DB scan errors", "1");
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_warns_for_mismatched_legacy_header_id() {
+        let fixture = Fixture::new().await;
+        fixture.write_legacy_rollout(
+            /*archived*/ false,
+            "2025-08-13T15-22-56",
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+        );
+
+        let check = fixture.check().await;
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_detail(&check, "rollout DB legacy files", "0");
+        assert_detail(&check, "rollout DB scan errors", "1");
+    }
+
+    #[test]
+    fn legacy_rollouts_count_toward_candidate_cap() {
+        let mut scan = RolloutScan::default();
+        for index in 0..MAX_PARITY_SCAN_FILES {
+            scan.record_legacy_file(PathBuf::from(format!("rollout-{index}.jsonl")));
+        }
+
+        assert_eq!(scan.legacy_files.len(), MAX_PARITY_SCAN_FILES);
+        assert_eq!(scan.candidate_count(), MAX_PARITY_SCAN_FILES);
+        assert!(scan.reached_candidate_cap());
+        assert!(scan.reached_scan_cap);
+
+        scan.record_legacy_file(PathBuf::from("rollout-extra.jsonl"));
+        assert_eq!(scan.legacy_files.len(), MAX_PARITY_SCAN_FILES);
+    }
+
     struct Fixture {
         codex_home: TempDir,
         sqlite_home: TempDir,
@@ -806,6 +1003,22 @@ mod tests {
                 codex_home,
                 sqlite_home,
             }
+        }
+
+        fn without_state_db() -> Self {
+            Self {
+                codex_home: TempDir::new().expect("codex home"),
+                sqlite_home: TempDir::new().expect("sqlite home"),
+            }
+        }
+
+        async fn check(&self) -> DoctorCheck {
+            thread_inventory_check_for_roots(
+                self.codex_home.path(),
+                self.sqlite_home.path(),
+                "test-provider",
+            )
+            .await
         }
 
         fn write_rollout(&self, archived: bool, timestamp: &str, thread_id: &str) -> PathBuf {
@@ -834,6 +1047,48 @@ mod tests {
             };
             let contents = serde_json::to_string(&rollout_line).expect("rollout line");
             std::fs::write(&path, format!("{contents}\n")).expect("rollout file");
+            path
+        }
+
+        fn write_legacy_rollout(
+            &self,
+            archived: bool,
+            timestamp: &str,
+            filename_thread_id: &str,
+            header_thread_id: &str,
+        ) -> PathBuf {
+            let header = format!(
+                r#"{{"id":"{header_thread_id}","timestamp":"2025-08-13T15:22:56.917Z","instructions":null}}"#
+            );
+            let contents = [
+                header,
+                r#"{"record_type":"state"}"#.to_string(),
+                r#"{"type":"message","id":null,"role":"user","content":[{"type":"input_text","text":"hello"}]}"#.to_string(),
+            ]
+            .join("\n");
+            self.write_rollout_contents(
+                archived,
+                timestamp,
+                filename_thread_id,
+                &format!("{contents}\n"),
+            )
+        }
+
+        fn write_rollout_contents(
+            &self,
+            archived: bool,
+            timestamp: &str,
+            thread_id: &str,
+            contents: &str,
+        ) -> PathBuf {
+            let root = if archived {
+                self.codex_home.path().join("archived_sessions")
+            } else {
+                self.codex_home.path().join("sessions/2025/08/13")
+            };
+            std::fs::create_dir_all(&root).expect("rollout dir");
+            let path = root.join(format!("rollout-{timestamp}-{thread_id}.jsonl"));
+            std::fs::write(&path, contents).expect("rollout file");
             path
         }
 
