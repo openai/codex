@@ -1,3 +1,5 @@
+//! Render persisted thread turns into history-cell building blocks.
+
 use std::sync::Arc;
 
 use crate::app_server_session::AppServerSession;
@@ -7,6 +9,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::ReasoningSummaryCell;
 use crate::history_cell::UserHistoryCell;
+use crate::multi_agents::sub_agent_activity_summary;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
 use codex_protocol::ThreadId;
@@ -190,6 +193,11 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
         }
         ThreadItem::CollabAgentToolCall { tool, status, .. } => {
             vec![format!("agent tool: {tool:?} · {status:?}").dim().into()]
+        }
+        ThreadItem::SubAgentActivity {
+            kind, agent_path, ..
+        } => {
+            vec![sub_agent_activity_summary(*kind, agent_path).dim().into()]
         }
         ThreadItem::WebSearch { query, .. } => {
             vec![vec!["web search: ".dim(), query.clone().into()].into()]

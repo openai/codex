@@ -7,6 +7,8 @@ use codex_protocol::protocol::CollabAgentSpawnEndEvent;
 use codex_protocol::protocol::CollabCloseBeginEvent;
 use codex_protocol::protocol::CollabCloseEndEvent;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::SubAgentActivityEvent;
+use codex_protocol::protocol::SubAgentActivityKind;
 
 use super::super::TraceReducer;
 use crate::model::ConversationItem;
@@ -123,15 +125,20 @@ impl TraceReducer {
         runtime_payload: &RawPayloadRef,
     ) -> Result<()> {
         let kind = self.rollout.tool_calls[tool_call_id].kind.clone();
+        let runtime_payload_json = self.read_payload_json(runtime_payload)?;
+        if runtime_payload_json.get("agent_thread_id").is_some() {
+            let payload: SubAgentActivityEvent = serde_json::from_value(runtime_payload_json)?;
+            return self.end_sub_agent_activity(wall_time_unix_ms, tool_call_id, &kind, &payload);
+        }
         match kind {
             ToolCallKind::SpawnAgent => {
                 let payload: CollabAgentSpawnEndEvent =
-                    serde_json::from_value(self.read_payload_json(runtime_payload)?)?;
+                    serde_json::from_value(runtime_payload_json)?;
                 self.end_spawn_agent_interaction(wall_time_unix_ms, tool_call_id, &payload)
             }
             ToolCallKind::AssignAgentTask => {
                 let payload: CollabAgentInteractionEndEvent =
-                    serde_json::from_value(self.read_payload_json(runtime_payload)?)?;
+                    serde_json::from_value(runtime_payload_json)?;
                 self.end_message_agent_interaction(
                     wall_time_unix_ms,
                     tool_call_id,
@@ -141,7 +148,7 @@ impl TraceReducer {
             }
             ToolCallKind::SendMessage => {
                 let payload: CollabAgentInteractionEndEvent =
-                    serde_json::from_value(self.read_payload_json(runtime_payload)?)?;
+                    serde_json::from_value(runtime_payload_json)?;
                 self.end_message_agent_interaction(
                     wall_time_unix_ms,
                     tool_call_id,
@@ -150,8 +157,7 @@ impl TraceReducer {
                 )
             }
             ToolCallKind::CloseAgent => {
-                let payload: CollabCloseEndEvent =
-                    serde_json::from_value(self.read_payload_json(runtime_payload)?)?;
+                let payload: CollabCloseEndEvent = serde_json::from_value(runtime_payload_json)?;
                 self.upsert_close_agent_interaction(
                     tool_call_id,
                     payload.receiver_thread_id.to_string(),
@@ -167,6 +173,57 @@ impl TraceReducer {
             | ToolCallKind::WaitAgent
             | ToolCallKind::Other { .. } => Ok(()),
         }
+    }
+
+    fn end_sub_agent_activity(
+        &mut self,
+        wall_time_unix_ms: i64,
+        tool_call_id: &str,
+        tool_kind: &ToolCallKind,
+        payload: &SubAgentActivityEvent,
+    ) -> Result<()> {
+        let target_thread_id = payload.agent_thread_id.to_string();
+        let (edge_id, edge_kind) = match (tool_kind, &payload.kind) {
+            (ToolCallKind::SpawnAgent, SubAgentActivityKind::Started) => {
+                let parent_thread_id = self.rollout.tool_calls[tool_call_id].thread_id.clone();
+                (
+                    spawn_edge_id(&parent_thread_id, &target_thread_id),
+                    InteractionEdgeKind::SpawnAgent,
+                )
+            }
+            (ToolCallKind::AssignAgentTask, SubAgentActivityKind::Interacted) => (
+                tool_edge_id(tool_call_id),
+                InteractionEdgeKind::AssignAgentTask,
+            ),
+            (ToolCallKind::SendMessage, SubAgentActivityKind::Interacted) => {
+                (tool_edge_id(tool_call_id), InteractionEdgeKind::SendMessage)
+            }
+            (ToolCallKind::CloseAgent, SubAgentActivityKind::Interrupted) => {
+                (tool_edge_id(tool_call_id), InteractionEdgeKind::CloseAgent)
+            }
+            _ => bail!(
+                "sub-agent activity {:?} does not match tool call kind {tool_kind:?}",
+                payload.kind
+            ),
+        };
+        let started_at_unix_ms = self.rollout.tool_calls[tool_call_id]
+            .execution
+            .started_at_unix_ms;
+        let carried_raw_payload_ids = self.agent_tool_payload_ids(tool_call_id)?;
+        self.upsert_interaction_edge(InteractionEdge {
+            edge_id,
+            kind: edge_kind,
+            source: TraceAnchor::ToolCall {
+                tool_call_id: tool_call_id.to_string(),
+            },
+            target: TraceAnchor::Thread {
+                thread_id: target_thread_id,
+            },
+            started_at_unix_ms,
+            ended_at_unix_ms: Some(wall_time_unix_ms),
+            carried_item_ids: Vec::new(),
+            carried_raw_payload_ids,
+        })
     }
 
     /// Adds the canonical tool result payload to an already reduced multi-agent edge.

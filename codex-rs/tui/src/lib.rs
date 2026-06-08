@@ -191,6 +191,7 @@ mod terminal_title;
 mod terminal_visualization_instructions;
 mod text_formatting;
 mod theme_picker;
+mod thread_transcript;
 mod token_usage;
 mod tooltips;
 mod transcript_reflow;

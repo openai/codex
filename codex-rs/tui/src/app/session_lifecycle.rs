@@ -8,6 +8,43 @@ use super::*;
 
 impl App {
     pub(super) async fn open_agent_picker(&mut self, app_server: &mut AppServerSession) {
+        self.backfill_loaded_subagent_threads(app_server).await;
+        // V2 subagents are identified by canonical paths observed from activity events or loaded
+        // thread metadata. Their status display is intentionally best-effort and uses only local
+        // buffered activity, avoiding one thread/read request per agent.
+        let path_backed_threads = self
+            .agent_navigation
+            .ordered_path_backed_subagent_threads(self.primary_thread_id);
+        if !path_backed_threads.is_empty() {
+            let running_threads: Vec<_> = path_backed_threads
+                .into_iter()
+                .filter_map(|(thread_id, entry)| {
+                    if !entry.is_running || entry.is_closed {
+                        return None;
+                    }
+                    Some((thread_id, entry.agent_path.as_deref()?.trim().to_string()))
+                })
+                .collect();
+            let mut entries = Vec::new();
+            for (thread_id, agent_path) in running_threads {
+                let preview = if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                    let store = channel.store.lock().await;
+                    super::agent_status_feed::AgentStatusThreadPreview::from_store(
+                        agent_path, &store,
+                    )
+                } else {
+                    super::agent_status_feed::AgentStatusThreadPreview::empty(agent_path)
+                };
+                entries.push(preview);
+            }
+
+            self.chat_widget
+                .add_to_history(super::agent_status_feed::AgentStatusHistoryCell::new(
+                    entries,
+                ));
+            return;
+        }
+
         let mut thread_ids = self.agent_navigation.tracked_thread_ids();
         for thread_id in self.thread_event_channels.keys().copied() {
             if !thread_ids.contains(&thread_id) {
@@ -44,14 +81,14 @@ impl App {
         let items: Vec<SelectionItem> = self
             .agent_navigation
             .ordered_threads()
-            .iter()
+            .into_iter()
             .enumerate()
             .map(|(idx, (thread_id, entry))| {
-                if self.active_thread_id == Some(*thread_id) {
+                if self.active_thread_id == Some(thread_id) {
                     initial_selected_idx = Some(idx);
                 }
-                let id = *thread_id;
-                let is_primary = self.primary_thread_id == Some(*thread_id);
+                let id = thread_id;
+                let is_primary = self.primary_thread_id == Some(thread_id);
                 let name = format_agent_picker_item_name(
                     entry.agent_nickname.as_deref(),
                     entry.agent_role.as_deref(),
@@ -62,7 +99,7 @@ impl App {
                     name: name.clone(),
                     name_prefix_spans: agent_picker_status_dot_spans(entry.is_closed),
                     description: Some(uuid.clone()),
-                    is_current: self.active_thread_id == Some(*thread_id),
+                    is_current: self.active_thread_id == Some(thread_id),
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::SelectAgentThread(id));
                     })],
@@ -145,6 +182,14 @@ impl App {
             .await
         {
             Ok(thread) => {
+                let is_running = matches!(
+                    thread.status,
+                    codex_app_server_protocol::ThreadStatus::Active { .. }
+                );
+                let is_closed = matches!(
+                    thread.status,
+                    codex_app_server_protocol::ThreadStatus::NotLoaded
+                );
                 self.upsert_agent_picker_thread(
                     thread_id,
                     thread.agent_nickname.or_else(|| {
@@ -157,11 +202,9 @@ impl App {
                             .as_ref()
                             .and_then(|entry| entry.agent_role.clone())
                     }),
-                    matches!(
-                        thread.status,
-                        codex_app_server_protocol::ThreadStatus::NotLoaded
-                    ),
+                    is_closed,
                 );
+                self.agent_navigation.set_running(thread_id, is_running);
                 true
             }
             Err(err) => {
@@ -186,6 +229,7 @@ impl App {
                         is_closed,
                     );
                 }
+                self.agent_navigation.set_running(thread_id, false);
                 true
             }
         }
@@ -610,13 +654,17 @@ impl App {
         }
 
         for thread in find_loaded_subagent_threads_for_primary(threads, primary_thread_id) {
+            let agent_path = thread.agent_path;
             self.upsert_agent_picker_thread(
                 thread.thread_id,
                 thread.agent_nickname,
                 thread.agent_role,
                 /*is_closed*/ false,
             );
+            self.agent_navigation
+                .set_agent_path(thread.thread_id, agent_path);
         }
+        self.sync_active_agent_label();
 
         !had_read_error
     }
