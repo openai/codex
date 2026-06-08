@@ -5,6 +5,7 @@ use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::load_marketplace;
+use crate::marketplace::load_raw_marketplace_plugin_names;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
@@ -307,6 +308,10 @@ pub fn refresh_curated_plugin_cache(
             .join(".agents/plugins/marketplace.json"),
     )
     .map_err(|_| "local curated marketplace is not available".to_string())?;
+    let marketplace_plugin_names = load_raw_marketplace_plugin_names(&curated_marketplace_path)
+        .map_err(|err| {
+            format!("failed to load curated marketplace plugin names for cache refresh: {err}")
+        })?;
     let curated_marketplace = load_marketplace(&curated_marketplace_path)
         .map_err(|err| format!("failed to load curated marketplace for cache refresh: {err}"))?;
 
@@ -321,35 +326,39 @@ pub fn refresh_curated_plugin_cache(
             );
             continue;
         }
-        let source_path = match plugin.source {
-            MarketplacePluginSource::Local { path } => path,
-            MarketplacePluginSource::Git { .. } => {
-                warn!(
-                    plugin = plugin_name,
-                    marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
-                    "skipping remote curated plugin source during cache refresh"
-                );
-                continue;
-            }
-        };
-        plugin_sources.insert(plugin_name, source_path);
+        if let MarketplacePluginSource::Local { path } = plugin.source {
+            plugin_sources.insert(plugin_name, path);
+        }
     }
 
     let mut cache_refreshed = false;
     for plugin_id in configured_curated_plugin_ids {
-        if store.active_plugin_version(plugin_id).as_deref() == Some(cache_plugin_version.as_str())
-        {
-            continue;
-        }
-
-        let Some(source_path) = plugin_sources.get(&plugin_id.plugin_name).cloned() else {
+        if !marketplace_plugin_names.contains(&plugin_id.plugin_name) {
             warn!(
                 plugin = plugin_id.plugin_name,
                 marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
                 "configured curated plugin no longer exists in curated marketplace during cache refresh"
             );
+            if store.plugin_base_root(plugin_id).as_path().exists() {
+                store.uninstall(plugin_id).map_err(|err| {
+                    format!(
+                        "failed to remove stale curated plugin cache for {}: {err}",
+                        plugin_id.as_key()
+                    )
+                })?;
+                cache_refreshed = true;
+            }
+            continue;
+        }
+
+        let Some(source_path) = plugin_sources.get(&plugin_id.plugin_name).cloned() else {
             continue;
         };
+
+        if store.active_plugin_version(plugin_id).as_deref() == Some(cache_plugin_version.as_str())
+        {
+            continue;
+        }
 
         store
             .install_with_version(source_path, plugin_id.clone(), cache_plugin_version.clone())
