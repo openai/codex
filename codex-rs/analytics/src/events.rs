@@ -803,7 +803,6 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) status: Option<TurnStatus>,
     pub(crate) turn_error: Option<CodexErrorInfo>,
     pub(crate) codex_error_kind: Option<CodexErrKind>,
-    pub(crate) codex_error_subreason: Option<String>,
     pub(crate) codex_error_http_status_code: Option<u16>,
     pub(crate) steer_count: Option<usize>,
     pub(crate) total_tool_call_count: Option<usize>,
