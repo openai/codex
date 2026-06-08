@@ -5,7 +5,6 @@ use super::app_server_event_targets::ServerNotificationThreadTarget;
 use super::app_server_event_targets::server_notification_thread_target;
 use super::app_server_event_targets::server_request_thread_id;
 use crate::app_command::AppCommand;
-use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
@@ -49,11 +48,6 @@ impl App {
             AppServerEvent::ServerRequest(request) => {
                 self.handle_server_request_event(app_server_client, request)
                     .await;
-            }
-            AppServerEvent::Disconnected { message } => {
-                tracing::warn!("app-server event stream disconnected: {message}");
-                self.chat_widget.add_error_message(message.clone());
-                self.app_event_tx.send(AppEvent::FatalExitRequest(message));
             }
         }
     }

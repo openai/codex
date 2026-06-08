@@ -8,25 +8,40 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SpendControlLimitSnapshot as CoreSpendControlLimitSnapshot;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use std::collections::HashMap;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum Account {
-    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "apiKey", rename_all = "camelCase")
+    )]
     #[ts(rename = "apiKey", rename_all = "camelCase")]
     ApiKey {},
 
-    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "chatgpt", rename_all = "camelCase")
+    )]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt { email: String, plan_type: PlanType },
 
-    #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "amazonBedrock", rename_all = "camelCase")
+    )]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
     AmazonBedrock {},
 }
@@ -41,31 +56,47 @@ impl From<ProviderAccount> for Account {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(tag = "type")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(tag = "type"))]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum LoginAccountParams {
-    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "apiKey", rename_all = "camelCase")
+    )]
     #[ts(rename = "apiKey", rename_all = "camelCase")]
     ApiKey {
-        #[serde(rename = "apiKey")]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "apiKey"))]
         #[ts(rename = "apiKey")]
         api_key: String,
     },
-    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "chatgpt", rename_all = "camelCase")
+    )]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt {
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(
+            any(test, feature = "serde-compat"),
+            serde(default, skip_serializing_if = "std::ops::Not::not")
+        )]
         codex_streamlined_login: bool,
     },
-    #[serde(rename = "chatgptDeviceCode")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "chatgptDeviceCode")
+    )]
     #[ts(rename = "chatgptDeviceCode")]
     ChatgptDeviceCode,
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[experimental("account/login/start.chatgptAuthTokens")]
-    #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "chatgptAuthTokens", rename_all = "camelCase")
+    )]
     #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     ChatgptAuthTokens {
         /// Access token (JWT) supplied by the client.
@@ -82,15 +113,25 @@ pub enum LoginAccountParams {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum LoginAccountResponse {
-    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "apiKey", rename_all = "camelCase")
+    )]
     #[ts(rename = "apiKey", rename_all = "camelCase")]
     ApiKey {},
-    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "chatgpt", rename_all = "camelCase")
+    )]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt {
         // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
@@ -99,7 +140,10 @@ pub enum LoginAccountResponse {
         /// URL the client should open in a browser to initiate the OAuth flow.
         auth_url: String,
     },
-    #[serde(rename = "chatgptDeviceCode", rename_all = "camelCase")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "chatgptDeviceCode", rename_all = "camelCase")
+    )]
     #[ts(rename = "chatgptDeviceCode", rename_all = "camelCase")]
     ChatgptDeviceCode {
         // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
@@ -110,20 +154,25 @@ pub enum LoginAccountResponse {
         /// One-time code the user must enter after signing in.
         user_code: String,
     },
-    #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "chatgptAuthTokens", rename_all = "camelCase")
+    )]
     #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     ChatgptAuthTokens {},
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct CancelLoginAccountParams {
     pub login_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum CancelLoginAccountStatus {
@@ -131,54 +180,67 @@ pub enum CancelLoginAccountStatus {
     NotFound,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct CancelLoginAccountResponse {
     pub status: CancelLoginAccountStatus,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AccountSessionsAddParams {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub switch_to_added_account: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AccountSessionsListParams {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub refresh_workspace_metadata: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AccountSessionsLogoutParams {
     pub session_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AccountSessionsSwitchParams {
     pub session_id: String,
     pub account_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AccountSessionsResponse {
     pub active_session_id: Option<String>,
     pub sessions: Vec<AccountSession>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AccountSession {
     pub session_id: String,
@@ -192,8 +254,9 @@ pub struct AccountSession {
     pub workspaces: Vec<AccountSessionWorkspace>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AccountSessionWorkspace {
     pub account_id: String,
@@ -202,29 +265,33 @@ pub struct AccountSessionWorkspace {
     pub kind: Option<AccountSessionWorkspaceKind>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum AccountSessionWorkspaceKind {
     Personal,
     Workspace,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct LogoutAccountResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum ChatgptAuthTokensRefreshReason {
     /// Codex attempted a backend request and received `401 Unauthorized`.
     Unauthorized,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ChatgptAuthTokensRefreshParams {
     pub reason: ChatgptAuthTokensRefreshReason,
@@ -239,8 +306,9 @@ pub struct ChatgptAuthTokensRefreshParams {
     pub previous_account_id: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ChatgptAuthTokensRefreshResponse {
     pub access_token: String,
@@ -248,8 +316,9 @@ pub struct ChatgptAuthTokensRefreshResponse {
     pub chatgpt_plan_type: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GetAccountRateLimitsResponse {
     /// Backward-compatible single-bucket view; mirrors the historical payload.
@@ -258,38 +327,43 @@ pub struct GetAccountRateLimitsResponse {
     pub rate_limits_by_limit_id: Option<HashMap<String, RateLimitSnapshot>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct SendAddCreditsNudgeEmailParams {
     pub credit_type: AddCreditsNudgeCreditType,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/", rename_all = "snake_case")]
 pub enum AddCreditsNudgeCreditType {
     Credits,
     UsageLimit,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct SendAddCreditsNudgeEmailResponse {
     pub status: AddCreditsNudgeEmailStatus,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/", rename_all = "snake_case")]
 pub enum AddCreditsNudgeEmailStatus {
     Sent,
     CooldownActive,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GetAccountParams {
     /// When `true`, requests a proactive token refresh before returning.
@@ -297,28 +371,34 @@ pub struct GetAccountParams {
     /// In managed auth mode this triggers the normal refresh-token flow. In
     /// external auth mode this flag is ignored. Clients should refresh tokens
     /// themselves and call `account/login/start` with `chatgptAuthTokens`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub refresh_token: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
     pub account: Option<Account>,
     pub requires_openai_auth: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AccountUpdatedNotification {
     pub auth_mode: Option<AuthMode>,
     pub plan_type: Option<PlanType>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// Sparse rolling rate-limit update.
 ///
@@ -329,8 +409,9 @@ pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct RateLimitSnapshot {
     pub limit_id: Option<String>,
@@ -360,8 +441,9 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/", rename_all = "snake_case")]
 pub enum RateLimitReachedType {
     RateLimitReached,
@@ -411,8 +493,9 @@ impl From<RateLimitReachedType> for CoreRateLimitReachedType {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct RateLimitWindow {
     pub used_percent: i32,
@@ -432,8 +515,9 @@ impl From<CoreRateLimitWindow> for RateLimitWindow {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct CreditsSnapshot {
     pub has_credits: bool,
@@ -451,8 +535,9 @@ impl From<CoreCreditsSnapshot> for CreditsSnapshot {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct SpendControlLimitSnapshot {
     pub limit: String,
@@ -473,8 +558,9 @@ impl From<CoreSpendControlLimitSnapshot> for SpendControlLimitSnapshot {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AccountLoginCompletedNotification {
     // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.

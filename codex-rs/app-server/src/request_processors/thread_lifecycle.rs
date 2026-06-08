@@ -139,7 +139,7 @@ pub(super) async fn ensure_conversation_listener(
     conversation_id: ThreadId,
     connection_id: ConnectionId,
     raw_events_enabled: bool,
-) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
+) -> Result<EnsureConversationListenerResult, RpcError> {
     let conversation = match listener_task_context
         .thread_manager
         .get_thread(conversation_id)
@@ -186,7 +186,7 @@ pub(super) async fn ensure_conversation_listener(
 }
 
 pub(super) fn log_listener_attach_result(
-    result: Result<EnsureConversationListenerResult, JSONRPCErrorError>,
+    result: Result<EnsureConversationListenerResult, RpcError>,
     thread_id: ThreadId,
     connection_id: ConnectionId,
     thread_kind: &'static str,
@@ -214,7 +214,7 @@ pub(super) async fn ensure_listener_task_running(
     conversation_id: ThreadId,
     conversation: Arc<CodexThread>,
     thread_state: Arc<Mutex<ThreadState>>,
-) -> Result<(), JSONRPCErrorError> {
+) -> Result<(), RpcError> {
     let (cancel_tx, mut cancel_rx) = oneshot::channel();
     let Some(mut unloading_state) = UnloadingState::new(
         &listener_task_context,

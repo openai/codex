@@ -23,7 +23,7 @@ use codex_app_server_protocol::FsWatchParams;
 use codex_app_server_protocol::FsWatchResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
@@ -49,7 +49,7 @@ impl FsRequestProcessor {
         }
     }
 
-    fn file_system(&self) -> Result<Arc<dyn ExecutorFileSystem>, JSONRPCErrorError> {
+    fn file_system(&self) -> Result<Arc<dyn ExecutorFileSystem>, RpcError> {
         self.environment_manager
             .try_local_environment()
             .map(|environment| environment.get_filesystem())
@@ -63,7 +63,7 @@ impl FsRequestProcessor {
     pub(crate) async fn read_file(
         &self,
         params: FsReadFileParams,
-    ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
+    ) -> Result<FsReadFileResponse, RpcError> {
         let bytes = self
             .file_system()?
             .read_file(&params.path, /*sandbox*/ None)
@@ -77,7 +77,7 @@ impl FsRequestProcessor {
     pub(crate) async fn write_file(
         &self,
         params: FsWriteFileParams,
-    ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
+    ) -> Result<FsWriteFileResponse, RpcError> {
         let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
             invalid_request(format!(
                 "fs/writeFile requires valid base64 dataBase64: {err}"
@@ -93,7 +93,7 @@ impl FsRequestProcessor {
     pub(crate) async fn create_directory(
         &self,
         params: FsCreateDirectoryParams,
-    ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
+    ) -> Result<FsCreateDirectoryResponse, RpcError> {
         self.file_system()?
             .create_directory(
                 &params.path,
@@ -110,7 +110,7 @@ impl FsRequestProcessor {
     pub(crate) async fn get_metadata(
         &self,
         params: FsGetMetadataParams,
-    ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
+    ) -> Result<FsGetMetadataResponse, RpcError> {
         let metadata = self
             .file_system()?
             .get_metadata(&params.path, /*sandbox*/ None)
@@ -128,7 +128,7 @@ impl FsRequestProcessor {
     pub(crate) async fn read_directory(
         &self,
         params: FsReadDirectoryParams,
-    ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
+    ) -> Result<FsReadDirectoryResponse, RpcError> {
         let entries = self
             .file_system()?
             .read_directory(&params.path, /*sandbox*/ None)
@@ -149,7 +149,7 @@ impl FsRequestProcessor {
     pub(crate) async fn remove(
         &self,
         params: FsRemoveParams,
-    ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
+    ) -> Result<FsRemoveResponse, RpcError> {
         self.file_system()?
             .remove(
                 &params.path,
@@ -164,10 +164,7 @@ impl FsRequestProcessor {
         Ok(FsRemoveResponse {})
     }
 
-    pub(crate) async fn copy(
-        &self,
-        params: FsCopyParams,
-    ) -> Result<FsCopyResponse, JSONRPCErrorError> {
+    pub(crate) async fn copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, RpcError> {
         self.file_system()?
             .copy(
                 &params.source_path,
@@ -186,7 +183,7 @@ impl FsRequestProcessor {
         &self,
         connection_id: ConnectionId,
         params: FsWatchParams,
-    ) -> Result<FsWatchResponse, JSONRPCErrorError> {
+    ) -> Result<FsWatchResponse, RpcError> {
         self.file_system()?;
         self.fs_watch_manager.watch(connection_id, params).await
     }
@@ -195,13 +192,13 @@ impl FsRequestProcessor {
         &self,
         connection_id: ConnectionId,
         params: FsUnwatchParams,
-    ) -> Result<FsUnwatchResponse, JSONRPCErrorError> {
+    ) -> Result<FsUnwatchResponse, RpcError> {
         self.file_system()?;
         self.fs_watch_manager.unwatch(connection_id, params).await
     }
 }
 
-fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
+fn map_fs_error(err: io::Error) -> RpcError {
     if err.kind() == io::ErrorKind::InvalidInput {
         invalid_request(err.to_string())
     } else {

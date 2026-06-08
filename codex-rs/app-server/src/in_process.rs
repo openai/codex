@@ -17,11 +17,9 @@
 //!
 //! # Transport model
 //!
-//! The runtime is transport-local but not protocol-free. Incoming requests are
-//! typed [`ClientRequest`] values, yet responses still come back through the
-//! same JSON-RPC result envelope that `MessageProcessor` uses for stdio and
-//! websocket transports. This keeps in-process behavior aligned with
-//! app-server rather than creating a second execution contract.
+//! The runtime is transport-local but not protocol-free. Requests and responses
+//! use the same typed enums as native gRPC, keeping in-process behavior aligned
+//! with app-server rather than creating a second execution contract.
 //!
 //! # Backpressure
 //!
@@ -69,13 +67,14 @@ use crate::transport::route_outgoing_envelope;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeParams;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::Result;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
@@ -99,7 +98,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default bounded channel capacity for in-process runtime queues.
 pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 
-type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
+type PendingClientRequestResponse = std::result::Result<ClientResponse, RpcError>;
 
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(
@@ -176,12 +175,11 @@ enum InProcessClientMessage {
         notification: ClientNotification,
     },
     ServerRequestResponse {
-        request_id: RequestId,
-        result: Result,
+        response: ServerResponse,
     },
     ServerRequestError {
         request_id: RequestId,
-        error: JSONRPCErrorError,
+        error: RpcError,
     },
     Shutdown {
         done_tx: oneshot::Sender<()>,
@@ -217,18 +215,11 @@ impl InProcessClientSender {
         self.try_send_client_message(InProcessClientMessage::Notification { notification })
     }
 
-    pub fn respond_to_server_request(&self, request_id: RequestId, result: Result) -> IoResult<()> {
-        self.try_send_client_message(InProcessClientMessage::ServerRequestResponse {
-            request_id,
-            result,
-        })
+    pub fn respond_to_server_request(&self, response: ServerResponse) -> IoResult<()> {
+        self.try_send_client_message(InProcessClientMessage::ServerRequestResponse { response })
     }
 
-    pub fn fail_server_request(
-        &self,
-        request_id: RequestId,
-        error: JSONRPCErrorError,
-    ) -> IoResult<()> {
+    pub fn fail_server_request(&self, request_id: RequestId, error: RpcError) -> IoResult<()> {
         self.try_send_client_message(InProcessClientMessage::ServerRequestError {
             request_id,
             error,
@@ -267,7 +258,7 @@ impl InProcessClientHandle {
     /// Sends a typed client request into the in-process runtime.
     ///
     /// The returned value is a transport-level `IoResult` containing either a
-    /// JSON-RPC success payload or JSON-RPC error payload. Callers must keep
+    /// typed response or RPC error payload. Callers must keep
     /// request IDs unique among concurrent requests; reusing an in-flight ID
     /// produces an `INVALID_REQUEST` response and can make request routing
     /// ambiguous in the caller.
@@ -288,19 +279,15 @@ impl InProcessClientHandle {
     /// This should be used only with request IDs received from the current
     /// runtime event stream; sending arbitrary IDs has no effect on app-server
     /// state and can mask a stuck approval flow in the caller.
-    pub fn respond_to_server_request(&self, request_id: RequestId, result: Result) -> IoResult<()> {
-        self.client.respond_to_server_request(request_id, result)
+    pub fn respond_to_server_request(&self, response: ServerResponse) -> IoResult<()> {
+        self.client.respond_to_server_request(response)
     }
 
     /// Rejects a pending [`ServerRequest`](InProcessServerEvent::ServerRequest).
     ///
     /// Use this when the embedder cannot satisfy a server request; leaving
     /// requests unanswered can stall turn progress.
-    pub fn fail_server_request(
-        &self,
-        request_id: RequestId,
-        error: JSONRPCErrorError,
-    ) -> IoResult<()> {
+    pub fn fail_server_request(&self, request_id: RequestId, error: RpcError) -> IoResult<()> {
         self.client.fail_server_request(request_id, error)
     }
 
@@ -436,7 +423,6 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 auth_manager,
                 installation_id,
                 rpc_transport: AppServerRpcTransport::InProcess,
-                remote_control_handle: None,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
@@ -547,7 +533,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                     if let Some(response_tx) =
                                         pending_request_responses.remove(&request_id)
                                     {
-                                        let _ = response_tx.send(Err(JSONRPCErrorError {
+                                        let _ = response_tx.send(Err(RpcError {
                                             code: OVERLOADED_ERROR_CODE,
                                             message: "in-process app-server request queue is full"
                                                 .to_string(),
@@ -578,9 +564,9 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                 }
                             }
                         }
-                        Some(InProcessClientMessage::ServerRequestResponse { request_id, result }) => {
+                        Some(InProcessClientMessage::ServerRequestResponse { response }) => {
                             outgoing_message_sender
-                                .notify_client_response(request_id, result)
+                                .notify_client_response(response)
                                 .await;
                         }
                         Some(InProcessClientMessage::ServerRequestError { request_id, error }) => {
@@ -604,11 +590,14 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                     let outgoing_message = queued_message.message;
                     match outgoing_message {
                         OutgoingMessage::Response(response) => {
-                            if let Some(response_tx) = pending_request_responses.remove(&response.id) {
-                                let _ = response_tx.send(Ok(response.result));
+                            let request_id = response.response.id().clone();
+                            if let Some(response_tx) =
+                                pending_request_responses.remove(&request_id)
+                            {
+                                let _ = response_tx.send(Ok(response.response));
                             } else {
                                 warn!(
-                                    request_id = ?response.id,
+                                    ?request_id,
                                     "dropping unmatched in-process response"
                                 );
                             }
@@ -631,7 +620,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                             {
                                 let (error, inner) = match send_error {
                                     mpsc::error::TrySendError::Full(inner) => (
-                                        JSONRPCErrorError {
+                                        RpcError {
                                             code: OVERLOADED_ERROR_CODE,
                                             message:
                                                 "in-process server request queue is full".to_string(),
@@ -728,10 +717,8 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
 mod tests {
     use super::*;
     use codex_app_server_protocol::ClientInfo;
-    use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
-    use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnItemsView;
@@ -811,10 +798,10 @@ mod tests {
             .await
             .expect("request transport should work")
             .expect("request should succeed");
-        assert!(response.is_object());
-
-        let _parsed: ConfigRequirementsReadResponse =
-            serde_json::from_value(response).expect("response should match v2 schema");
+        assert!(matches!(
+            response,
+            ClientResponse::ConfigRequirementsRead { .. }
+        ));
         client
             .shutdown()
             .await
@@ -839,8 +826,12 @@ mod tests {
                 .await
                 .expect("request transport should work")
                 .expect("thread/start should succeed");
-            let parsed: ThreadStartResponse =
-                serde_json::from_value(response).expect("thread/start response should parse");
+            let ClientResponse::ThreadStart {
+                response: parsed, ..
+            } = response
+            else {
+                panic!("expected thread/start response");
+            };
             assert_eq!(parsed.thread.source, expected_source);
             client
                 .shutdown()
@@ -868,8 +859,10 @@ mod tests {
                 Err(err) => panic!("request transport should work: {err}"),
             }
         };
-        let _parsed: ConfigRequirementsReadResponse =
-            serde_json::from_value(response).expect("response should match v2 schema");
+        assert!(matches!(
+            response,
+            ClientResponse::ConfigRequirementsRead { .. }
+        ));
         client
             .shutdown()
             .await

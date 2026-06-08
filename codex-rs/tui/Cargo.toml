@@ -151,7 +151,7 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
-codex-cli = { workspace = true }
+codex-app-server-protocol = { workspace = true, features = ["serde-compat"] }
 codex-mcp = { workspace = true }
 core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }

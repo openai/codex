@@ -35,7 +35,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
 use codex_protocol::protocol::RealtimeVoicesList;
@@ -475,11 +474,6 @@ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: Dy
     sess.notify_dynamic_tool_response(&id, response).await;
 }
 
-pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
-    let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
-    *guard = Some(refresh_config);
-}
-
 pub async fn reload_user_config(sess: &Arc<Session>) {
     sess.reload_user_config_layer().await;
 }
@@ -821,10 +815,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::DynamicToolResponse { id, response } => {
                     dynamic_tool_response(&sess, id, response).await;
-                    false
-                }
-                Op::RefreshMcpServers { config } => {
-                    refresh_mcp_servers(&sess, config).await;
                     false
                 }
                 Op::ReloadUserConfig => {

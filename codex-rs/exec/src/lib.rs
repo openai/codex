@@ -16,20 +16,22 @@ pub use cli::ReviewArgs;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
 use codex_app_server_client::ExecServerRuntimePaths;
+use codex_app_server_client::FromClientResponse;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigWarningNotification;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::ThreadListParams;
@@ -1139,7 +1141,7 @@ async fn send_request_with_response<T>(
     method: &str,
 ) -> Result<T, String>
 where
-    T: serde::de::DeserializeOwned,
+    T: FromClientResponse,
 {
     client.request_typed(request).await.map_err(|err| {
         if method.is_empty() {
@@ -1552,13 +1554,12 @@ fn resume_lookup_model_providers(
     }
 }
 
-fn canceled_mcp_server_elicitation_response() -> Result<Value, String> {
-    serde_json::to_value(McpServerElicitationRequestResponse {
+fn canceled_mcp_server_elicitation_response() -> McpServerElicitationRequestResponse {
+    McpServerElicitationRequestResponse {
         action: McpServerElicitationAction::Cancel,
         content: None,
         meta: None,
-    })
-    .map_err(|err| format!("failed to encode mcp elicitation response: {err}"))
+    }
 }
 
 async fn request_shutdown(
@@ -1577,18 +1578,6 @@ async fn request_shutdown(
         .map(|_| ())
 }
 
-async fn resolve_server_request(
-    client: &InProcessAppServerClient,
-    request_id: RequestId,
-    value: serde_json::Value,
-    method: &str,
-) -> Result<(), String> {
-    client
-        .resolve_server_request(request_id, value)
-        .await
-        .map_err(|err| format!("failed to resolve `{method}` server request: {err}"))
-}
-
 async fn reject_server_request(
     client: &InProcessAppServerClient,
     request_id: RequestId,
@@ -1598,7 +1587,7 @@ async fn reject_server_request(
     client
         .reject_server_request(
             request_id,
-            JSONRPCErrorError {
+            RpcError {
                 code: -32000,
                 message: reason,
                 data: None,
@@ -1609,15 +1598,21 @@ async fn reject_server_request(
 }
 
 fn server_request_method_name(request: &ServerRequest) -> String {
-    serde_json::to_value(request)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("method")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "unknown".to_string())
+    match request {
+        ServerRequest::CommandExecutionRequestApproval { .. } => {
+            "item/commandExecution/requestApproval"
+        }
+        ServerRequest::FileChangeRequestApproval { .. } => "item/fileChange/requestApproval",
+        ServerRequest::ToolRequestUserInput { .. } => "item/tool/requestUserInput",
+        ServerRequest::McpServerElicitationRequest { .. } => "mcpServer/elicitation/request",
+        ServerRequest::PermissionsRequestApproval { .. } => "item/permissions/requestApproval",
+        ServerRequest::DynamicToolCall { .. } => "item/tool/call",
+        ServerRequest::ChatgptAuthTokensRefresh { .. } => "account/chatgptAuthTokens/refresh",
+        ServerRequest::AttestationGenerate { .. } => "attestation/generate",
+        ServerRequest::ApplyPatchApproval { .. } => "applyPatchApproval",
+        ServerRequest::ExecCommandApproval { .. } => "execCommandApproval",
+    }
+    .to_string()
 }
 
 async fn handle_server_request(
@@ -1631,18 +1626,17 @@ async fn handle_server_request(
             // Exec auto-cancels elicitation instead of surfacing it
             // interactively. Preserve that behavior for attached subagent
             // threads too so we do not turn a cancel into a decline/error.
-            match canceled_mcp_server_elicitation_response() {
-                Ok(value) => {
-                    resolve_server_request(
-                        client,
-                        request_id,
-                        value,
-                        "mcpServer/elicitation/request",
+            client
+                .resolve_server_request(ServerResponse::McpServerElicitationRequest {
+                    request_id,
+                    response: canceled_mcp_server_elicitation_response(),
+                })
+                .await
+                .map_err(|err| {
+                    format!(
+                        "failed to resolve `mcpServer/elicitation/request` server request: {err}"
                     )
-                    .await
-                }
-                Err(err) => Err(err),
-            }
+                })
         }
         ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
             reject_server_request(

@@ -8,7 +8,6 @@ use std::sync::OnceLock;
 
 use crate::app_command::AppCommand;
 use crate::legacy_core::config::Config;
-use serde::Serialize;
 use serde_json::json;
 
 use crate::app_event::AppEvent;
@@ -214,7 +213,13 @@ pub(crate) fn log_outbound_op(op: &AppCommand) {
     if !LOGGER.is_enabled() {
         return;
     }
-    write_record("from_tui", "op", op);
+    let value = json!({
+        "ts": now_ts(),
+        "dir": "from_tui",
+        "kind": "op",
+        "payload": format!("{op:?}"),
+    });
+    LOGGER.write_json_line(value);
 }
 
 pub(crate) fn log_session_end() {
@@ -225,19 +230,6 @@ pub(crate) fn log_session_end() {
         "ts": now_ts(),
         "dir": "meta",
         "kind": "session_end",
-    });
-    LOGGER.write_json_line(value);
-}
-
-fn write_record<T>(dir: &str, kind: &str, obj: &T)
-where
-    T: Serialize,
-{
-    let value = json!({
-        "ts": now_ts(),
-        "dir": dir,
-        "kind": kind,
-        "payload": obj,
     });
     LOGGER.write_json_line(value);
 }

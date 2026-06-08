@@ -1,7 +1,7 @@
 use clap::Parser;
 use codex_app_server::AppServerRuntimeOptions;
 use codex_app_server::AppServerTransport;
-use codex_app_server::AppServerWebsocketAuthArgs;
+#[cfg(debug_assertions)]
 use codex_app_server::PluginStartupTasks;
 use codex_app_server::run_main_with_transport_options;
 use codex_arg0::Arg0DispatchPaths;
@@ -13,7 +13,9 @@ use std::path::PathBuf;
 
 // Debug-only test hook: lets integration tests point the server at a temporary
 // managed config file without writing to /etc.
+#[cfg(debug_assertions)]
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH";
+#[cfg(debug_assertions)]
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
 #[derive(Debug, Parser)]
@@ -22,8 +24,7 @@ struct AppServerArgs {
     #[command(flatten)]
     config_overrides: CliConfigOverrides,
 
-    /// Transport endpoint URL. Supported values: `stdio://` (default),
-    /// `unix://`, `unix://PATH`, `ws://IP:PORT`, `off`.
+    /// Native gRPC endpoint URL. Supported values: `grpc://IP:PORT` and `off`.
     #[arg(
         long = "listen",
         value_name = "URL",
@@ -40,9 +41,6 @@ struct AppServerArgs {
     )]
     session_source: SessionSource,
 
-    #[command(flatten)]
-    auth: AppServerWebsocketAuthArgs,
-
     /// Fail if config.toml contains unknown configuration fields.
     #[arg(long = "strict-config", default_value_t = false)]
     strict_config: bool,
@@ -52,10 +50,6 @@ struct AppServerArgs {
     #[cfg(debug_assertions)]
     #[arg(long = "disable-plugin-startup-tasks-for-tests", hide = true)]
     disable_plugin_startup_tasks_for_tests: bool,
-
-    /// Enable remote control for this app-server process.
-    #[arg(long = "remote-control", hide = true)]
-    remote_control: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -64,11 +58,9 @@ fn main() -> anyhow::Result<()> {
             config_overrides,
             listen,
             session_source,
-            auth,
             strict_config,
             #[cfg(debug_assertions)]
             disable_plugin_startup_tasks_for_tests,
-            remote_control,
         } = AppServerArgs::parse();
         let loader_overrides = if disable_managed_config_from_debug_env() {
             LoaderOverrides::without_managed_config_for_tests()
@@ -78,14 +70,15 @@ fn main() -> anyhow::Result<()> {
                 .unwrap_or_default()
         };
         let transport = listen;
-        let auth = auth.try_into_settings()?;
-        let mut runtime_options = AppServerRuntimeOptions::default();
+        let runtime_options = AppServerRuntimeOptions::default();
         #[cfg(debug_assertions)]
-        if disable_plugin_startup_tasks_for_tests {
-            runtime_options.plugin_startup_tasks = PluginStartupTasks::Skip;
-        }
-        runtime_options.remote_control_enabled = remote_control;
-
+        let runtime_options = {
+            let mut runtime_options = runtime_options;
+            if disable_plugin_startup_tasks_for_tests {
+                runtime_options.plugin_startup_tasks = PluginStartupTasks::Skip;
+            }
+            runtime_options
+        };
         run_main_with_transport_options(
             arg0_paths,
             config_overrides,
@@ -94,7 +87,6 @@ fn main() -> anyhow::Result<()> {
             /*default_analytics_enabled*/ false,
             transport,
             session_source,
-            auth,
             runtime_options,
         )
         .await?;

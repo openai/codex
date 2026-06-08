@@ -21,12 +21,12 @@ use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
 use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_config::ConfigRequirementsToml;
@@ -80,7 +80,7 @@ impl ConfigRequestProcessor {
     pub(crate) async fn read(
         &self,
         params: ConfigReadParams,
-    ) -> Result<ConfigReadResponse, JSONRPCErrorError> {
+    ) -> Result<ConfigReadResponse, RpcError> {
         let fallback_cwd = params.cwd.as_ref().map(PathBuf::from);
         let mut response = self.config_manager.read(params).await.map_err(map_error)?;
         let config = self.load_latest_config(fallback_cwd).await?;
@@ -108,7 +108,7 @@ impl ConfigRequestProcessor {
 
     pub(crate) async fn config_requirements_read(
         &self,
-    ) -> Result<ConfigRequirementsReadResponse, JSONRPCErrorError> {
+    ) -> Result<ConfigRequirementsReadResponse, RpcError> {
         let requirements = self
             .config_manager
             .read_requirements()
@@ -122,7 +122,7 @@ impl ConfigRequestProcessor {
     pub(crate) async fn value_write(
         &self,
         params: ConfigValueWriteParams,
-    ) -> Result<ClientResponsePayload, JSONRPCErrorError> {
+    ) -> Result<ClientResponsePayload, RpcError> {
         self.handle_config_mutation_result(self.write_value(params).await)
             .await
             .map(ClientResponsePayload::ConfigValueWrite)
@@ -131,7 +131,7 @@ impl ConfigRequestProcessor {
     pub(crate) async fn batch_write(
         &self,
         params: ConfigBatchWriteParams,
-    ) -> Result<ClientResponsePayload, JSONRPCErrorError> {
+    ) -> Result<ClientResponsePayload, RpcError> {
         self.handle_config_mutation_result(self.batch_write_inner(params).await)
             .await
             .map(ClientResponsePayload::ConfigBatchWrite)
@@ -141,7 +141,7 @@ impl ConfigRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ExperimentalFeatureEnablementSetParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         let response = self
             .handle_config_mutation_result(self.set_experimental_feature_enablement(params).await)
             .await?;
@@ -156,7 +156,7 @@ impl ConfigRequestProcessor {
 
     pub(crate) async fn model_provider_capabilities_read(
         &self,
-    ) -> Result<ModelProviderCapabilitiesReadResponse, JSONRPCErrorError> {
+    ) -> Result<ModelProviderCapabilitiesReadResponse, RpcError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let provider = create_model_provider(config.model_provider, /*auth_manager*/ None);
         let capabilities = provider.capabilities();
@@ -174,8 +174,8 @@ impl ConfigRequestProcessor {
 
     async fn handle_config_mutation_result<T>(
         &self,
-        result: std::result::Result<T, JSONRPCErrorError>,
-    ) -> Result<T, JSONRPCErrorError> {
+        result: std::result::Result<T, RpcError>,
+    ) -> Result<T, RpcError> {
         let response = result?;
         self.handle_config_mutation().await;
         Ok(response)
@@ -184,7 +184,7 @@ impl ConfigRequestProcessor {
     async fn load_latest_config(
         &self,
         fallback_cwd: Option<PathBuf>,
-    ) -> Result<codex_core::config::Config, JSONRPCErrorError> {
+    ) -> Result<codex_core::config::Config, RpcError> {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
@@ -198,7 +198,7 @@ impl ConfigRequestProcessor {
     async fn write_value(
         &self,
         params: ConfigValueWriteParams,
-    ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
+    ) -> Result<ConfigWriteResponse, RpcError> {
         let pending_changes = codex_core_plugins::toggles::collect_plugin_enabled_candidates(
             [(&params.key_path, &params.value)].into_iter(),
         );
@@ -214,7 +214,7 @@ impl ConfigRequestProcessor {
     async fn batch_write_inner(
         &self,
         params: ConfigBatchWriteParams,
-    ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
+    ) -> Result<ConfigWriteResponse, RpcError> {
         let reload_user_config = params.reload_user_config;
         let pending_changes = codex_core_plugins::toggles::collect_plugin_enabled_candidates(
             params
@@ -237,7 +237,7 @@ impl ConfigRequestProcessor {
     async fn set_experimental_feature_enablement(
         &self,
         params: ExperimentalFeatureEnablementSetParams,
-    ) -> Result<ExperimentalFeatureEnablementSetResponse, JSONRPCErrorError> {
+    ) -> Result<ExperimentalFeatureEnablementSetResponse, RpcError> {
         let ExperimentalFeatureEnablementSetParams { mut enablement } = params;
         let mut invalid_keys = Vec::new();
         enablement.retain(|key, _| {
@@ -545,7 +545,7 @@ fn map_network_unix_socket_permission_to_api(
     }
 }
 
-fn map_error(err: ConfigManagerError) -> JSONRPCErrorError {
+fn map_error(err: ConfigManagerError) -> RpcError {
     if let Some(code) = err.write_error_code() {
         return config_write_error(code, err.to_string());
     }
@@ -553,8 +553,16 @@ fn map_error(err: ConfigManagerError) -> JSONRPCErrorError {
     internal_error(err.to_string())
 }
 
-fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) -> JSONRPCErrorError {
+fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) -> RpcError {
     let mut error = invalid_request(message);
+    let code = match code {
+        ConfigWriteErrorCode::ConfigLayerReadonly => "configLayerReadonly",
+        ConfigWriteErrorCode::ConfigVersionConflict => "configVersionConflict",
+        ConfigWriteErrorCode::ConfigValidationError => "configValidationError",
+        ConfigWriteErrorCode::ConfigPathNotFound => "configPathNotFound",
+        ConfigWriteErrorCode::ConfigSchemaUnknownKey => "configSchemaUnknownKey",
+        ConfigWriteErrorCode::UserLayerNotFound => "userLayerNotFound",
+    };
     error.data = Some(json!({
         "config_write_error_code": code,
     }));

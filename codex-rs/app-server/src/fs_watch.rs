@@ -6,7 +6,7 @@ use codex_app_server_protocol::FsUnwatchParams;
 use codex_app_server_protocol::FsUnwatchResponse;
 use codex_app_server_protocol::FsWatchParams;
 use codex_app_server_protocol::FsWatchResponse;
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_file_watcher::DebouncedWatchReceiver;
 use codex_file_watcher::FileWatcher;
@@ -77,7 +77,7 @@ impl FsWatchManager {
         &self,
         connection_id: ConnectionId,
         params: FsWatchParams,
-    ) -> Result<FsWatchResponse, JSONRPCErrorError> {
+    ) -> Result<FsWatchResponse, RpcError> {
         let watch_id = params.watch_id;
         let watch_key = WatchKey {
             connection_id,
@@ -147,7 +147,7 @@ impl FsWatchManager {
         &self,
         connection_id: ConnectionId,
         params: FsUnwatchParams,
-    ) -> Result<FsUnwatchResponse, JSONRPCErrorError> {
+    ) -> Result<FsUnwatchResponse, RpcError> {
         let watch_key = WatchKey {
             connection_id,
             watch_id: params.watch_id,

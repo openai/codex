@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use crate::app_command::AppCommand as Op;
 use codex_app_server_protocol::McpElicitationEnumSchema;
 use codex_app_server_protocol::McpElicitationPrimitiveSchema;
+use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpElicitationSingleSelectEnumSchema;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequest;
@@ -223,7 +224,6 @@ impl McpServerElicitationFormRequest {
             return None;
         };
 
-        let requested_schema = serde_json::to_value(requested_schema).ok()?;
         Self::from_parts(
             thread_id,
             server_name,
@@ -240,7 +240,7 @@ impl McpServerElicitationFormRequest {
         request_id: AppServerRequestId,
         meta: Option<Value>,
         message: String,
-        requested_schema: Value,
+        requested_schema: McpElicitationSchema,
     ) -> Option<Self> {
         let tool_suggestion = parse_tool_suggestion_request(meta.as_ref());
         let is_tool_approval = meta
@@ -249,14 +249,7 @@ impl McpServerElicitationFormRequest {
             .and_then(|meta| meta.get(APPROVAL_META_KIND_KEY))
             .and_then(Value::as_str)
             == Some(APPROVAL_META_KIND_MCP_TOOL_CALL);
-        let is_empty_object_schema = requested_schema.as_object().is_some_and(|schema| {
-            schema.get("type").and_then(Value::as_str) == Some("object")
-                && schema
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .is_some_and(serde_json::Map::is_empty)
-        });
-        let is_message_only_schema = requested_schema.is_null() || is_empty_object_schema;
+        let is_message_only_schema = requested_schema.properties.is_empty();
         let is_tool_approval_action = is_tool_approval && is_message_only_schema;
         let approval_display_params = if is_tool_approval_action {
             parse_tool_approval_display_params(meta.as_ref())
@@ -529,26 +522,18 @@ fn format_tool_approval_display_param_value(value: &Value) -> String {
     truncate_text(&formatted, APPROVAL_TOOL_PARAM_VALUE_TRUNCATE_GRAPHEMES)
 }
 
-fn parse_fields_from_schema(requested_schema: &Value) -> Option<Vec<McpServerElicitationField>> {
-    let schema = requested_schema.as_object()?;
-    if schema.get("type").and_then(Value::as_str) != Some("object") {
-        return None;
-    }
-    let required = schema
-        .get("required")
-        .and_then(Value::as_array)
-        .into_iter()
+fn parse_fields_from_schema(
+    requested_schema: &McpElicitationSchema,
+) -> Option<Vec<McpServerElicitationField>> {
+    let required = requested_schema
+        .required
+        .iter()
         .flatten()
-        .filter_map(Value::as_str)
         .map(ToString::to_string)
         .collect::<HashSet<_>>();
-    let properties = schema.get("properties")?.as_object()?;
     let mut fields = Vec::new();
-    for (id, property_schema) in properties {
-        let property =
-            serde_json::from_value::<McpElicitationPrimitiveSchema>(property_schema.clone())
-                .ok()?;
-        fields.push(parse_field(id, property, required.contains(id))?);
+    for (id, property) in &requested_schema.properties {
+        fields.push(parse_field(id, property.clone(), required.contains(id))?);
     }
     if fields.is_empty() {
         return None;
@@ -1739,6 +1724,10 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::render::renderable::Renderable;
+    use codex_app_server_protocol::McpElicitationBooleanSchema;
+    use codex_app_server_protocol::McpElicitationBooleanType;
+    use codex_app_server_protocol::McpElicitationNumberSchema;
+    use codex_app_server_protocol::McpElicitationNumberType;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::UnboundedReceiver;
     use tokio::sync::mpsc::unbounded_channel;
@@ -1750,7 +1739,7 @@ mod tests {
 
     fn form_request(
         message: &str,
-        requested_schema: Value,
+        requested_schema: McpElicitationSchema,
         meta: Option<Value>,
     ) -> McpServerElicitationRequestParams {
         McpServerElicitationRequestParams {
@@ -1760,8 +1749,7 @@ mod tests {
             request: McpServerElicitationRequest::Form {
                 meta,
                 message: message.to_string(),
-                requested_schema: serde_json::from_value(requested_schema)
-                    .expect("test schema should deserialize"),
+                requested_schema,
             },
         }
     }
@@ -1781,11 +1769,52 @@ mod tests {
         )
     }
 
-    fn empty_object_schema() -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {},
-        })
+    fn empty_object_schema() -> McpElicitationSchema {
+        McpElicitationSchema::default()
+    }
+
+    fn boolean_form_schema(
+        fields: &[(&str, &str, Option<&str>)],
+        required: &[&str],
+    ) -> McpElicitationSchema {
+        McpElicitationSchema {
+            properties: fields
+                .iter()
+                .map(|(id, title, description)| {
+                    (
+                        (*id).to_string(),
+                        McpElicitationPrimitiveSchema::Boolean(McpElicitationBooleanSchema {
+                            type_: McpElicitationBooleanType::Boolean,
+                            title: Some((*title).to_string()),
+                            description: description.map(ToString::to_string),
+                            default: None,
+                        }),
+                    )
+                })
+                .collect(),
+            required: (!required.is_empty())
+                .then(|| required.iter().map(ToString::to_string).collect()),
+            ..Default::default()
+        }
+    }
+
+    fn integer_form_schema(id: &str, title: &str) -> McpElicitationSchema {
+        McpElicitationSchema {
+            properties: [(
+                id.to_string(),
+                McpElicitationPrimitiveSchema::Number(McpElicitationNumberSchema {
+                    type_: McpElicitationNumberType::Integer,
+                    title: Some(title.to_string()),
+                    description: None,
+                    minimum: None,
+                    maximum: None,
+                    default: None,
+                }),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        }
     }
 
     fn tool_approval_meta(
@@ -1856,17 +1885,10 @@ mod tests {
             thread_id,
             form_request(
                 "Allow this request?",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "confirmed": {
-                            "type": "boolean",
-                            "title": "Confirm",
-                            "description": "Approve the pending action.",
-                        }
-                    },
-                    "required": ["confirmed"],
-                }),
+                boolean_form_schema(
+                    &[("confirmed", "Confirm", Some("Approve the pending action."))],
+                    &["confirmed"],
+                ),
                 /*meta*/ None,
             ),
         )
@@ -1913,15 +1935,7 @@ mod tests {
             ThreadId::default(),
             form_request(
                 "Pick a number",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "count": {
-                            "type": "integer",
-                            "title": "Count",
-                        }
-                    },
-                }),
+                integer_form_schema("count", "Count"),
                 /*meta*/ None,
             ),
         );
@@ -2154,17 +2168,10 @@ mod tests {
             thread_id,
             form_request(
                 "Allow this request?",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "confirmed": {
-                            "type": "boolean",
-                            "title": "Confirm",
-                            "description": "Approve the pending action.",
-                        }
-                    },
-                    "required": ["confirmed"],
-                }),
+                boolean_form_schema(
+                    &[("confirmed", "Confirm", Some("Approve the pending action."))],
+                    &["confirmed"],
+                ),
                 /*meta*/ None,
             ),
         )
@@ -2207,20 +2214,10 @@ mod tests {
             ThreadId::default(),
             form_request(
                 "Choose values",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "first": {
-                            "type": "boolean",
-                            "title": "First",
-                        },
-                        "second": {
-                            "type": "boolean",
-                            "title": "Second",
-                        }
-                    },
-                    "required": ["first", "second"],
-                }),
+                boolean_form_schema(
+                    &[("first", "First", None), ("second", "Second", None)],
+                    &["first", "second"],
+                ),
                 /*meta*/ None,
             ),
         )
@@ -2353,17 +2350,10 @@ mod tests {
             thread_id,
             form_request(
                 "Allow this request?",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "confirmed": {
-                            "type": "boolean",
-                            "title": "Confirm",
-                            "description": "Approve the pending action.",
-                        }
-                    },
-                    "required": ["confirmed"],
-                }),
+                boolean_form_schema(
+                    &[("confirmed", "Confirm", Some("Approve the pending action."))],
+                    &["confirmed"],
+                ),
                 /*meta*/ None,
             ),
         )
@@ -2403,15 +2393,7 @@ mod tests {
             ThreadId::default(),
             form_request(
                 "First",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "confirmed": {
-                            "type": "boolean",
-                            "title": "Confirm",
-                        }
-                    },
-                }),
+                boolean_form_schema(&[("confirmed", "Confirm", None)], &[]),
                 /*meta*/ None,
             ),
         )
@@ -2420,15 +2402,7 @@ mod tests {
             ThreadId::default(),
             form_request(
                 "Second",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "confirmed": {
-                            "type": "boolean",
-                            "title": "Confirm",
-                        }
-                    },
-                }),
+                boolean_form_schema(&[("confirmed", "Confirm", None)], &[]),
                 /*meta*/ None,
             ),
         )
@@ -2437,15 +2411,7 @@ mod tests {
             ThreadId::default(),
             form_request(
                 "Third",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "confirmed": {
-                            "type": "boolean",
-                            "title": "Confirm",
-                        }
-                    },
-                }),
+                boolean_form_schema(&[("confirmed", "Confirm", None)], &[]),
                 /*meta*/ None,
             ),
         )
@@ -2472,15 +2438,7 @@ mod tests {
     fn resolved_request_dismisses_overlay_without_emitting_events() {
         let (tx, mut rx) = test_sender();
         let thread_id = ThreadId::default();
-        let supported_form_schema = serde_json::json!({
-            "type": "object",
-            "properties": {
-                "confirmed": {
-                    "type": "boolean",
-                    "title": "Confirm",
-                }
-            },
-        });
+        let supported_form_schema = boolean_form_schema(&[("confirmed", "Confirm", None)], &[]);
         let mut overlay = McpServerElicitationOverlay::new(
             from_form_request(
                 thread_id,
@@ -2503,8 +2461,7 @@ mod tests {
                     request: McpServerElicitationRequest::Form {
                         meta: None,
                         message: "Second".to_string(),
-                        requested_schema: serde_json::from_value(supported_form_schema)
-                            .expect("test schema should deserialize"),
+                        requested_schema: supported_form_schema,
                     },
                 },
             )
@@ -2543,17 +2500,10 @@ mod tests {
             ThreadId::default(),
             form_request(
                 "Allow this request?",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "confirmed": {
-                            "type": "boolean",
-                            "title": "Confirm",
-                            "description": "Approve the pending action.",
-                        }
-                    },
-                    "required": ["confirmed"],
-                }),
+                boolean_form_schema(
+                    &[("confirmed", "Confirm", Some("Approve the pending action."))],
+                    &["confirmed"],
+                ),
                 /*meta*/ None,
             ),
         )

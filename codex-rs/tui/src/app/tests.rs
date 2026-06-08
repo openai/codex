@@ -40,7 +40,6 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerStartupState;
@@ -53,6 +52,7 @@ use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurn
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
@@ -4365,10 +4365,18 @@ fn active_turn_not_steerable_turn_error_extracts_structured_server_error() {
     };
     let error = TypedRequestError::Server {
         method: "turn/steer".to_string(),
-        source: JSONRPCErrorError {
+        source: RpcError {
             code: -32602,
             message: turn_error.message.clone(),
-            data: Some(serde_json::to_value(&turn_error).expect("turn error should serialize")),
+            data: Some(serde_json::json!({
+                "message": turn_error.message,
+                "codexErrorInfo": {
+                    "activeTurnNotSteerable": {
+                        "turnKind": "review",
+                    },
+                },
+                "additionalDetails": null,
+            })),
         },
     };
 
@@ -4408,7 +4416,7 @@ fn session_start_error_surfaces_archived_guidance_without_rollout_path() {
 fn active_turn_steer_race_detects_missing_active_turn() {
     let error = TypedRequestError::Server {
         method: "turn/steer".to_string(),
-        source: JSONRPCErrorError {
+        source: RpcError {
             code: -32602,
             message: "no active turn to steer".to_string(),
             data: None,
@@ -4426,7 +4434,7 @@ fn active_turn_steer_race_detects_missing_active_turn() {
 fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
     let error = TypedRequestError::Server {
         method: "turn/steer".to_string(),
-        source: JSONRPCErrorError {
+        source: RpcError {
             code: -32602,
             message: "expected active turn id `turn-expected` but found `turn-actual`".to_string(),
             data: None,

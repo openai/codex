@@ -17,23 +17,30 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use ts_rs::TS;
 
 use crate::protocol::common::AuthMode;
 use crate::protocol::v2::ForcedChatgptWorkspaceIds;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct InitializeParams {
     pub client_info: ClientInfo,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(skip_serializing_if = "Option::is_none")
+    )]
     pub capabilities: Option<InitializeCapabilities>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct ClientInfo {
     pub name: String,
     pub title: Option<String>,
@@ -41,14 +48,15 @@ pub struct ClientInfo {
 }
 
 /// Client-declared capabilities negotiated during initialize.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct InitializeCapabilities {
     /// Opt into receiving experimental API methods and fields.
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub experimental_api: bool,
     /// Opt into `attestation/generate` requests for upstream `x-oai-attestation`.
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub request_attestation: bool,
     /// Exact notification method names that should be suppressed for this
     /// connection (for example `thread/started`).
@@ -56,8 +64,9 @@ pub struct InitializeCapabilities {
     pub opt_out_notification_methods: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct InitializeResponse {
     pub user_agent: String,
     /// Absolute path to the server's $CODEX_HOME directory.
@@ -70,27 +79,30 @@ pub struct InitializeResponse {
     pub platform_os: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(untagged))]
 pub enum GetConversationSummaryParams {
     RolloutPath {
-        #[serde(rename = "rolloutPath")]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "rolloutPath"))]
         rollout_path: PathBuf,
     },
     ThreadId {
-        #[serde(rename = "conversationId")]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "conversationId"))]
         conversation_id: ThreadId,
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct GetConversationSummaryResponse {
     pub summary: ConversationSummary,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct ConversationSummary {
     pub conversation_id: ThreadId,
     pub path: PathBuf,
@@ -104,29 +116,33 @@ pub struct ConversationSummary {
     pub git_info: Option<ConversationGitInfo>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 pub struct ConversationGitInfo {
     pub sha: Option<String>,
     pub branch: Option<String>,
     pub origin_url: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct LoginApiKeyParams {
     pub api_key: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct GitDiffToRemoteResponse {
     pub sha: GitSha,
     pub diff: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct ApplyPatchApprovalParams {
     pub conversation_id: ThreadId,
     /// Use to correlate this with [codex_protocol::protocol::PatchApplyBeginEvent]
@@ -140,14 +156,16 @@ pub struct ApplyPatchApprovalParams {
     pub grant_root: Option<PathBuf>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct ApplyPatchApprovalResponse {
     pub decision: ReviewDecision,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct ExecCommandApprovalParams {
     pub conversation_id: ThreadId,
     /// Use to correlate this with [codex_protocol::protocol::ExecCommandBeginEvent]
@@ -161,26 +179,30 @@ pub struct ExecCommandApprovalParams {
     pub parsed_cmd: Vec<ParsedCommand>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
 pub struct ExecCommandApprovalResponse {
     pub decision: ReviewDecision,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct GitDiffToRemoteParams {
     pub cwd: PathBuf,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct GetAuthStatusParams {
     pub include_token: Option<bool>,
     pub refresh_token: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct ExecOneOffCommandParams {
     pub command: Vec<String>,
     pub timeout_ms: Option<u64>,
@@ -188,16 +210,18 @@ pub struct ExecOneOffCommandParams {
     pub sandbox_policy: Option<SandboxPolicy>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct GetAuthStatusResponse {
     pub auth_method: Option<AuthMode>,
     pub auth_token: Option<String>,
     pub requires_openai_auth: Option<bool>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct UserSavedConfig {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
@@ -211,24 +235,27 @@ pub struct UserSavedConfig {
     pub tools: Option<Tools>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct Tools {
     pub web_search: Option<bool>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct SandboxSettings {
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub writable_roots: Vec<AbsolutePathBuf>,
     pub network_access: Option<bool>,
     pub exclude_tmpdir_env_var: Option<bool>,
     pub exclude_slash_tmp: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 pub struct InterruptConversationResponse {
     pub abort_reason: TurnAbortReason,
 }

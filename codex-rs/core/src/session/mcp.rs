@@ -74,6 +74,18 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 }
 
 impl Session {
+    pub(crate) async fn queue_mcp_server_refresh(
+        &self,
+        mcp_servers: HashMap<String, McpServerConfig>,
+        mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
+    ) {
+        let mut guard = self.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(McpServerRefreshConfig {
+            mcp_servers,
+            mcp_oauth_credentials_store_mode,
+        });
+    }
+
     pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> ElicitationReviewerHandle {
         Arc::new(GuardianMcpElicitationReviewer::new(self))
     }
@@ -111,25 +123,11 @@ impl Session {
                 meta,
                 message,
                 requested_schema,
-            } => {
-                let requested_schema = match serde_json::to_value(requested_schema) {
-                    Ok(requested_schema) => requested_schema,
-                    Err(err) => {
-                        warn!(
-                            "failed to serialize MCP elicitation schema for server_name: {server_name}, request_id: {request_id}: {err:#}"
-                        );
-                        return McpServerElicitationOutcome {
-                            response: None,
-                            sent: false,
-                        };
-                    }
-                };
-                codex_protocol::approvals::ElicitationRequest::Form {
-                    meta,
-                    message,
-                    requested_schema,
-                }
-            }
+            } => codex_protocol::approvals::ElicitationRequest::Form {
+                meta,
+                message,
+                requested_schema,
+            },
             McpServerElicitationRequest::Url {
                 meta,
                 message,
@@ -394,26 +392,13 @@ impl Session {
             mcp_oauth_credentials_store_mode,
         } = refresh_config;
 
-        let mcp_servers =
-            match serde_json::from_value::<HashMap<String, McpServerConfig>>(mcp_servers) {
-                Ok(servers) => servers,
-                Err(err) => {
-                    warn!("failed to parse MCP server refresh config: {err}");
-                    return;
-                }
-            };
-        let store_mode = match serde_json::from_value::<OAuthCredentialsStoreMode>(
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_servers,
             mcp_oauth_credentials_store_mode,
-        ) {
-            Ok(mode) => mode,
-            Err(err) => {
-                warn!("failed to parse MCP OAuth refresh config: {err}");
-                return;
-            }
-        };
-
-        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode, elicitation_reviewer)
-            .await;
+            elicitation_reviewer,
+        )
+        .await;
     }
 
     pub(crate) async fn refresh_mcp_servers_now(

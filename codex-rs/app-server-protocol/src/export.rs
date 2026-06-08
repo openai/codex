@@ -195,12 +195,7 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
     ensure_dir(out_dir)?;
     let envelope_emitters: Vec<JsonSchemaEmitter> = vec![
         |d| write_json_schema_with_return::<crate::RequestId>(d, "RequestId"),
-        |d| write_json_schema_with_return::<crate::JSONRPCMessage>(d, "JSONRPCMessage"),
-        |d| write_json_schema_with_return::<crate::JSONRPCRequest>(d, "JSONRPCRequest"),
-        |d| write_json_schema_with_return::<crate::JSONRPCNotification>(d, "JSONRPCNotification"),
-        |d| write_json_schema_with_return::<crate::JSONRPCResponse>(d, "JSONRPCResponse"),
-        |d| write_json_schema_with_return::<crate::JSONRPCError>(d, "JSONRPCError"),
-        |d| write_json_schema_with_return::<crate::JSONRPCErrorError>(d, "JSONRPCErrorError"),
+        |d| write_json_schema_with_return::<crate::RpcError>(d, "RpcError"),
         |d| write_json_schema_with_return::<crate::ClientRequest>(d, "ClientRequest"),
         |d| write_json_schema_with_return::<crate::ServerRequest>(d, "ServerRequest"),
         |d| write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification"),
@@ -2151,7 +2146,7 @@ mod tests {
                 continue;
             }
 
-            // Only allow "?: T | null" in objects representing JSON-RPC requests,
+            // Only allow "?: T | null" in objects representing RPC requests,
             // which we assume are called "*Params".
             let allow_optional_nullable = path
                 .file_stem()
@@ -2314,7 +2309,7 @@ mod tests {
 
         // If this assertion fails, it means a field was generated as "?: T | null",
         // which is both optional (undefined) and nullable (null), for a type not ending
-        // in "Params" (which represent JSON-RPC requests).
+        // in "Params" (which represent RPC requests).
         assert!(
             optional_nullable_offenders.is_empty(),
             "Generated TypeScript has optional nullable fields outside *Params types (disallowed '?: T | null'):\n{optional_nullable_offenders:?}"

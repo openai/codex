@@ -8,7 +8,7 @@
 use std::error::Error as StdError;
 use std::time::Duration;
 
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 use codex_client::build_reqwest_client_with_custom_ca;
 use futures::FutureExt;
 use futures::StreamExt;
@@ -111,7 +111,7 @@ impl HttpClient for ReqwestHttpClient {
 }
 
 impl ReqwestHttpRequestRunner {
-    pub(crate) fn new(timeout_ms: Option<u64>) -> Result<Self, JSONRPCErrorError> {
+    pub(crate) fn new(timeout_ms: Option<u64>) -> Result<Self, RpcError> {
         let client = ReqwestHttpClient::build_client(timeout_ms)
             .map_err(|error| internal_error(error.to_string()))?;
         Ok(Self { client })
@@ -120,8 +120,7 @@ impl ReqwestHttpRequestRunner {
     pub(crate) async fn run(
         &self,
         params: HttpRequestParams,
-    ) -> Result<(HttpRequestResponse, Option<PendingReqwestHttpBodyStream>), JSONRPCErrorError>
-    {
+    ) -> Result<(HttpRequestResponse, Option<PendingReqwestHttpBodyStream>), RpcError> {
         let method = Method::from_bytes(params.method.as_bytes())
             .map_err(|error| invalid_params(format!("http/request method is invalid: {error}")))?;
         let url = Url::parse(&params.url)
@@ -243,7 +242,7 @@ impl ReqwestHttpRequestRunner {
         .await;
     }
 
-    fn build_headers(headers: Vec<HttpHeader>) -> Result<HeaderMap, JSONRPCErrorError> {
+    fn build_headers(headers: Vec<HttpHeader>) -> Result<HeaderMap, RpcError> {
         let mut header_map = HeaderMap::new();
         for header in headers {
             let name = HeaderName::from_bytes(header.name.as_bytes()).map_err(|error| {

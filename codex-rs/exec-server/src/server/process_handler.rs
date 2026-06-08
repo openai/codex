@@ -1,4 +1,4 @@
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 
 use crate::local_process::LocalProcess;
 use crate::protocol::ExecParams;
@@ -31,28 +31,22 @@ impl ProcessHandler {
         self.process.set_notification_sender(notifications);
     }
 
-    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, RpcError> {
         self.process.exec(params).await
     }
 
-    pub(crate) async fn exec_read(
-        &self,
-        params: ReadParams,
-    ) -> Result<ReadResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec_read(&self, params: ReadParams) -> Result<ReadResponse, RpcError> {
         self.process.exec_read(params).await
     }
 
-    pub(crate) async fn exec_write(
-        &self,
-        params: WriteParams,
-    ) -> Result<WriteResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec_write(&self, params: WriteParams) -> Result<WriteResponse, RpcError> {
         self.process.exec_write(params).await
     }
 
     pub(crate) async fn terminate(
         &self,
         params: TerminateParams,
-    ) -> Result<TerminateResponse, JSONRPCErrorError> {
+    ) -> Result<TerminateResponse, RpcError> {
         self.process.terminate_process(params).await
     }
 }

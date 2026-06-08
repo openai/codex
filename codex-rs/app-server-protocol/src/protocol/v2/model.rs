@@ -2,11 +2,14 @@ use super::shared::v2_enum_from_core;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailabilityNux;
 use codex_protocol::openai_models::ReasoningEffort;
+#[cfg(any(test, feature = "serde-compat"))]
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -22,13 +25,15 @@ v2_enum_from_core!(
     }
 );
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ModelProviderCapabilitiesReadParams {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ModelProviderCapabilitiesReadResponse {
     pub namespace_tools: bool,
@@ -36,8 +41,9 @@ pub struct ModelProviderCapabilitiesReadResponse {
     pub web_search: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ModelListParams {
     /// Opaque pagination cursor returned by a previous call.
@@ -51,8 +57,9 @@ pub struct ModelListParams {
     pub include_hidden: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ModelAvailabilityNux {
     pub message: String,
@@ -66,8 +73,9 @@ impl From<CoreModelAvailabilityNux> for ModelAvailabilityNux {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ModelServiceTier {
     pub id: String,
@@ -75,8 +83,9 @@ pub struct ModelServiceTier {
     pub description: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct Model {
     pub id: String,
@@ -89,24 +98,28 @@ pub struct Model {
     pub hidden: bool,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
     pub default_reasoning_effort: ReasoningEffort,
-    #[serde(default = "default_input_modalities")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default = "default_input_modalities")
+    )]
     pub input_modalities: Vec<InputModality>,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub supports_personality: bool,
     /// Deprecated: use `serviceTiers` instead.
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub additional_speed_tiers: Vec<String>,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub service_tiers: Vec<ModelServiceTier>,
     /// Catalog default service tier id for this model, when one is configured.
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub default_service_tier: Option<String>,
     // Only one model should be marked as default.
     pub is_default: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ModelUpgradeInfo {
     pub model: String,
@@ -115,16 +128,18 @@ pub struct ModelUpgradeInfo {
     pub migration_markdown: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ReasoningEffortOption {
     pub reasoning_effort: ReasoningEffort,
     pub description: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ModelListResponse {
     pub data: Vec<Model>,
@@ -133,8 +148,9 @@ pub struct ModelListResponse {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ModelReroutedNotification {
     pub thread_id: String,
@@ -144,8 +160,9 @@ pub struct ModelReroutedNotification {
     pub reason: ModelRerouteReason,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ModelVerificationNotification {
     pub thread_id: String,

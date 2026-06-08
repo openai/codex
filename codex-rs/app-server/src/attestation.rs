@@ -1,13 +1,12 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
-use axum::http::HeaderValue;
 use codex_app_server_protocol::AttestationGenerateParams;
-use codex_app_server_protocol::AttestationGenerateResponse;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_core::AttestationContext;
 use codex_core::AttestationProvider;
 use codex_core::GenerateAttestationFuture;
+use http::HeaderValue;
 use serde::Serialize;
 use tokio::time::Duration;
 use tokio::time::timeout;
@@ -79,8 +78,8 @@ async fn request_attestation_header_value_with_timeout(
         )
         .await;
 
-    let result = match timeout(timeout_duration, rx).await {
-        Ok(Ok(Ok(result))) => result,
+    let response = match timeout(timeout_duration, rx).await {
+        Ok(Ok(Ok(response))) => response,
         Ok(Ok(Err(err))) => {
             warn!(
                 code = err.code,
@@ -112,13 +111,15 @@ async fn request_attestation_header_value_with_timeout(
         }
     };
 
-    match serde_json::from_value::<AttestationGenerateResponse>(result) {
-        Ok(response) => app_server_attestation_header_value(
-            AppServerAttestationStatus::Ok,
-            Some(&response.token),
-        ),
-        Err(err) => {
-            warn!("failed to deserialize attestation generation response: {err}");
+    match response {
+        codex_app_server_protocol::ServerResponse::AttestationGenerate { response, .. } => {
+            app_server_attestation_header_value(
+                AppServerAttestationStatus::Ok,
+                Some(&response.token),
+            )
+        }
+        response => {
+            warn!("received unexpected attestation response: {response:?}");
             app_server_attestation_header_value(
                 AppServerAttestationStatus::MalformedResponse,
                 /*token*/ None,

@@ -101,6 +101,16 @@ pub use protocol::WriteResponse;
 pub use protocol::WriteStatus;
 pub use remote::RemoteEnvironmentConfig;
 pub use remote::run_remote_environment;
+#[doc(hidden)]
+pub use rpc::JSONRPCError;
+#[doc(hidden)]
+pub use rpc::JSONRPCMessage;
+#[doc(hidden)]
+pub use rpc::JSONRPCNotification;
+#[doc(hidden)]
+pub use rpc::JSONRPCRequest;
+#[doc(hidden)]
+pub use rpc::JSONRPCResponse;
 pub use runtime_paths::ExecServerRuntimePaths;
 pub use server::DEFAULT_LISTEN_URL;
 pub use server::ExecServerListenUrlParseError;

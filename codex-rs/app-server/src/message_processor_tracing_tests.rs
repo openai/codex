@@ -12,10 +12,10 @@ use app_test_support::write_mock_responses_config_toml;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
-use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -100,11 +100,6 @@ fn init_test_tracing() -> &'static TestTracing {
     })
 }
 
-fn request_from_client_request(request: ClientRequest) -> JSONRPCRequest {
-    serde_json::from_value(serde_json::to_value(request).expect("serialize client request"))
-        .expect("client request should convert to JSON-RPC")
-}
-
 struct TracingHarness {
     _server: MockServer,
     _codex_home: TempDir,
@@ -167,20 +162,21 @@ impl TracingHarness {
 
     async fn request<T>(&mut self, request: ClientRequest, trace: Option<W3cTraceContext>) -> T
     where
-        T: serde::de::DeserializeOwned,
+        T: FromClientResponse,
     {
         let request_id = match request.id() {
             RequestId::Integer(request_id) => *request_id,
             request_id => panic!("expected integer request id in test harness, got {request_id:?}"),
         };
-        let mut request = request_from_client_request(request);
-        request.trace = trace;
 
         self.processor
-            .process_request(
+            .process_native_request(
                 TEST_CONNECTION_ID,
                 request,
-                &AppServerTransport::Stdio,
+                trace,
+                &AppServerTransport::Grpc {
+                    bind_address: "127.0.0.1:0".parse().expect("valid test bind address"),
+                },
                 Arc::clone(&self.session),
             )
             .await;
@@ -265,7 +261,6 @@ async fn build_test_processor(
         auth_manager,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         rpc_transport: AppServerRpcTransport::Stdio,
-        remote_control_handle: None,
         plugin_startup_tasks: crate::PluginStartupTasks::Start,
     }));
     (processor, outgoing_rx)
@@ -313,7 +308,7 @@ fn find_rpc_span_with_trace<'a>(
         .iter()
         .find(|span| {
             span.span_kind == kind
-                && span_attr(span, "rpc.system") == Some("jsonrpc")
+                && span_attr(span, "rpc.system") == Some("grpc")
                 && span_attr(span, "rpc.method") == Some(method)
                 && span.span_context.trace_id() == trace_id
         })
@@ -423,7 +418,38 @@ fn assert_has_internal_descendant_at_min_depth(
     );
 }
 
-async fn read_response<T: serde::de::DeserializeOwned>(
+trait FromClientResponse {
+    fn from_client_response(response: ClientResponse) -> Self;
+}
+
+impl FromClientResponse for InitializeResponse {
+    fn from_client_response(response: ClientResponse) -> Self {
+        let ClientResponse::Initialize { response, .. } = response else {
+            panic!("expected initialize response, got {response:?}");
+        };
+        response
+    }
+}
+
+impl FromClientResponse for ThreadStartResponse {
+    fn from_client_response(response: ClientResponse) -> Self {
+        let ClientResponse::ThreadStart { response, .. } = response else {
+            panic!("expected thread/start response, got {response:?}");
+        };
+        response
+    }
+}
+
+impl FromClientResponse for TurnStartResponse {
+    fn from_client_response(response: ClientResponse) -> Self {
+        let ClientResponse::TurnStart { response, .. } = response else {
+            panic!("expected turn/start response, got {response:?}");
+        };
+        response
+    }
+}
+
+async fn read_response<T: FromClientResponse>(
     outgoing_rx: &mut mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
     request_id: i64,
 ) -> T {
@@ -446,11 +472,10 @@ async fn read_response<T: serde::de::DeserializeOwned>(
         let crate::outgoing_message::OutgoingMessage::Response(response) = message else {
             continue;
         };
-        if response.id != RequestId::Integer(request_id) {
+        if response.response.id() != &RequestId::Integer(request_id) {
             continue;
         }
-        return serde_json::from_value(response.result)
-            .expect("response payload should deserialize");
+        return T::from_client_response(response.response);
     }
 }
 
@@ -542,9 +567,9 @@ where
 
 #[test]
 #[serial(app_server_tracing)]
-fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
+fn thread_start_grpc_span_exports_server_span_and_parents_children() -> Result<()> {
     run_current_thread_test_with_stack(
-        "thread_start_jsonrpc_span_exports_server_span_and_parents_children",
+        "thread_start_grpc_span_exports_server_span_and_parents_children",
         async {
             let mut harness = TracingHarness::new().await?;
 
@@ -574,7 +599,7 @@ fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Resul
                     .rev()
                     .find(|span| {
                         span.span_kind == SpanKind::Server
-                            && span_attr(span, "rpc.system") == Some("jsonrpc")
+                            && span_attr(span, "rpc.system") == Some("grpc")
                             && span_attr(span, "rpc.method") == Some("thread/start")
                     })
                     .unwrap_or_else(|| {
@@ -634,7 +659,7 @@ fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Resul
 
 #[tokio::test(flavor = "current_thread")]
 #[serial(app_server_tracing)]
-async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
+async fn turn_start_grpc_span_parents_core_turn_spans() -> Result<()> {
     let mut harness = TracingHarness::new().await?;
     let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
     let thread_id = thread_start_response.thread.id.clone();

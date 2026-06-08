@@ -13,7 +13,7 @@ fn cloud_config_bundle_load_error(err: &std::io::Error) -> Option<&CloudConfigBu
     None
 }
 
-pub(super) fn config_load_error(err: &std::io::Error) -> JSONRPCErrorError {
+pub(super) fn config_load_error(err: &std::io::Error) -> RpcError {
     let data = cloud_config_bundle_load_error(err).map(|cloud_error| {
         let mut data = serde_json::json!({
             "reason": "cloudConfigBundle",

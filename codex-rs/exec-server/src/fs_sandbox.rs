@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -57,7 +57,7 @@ impl FileSystemSandboxRunner {
         &self,
         sandbox: &FileSystemSandboxContext,
         request: FsHelperRequest,
-    ) -> Result<FsHelperPayload, JSONRPCErrorError> {
+    ) -> Result<FsHelperPayload, RpcError> {
         let cwd = sandbox_cwd(sandbox)?;
         let mut file_system_policy = sandbox.permissions.file_system_sandbox_policy();
         let helper_read_roots = if sandbox.use_legacy_landlock {
@@ -83,7 +83,7 @@ impl FileSystemSandboxRunner {
         permission_profile: &PermissionProfile,
         cwd: &AbsolutePathBuf,
         sandbox_context: &FileSystemSandboxContext,
-    ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
+    ) -> Result<SandboxExecRequest, RpcError> {
         let helper = &self.runtime_paths.codex_self_exe;
         let sandbox_manager = SandboxManager::new();
         let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
@@ -118,7 +118,7 @@ impl FileSystemSandboxRunner {
     }
 }
 
-fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
+fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<AbsolutePathBuf, RpcError> {
     if let Some(cwd) = &sandbox.cwd {
         return Ok(cwd.clone());
     }
@@ -249,7 +249,7 @@ fn bazel_bwrap_env_key_is_allowed(_key: &str) -> bool {
 async fn run_command(
     command: SandboxExecRequest,
     request_json: Vec<u8>,
-) -> Result<FsHelperPayload, JSONRPCErrorError> {
+) -> Result<FsHelperPayload, RpcError> {
     let mut child = spawn_command(command)?;
     let mut stdin = child
         .stdin
@@ -270,7 +270,7 @@ async fn run_command(
     let response: FsHelperResponse = serde_json::from_slice(&output.stdout).map_err(json_error)?;
     match response {
         FsHelperResponse::Ok(payload) => Ok(payload),
-        FsHelperResponse::Error(error) => Err(error),
+        FsHelperResponse::Error(error) => Err(error.into()),
     }
 }
 
@@ -282,7 +282,7 @@ fn spawn_command(
         arg0,
         ..
     }: SandboxExecRequest,
-) -> Result<tokio::process::Child, JSONRPCErrorError> {
+) -> Result<tokio::process::Child, RpcError> {
     let Some((program, args)) = argv.split_first() else {
         return Err(invalid_request("fs sandbox command was empty".to_string()));
     };
@@ -304,11 +304,11 @@ fn spawn_command(
     command.spawn().map_err(io_error)
 }
 
-fn io_error(err: std::io::Error) -> JSONRPCErrorError {
+fn io_error(err: std::io::Error) -> RpcError {
     internal_error(err.to_string())
 }
 
-fn json_error(err: serde_json::Error) -> JSONRPCErrorError {
+fn json_error(err: serde_json::Error) -> RpcError {
     internal_error(format!(
         "failed to encode or decode fs sandbox helper message: {err}"
     ))

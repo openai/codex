@@ -1,13 +1,16 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use std::collections::HashMap;
 use ts_rs::TS;
 
 /// PTY size in character cells for `process/spawn` PTY sessions.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessTerminalSize {
     /// Terminal height in character cells.
@@ -22,8 +25,9 @@ pub struct ProcessTerminalSize {
 /// `process/spawn` returns after the process has started and the connection-scoped
 /// `processHandle` has been registered. Process output and exit are reported via
 /// `process/outputDelta` and `process/exited` notifications.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessSpawnParams {
     /// Command argv vector. Empty arrays are rejected.
@@ -38,25 +42,37 @@ pub struct ProcessSpawnParams {
     /// Enable PTY mode.
     ///
     /// This implies `streamStdin` and `streamStdoutStderr`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub tty: bool,
     /// Allow follow-up `process/writeStdin` requests to write stdin bytes.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub stream_stdin: bool,
     /// Stream stdout/stderr via `process/outputDelta` notifications.
     ///
     /// Streamed bytes are not duplicated into the `process/exited` notification.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub stream_stdout_stderr: bool,
     /// Optional per-stream stdout/stderr capture cap in bytes.
     ///
     /// When omitted, the server default applies. Set to `null` to disable the
     /// cap.
-    #[serde(
-        default,
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     #[ts(type = "number | null")]
     #[ts(optional = nullable)]
@@ -65,11 +81,14 @@ pub struct ProcessSpawnParams {
     ///
     /// When omitted, the server default applies. Set to `null` to disable the
     /// timeout.
-    #[serde(
-        default,
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     #[ts(type = "number | null")]
     #[ts(optional = nullable)]
@@ -88,15 +107,17 @@ pub struct ProcessSpawnParams {
 }
 
 /// Successful response for `process/spawn`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessSpawnResponse {}
 
 /// Write stdin bytes to a running `process/spawn` session, close stdin, or
 /// both.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessWriteStdinParams {
     /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
@@ -105,19 +126,24 @@ pub struct ProcessWriteStdinParams {
     #[ts(optional = nullable)]
     pub delta_base64: Option<String>,
     /// Close stdin after writing `deltaBase64`, if present.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub close_stdin: bool,
 }
 
 /// Empty success response for `process/writeStdin`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessWriteStdinResponse {}
 
 /// Terminate a running `process/spawn` session.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessKillParams {
     /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
@@ -125,14 +151,16 @@ pub struct ProcessKillParams {
 }
 
 /// Empty success response for `process/kill`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessKillResponse {}
 
 /// Resize a running PTY-backed `process/spawn` session.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessResizePtyParams {
     /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
@@ -142,14 +170,16 @@ pub struct ProcessResizePtyParams {
 }
 
 /// Empty success response for `process/resizePty`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessResizePtyResponse {}
 
 /// Stream label for `process/outputDelta` notifications.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum ProcessOutputStream {
     /// stdout stream. PTY mode multiplexes terminal output here.
@@ -159,8 +189,9 @@ pub enum ProcessOutputStream {
 }
 
 /// Base64-encoded output chunk emitted for a streaming `process/spawn` request.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessOutputDeltaNotification {
     /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
@@ -175,8 +206,9 @@ pub struct ProcessOutputDeltaNotification {
 }
 
 /// Final process exit notification for `process/spawn`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ProcessExitedNotification {
     /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.

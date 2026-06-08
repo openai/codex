@@ -4,8 +4,8 @@ use crate::events::GuardianReviewEventParams;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
@@ -282,7 +282,7 @@ pub struct CodexTurnSteerEvent {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum AnalyticsJsonRpcError {
+pub enum AnalyticsRpcError {
     TurnSteer(TurnSteerRequestError),
     Input(InputError),
 }
@@ -444,8 +444,8 @@ pub(crate) enum AnalyticsFact {
     ErrorResponse {
         connection_id: u64,
         request_id: RequestId,
-        error: JSONRPCErrorError,
-        error_type: Option<AnalyticsJsonRpcError>,
+        error: RpcError,
+        error_type: Option<AnalyticsRpcError>,
     },
     ServerRequest {
         connection_id: u64,

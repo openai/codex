@@ -1026,7 +1026,7 @@
     },
     "McpElicitationSchema": {
       "additionalProperties": false,
-      "description": "Typed form schema for MCP `elicitation/create` requests.\n\nThis matches the `requestedSchema` shape from the MCP 2025-11-25 `ElicitRequestFormParams` schema.",
+      "description": "Typed form schema for MCP `elicitation/create` requests.\n\nThis is the Codex-owned representation shared by core protocol events and the app-server API.",
       "properties": {
         "$schema": {
           "type": [
@@ -1593,8 +1593,8 @@
         "environmentId": {
           "default": null,
           "type": [
-            "null",
-            "string"
+            "string",
+            "null"
           ]
         },
         "itemId": {

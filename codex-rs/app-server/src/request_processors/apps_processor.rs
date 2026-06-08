@@ -35,7 +35,7 @@ impl AppsRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: AppsListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.apps_list_inner(request_id, params)
             .await
             .map(|response| response.map(Into::into))
@@ -45,7 +45,7 @@ impl AppsRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: AppsListParams,
-    ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
+    ) -> Result<Option<AppsListResponse>, RpcError> {
         let thread = if let Some(thread_id) = params.thread_id.as_deref() {
             let (_, loaded_thread) = self.load_thread(thread_id).await?;
             Some(loaded_thread)
@@ -141,7 +141,7 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
-    ) -> Result<(AppsListResponse, bool), JSONRPCErrorError> {
+    ) -> Result<(AppsListResponse, bool), RpcError> {
         let AppsListParams {
             cursor,
             limit,
@@ -273,10 +273,7 @@ impl AppsRequestProcessor {
         }
     }
 
-    async fn load_thread(
-        &self,
-        thread_id: &str,
-    ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
+    async fn load_thread(&self, thread_id: &str) -> Result<(ThreadId, Arc<CodexThread>), RpcError> {
         let thread_id = ThreadId::from_string(thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
@@ -289,10 +286,7 @@ impl AppsRequestProcessor {
         Ok((thread_id, thread))
     }
 
-    async fn load_latest_config(
-        &self,
-        fallback_cwd: Option<PathBuf>,
-    ) -> Result<Config, JSONRPCErrorError> {
+    async fn load_latest_config(&self, fallback_cwd: Option<PathBuf>) -> Result<Config, RpcError> {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
@@ -351,7 +345,7 @@ fn paginate_apps(
     connectors: &[AppInfo],
     start: usize,
     limit: Option<u32>,
-) -> Result<AppsListResponse, JSONRPCErrorError> {
+) -> Result<AppsListResponse, RpcError> {
     let total = connectors.len();
     if start > total {
         return Err(invalid_request(format!(

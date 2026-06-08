@@ -6,7 +6,6 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::ClientResponsePayload;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ProcessExitedNotification;
 use codex_app_server_protocol::ProcessKillParams;
 use codex_app_server_protocol::ProcessKillResponse;
@@ -19,6 +18,7 @@ use codex_app_server_protocol::ProcessSpawnResponse;
 use codex_app_server_protocol::ProcessTerminalSize;
 use codex_app_server_protocol::ProcessWriteStdinParams;
 use codex_app_server_protocol::ProcessWriteStdinResponse;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecExpirationOutcome;
@@ -69,7 +69,7 @@ impl ProcessExecRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ProcessSpawnParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         self.require_local_environment()?;
         let ProcessSpawnParams {
             command,
@@ -146,7 +146,7 @@ impl ProcessExecRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ProcessWriteStdinParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.process_exec_manager
             .write_stdin(request_id, params)
             .await
@@ -157,7 +157,7 @@ impl ProcessExecRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ProcessResizePtyParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.process_exec_manager
             .resize_pty(request_id, params)
             .await
@@ -168,7 +168,7 @@ impl ProcessExecRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ProcessKillParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.process_exec_manager
             .kill(request_id, params)
             .await
@@ -181,7 +181,7 @@ impl ProcessExecRequestProcessor {
             .await;
     }
 
-    fn require_local_environment(&self) -> Result<(), JSONRPCErrorError> {
+    fn require_local_environment(&self) -> Result<(), RpcError> {
         self.environment_manager
             .try_local_environment()
             .is_some()
@@ -214,7 +214,7 @@ enum ProcessControl {
 
 struct ProcessControlRequest {
     control: ProcessControl,
-    response_tx: Option<oneshot::Sender<Result<(), JSONRPCErrorError>>>,
+    response_tx: Option<oneshot::Sender<Result<(), RpcError>>>,
 }
 
 struct StartProcessParams {
@@ -262,7 +262,7 @@ struct ProcessOutputCapture {
 }
 
 impl ProcessExecManager {
-    async fn start(&self, params: StartProcessParams) -> Result<(), JSONRPCErrorError> {
+    async fn start(&self, params: StartProcessParams) -> Result<(), RpcError> {
         let StartProcessParams {
             outgoing,
             request_id,
@@ -356,7 +356,7 @@ impl ProcessExecManager {
         &self,
         request_id: ConnectionRequestId,
         params: ProcessWriteStdinParams,
-    ) -> Result<ProcessWriteStdinResponse, JSONRPCErrorError> {
+    ) -> Result<ProcessWriteStdinResponse, RpcError> {
         if params.delta_base64.is_none() && !params.close_stdin {
             return Err(invalid_params(
                 "process/writeStdin requires deltaBase64 or closeStdin",
@@ -387,7 +387,7 @@ impl ProcessExecManager {
         &self,
         request_id: ConnectionRequestId,
         params: ProcessKillParams,
-    ) -> Result<ProcessKillResponse, JSONRPCErrorError> {
+    ) -> Result<ProcessKillResponse, RpcError> {
         self.send_control(
             request_id.connection_id,
             params.process_handle,
@@ -401,7 +401,7 @@ impl ProcessExecManager {
         &self,
         request_id: ConnectionRequestId,
         params: ProcessResizePtyParams,
-    ) -> Result<ProcessResizePtyResponse, JSONRPCErrorError> {
+    ) -> Result<ProcessResizePtyResponse, RpcError> {
         self.send_control(
             request_id.connection_id,
             params.process_handle,
@@ -446,7 +446,7 @@ impl ProcessExecManager {
         connection_id: ConnectionId,
         process_handle: String,
         control: ProcessControl,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let process_key = ConnectionProcessHandle {
             connection_id,
             process_handle,
@@ -668,7 +668,7 @@ async fn handle_process_write(
     stream_stdin: bool,
     delta: Vec<u8>,
     close_stdin: bool,
-) -> Result<(), JSONRPCErrorError> {
+) -> Result<(), RpcError> {
     if !stream_stdin {
         return Err(invalid_request(
             "stdin streaming is not enabled for this process",
@@ -689,18 +689,13 @@ async fn handle_process_write(
     Ok(())
 }
 
-fn handle_process_resize(
-    session: &ProcessHandle,
-    size: TerminalSize,
-) -> Result<(), JSONRPCErrorError> {
+fn handle_process_resize(session: &ProcessHandle, size: TerminalSize) -> Result<(), RpcError> {
     session
         .resize(size)
         .map_err(|err| invalid_request(format!("failed to resize PTY: {err}")))
 }
 
-fn terminal_size_from_protocol(
-    size: ProcessTerminalSize,
-) -> Result<TerminalSize, JSONRPCErrorError> {
+fn terminal_size_from_protocol(size: ProcessTerminalSize) -> Result<TerminalSize, RpcError> {
     if size.rows == 0 || size.cols == 0 {
         return Err(invalid_params(
             "process size rows and cols must be greater than 0",
@@ -712,12 +707,12 @@ fn terminal_size_from_protocol(
     })
 }
 
-fn no_active_process_error(process_handle: &str) -> JSONRPCErrorError {
+fn no_active_process_error(process_handle: &str) -> RpcError {
     invalid_request(format!(
         "no active process for process handle {process_handle:?}"
     ))
 }
 
-fn process_no_longer_running_error(process_handle: &str) -> JSONRPCErrorError {
+fn process_no_longer_running_error(process_handle: &str) -> RpcError {
     invalid_request(format!("process {process_handle:?} is no longer running"))
 }

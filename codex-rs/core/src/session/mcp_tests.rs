@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::approvals::McpElicitationSchema;
 use rmcp::model::BooleanSchema;
 use rmcp::model::ElicitationSchema;
 use rmcp::model::PrimitiveSchema;
@@ -111,10 +112,7 @@ fn plugin_install_elicitation_telemetry_metadata_requires_install_tool_suggestio
                 "tool_name": "Slack",
             })),
             message: "Install Slack?".to_string(),
-            requested_schema: json!({
-                "type": "object",
-                "properties": {},
-            }),
+            requested_schema: McpElicitationSchema::default(),
         },
     });
 
@@ -140,10 +138,7 @@ fn plugin_install_elicitation_telemetry_metadata_requires_install_tool_suggestio
                 "tool_name": "Slack",
             })),
             message: "Enable Slack?".to_string(),
-            requested_schema: json!({
-                "type": "object",
-                "properties": {},
-            }),
+            requested_schema: McpElicitationSchema::default(),
         },
     });
 

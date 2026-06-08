@@ -28,23 +28,14 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
+use crate::transport::NativeIncomingMessage;
 use crate::transport::OutboundConnectionState;
-use crate::transport::RemoteControlStartConfig;
 use crate::transport::TransportEvent;
-use crate::transport::acquire_app_server_startup_lock;
-use crate::transport::app_server_startup_lock_path;
-use crate::transport::auth::policy_from_settings;
-use crate::transport::prepare_control_socket_path;
 use crate::transport::route_outgoing_envelope;
-use crate::transport::start_control_socket_acceptor;
-use crate::transport::start_remote_control;
-use crate::transport::start_stdio_connection;
-use crate::transport::start_websocket_acceptor;
+use crate::transport::start_grpc_acceptor;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
 use codex_config::ConfigLoadError;
@@ -59,7 +50,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_rollout::state_db as rollout_state_db;
 use codex_state::log_db;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Level;
@@ -79,6 +69,7 @@ mod attestation;
 mod bespoke_event_handling;
 mod command_exec;
 mod config;
+mod config_api;
 mod config_manager;
 mod config_manager_service;
 mod connection_rpc_gate;
@@ -104,10 +95,6 @@ mod transport;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;
-pub use crate::transport::app_server_control_socket_path;
-pub use crate::transport::auth::AppServerWebsocketAuthArgs;
-pub use crate::transport::auth::AppServerWebsocketAuthSettings;
-pub use crate::transport::auth::WebsocketAuthCliMode;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
 const OTEL_SERVICE_NAME: &str = "codex-app-server";
@@ -130,7 +117,7 @@ fn configured_thread_config_loader(config: &Config) -> Arc<dyn ThreadConfigLoade
 /// Control-plane messages from the processor/transport side to the outbound router task.
 ///
 /// `run_main_with_transport_options` uses two loops/tasks:
-/// - processor loop: handles incoming JSON-RPC and request dispatch
+/// - processor loop: handles incoming native gRPC messages and request dispatch
 /// - outbound loop: performs potentially slow writes to per-connection writers
 ///
 /// `OutboundControlEvent` keeps those loops coordinated without sharing mutable
@@ -385,9 +372,10 @@ pub async fn run_main(
         loader_overrides,
         strict_config,
         default_analytics_enabled,
-        AppServerTransport::Stdio,
+        AppServerTransport::Grpc {
+            bind_address: std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        },
         SessionSource::VSCode,
-        AppServerWebsocketAuthSettings::default(),
         AppServerRuntimeOptions::default(),
     )
     .await
@@ -402,7 +390,6 @@ pub enum PluginStartupTasks {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
-    pub remote_control_enabled: bool,
     pub install_shutdown_signal_handler: bool,
 }
 
@@ -410,7 +397,6 @@ impl Default for AppServerRuntimeOptions {
     fn default() -> Self {
         Self {
             plugin_startup_tasks: PluginStartupTasks::Start,
-            remote_control_enabled: false,
             install_shutdown_signal_handler: true,
         }
     }
@@ -425,7 +411,6 @@ pub async fn run_main_with_transport_options(
     default_analytics_enabled: bool,
     transport: AppServerTransport,
     session_source: SessionSource,
-    auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
     let (transport_event_tx, mut transport_event_rx) =
@@ -522,15 +507,6 @@ pub async fn run_main_with_transport_options(
     })?;
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
-    let unix_socket_startup_lock = match &transport {
-        AppServerTransport::UnixSocket { socket_path } => {
-            let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
-            let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
-            prepare_control_socket_path(socket_path.as_path()).await?;
-            Some(startup_lock)
-        }
-        _ => None,
-    };
     let state_db = match rollout_state_db::try_init(&config).await {
         Ok(state_db) => Some(state_db),
         Err(err) => {
@@ -659,79 +635,30 @@ pub async fn run_main_with_transport_options(
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
 
-    let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
-    let shutdown_when_no_connections = single_client_mode;
-    let graceful_signal_restart_enabled =
-        runtime_options.install_shutdown_signal_handler && !single_client_mode;
-    let mut app_server_client_name_rx = None;
+    let graceful_signal_restart_enabled = runtime_options.install_shutdown_signal_handler;
 
     match &transport {
-        AppServerTransport::Stdio => {
-            let (stdio_client_name_tx, stdio_client_name_rx) = oneshot::channel::<String>();
-            app_server_client_name_rx = Some(stdio_client_name_rx);
-            start_stdio_connection(
-                transport_event_tx.clone(),
-                &mut transport_accept_handles,
-                stdio_client_name_tx,
-            )
-            .await?;
-        }
-        AppServerTransport::UnixSocket { socket_path } => {
-            let accept_handle = start_control_socket_acceptor(
-                socket_path.clone(),
-                transport_event_tx.clone(),
-                transport_shutdown_token.clone(),
-            )
-            .await?;
-            transport_accept_handles.push(accept_handle);
-        }
-        AppServerTransport::WebSocket { bind_address } => {
-            let accept_handle = start_websocket_acceptor(
+        AppServerTransport::Grpc { bind_address } => {
+            let accept_handle = start_grpc_acceptor(
                 *bind_address,
                 transport_event_tx.clone(),
                 transport_shutdown_token.clone(),
-                policy_from_settings(&auth)?,
             )
             .await?;
             transport_accept_handles.push(accept_handle);
         }
         AppServerTransport::Off => {}
     }
-    drop(unix_socket_startup_lock);
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    let remote_control_requested = runtime_options.remote_control_enabled;
-    let remote_control_enabled = remote_control_requested && state_db.is_some();
-    if remote_control_requested && state_db.is_none() {
-        error!("remote control disabled because sqlite state db is unavailable");
-    }
-    if transport_accept_handles.is_empty() && !remote_control_enabled {
+    if transport_accept_handles.is_empty() {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            if remote_control_requested && state_db.is_none() {
-                "no transport configured; remote control disabled because sqlite state db is unavailable"
-            } else {
-                "no transport configured; use --listen or enable remote control"
-            },
+            "no transport configured; use --listen grpc://IP:PORT",
         ));
     }
-
-    let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
-        RemoteControlStartConfig {
-            remote_control_url: config.chatgpt_base_url.clone(),
-            installation_id: installation_id.clone(),
-        },
-        state_db.clone(),
-        auth_manager.clone(),
-        transport_event_tx.clone(),
-        transport_shutdown_token.clone(),
-        app_server_client_name_rx,
-        remote_control_enabled,
-    )
-    .await?;
-    transport_accept_handles.push(remote_control_accept_handle);
 
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
@@ -767,7 +694,7 @@ pub async fn run_main_with_transport_options(
                             }
                             OutboundControlEvent::DisconnectAll => {
                                 info!(
-                                    "disconnecting {} outbound websocket connection(s) for graceful restart",
+                                    "disconnecting {} outbound gRPC connection(s) for graceful restart",
                                     outbound_connections.len()
                                 );
                                 for connection_state in outbound_connections.values() {
@@ -796,7 +723,6 @@ pub async fn run_main_with_transport_options(
             outgoing_tx,
             analytics_events_client.clone(),
         ));
-        let initialize_notification_sender = outgoing_message_sender.clone();
         let outbound_control_tx = outbound_control_tx;
         let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
@@ -813,14 +739,11 @@ pub async fn run_main_with_transport_options(
             auth_manager,
             installation_id,
             rpc_transport: analytics_rpc_transport(&transport),
-            remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
-        let mut remote_control_status_rx = remote_control_handle.status_receiver();
-        let mut remote_control_status = remote_control_status_rx.borrow().clone();
         let transport_shutdown_token = transport_shutdown_token.clone();
         async move {
             let mut listen_for_threads = true;
@@ -914,23 +837,24 @@ pub async fn run_main_with_transport_options(
                                     break;
                                 }
                                 processor.connection_closed(connection_id, &connection_state.session).await;
-                                if shutdown_when_no_connections && connections.is_empty() {
-                                    break;
-                                }
                             }
-                            TransportEvent::IncomingMessage { connection_id, message } => {
+                            TransportEvent::IncomingNativeMessage {
+                                connection_id,
+                                message,
+                            } => {
                                 match message {
-                                    JSONRPCMessage::Request(request) => {
+                                    NativeIncomingMessage::Request { request, trace } => {
                                         let Some(connection_state) = connections.get_mut(&connection_id) else {
-                                            warn!("dropping request from unknown connection: {connection_id:?}");
+                                            warn!("dropping native request from unknown connection: {connection_id:?}");
                                             continue;
                                         };
                                         let was_initialized =
                                             connection_state.session.initialized();
                                         processor
-                                            .process_request(
+                                            .process_native_request(
                                                 connection_id,
                                                 request,
+                                                trace,
                                                 &transport,
                                                 Arc::clone(&connection_state.session),
                                             )
@@ -964,14 +888,6 @@ pub async fn run_main_with_transport_options(
                                                     connection_id,
                                                 )
                                                 .await;
-                                            initialize_notification_sender
-                                                .send_server_notification_to_connections(
-                                                    &[connection_id],
-                                                    ServerNotification::RemoteControlStatusChanged(
-                                                        remote_control_status.clone(),
-                                                    ),
-                                                )
-                                                .await;
                                             processor
                                                 .connection_initialized(
                                                     connection_id,
@@ -985,44 +901,32 @@ pub async fn run_main_with_transport_options(
                                                 .store(true, std::sync::atomic::Ordering::Release);
                                         }
                                     }
-                                    JSONRPCMessage::Response(response) => {
+                                    NativeIncomingMessage::Response(response) => {
                                         if !connections.contains_key(&connection_id) {
-                                            warn!("dropping response from unknown connection: {connection_id:?}");
+                                            warn!("dropping native response from unknown connection: {connection_id:?}");
                                             continue;
                                         }
-                                        processor.process_response(response).await;
+                                        processor.process_server_response(response).await;
                                     }
-                                    JSONRPCMessage::Notification(notification) => {
+                                    NativeIncomingMessage::Notification(notification) => {
                                         if !connections.contains_key(&connection_id) {
-                                            warn!("dropping notification from unknown connection: {connection_id:?}");
+                                            warn!("dropping native notification from unknown connection: {connection_id:?}");
                                             continue;
                                         }
-                                        processor.process_notification(notification).await;
+                                        processor.process_client_notification(notification).await;
                                     }
-                                    JSONRPCMessage::Error(err) => {
+                                    NativeIncomingMessage::Error { request_id, error } => {
                                         if !connections.contains_key(&connection_id) {
-                                            warn!("dropping error from unknown connection: {connection_id:?}");
+                                            warn!("dropping native error from unknown connection: {connection_id:?}");
                                             continue;
                                         }
-                                        processor.process_error(err).await;
+                                        processor
+                                            .process_client_error(request_id, error)
+                                            .await;
                                     }
                                 }
                             }
                         }
-                    }
-                    changed = remote_control_status_rx.changed() => {
-                        if changed.is_err() {
-                            continue;
-                        }
-                        let status = remote_control_status_rx.borrow().clone();
-                        if remote_control_status == status {
-                            continue;
-                        }
-                        remote_control_status = status.clone();
-                        let notification = ServerNotification::RemoteControlStatusChanged(status);
-                        initialize_notification_sender
-                            .send_server_notification(notification)
-                            .await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
@@ -1088,10 +992,8 @@ pub async fn run_main_with_transport_options(
 
 fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransport {
     match transport {
-        AppServerTransport::Stdio => AppServerRpcTransport::Stdio,
-        AppServerTransport::UnixSocket { .. }
-        | AppServerTransport::WebSocket { .. }
-        | AppServerTransport::Off => AppServerRpcTransport::Websocket,
+        AppServerTransport::Grpc { .. } => AppServerRpcTransport::Grpc,
+        AppServerTransport::Off => AppServerRpcTransport::Grpc,
     }
 }
 

@@ -94,7 +94,7 @@ fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginS
 
 fn load_shared_plugin_ids_by_local_path(
     config: &Config,
-) -> Result<std::collections::BTreeMap<AbsolutePathBuf, String>, JSONRPCErrorError> {
+) -> Result<std::collections::BTreeMap<AbsolutePathBuf, String>, RpcError> {
     codex_core_plugins::remote::load_plugin_share_remote_ids_by_local_path(
         config.codex_home.as_path(),
     )
@@ -234,9 +234,7 @@ fn remote_plugin_share_update_discoverability(
     }
 }
 
-fn validate_client_plugin_share_targets(
-    targets: &[PluginShareTarget],
-) -> Result<(), JSONRPCErrorError> {
+fn validate_client_plugin_share_targets(targets: &[PluginShareTarget]) -> Result<(), RpcError> {
     if targets
         .iter()
         .any(|target| target.principal_type == PluginSharePrincipalType::Workspace)
@@ -345,7 +343,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_list(
         &self,
         params: PluginListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_list_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -354,7 +352,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_installed(
         &self,
         params: PluginInstalledParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_installed_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -363,7 +361,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_read(
         &self,
         params: PluginReadParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_read_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -372,7 +370,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_skill_read(
         &self,
         params: PluginSkillReadParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_skill_read_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -381,7 +379,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_save(
         &self,
         params: PluginShareSaveParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_share_save_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -390,7 +388,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_update_targets(
         &self,
         params: PluginShareUpdateTargetsParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_share_update_targets_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -399,7 +397,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_list(
         &self,
         params: PluginShareListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_share_list_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -408,7 +406,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_checkout(
         &self,
         params: PluginShareCheckoutParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_share_checkout_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -417,7 +415,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_delete(
         &self,
         params: PluginShareDeleteParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_share_delete_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -426,7 +424,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_install(
         &self,
         params: PluginInstallParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_install_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -435,7 +433,7 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_uninstall(
         &self,
         params: PluginUninstallParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.plugin_uninstall_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -478,10 +476,7 @@ impl PluginRequestProcessor {
         self.thread_manager.skills_manager().clear_cache();
     }
 
-    async fn load_latest_config(
-        &self,
-        fallback_cwd: Option<PathBuf>,
-    ) -> Result<Config, JSONRPCErrorError> {
+    async fn load_latest_config(&self, fallback_cwd: Option<PathBuf>) -> Result<Config, RpcError> {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
@@ -513,7 +508,7 @@ impl PluginRequestProcessor {
     async fn plugin_list_response(
         &self,
         params: PluginListParams,
-    ) -> Result<PluginListResponse, JSONRPCErrorError> {
+    ) -> Result<PluginListResponse, RpcError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams {
             cwds,
@@ -679,7 +674,7 @@ impl PluginRequestProcessor {
                     err @ (RemotePluginCatalogError::AuthRequired
                     | RemotePluginCatalogError::UnsupportedAuthMode),
                 ) if explicit_marketplace_kinds => {
-                    return Err(remote_plugin_catalog_error_to_jsonrpc(
+                    return Err(remote_plugin_catalog_error_to_rpc(
                         err,
                         "list remote plugin catalog",
                     ));
@@ -689,7 +684,7 @@ impl PluginRequestProcessor {
                     | RemotePluginCatalogError::UnsupportedAuthMode,
                 ) => {}
                 Err(err) if explicit_marketplace_kinds => {
-                    return Err(remote_plugin_catalog_error_to_jsonrpc(
+                    return Err(remote_plugin_catalog_error_to_rpc(
                         err,
                         "list remote plugin catalog",
                     ));
@@ -734,7 +729,7 @@ impl PluginRequestProcessor {
     async fn plugin_installed_response(
         &self,
         params: PluginInstalledParams,
-    ) -> Result<PluginInstalledResponse, JSONRPCErrorError> {
+    ) -> Result<PluginInstalledResponse, RpcError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginInstalledParams {
             cwds,
@@ -813,7 +808,7 @@ impl PluginRequestProcessor {
             Vec<PluginMarketplaceEntry>,
             Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
         ),
-        JSONRPCErrorError,
+        RpcError,
     > {
         let config_for_marketplace_listing = plugins_input.clone();
         let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(config)?;
@@ -925,7 +920,7 @@ impl PluginRequestProcessor {
     async fn plugin_read_response(
         &self,
         params: PluginReadParams,
-    ) -> Result<PluginReadResponse, JSONRPCErrorError> {
+    ) -> Result<PluginReadResponse, RpcError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginReadParams {
             marketplace_path,
@@ -1086,7 +1081,7 @@ impl PluginRequestProcessor {
                 )
                 .await
                 .map_err(|err| {
-                    remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin details")
+                    remote_plugin_catalog_error_to_rpc(err, "read remote plugin details")
                 })?;
                 let plugin_apps = remote_detail
                     .app_ids
@@ -1111,7 +1106,7 @@ impl PluginRequestProcessor {
     async fn plugin_skill_read_response(
         &self,
         params: PluginSkillReadParams,
-    ) -> Result<PluginSkillReadResponse, JSONRPCErrorError> {
+    ) -> Result<PluginSkillReadResponse, RpcError> {
         let PluginSkillReadParams {
             remote_marketplace_name,
             remote_plugin_id,
@@ -1144,7 +1139,7 @@ impl PluginRequestProcessor {
         )
         .await
         .map_err(|err| {
-            remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin skill details")
+            remote_plugin_catalog_error_to_rpc(err, "read remote plugin skill details")
         })?;
 
         Ok(PluginSkillReadResponse {
@@ -1155,7 +1150,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_save_response(
         &self,
         params: PluginShareSaveParams,
-    ) -> Result<PluginShareSaveResponse, JSONRPCErrorError> {
+    ) -> Result<PluginShareSaveResponse, RpcError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         if !config.features.enabled(Feature::PluginSharing) {
             return Err(invalid_request("plugin sharing is disabled"));
@@ -1201,7 +1196,7 @@ impl PluginRequestProcessor {
             access_policy,
         )
         .await
-        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "save remote plugin share"))?;
+        .map_err(|err| remote_plugin_catalog_error_to_rpc(err, "save remote plugin share"))?;
         let remote_plugin_id = result.remote_plugin_id;
         self.clear_plugin_related_caches();
         Ok(PluginShareSaveResponse {
@@ -1213,7 +1208,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_update_targets_response(
         &self,
         params: PluginShareUpdateTargetsParams,
-    ) -> Result<PluginShareUpdateTargetsResponse, JSONRPCErrorError> {
+    ) -> Result<PluginShareUpdateTargetsResponse, RpcError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         if !config.features.enabled(Feature::PluginSharing) {
             return Err(invalid_request("plugin sharing is disabled"));
@@ -1240,7 +1235,7 @@ impl PluginRequestProcessor {
         )
         .await
         .map_err(|err| {
-            remote_plugin_catalog_error_to_jsonrpc(err, "update remote plugin share targets")
+            remote_plugin_catalog_error_to_rpc(err, "update remote plugin share targets")
         })?;
         self.clear_plugin_related_caches();
         Ok(PluginShareUpdateTargetsResponse {
@@ -1256,7 +1251,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_list_response(
         &self,
         _params: PluginShareListParams,
-    ) -> Result<PluginShareListResponse, JSONRPCErrorError> {
+    ) -> Result<PluginShareListResponse, RpcError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
@@ -1267,7 +1262,7 @@ impl PluginRequestProcessor {
             config.codex_home.as_path(),
         )
         .await
-        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "list remote plugin shares"))?
+        .map_err(|err| remote_plugin_catalog_error_to_rpc(err, "list remote plugin shares"))?
         .into_iter()
         .map(|summary| {
             let RemoteCatalogPluginShareSummary {
@@ -1287,7 +1282,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_checkout_response(
         &self,
         params: PluginShareCheckoutParams,
-    ) -> Result<PluginShareCheckoutResponse, JSONRPCErrorError> {
+    ) -> Result<PluginShareCheckoutResponse, RpcError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         if !config.features.enabled(Feature::PluginSharing) {
             return Err(invalid_request("plugin sharing is disabled"));
@@ -1307,7 +1302,7 @@ impl PluginRequestProcessor {
             &remote_plugin_id,
         )
         .await
-        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "checkout plugin share"))?;
+        .map_err(|err| remote_plugin_catalog_error_to_rpc(err, "checkout plugin share"))?;
         self.clear_plugin_related_caches();
         Ok(PluginShareCheckoutResponse {
             remote_plugin_id: result.remote_plugin_id,
@@ -1323,7 +1318,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_delete_response(
         &self,
         params: PluginShareDeleteParams,
-    ) -> Result<PluginShareDeleteResponse, JSONRPCErrorError> {
+    ) -> Result<PluginShareDeleteResponse, RpcError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         let PluginShareDeleteParams { remote_plugin_id } = params;
         if remote_plugin_id.is_empty() || !is_valid_remote_plugin_id(&remote_plugin_id) {
@@ -1340,14 +1335,14 @@ impl PluginRequestProcessor {
             &remote_plugin_id,
         )
         .await
-        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "delete remote plugin share"))?;
+        .map_err(|err| remote_plugin_catalog_error_to_rpc(err, "delete remote plugin share"))?;
         self.clear_plugin_related_caches();
         Ok(PluginShareDeleteResponse {})
     }
 
     async fn load_plugin_share_config_and_auth(
         &self,
-    ) -> Result<(Config, Option<CodexAuth>), JSONRPCErrorError> {
+    ) -> Result<(Config, Option<CodexAuth>), RpcError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins) {
             return Err(invalid_request("plugin sharing is not enabled"));
@@ -1359,7 +1354,7 @@ impl PluginRequestProcessor {
     async fn plugin_install_response(
         &self,
         params: PluginInstallParams,
-    ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
+    ) -> Result<PluginInstallResponse, RpcError> {
         let PluginInstallParams {
             marketplace_path,
             remote_marketplace_name,
@@ -1440,7 +1435,7 @@ impl PluginRequestProcessor {
         &self,
         remote_marketplace_name: String,
         remote_plugin_id: String,
-    ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
+    ) -> Result<PluginInstallResponse, RpcError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins) {
             return Err(invalid_request(format!(
@@ -1462,10 +1457,7 @@ impl PluginRequestProcessor {
             )
             .await
             .map_err(|err| {
-                remote_plugin_catalog_error_to_jsonrpc(
-                    err,
-                    "read remote plugin details before install",
-                )
+                remote_plugin_catalog_error_to_rpc(err, "read remote plugin details before install")
             })?;
         if remote_detail.summary.availability == PluginAvailability::DisabledByAdmin {
             return Err(invalid_request(format!(
@@ -1494,14 +1486,14 @@ impl PluginRequestProcessor {
             remote_detail.bundle_download_url.as_deref(),
             remote_detail.app_manifest.clone(),
         )
-        .map_err(remote_plugin_bundle_install_error_to_jsonrpc)?;
+        .map_err(remote_plugin_bundle_install_error_to_rpc)?;
 
         let result = codex_core_plugins::remote_bundle::download_and_install_remote_plugin_bundle(
             config.codex_home.to_path_buf(),
             validated_bundle,
         )
         .await
-        .map_err(remote_plugin_bundle_install_error_to_jsonrpc)?;
+        .map_err(remote_plugin_bundle_install_error_to_rpc)?;
 
         // Cache first so a backend install cannot succeed when local materialization fails.
         // If this backend call fails, the cache entry is harmless because remote installed state
@@ -1513,7 +1505,7 @@ impl PluginRequestProcessor {
             &remote_plugin_id,
         )
         .await
-        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin"))?;
+        .map_err(|err| remote_plugin_catalog_error_to_rpc(err, "install remote plugin"))?;
 
         self.thread_manager
             .plugins_manager()
@@ -1699,7 +1691,7 @@ impl PluginRequestProcessor {
     async fn plugin_uninstall_response(
         &self,
         params: PluginUninstallParams,
-    ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
+    ) -> Result<PluginUninstallResponse, RpcError> {
         let PluginUninstallParams { plugin_id } = params;
         if codex_plugin::PluginId::parse(&plugin_id).is_err()
             && !is_valid_remote_plugin_id(&plugin_id)
@@ -1727,7 +1719,7 @@ impl PluginRequestProcessor {
         Ok(PluginUninstallResponse {})
     }
 
-    fn plugin_install_error(err: CorePluginInstallError) -> JSONRPCErrorError {
+    fn plugin_install_error(err: CorePluginInstallError) -> RpcError {
         if err.is_invalid_request() {
             return invalid_request(err.to_string());
         }
@@ -1751,7 +1743,7 @@ impl PluginRequestProcessor {
         }
     }
 
-    fn plugin_uninstall_error(err: CorePluginUninstallError) -> JSONRPCErrorError {
+    fn plugin_uninstall_error(err: CorePluginUninstallError) -> RpcError {
         if err.is_invalid_request() {
             return invalid_request(err.to_string());
         }
@@ -1775,7 +1767,7 @@ impl PluginRequestProcessor {
         }
     }
 
-    fn marketplace_error(err: MarketplaceError, action: &str) -> JSONRPCErrorError {
+    fn marketplace_error(err: MarketplaceError, action: &str) -> RpcError {
         match err {
             MarketplaceError::MarketplaceNotFound { .. }
             | MarketplaceError::InvalidMarketplaceFile { .. }
@@ -1790,7 +1782,7 @@ impl PluginRequestProcessor {
     async fn remote_plugin_uninstall_response(
         &self,
         plugin_id: String,
-    ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
+    ) -> Result<PluginUninstallResponse, RpcError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins) {
             return Err(invalid_request("remote plugin uninstall is not enabled"));
@@ -1824,9 +1816,8 @@ impl PluginRequestProcessor {
             );
         }
 
-        uninstall_result.map_err(|err| {
-            remote_plugin_catalog_error_to_jsonrpc(err, "uninstall remote plugin")
-        })?;
+        uninstall_result
+            .map_err(|err| remote_plugin_catalog_error_to_rpc(err, "uninstall remote plugin"))?;
         Ok(PluginUninstallResponse {})
     }
 }
@@ -2055,10 +2046,7 @@ fn remote_plugin_detail_to_info(
     }
 }
 
-fn remote_plugin_catalog_error_to_jsonrpc(
-    err: RemotePluginCatalogError,
-    context: &str,
-) -> JSONRPCErrorError {
+fn remote_plugin_catalog_error_to_rpc(err: RemotePluginCatalogError, context: &str) -> RpcError {
     let message = format!("{context}: {err}");
     match &err {
         RemotePluginCatalogError::AuthRequired | RemotePluginCatalogError::UnsupportedAuthMode => {
@@ -2088,8 +2076,8 @@ fn remote_plugin_catalog_error_to_jsonrpc(
     }
 }
 
-fn remote_plugin_bundle_install_error_to_jsonrpc(
+fn remote_plugin_bundle_install_error_to_rpc(
     err: codex_core_plugins::remote_bundle::RemotePluginBundleInstallError,
-) -> JSONRPCErrorError {
+) -> RpcError {
     internal_error(format!("install remote plugin bundle: {err}"))
 }

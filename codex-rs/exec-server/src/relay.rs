@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use codex_app_server_protocol::JSONRPCMessage;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -25,6 +24,7 @@ use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
+use crate::rpc::JSONRPCMessage;
 use crate::server::ConnectionProcessor;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
@@ -468,7 +468,7 @@ mod tests {
     use std::task::Poll;
     use std::time::Duration;
 
-    use codex_app_server_protocol::JSONRPCRequest;
+    use crate::rpc::JSONRPCRequest;
     use codex_app_server_protocol::RequestId;
     use futures::Sink;
     use futures::Stream;

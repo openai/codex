@@ -112,10 +112,7 @@ impl ChatWidget {
     ) {
         self.submit_op(AppCommand::realtime_conversation_start(
             transport,
-            self.config
-                .realtime
-                .voice
-                .and_then(|voice| serde_json::to_value(voice).ok()),
+            self.config.realtime.voice,
         ));
     }
 

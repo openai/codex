@@ -17,6 +17,7 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-app-server-transport = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-features = { workspace = true }
@@ -32,6 +33,8 @@ tokio = { workspace = true, features = [
     "process",
     "rt-multi-thread",
 ] }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
 uuid = { workspace = true }
 wiremock = { workspace = true }
 core_test_support = { path = "../../../core/tests/common" }

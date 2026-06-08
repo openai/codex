@@ -1,12 +1,15 @@
 use super::TurnError;
 use crate::RequestId;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct DeprecationNoticeNotification {
     /// Concise summary of what is deprecated.
@@ -15,8 +18,9 @@ pub struct DeprecationNoticeNotification {
     pub details: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct WarningNotification {
     /// Optional thread target when the warning applies to a specific thread.
@@ -25,8 +29,9 @@ pub struct WarningNotification {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GuardianWarningNotification {
     /// Thread target for the guardian warning.
@@ -35,8 +40,9 @@ pub struct GuardianWarningNotification {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ErrorNotification {
     pub error: TurnError,
@@ -47,8 +53,9 @@ pub struct ErrorNotification {
     pub turn_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ServerRequestResolvedNotification {
     pub thread_id: String,

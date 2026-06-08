@@ -7089,11 +7089,9 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     let old_token = session.mcp_startup_cancellation_token().await;
     assert!(!old_token.is_cancelled());
 
-    let mcp_oauth_credentials_store_mode =
-        serde_json::to_value(OAuthCredentialsStoreMode::Auto).expect("serialize store mode");
     let refresh_config = McpServerRefreshConfig {
-        mcp_servers: json!({}),
-        mcp_oauth_credentials_store_mode,
+        mcp_servers: HashMap::new(),
+        mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::Auto,
     };
     {
         let mut guard = session.pending_mcp_server_refresh_config.lock().await;

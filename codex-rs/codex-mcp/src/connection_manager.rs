@@ -28,6 +28,8 @@ use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
 use crate::rmcp_client::list_tools_for_client_uncached;
+use crate::rmcp_client::value_from_icon;
+use crate::rmcp_client::value_from_meta;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
@@ -55,15 +57,21 @@ use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_rmcp_client::ElicitationResponse;
+use rmcp::model::Annotations;
+use rmcp::model::Content;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
+use rmcp::model::RawContent;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use rmcp::model::Resource;
+use rmcp::model::ResourceContents;
 use rmcp::model::ResourceTemplate;
+use rmcp::model::Role;
+use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -702,20 +710,13 @@ impl McpConnectionManager {
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
 
-        let content = result
-            .content
-            .into_iter()
-            .map(|content| {
-                serde_json::to_value(content)
-                    .unwrap_or_else(|_| serde_json::Value::String("<content>".to_string()))
-            })
-            .collect();
+        let content = result.content.into_iter().map(value_from_content).collect();
 
         Ok(CallToolResult {
             content,
             structured_content: result.structured_content,
             is_error: result.is_error,
-            meta: result.meta.and_then(|meta| serde_json::to_value(meta).ok()),
+            meta: result.meta.map(value_from_meta),
         })
     }
 
@@ -786,6 +787,142 @@ impl McpConnectionManager {
             .await
             .context("failed to get client")
     }
+}
+
+fn value_from_content(content: Content) -> JsonValue {
+    let mut value = JsonMap::new();
+    match content.raw {
+        RawContent::Text(text) => {
+            value.insert("type".to_string(), JsonValue::String("text".to_string()));
+            value.insert("text".to_string(), JsonValue::String(text.text));
+            if let Some(meta) = text.meta {
+                value.insert("_meta".to_string(), value_from_meta(meta));
+            }
+        }
+        RawContent::Image(image) => {
+            value.insert("type".to_string(), JsonValue::String("image".to_string()));
+            value.insert("data".to_string(), JsonValue::String(image.data));
+            value.insert("mimeType".to_string(), JsonValue::String(image.mime_type));
+            if let Some(meta) = image.meta {
+                value.insert("_meta".to_string(), value_from_meta(meta));
+            }
+        }
+        RawContent::Resource(resource) => {
+            value.insert(
+                "type".to_string(),
+                JsonValue::String("resource".to_string()),
+            );
+            if let Some(meta) = resource.meta {
+                value.insert("_meta".to_string(), value_from_meta(meta));
+            }
+            let resource = match resource.resource {
+                ResourceContents::TextResourceContents {
+                    uri,
+                    mime_type,
+                    text,
+                    meta,
+                } => {
+                    let mut resource = JsonMap::new();
+                    resource.insert("uri".to_string(), JsonValue::String(uri));
+                    if let Some(mime_type) = mime_type {
+                        resource.insert("mimeType".to_string(), JsonValue::String(mime_type));
+                    }
+                    resource.insert("text".to_string(), JsonValue::String(text));
+                    if let Some(meta) = meta {
+                        resource.insert("_meta".to_string(), value_from_meta(meta));
+                    }
+                    JsonValue::Object(resource)
+                }
+                ResourceContents::BlobResourceContents {
+                    uri,
+                    mime_type,
+                    blob,
+                    meta,
+                } => {
+                    let mut resource = JsonMap::new();
+                    resource.insert("uri".to_string(), JsonValue::String(uri));
+                    if let Some(mime_type) = mime_type {
+                        resource.insert("mimeType".to_string(), JsonValue::String(mime_type));
+                    }
+                    resource.insert("blob".to_string(), JsonValue::String(blob));
+                    if let Some(meta) = meta {
+                        resource.insert("_meta".to_string(), value_from_meta(meta));
+                    }
+                    JsonValue::Object(resource)
+                }
+            };
+            value.insert("resource".to_string(), resource);
+        }
+        RawContent::Audio(audio) => {
+            value.insert("type".to_string(), JsonValue::String("audio".to_string()));
+            value.insert("data".to_string(), JsonValue::String(audio.data));
+            value.insert("mimeType".to_string(), JsonValue::String(audio.mime_type));
+        }
+        RawContent::ResourceLink(resource) => {
+            value.insert(
+                "type".to_string(),
+                JsonValue::String("resource_link".to_string()),
+            );
+            value.insert("uri".to_string(), JsonValue::String(resource.uri));
+            value.insert("name".to_string(), JsonValue::String(resource.name));
+            if let Some(title) = resource.title {
+                value.insert("title".to_string(), JsonValue::String(title));
+            }
+            if let Some(description) = resource.description {
+                value.insert("description".to_string(), JsonValue::String(description));
+            }
+            if let Some(mime_type) = resource.mime_type {
+                value.insert("mimeType".to_string(), JsonValue::String(mime_type));
+            }
+            if let Some(size) = resource.size {
+                value.insert("size".to_string(), JsonValue::from(size));
+            }
+            if let Some(icons) = resource.icons {
+                value.insert(
+                    "icons".to_string(),
+                    JsonValue::Array(icons.into_iter().map(value_from_icon).collect()),
+                );
+            }
+            if let Some(meta) = resource.meta {
+                value.insert("_meta".to_string(), value_from_meta(meta));
+            }
+        }
+    }
+    if let Some(annotations) = content.annotations {
+        value.insert(
+            "annotations".to_string(),
+            value_from_annotations(annotations),
+        );
+    }
+    JsonValue::Object(value)
+}
+
+fn value_from_annotations(annotations: Annotations) -> JsonValue {
+    let mut value = JsonMap::new();
+    if let Some(audience) = annotations.audience {
+        value.insert(
+            "audience".to_string(),
+            JsonValue::Array(
+                audience
+                    .into_iter()
+                    .map(|role| match role {
+                        Role::User => JsonValue::String("user".to_string()),
+                        Role::Assistant => JsonValue::String("assistant".to_string()),
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(priority) = annotations.priority {
+        value.insert("priority".to_string(), JsonValue::from(priority));
+    }
+    if let Some(last_modified) = annotations.last_modified {
+        value.insert(
+            "lastModified".to_string(),
+            JsonValue::String(last_modified.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
+        );
+    }
+    JsonValue::Object(value)
 }
 
 impl Drop for McpConnectionManager {
@@ -878,3 +1015,7 @@ fn is_mcp_client_startup_timeout_error(error: &StartupOutcomeError) -> bool {
 #[cfg(test)]
 #[path = "connection_manager_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rmcp_value_conversion_tests.rs"]
+mod rmcp_value_conversion_tests;

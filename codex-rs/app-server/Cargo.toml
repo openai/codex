@@ -24,12 +24,6 @@ workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
-axum = { workspace = true, default-features = false, features = [
-    "http1",
-    "json",
-    "tokio",
-    "ws",
-] }
 codex-analytics = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-config = { workspace = true }
@@ -76,6 +70,7 @@ codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
+http = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -124,7 +119,8 @@ serial_test = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 tar = { workspace = true }
-tokio-tungstenite = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 url = { workspace = true }
 wiremock = { workspace = true }

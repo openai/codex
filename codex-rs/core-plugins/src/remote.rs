@@ -1,10 +1,10 @@
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::SkillInterface;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
@@ -223,9 +223,9 @@ pub fn is_valid_remote_plugin_id(plugin_id: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
 }
 
-pub fn validate_remote_plugin_id(plugin_id: &str) -> Result<(), JSONRPCErrorError> {
+pub fn validate_remote_plugin_id(plugin_id: &str) -> Result<(), RpcError> {
     if !is_valid_remote_plugin_id(plugin_id) {
-        return Err(JSONRPCErrorError {
+        return Err(RpcError {
             code: INVALID_REQUEST_ERROR_CODE,
             message:
                 "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed"
@@ -482,11 +482,66 @@ struct RemotePluginDirectoryItem {
     share_url: Option<String>,
     #[serde(default)]
     share_principals: Option<Vec<RemotePluginDirectorySharePrincipal>>,
-    installation_policy: PluginInstallPolicy,
-    authentication_policy: PluginAuthPolicy,
+    installation_policy: RemotePluginInstallPolicy,
+    authentication_policy: RemotePluginAuthPolicy,
     #[serde(rename = "status", default)]
-    availability: PluginAvailability,
+    availability: RemotePluginAvailability,
     release: RemotePluginReleaseResponse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+enum RemotePluginInstallPolicy {
+    #[serde(rename = "NOT_AVAILABLE")]
+    NotAvailable,
+    #[serde(rename = "AVAILABLE")]
+    Available,
+    #[serde(rename = "INSTALLED_BY_DEFAULT")]
+    InstalledByDefault,
+}
+
+impl From<RemotePluginInstallPolicy> for PluginInstallPolicy {
+    fn from(value: RemotePluginInstallPolicy) -> Self {
+        match value {
+            RemotePluginInstallPolicy::NotAvailable => Self::NotAvailable,
+            RemotePluginInstallPolicy::Available => Self::Available,
+            RemotePluginInstallPolicy::InstalledByDefault => Self::InstalledByDefault,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+enum RemotePluginAuthPolicy {
+    #[serde(rename = "ON_INSTALL")]
+    OnInstall,
+    #[serde(rename = "ON_USE")]
+    OnUse,
+}
+
+impl From<RemotePluginAuthPolicy> for PluginAuthPolicy {
+    fn from(value: RemotePluginAuthPolicy) -> Self {
+        match value {
+            RemotePluginAuthPolicy::OnInstall => Self::OnInstall,
+            RemotePluginAuthPolicy::OnUse => Self::OnUse,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+enum RemotePluginAvailability {
+    #[serde(rename = "AVAILABLE", alias = "ENABLED")]
+    #[default]
+    Available,
+    #[serde(rename = "DISABLED_BY_ADMIN")]
+    DisabledByAdmin,
+}
+
+impl From<RemotePluginAvailability> for PluginAvailability {
+    fn from(value: RemotePluginAvailability) -> Self {
+        match value {
+            RemotePluginAvailability::Available => Self::Available,
+            RemotePluginAvailability::DisabledByAdmin => Self::DisabledByAdmin,
+        }
+    }
 }
 
 fn remote_plugin_canonical_marketplace_name(
@@ -1177,9 +1232,9 @@ fn build_remote_plugin_summary(
         share_context: remote_plugin_share_context(plugin)?,
         installed: installed_plugin.is_some(),
         enabled: installed_plugin.is_some_and(|plugin| plugin.enabled),
-        install_policy: plugin.installation_policy,
-        auth_policy: plugin.authentication_policy,
-        availability: plugin.availability,
+        install_policy: plugin.installation_policy.into(),
+        auth_policy: plugin.authentication_policy.into(),
+        availability: plugin.availability.into(),
         interface: remote_plugin_interface_to_info(plugin),
         keywords: plugin.release.keywords.clone(),
     })
@@ -1208,8 +1263,8 @@ fn remote_discoverable_plugin_from_directory_item(
         description,
         has_skills: !plugin.release.skills.is_empty(),
         app_ids: plugin.release.app_ids.clone(),
-        install_policy: plugin.installation_policy,
-        availability: plugin.availability,
+        install_policy: plugin.installation_policy.into(),
+        availability: plugin.availability.into(),
     })
 }
 
@@ -1255,9 +1310,9 @@ fn remote_installed_plugin_to_cache_entry(
         id: plugin.id.clone(),
         name: plugin.name.clone(),
         enabled: installed_plugin.enabled,
-        install_policy: plugin.installation_policy,
-        auth_policy: plugin.authentication_policy,
-        availability: plugin.availability,
+        install_policy: plugin.installation_policy.into(),
+        auth_policy: plugin.authentication_policy.into(),
+        availability: plugin.availability.into(),
         interface: remote_plugin_interface_to_info(plugin),
         keywords: plugin.release.keywords.clone(),
     })

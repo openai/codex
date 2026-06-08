@@ -11,7 +11,9 @@ use codex_protocol::protocol::HookSource as CoreHookSource;
 use codex_protocol::protocol::HookTrustStatus as CoreHookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -61,6 +63,7 @@ v2_enum_from_core!(
     }
 );
 
+#[cfg(any(test, feature = "serde-compat"))]
 fn default_hook_source() -> HookSource {
     HookSource::Unknown
 }
@@ -77,8 +80,9 @@ v2_enum_from_core!(
     }
 );
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct HookOutputEntry {
     pub kind: HookOutputEntryKind,
@@ -94,8 +98,9 @@ impl From<CoreHookOutputEntry> for HookOutputEntry {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct HookRunSummary {
     pub id: String,
@@ -104,7 +109,10 @@ pub struct HookRunSummary {
     pub execution_mode: HookExecutionMode,
     pub scope: HookScope,
     pub source_path: AbsolutePathBuf,
-    #[serde(default = "default_hook_source")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default = "default_hook_source")
+    )]
     pub source: HookSource,
     pub display_order: i64,
     pub status: HookRunStatus,
@@ -136,8 +144,9 @@ impl From<CoreHookRunSummary> for HookRunSummary {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct HookStartedNotification {
     pub thread_id: String,
@@ -145,8 +154,9 @@ pub struct HookStartedNotification {
     pub run: HookRunSummary,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct HookCompletedNotification {
     pub thread_id: String,

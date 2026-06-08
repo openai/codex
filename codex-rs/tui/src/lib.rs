@@ -26,9 +26,6 @@ use codex_app_server_client::AppServerClient;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
-use codex_app_server_client::RemoteAppServerClient;
-use codex_app_server_client::RemoteAppServerConnectArgs;
-pub use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
@@ -80,6 +77,17 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 use url::Url;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemoteAppServerEndpoint {
+    WebSocket {
+        websocket_url: String,
+        auth_token: Option<String>,
+    },
+    UnixSocket {
+        socket_path: AbsolutePathBuf,
+    },
+}
 use uuid::Uuid;
 
 pub(crate) use codex_app_server_client::legacy_core;
@@ -288,9 +296,6 @@ pub use public_widgets::composer_input::ComposerInput;
 const TUI_LOG_FILE_NAME: &str = "codex-tui.log";
 
 #[cfg(unix)]
-const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_millis(50);
-
 #[allow(clippy::too_many_arguments)]
 async fn start_embedded_app_server(
     arg0_paths: Arg0DispatchPaths,
@@ -323,7 +328,6 @@ async fn start_embedded_app_server(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AppServerTarget {
     Embedded,
-    LocalDaemon { endpoint: RemoteAppServerEndpoint },
     Remote { endpoint: RemoteAppServerEndpoint },
 }
 
@@ -352,9 +356,7 @@ async fn init_state_db_for_app_server_target(
                 err.to_string(),
             ))
         }),
-        AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => {
-            Ok(state_db::get_state_db(config).await)
-        }
+        AppServerTarget::Remote { .. } => Ok(state_db::get_state_db(config).await),
     }
 }
 
@@ -408,8 +410,7 @@ pub fn resolve_remote_addr(addr: &str) -> color_eyre::Result<RemoteAppServerEndp
     if let Some(socket_path) = addr.strip_prefix("unix://") {
         let socket_path = if socket_path.is_empty() {
             let codex_home = find_codex_home().wrap_err("failed to resolve CODEX_HOME")?;
-            codex_app_server_client::app_server_control_socket_path(&codex_home)
-                .map_err(color_eyre::Report::new)?
+            app_server_control_socket_path(&codex_home).map_err(color_eyre::Report::new)?
         } else {
             AbsolutePathBuf::relative_to_current_dir(socket_path)
                 .map_err(color_eyre::Report::new)?
@@ -453,53 +454,19 @@ pub fn remote_addr_supports_auth_token(endpoint: &RemoteAppServerEndpoint) -> bo
 }
 
 async fn connect_remote_app_server(
-    endpoint: RemoteAppServerEndpoint,
+    _endpoint: RemoteAppServerEndpoint,
 ) -> color_eyre::Result<AppServerClient> {
-    let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-        endpoint,
-        client_name: "codex-tui".to_string(),
-        client_version: env!("CARGO_PKG_VERSION").to_string(),
-        experimental_api: true,
-        opt_out_notification_methods: Vec::new(),
-        channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-    })
-    .await
-    .wrap_err("failed to connect to remote app server")?;
-    Ok(AppServerClient::Remote(app_server))
-}
-
-#[cfg(unix)]
-async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<AbsolutePathBuf> {
-    let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home).ok()?;
-    if !socket_path.as_path().try_exists().unwrap_or(false) {
-        return None;
-    }
-
-    match tokio::time::timeout(
-        AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT,
-        tokio::net::UnixStream::connect(socket_path.as_path()),
+    color_eyre::eyre::bail!(
+        "remote app-server connections are unavailable in the native gRPC experiment"
     )
-    .await
-    {
-        Ok(Ok(_stream)) => Some(socket_path),
-        Ok(Err(err)) => {
-            tracing::debug!(%err, socket_path = %socket_path.display(), "skipping default app-server daemon socket");
-            None
-        }
-        Err(_) => {
-            tracing::debug!(
-                socket_path = %socket_path.display(),
-                timeout_ms = AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT.as_millis(),
-                "timed out probing default app-server daemon socket"
-            );
-            None
-        }
-    }
 }
 
-#[cfg(not(unix))]
-async fn maybe_probe_default_daemon_socket(_codex_home: &Path) -> Option<AbsolutePathBuf> {
-    None
+fn app_server_control_socket_path(codex_home: &Path) -> std::io::Result<AbsolutePathBuf> {
+    AbsolutePathBuf::from_absolute_path(
+        codex_home
+            .join("app-server-control")
+            .join("app-server-control.sock"),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -531,9 +498,7 @@ async fn start_app_server(
         )
         .await
         .map(AppServerClient::InProcess),
-        AppServerTarget::LocalDaemon { endpoint } | AppServerTarget::Remote { endpoint } => {
-            connect_remote_app_server(endpoint.clone()).await
-        }
+        AppServerTarget::Remote { endpoint } => connect_remote_app_server(endpoint.clone()).await,
     }
 }
 
@@ -617,8 +582,7 @@ where
         state_db,
         environment_manager,
         config_warnings,
-        session_source: serde_json::from_value(serde_json::json!("cli"))
-            .unwrap_or_else(|err| panic!("cli session source should deserialize: {err}")),
+        session_source: codex_protocol::protocol::SessionSource::Cli,
         enable_codex_api_key_env: false,
         client_name: "codex-tui".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -830,51 +794,11 @@ fn latest_session_cwd_filter<'a>(
 
 fn app_server_target_for_launch(
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
-    default_daemon_socket: Option<AbsolutePathBuf>,
-    can_reuse_implicit_local_daemon: bool,
 ) -> AppServerTarget {
     match explicit_remote_endpoint {
         Some(endpoint) => AppServerTarget::Remote { endpoint },
-        None if can_reuse_implicit_local_daemon => {
-            default_daemon_socket.map_or(AppServerTarget::Embedded, |socket_path| {
-                AppServerTarget::LocalDaemon {
-                    endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
-                }
-            })
-        }
         None => AppServerTarget::Embedded,
     }
-}
-
-fn loader_overrides_are_default(loader_overrides: &LoaderOverrides) -> bool {
-    let loader_overrides_are_default = loader_overrides.user_config_path.is_none()
-        && loader_overrides.user_config_profile.is_none()
-        && loader_overrides.managed_config_path.is_none()
-        && loader_overrides.system_config_path.is_none()
-        && loader_overrides.system_requirements_path.is_none()
-        && !loader_overrides.ignore_managed_requirements
-        && !loader_overrides.ignore_user_config
-        && !loader_overrides.ignore_user_and_project_exec_policy_rules
-        && loader_overrides
-            .macos_managed_config_requirements_base64
-            .is_none();
-    #[cfg(target_os = "macos")]
-    let loader_overrides_are_default =
-        loader_overrides_are_default && loader_overrides.managed_preferences_base64.is_none();
-    loader_overrides_are_default
-}
-
-fn can_reuse_implicit_local_daemon(
-    cli_kv_overrides: &[(String, toml::Value)],
-    loader_overrides: &LoaderOverrides,
-    strict_config: bool,
-    has_non_replayable_launch_overrides: bool,
-) -> bool {
-    // A reused daemon cannot adopt this invocation's full launch config state.
-    cli_kv_overrides.is_empty()
-        && loader_overrides_are_default(loader_overrides)
-        && !strict_config
-        && !has_non_replayable_launch_overrides
 }
 
 pub async fn run_main(
@@ -934,22 +858,7 @@ pub async fn run_main(
         launch_loader_overrides.user_config_path = Some(user_config_path);
         launch_loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
-    let reuse_implicit_local_daemon = can_reuse_implicit_local_daemon(
-        &cli_kv_overrides,
-        &launch_loader_overrides,
-        strict_config,
-        cli.bypass_hook_trust,
-    );
-    let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
-        maybe_probe_default_daemon_socket(&codex_home).await
-    } else {
-        None
-    };
-    let app_server_target = app_server_target_for_launch(
-        explicit_remote_endpoint,
-        default_daemon,
-        reuse_implicit_local_daemon,
-    );
+    let app_server_target = app_server_target_for_launch(explicit_remote_endpoint);
     let remote_cwd_override = cli
         .cwd
         .clone()
@@ -2133,7 +2042,7 @@ mod tests {
         assert_eq!(
             resolve_remote_addr("unix://")?,
             RemoteAppServerEndpoint::UnixSocket {
-                socket_path: codex_app_server_client::app_server_control_socket_path(&codex_home)?,
+                socket_path: app_server_control_socket_path(&codex_home)?,
             }
         );
         Ok(())
@@ -2178,52 +2087,12 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn default_daemon_auto_connect_skips_missing_socket() -> color_eyre::Result<()> {
-        let codex_home = TempDir::new()?;
-        assert!(
-            maybe_probe_default_daemon_socket(codex_home.path())
-                .await
-                .is_none()
-        );
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn default_daemon_auto_connect_probes_socket_only() -> color_eyre::Result<()> {
-        let codex_home = TempDir::new()?;
-        let socket_path =
-            codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
-        std::fs::create_dir_all(socket_path.as_path().parent().expect("socket parent"))?;
-        let _listener = tokio::net::UnixListener::bind(socket_path.as_path())?;
-
-        assert_eq!(
-            maybe_probe_default_daemon_socket(codex_home.path()).await,
-            Some(socket_path)
-        );
-        Ok(())
-    }
-
     #[test]
-    fn app_server_target_for_launch_uses_local_daemon_for_default_socket() -> color_eyre::Result<()>
-    {
-        let socket_path = AbsolutePathBuf::relative_to_current_dir("codex.sock")?;
-        let target = app_server_target_for_launch(
-            /*explicit_remote_endpoint*/ None,
-            Some(socket_path.clone()),
-            /*can_reuse_implicit_local_daemon*/ true,
-        );
-
+    fn app_server_target_for_launch_defaults_to_embedded() {
         assert_eq!(
-            target,
-            AppServerTarget::LocalDaemon {
-                endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
-            }
+            app_server_target_for_launch(/*explicit_remote_endpoint*/ None),
+            AppServerTarget::Embedded
         );
-        assert!(!target.uses_remote_workspace());
-        assert_eq!(target.thread_params_mode(), ThreadParamsMode::Embedded);
-        Ok(())
     }
 
     #[test]
@@ -2231,11 +2100,7 @@ mod tests {
         let explicit_endpoint = RemoteAppServerEndpoint::UnixSocket {
             socket_path: AbsolutePathBuf::relative_to_current_dir("explicit.sock")?,
         };
-        let target = app_server_target_for_launch(
-            Some(explicit_endpoint.clone()),
-            Some(AbsolutePathBuf::relative_to_current_dir("default.sock")?),
-            /*can_reuse_implicit_local_daemon*/ false,
-        );
+        let target = app_server_target_for_launch(Some(explicit_endpoint.clone()));
 
         assert_eq!(
             target,
@@ -2248,74 +2113,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn app_server_target_for_launch_skips_local_daemon_when_launch_config_is_not_replayable()
-    -> color_eyre::Result<()> {
-        let socket_path = AbsolutePathBuf::relative_to_current_dir("codex.sock")?;
-        let target = app_server_target_for_launch(
-            /*explicit_remote_endpoint*/ None,
-            Some(socket_path),
-            /*can_reuse_implicit_local_daemon*/ false,
-        );
-
-        assert_eq!(target, AppServerTarget::Embedded);
-        Ok(())
-    }
-
-    #[test]
-    fn can_reuse_implicit_local_daemon_requires_default_launch_config() -> color_eyre::Result<()> {
-        let mut loader_overrides = LoaderOverrides::default();
-        let cli_kv_overrides = vec![("web_search".to_string(), toml::Value::String("live".into()))];
-
-        assert!(can_reuse_implicit_local_daemon(
-            &[],
-            &LoaderOverrides::default(),
-            /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
-        ));
-        assert!(!can_reuse_implicit_local_daemon(
-            &cli_kv_overrides,
-            &LoaderOverrides::default(),
-            /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
-        ));
-        loader_overrides.ignore_user_config = true;
-        assert!(!can_reuse_implicit_local_daemon(
-            &[],
-            &loader_overrides,
-            /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
-        ));
-        assert!(!can_reuse_implicit_local_daemon(
-            &[],
-            &LoaderOverrides::default(),
-            /*strict_config*/ true,
-            /*has_non_replayable_launch_overrides*/ false,
-        ));
-        assert!(!can_reuse_implicit_local_daemon(
-            &[],
-            &LoaderOverrides::default(),
-            /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ true,
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn should_load_configured_environments_for_local_daemon() -> color_eyre::Result<()> {
-        let target = AppServerTarget::LocalDaemon {
-            endpoint: RemoteAppServerEndpoint::UnixSocket {
-                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
-            },
-        };
-
-        assert!(should_load_configured_environments(
-            &LoaderOverrides::default(),
-            &target,
-        ));
-        Ok(())
-    }
-
     #[tokio::test]
     async fn latest_session_lookup_params_keep_local_filters_for_embedded_sessions()
     -> std::io::Result<()> {
@@ -2325,33 +2122,6 @@ mod tests {
 
         let params = latest_session_lookup_params(
             /*uses_remote_workspace*/ false,
-            &config,
-            Some(cwd.as_path()),
-            /*include_non_interactive*/ false,
-        );
-
-        assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
-        assert_eq!(
-            params.cwd,
-            Some(ThreadListCwdFilter::One(cwd.to_string_lossy().to_string()))
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn latest_session_lookup_params_keep_local_filters_for_local_daemon_sessions()
-    -> color_eyre::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
-        let cwd = temp_dir.path().join("project");
-        let target = AppServerTarget::LocalDaemon {
-            endpoint: RemoteAppServerEndpoint::UnixSocket {
-                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
-            },
-        };
-
-        let params = latest_session_lookup_params(
-            target.uses_remote_workspace(),
             &config,
             Some(cwd.as_path()),
             /*include_non_interactive*/ false,
@@ -2645,29 +2415,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_cwd_for_app_server_target_canonicalizes_local_daemon_cli_cwd()
-    -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let target = AppServerTarget::LocalDaemon {
-            endpoint: RemoteAppServerEndpoint::UnixSocket {
-                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
-            },
-        };
-        let environment_manager = EnvironmentManager::default_for_tests();
-
-        let config_cwd =
-            config_cwd_for_app_server_target(Some(temp_dir.path()), &target, &environment_manager)?;
-
-        assert_eq!(
-            config_cwd,
-            Some(AbsolutePathBuf::from_absolute_path(dunce::canonicalize(
-                temp_dir.path()
-            )?)?)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn config_cwd_for_app_server_target_errors_for_missing_embedded_cli_cwd()
     -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
@@ -2778,8 +2525,7 @@ mod tests {
                 thread_id,
                 rollout_path.clone(),
                 created_at,
-                serde_json::from_value(serde_json::json!("cli"))
-                    .expect("cli session source should deserialize"),
+                codex_protocol::protocol::SessionSource::Cli,
             );
             builder.cwd = session_cwd;
             let mut metadata = builder.build(config.model_provider_id.as_str());

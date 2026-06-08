@@ -5,14 +5,13 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RpcError;
+use codex_protocol::protocol::W3cTraceContext;
+use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -25,6 +24,249 @@ use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum JSONRPCMessage {
+    Request(JSONRPCRequest),
+    Notification(JSONRPCNotification),
+    Response(JSONRPCResponse),
+    Error(JSONRPCError),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JSONRPCRequest {
+    pub id: RequestId,
+    pub method: String,
+    pub params: Option<Value>,
+    pub trace: Option<W3cTraceContext>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JSONRPCNotification {
+    pub method: String,
+    pub params: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JSONRPCResponse {
+    pub id: RequestId,
+    pub result: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JSONRPCError {
+    pub error: RpcError,
+    pub id: RequestId,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum JsonRpcWireMessage {
+    Request(JsonRpcWireRequest),
+    Notification(JsonRpcWireNotification),
+    Response(JsonRpcWireResponse),
+    Error(JsonRpcWireError),
+}
+
+#[derive(Deserialize, Serialize)]
+struct JsonRpcWireRequest {
+    id: JsonRpcWireRequestId,
+    method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    params: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trace: Option<W3cTraceContext>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct JsonRpcWireNotification {
+    method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    params: Option<Value>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct JsonRpcWireResponse {
+    id: JsonRpcWireRequestId,
+    result: Value,
+}
+
+#[derive(Deserialize, Serialize)]
+struct JsonRpcWireError {
+    error: RpcErrorWire,
+    id: JsonRpcWireRequestId,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum JsonRpcWireRequestId {
+    String(String),
+    Integer(i64),
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub(crate) struct RpcErrorWire {
+    code: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data: Option<Value>,
+    message: String,
+}
+
+impl Serialize for JSONRPCMessage {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        JsonRpcWireMessage::from(self.clone()).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for JSONRPCMessage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        JsonRpcWireMessage::deserialize(deserializer).map(Into::into)
+    }
+}
+
+impl From<JSONRPCMessage> for JsonRpcWireMessage {
+    fn from(message: JSONRPCMessage) -> Self {
+        match message {
+            JSONRPCMessage::Request(request) => Self::Request(request.into()),
+            JSONRPCMessage::Notification(notification) => Self::Notification(notification.into()),
+            JSONRPCMessage::Response(response) => Self::Response(response.into()),
+            JSONRPCMessage::Error(error) => Self::Error(error.into()),
+        }
+    }
+}
+
+impl From<JsonRpcWireMessage> for JSONRPCMessage {
+    fn from(message: JsonRpcWireMessage) -> Self {
+        match message {
+            JsonRpcWireMessage::Request(request) => Self::Request(request.into()),
+            JsonRpcWireMessage::Notification(notification) => {
+                Self::Notification(notification.into())
+            }
+            JsonRpcWireMessage::Response(response) => Self::Response(response.into()),
+            JsonRpcWireMessage::Error(error) => Self::Error(error.into()),
+        }
+    }
+}
+
+impl From<JSONRPCRequest> for JsonRpcWireRequest {
+    fn from(request: JSONRPCRequest) -> Self {
+        Self {
+            id: request.id.into(),
+            method: request.method,
+            params: request.params,
+            trace: request.trace,
+        }
+    }
+}
+
+impl From<JsonRpcWireRequest> for JSONRPCRequest {
+    fn from(request: JsonRpcWireRequest) -> Self {
+        Self {
+            id: request.id.into(),
+            method: request.method,
+            params: request.params,
+            trace: request.trace,
+        }
+    }
+}
+
+impl From<JSONRPCNotification> for JsonRpcWireNotification {
+    fn from(notification: JSONRPCNotification) -> Self {
+        Self {
+            method: notification.method,
+            params: notification.params,
+        }
+    }
+}
+
+impl From<JsonRpcWireNotification> for JSONRPCNotification {
+    fn from(notification: JsonRpcWireNotification) -> Self {
+        Self {
+            method: notification.method,
+            params: notification.params,
+        }
+    }
+}
+
+impl From<JSONRPCResponse> for JsonRpcWireResponse {
+    fn from(response: JSONRPCResponse) -> Self {
+        Self {
+            id: response.id.into(),
+            result: response.result,
+        }
+    }
+}
+
+impl From<JsonRpcWireResponse> for JSONRPCResponse {
+    fn from(response: JsonRpcWireResponse) -> Self {
+        Self {
+            id: response.id.into(),
+            result: response.result,
+        }
+    }
+}
+
+impl From<JSONRPCError> for JsonRpcWireError {
+    fn from(error: JSONRPCError) -> Self {
+        Self {
+            error: error.error.into(),
+            id: error.id.into(),
+        }
+    }
+}
+
+impl From<JsonRpcWireError> for JSONRPCError {
+    fn from(error: JsonRpcWireError) -> Self {
+        Self {
+            error: error.error.into(),
+            id: error.id.into(),
+        }
+    }
+}
+
+impl From<RequestId> for JsonRpcWireRequestId {
+    fn from(request_id: RequestId) -> Self {
+        match request_id {
+            RequestId::String(value) => Self::String(value),
+            RequestId::Integer(value) => Self::Integer(value),
+        }
+    }
+}
+
+impl From<JsonRpcWireRequestId> for RequestId {
+    fn from(request_id: JsonRpcWireRequestId) -> Self {
+        match request_id {
+            JsonRpcWireRequestId::String(value) => Self::String(value),
+            JsonRpcWireRequestId::Integer(value) => Self::Integer(value),
+        }
+    }
+}
+
+impl From<RpcError> for RpcErrorWire {
+    fn from(error: RpcError) -> Self {
+        Self {
+            code: error.code,
+            data: error.data,
+            message: error.message,
+        }
+    }
+}
+
+impl From<RpcErrorWire> for RpcError {
+    fn from(error: RpcErrorWire) -> Self {
+        Self {
+            code: error.code,
+            data: error.data,
+            message: error.message,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum RpcCallError {
     /// The underlying JSON-RPC transport closed before this call completed.
@@ -32,7 +274,7 @@ pub(crate) enum RpcCallError {
     /// The response bytes were valid JSON-RPC but not the expected result type.
     Json(serde_json::Error),
     /// The executor returned a JSON-RPC error response for this call.
-    Server(JSONRPCErrorError),
+    Server(RpcError),
 }
 
 type PendingRequest = oneshot::Sender<Result<Value, RpcCallError>>;
@@ -57,7 +299,7 @@ pub(crate) enum RpcServerOutboundMessage {
     },
     Error {
         request_id: RequestId,
-        error: JSONRPCErrorError,
+        error: RpcError,
     },
     Notification(JSONRPCNotification),
 }
@@ -76,7 +318,7 @@ impl RpcNotificationSender {
         &self,
         request_id: RequestId,
         result: Value,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         self.outgoing_tx
             .send(RpcServerOutboundMessage::Response { request_id, result })
             .await
@@ -87,7 +329,7 @@ impl RpcNotificationSender {
         &self,
         method: &str,
         params: &P,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let params = serde_json::to_value(params).map_err(|err| internal_error(err.to_string()))?;
         self.outgoing_tx
             .send(RpcServerOutboundMessage::Notification(
@@ -128,7 +370,7 @@ where
         P: DeserializeOwned + Send + 'static,
         R: Serialize + Send + 'static,
         F: Fn(Arc<S>, P) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
+        Fut: Future<Output = Result<R, RpcError>> + Send + 'static,
     {
         self.request_routes.insert(
             method,
@@ -163,7 +405,7 @@ where
     where
         P: DeserializeOwned + Send + 'static,
         F: Fn(Arc<S>, RequestId, P) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<(), JSONRPCErrorError>> + Send + 'static,
+        Fut: Future<Output = Result<(), RpcError>> + Send + 'static,
     {
         self.request_routes.insert(
             method,
@@ -409,47 +651,47 @@ pub(crate) fn encode_server_message(
     }
 }
 
-pub(crate) fn invalid_request(message: String) -> JSONRPCErrorError {
-    JSONRPCErrorError {
+pub(crate) fn invalid_request(message: String) -> RpcError {
+    RpcError {
         code: -32600,
         data: None,
         message,
     }
 }
 
-pub(crate) fn method_not_found(message: String) -> JSONRPCErrorError {
-    JSONRPCErrorError {
+pub(crate) fn method_not_found(message: String) -> RpcError {
+    RpcError {
         code: -32601,
         data: None,
         message,
     }
 }
 
-pub(crate) fn invalid_params(message: String) -> JSONRPCErrorError {
-    JSONRPCErrorError {
+pub(crate) fn invalid_params(message: String) -> RpcError {
+    RpcError {
         code: -32602,
         data: None,
         message,
     }
 }
 
-pub(crate) fn not_found(message: String) -> JSONRPCErrorError {
-    JSONRPCErrorError {
+pub(crate) fn not_found(message: String) -> RpcError {
+    RpcError {
         code: -32004,
         data: None,
         message,
     }
 }
 
-pub(crate) fn internal_error(message: String) -> JSONRPCErrorError {
-    JSONRPCErrorError {
+pub(crate) fn internal_error(message: String) -> RpcError {
+    RpcError {
         code: -32603,
         data: None,
         message,
     }
 }
 
-fn decode_request_params<P>(params: Option<Value>) -> Result<P, JSONRPCErrorError>
+fn decode_request_params<P>(params: Option<Value>) -> Result<P, RpcError>
 where
     P: DeserializeOwned,
 {
@@ -529,16 +771,47 @@ async fn drain_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
 mod tests {
     use std::time::Duration;
 
-    use codex_app_server_protocol::JSONRPCMessage;
-    use codex_app_server_protocol::JSONRPCResponse;
+    use codex_app_server_protocol::RequestId;
+    use codex_app_server_protocol::RpcError;
     use pretty_assertions::assert_eq;
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWriteExt;
     use tokio::io::BufReader;
     use tokio::time::timeout;
 
+    use super::JSONRPCError;
+    use super::JSONRPCMessage;
+    use super::JSONRPCRequest;
+    use super::JSONRPCResponse;
     use super::RpcClient;
     use crate::connection::JsonRpcConnection;
+
+    #[test]
+    fn jsonrpc_wire_round_trip_preserves_domain_ids_and_errors() {
+        let messages = [
+            JSONRPCMessage::Request(JSONRPCRequest {
+                id: RequestId::String("request-1".to_string()),
+                method: "test/request".to_string(),
+                params: Some(serde_json::json!({"value": 1})),
+                trace: None,
+            }),
+            JSONRPCMessage::Error(JSONRPCError {
+                id: RequestId::Integer(7),
+                error: RpcError {
+                    code: -32602,
+                    data: Some(serde_json::json!({"field": "value"})),
+                    message: "invalid params".to_string(),
+                },
+            }),
+        ];
+
+        for message in messages {
+            let encoded = serde_json::to_value(&message).expect("message should serialize");
+            let decoded: JSONRPCMessage =
+                serde_json::from_value(encoded).expect("message should deserialize from wire");
+            assert_eq!(decoded, message);
+        }
+    }
 
     async fn read_jsonrpc_line<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> JSONRPCMessage
     where

@@ -2,7 +2,7 @@ use std::io;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
@@ -51,7 +51,7 @@ impl FileSystemHandler {
     pub(crate) async fn read_file(
         &self,
         params: FsReadFileParams,
-    ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
+    ) -> Result<FsReadFileResponse, RpcError> {
         let bytes = self
             .file_system
             .read_file(&params.path, params.sandbox.as_ref())
@@ -65,7 +65,7 @@ impl FileSystemHandler {
     pub(crate) async fn write_file(
         &self,
         params: FsWriteFileParams,
-    ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
+    ) -> Result<FsWriteFileResponse, RpcError> {
         let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
             invalid_request(format!(
                 "{FS_WRITE_FILE_METHOD} requires valid base64 dataBase64: {err}"
@@ -81,7 +81,7 @@ impl FileSystemHandler {
     pub(crate) async fn create_directory(
         &self,
         params: FsCreateDirectoryParams,
-    ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
+    ) -> Result<FsCreateDirectoryResponse, RpcError> {
         let recursive = params.recursive.unwrap_or(true);
         self.file_system
             .create_directory(
@@ -97,7 +97,7 @@ impl FileSystemHandler {
     pub(crate) async fn get_metadata(
         &self,
         params: FsGetMetadataParams,
-    ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
+    ) -> Result<FsGetMetadataResponse, RpcError> {
         let metadata = self
             .file_system
             .get_metadata(&params.path, params.sandbox.as_ref())
@@ -115,7 +115,7 @@ impl FileSystemHandler {
     pub(crate) async fn canonicalize(
         &self,
         params: FsCanonicalizeParams,
-    ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+    ) -> Result<FsCanonicalizeResponse, RpcError> {
         let path = self
             .file_system
             .canonicalize(&params.path, params.sandbox.as_ref())
@@ -124,10 +124,7 @@ impl FileSystemHandler {
         Ok(FsCanonicalizeResponse { path })
     }
 
-    pub(crate) async fn join(
-        &self,
-        params: FsJoinParams,
-    ) -> Result<FsJoinResponse, JSONRPCErrorError> {
+    pub(crate) async fn join(&self, params: FsJoinParams) -> Result<FsJoinResponse, RpcError> {
         let path = self
             .file_system
             .join(&params.base_path, &params.path)
@@ -139,7 +136,7 @@ impl FileSystemHandler {
     pub(crate) async fn parent(
         &self,
         params: FsParentParams,
-    ) -> Result<FsParentResponse, JSONRPCErrorError> {
+    ) -> Result<FsParentResponse, RpcError> {
         let path = self
             .file_system
             .parent(&params.path)
@@ -151,7 +148,7 @@ impl FileSystemHandler {
     pub(crate) async fn read_directory(
         &self,
         params: FsReadDirectoryParams,
-    ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
+    ) -> Result<FsReadDirectoryResponse, RpcError> {
         let entries = self
             .file_system
             .read_directory(&params.path, params.sandbox.as_ref())
@@ -170,7 +167,7 @@ impl FileSystemHandler {
     pub(crate) async fn remove(
         &self,
         params: FsRemoveParams,
-    ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
+    ) -> Result<FsRemoveResponse, RpcError> {
         let recursive = params.recursive.unwrap_or(true);
         let force = params.force.unwrap_or(true);
         self.file_system
@@ -184,10 +181,7 @@ impl FileSystemHandler {
         Ok(FsRemoveResponse {})
     }
 
-    pub(crate) async fn copy(
-        &self,
-        params: FsCopyParams,
-    ) -> Result<FsCopyResponse, JSONRPCErrorError> {
+    pub(crate) async fn copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, RpcError> {
         self.file_system
             .copy(
                 &params.source_path,
@@ -203,7 +197,7 @@ impl FileSystemHandler {
     }
 }
 
-fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
+fn map_fs_error(err: io::Error) -> RpcError {
     match err.kind() {
         io::ErrorKind::NotFound => not_found(err.to_string()),
         io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied => {

@@ -19,12 +19,12 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
-use serde::Serialize;
 use serde_json::Value;
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum AppCommand {
     Interrupt {
         behavior: InterruptBehavior,
@@ -32,7 +32,7 @@ pub(crate) enum AppCommand {
     CleanBackgroundTerminals,
     RealtimeConversationStart {
         transport: Option<ThreadRealtimeStartTransport>,
-        voice: Option<Value>,
+        voice: Option<RealtimeVoice>,
     },
     RealtimeConversationAudio(ThreadRealtimeAudioChunk),
     RealtimeConversationClose,
@@ -112,7 +112,7 @@ pub(crate) enum AppCommand {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InterruptBehavior {
     Default,
     RestorePromptIfNoOutput,
@@ -137,7 +137,7 @@ impl AppCommand {
 
     pub(crate) fn realtime_conversation_start(
         transport: Option<ThreadRealtimeStartTransport>,
-        voice: Option<Value>,
+        voice: Option<RealtimeVoice>,
     ) -> Self {
         Self::RealtimeConversationStart { transport, voice }
     }

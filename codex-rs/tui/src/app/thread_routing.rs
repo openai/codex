@@ -759,10 +759,7 @@ impl App {
             return Ok(false);
         };
 
-        match app_server
-            .resolve_server_request(resolution.request_id, resolution.result)
-            .await
-        {
+        match app_server.resolve_server_request(resolution.response).await {
             Ok(()) => {
                 if ThreadEventStore::op_can_change_pending_replay_state(op) {
                     self.note_thread_outbound_op(thread_id, op).await;

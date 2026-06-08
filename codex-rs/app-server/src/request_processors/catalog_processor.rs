@@ -120,7 +120,7 @@ impl CatalogRequestProcessor {
     pub(crate) async fn skills_list(
         &self,
         params: SkillsListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.skills_list_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -129,7 +129,7 @@ impl CatalogRequestProcessor {
     pub(crate) async fn hooks_list(
         &self,
         params: HooksListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.hooks_list_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -138,7 +138,7 @@ impl CatalogRequestProcessor {
     pub(crate) async fn skills_config_write(
         &self,
         params: SkillsConfigWriteParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.skills_config_write_response_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -147,7 +147,7 @@ impl CatalogRequestProcessor {
     pub(crate) async fn skills_extra_roots_set(
         &self,
         params: SkillsExtraRootsSetParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.skills_extra_roots_set_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -156,7 +156,7 @@ impl CatalogRequestProcessor {
     pub(crate) async fn model_list(
         &self,
         params: ModelListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         Self::list_models(self.thread_manager.clone(), params)
             .await
             .map(|response| Some(response.into()))
@@ -165,7 +165,7 @@ impl CatalogRequestProcessor {
     pub(crate) async fn experimental_feature_list(
         &self,
         params: ExperimentalFeatureListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.experimental_feature_list_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -174,7 +174,7 @@ impl CatalogRequestProcessor {
     pub(crate) async fn permission_profile_list(
         &self,
         params: PermissionProfileListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.permission_profile_list_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -183,7 +183,7 @@ impl CatalogRequestProcessor {
     pub(crate) async fn collaboration_mode_list(
         &self,
         params: CollaborationModeListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         Self::list_collaboration_modes(self.thread_manager.clone(), params)
             .await
             .map(|response| Some(response.into()))
@@ -192,7 +192,7 @@ impl CatalogRequestProcessor {
     pub(crate) async fn mock_experimental_method(
         &self,
         params: MockExperimentalMethodParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.mock_experimental_method_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -213,10 +213,7 @@ impl CatalogRequestProcessor {
         Ok((cwd_abs, config_layer_stack))
     }
 
-    async fn load_latest_config(
-        &self,
-        fallback_cwd: Option<PathBuf>,
-    ) -> Result<Config, JSONRPCErrorError> {
+    async fn load_latest_config(&self, fallback_cwd: Option<PathBuf>) -> Result<Config, RpcError> {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
@@ -248,7 +245,7 @@ impl CatalogRequestProcessor {
     async fn list_models(
         thread_manager: Arc<ThreadManager>,
         params: ModelListParams,
-    ) -> Result<ModelListResponse, JSONRPCErrorError> {
+    ) -> Result<ModelListResponse, RpcError> {
         let ModelListParams {
             limit,
             cursor,
@@ -295,7 +292,7 @@ impl CatalogRequestProcessor {
     async fn list_collaboration_modes(
         thread_manager: Arc<ThreadManager>,
         params: CollaborationModeListParams,
-    ) -> Result<CollaborationModeListResponse, JSONRPCErrorError> {
+    ) -> Result<CollaborationModeListResponse, RpcError> {
         let CollaborationModeListParams {} = params;
         let items = thread_manager
             .list_collaboration_modes()
@@ -309,7 +306,7 @@ impl CatalogRequestProcessor {
     async fn experimental_feature_list_response(
         &self,
         params: ExperimentalFeatureListParams,
-    ) -> Result<ExperimentalFeatureListResponse, JSONRPCErrorError> {
+    ) -> Result<ExperimentalFeatureListResponse, RpcError> {
         let ExperimentalFeatureListParams {
             cursor,
             limit,
@@ -417,7 +414,7 @@ impl CatalogRequestProcessor {
     async fn permission_profile_list_response(
         &self,
         params: PermissionProfileListParams,
-    ) -> Result<PermissionProfileListResponse, JSONRPCErrorError> {
+    ) -> Result<PermissionProfileListResponse, RpcError> {
         let PermissionProfileListParams { cursor, limit, cwd } = params;
         let config_layer_stack = match cwd {
             Some(cwd) => {
@@ -489,7 +486,7 @@ impl CatalogRequestProcessor {
     async fn mock_experimental_method_inner(
         &self,
         params: MockExperimentalMethodParams,
-    ) -> Result<MockExperimentalMethodResponse, JSONRPCErrorError> {
+    ) -> Result<MockExperimentalMethodResponse, RpcError> {
         let MockExperimentalMethodParams { value } = params;
         let response = MockExperimentalMethodResponse { echoed: value };
         Ok(response)
@@ -498,7 +495,7 @@ impl CatalogRequestProcessor {
     async fn skills_list_response(
         &self,
         params: SkillsListParams,
-    ) -> Result<SkillsListResponse, JSONRPCErrorError> {
+    ) -> Result<SkillsListResponse, RpcError> {
         let SkillsListParams { cwds, force_reload } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.to_path_buf()]
@@ -585,7 +582,7 @@ impl CatalogRequestProcessor {
     async fn skills_extra_roots_set_response(
         &self,
         params: SkillsExtraRootsSetParams,
-    ) -> Result<SkillsExtraRootsSetResponse, JSONRPCErrorError> {
+    ) -> Result<SkillsExtraRootsSetResponse, RpcError> {
         let SkillsExtraRootsSetParams { extra_roots } = params;
         self.skills_watcher
             .register_runtime_extra_roots(&extra_roots);
@@ -604,7 +601,7 @@ impl CatalogRequestProcessor {
     async fn hooks_list_response(
         &self,
         params: HooksListParams,
-    ) -> Result<HooksListResponse, JSONRPCErrorError> {
+    ) -> Result<HooksListResponse, RpcError> {
         let HooksListParams { cwds } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.to_path_buf()]
@@ -674,7 +671,7 @@ impl CatalogRequestProcessor {
     async fn skills_config_write_response_inner(
         &self,
         params: SkillsConfigWriteParams,
-    ) -> Result<SkillsConfigWriteResponse, JSONRPCErrorError> {
+    ) -> Result<SkillsConfigWriteResponse, RpcError> {
         let SkillsConfigWriteParams {
             path,
             name,

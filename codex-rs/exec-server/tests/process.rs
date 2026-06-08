@@ -2,11 +2,11 @@
 
 mod common;
 
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_exec_server::ExecResponse;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
+use codex_exec_server::JSONRPCMessage;
+use codex_exec_server::JSONRPCResponse;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::TerminateResponse;

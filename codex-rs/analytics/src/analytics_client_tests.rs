@@ -1,4 +1,5 @@
 use crate::client::AnalyticsEventsQueue;
+use crate::events::AnalyticsCommandExecutionSource;
 use crate::events::AppServerRpcTransport;
 use crate::events::CodexAcceptedLineFingerprintsEventParams;
 use crate::events::CodexAcceptedLineFingerprintsEventRequest;
@@ -38,7 +39,7 @@ use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
 use crate::events::subagent_thread_started_event_request;
 use crate::facts::AnalyticsFact;
-use crate::facts::AnalyticsJsonRpcError;
+use crate::facts::AnalyticsRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
@@ -75,7 +76,6 @@ use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
-use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandAction;
@@ -94,13 +94,12 @@ use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpToolCallStatus;
-use codex_app_server_protocol::NonSteerableTurnKind;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::RequestPermissionProfile;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -429,41 +428,40 @@ fn sample_turn_steer_response(turn_id: &str) -> ClientResponsePayload {
     })
 }
 
-fn no_active_turn_steer_error() -> JSONRPCErrorError {
-    JSONRPCErrorError {
+fn no_active_turn_steer_error() -> RpcError {
+    RpcError {
         code: -32600,
         message: "no active turn to steer".to_string(),
         data: None,
     }
 }
 
-fn no_active_turn_steer_error_type() -> AnalyticsJsonRpcError {
-    AnalyticsJsonRpcError::TurnSteer(TurnSteerRequestError::NoActiveTurn)
+fn no_active_turn_steer_error_type() -> AnalyticsRpcError {
+    AnalyticsRpcError::TurnSteer(TurnSteerRequestError::NoActiveTurn)
 }
 
-fn non_steerable_review_error() -> JSONRPCErrorError {
-    JSONRPCErrorError {
+fn non_steerable_review_error() -> RpcError {
+    RpcError {
         code: -32600,
         message: "cannot steer a review turn".to_string(),
-        data: Some(
-            serde_json::to_value(AppServerTurnError {
-                message: "cannot steer a review turn".to_string(),
-                codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
-                    turn_kind: NonSteerableTurnKind::Review,
-                }),
-                additional_details: None,
-            })
-            .expect("serialize turn error"),
-        ),
+        data: Some(json!({
+            "message": "cannot steer a review turn",
+            "codexErrorInfo": {
+                "activeTurnNotSteerable": {
+                    "turnKind": "review",
+                },
+            },
+            "additionalDetails": null,
+        })),
     }
 }
 
-fn non_steerable_review_error_type() -> AnalyticsJsonRpcError {
-    AnalyticsJsonRpcError::TurnSteer(TurnSteerRequestError::NonSteerableReview)
+fn non_steerable_review_error_type() -> AnalyticsRpcError {
+    AnalyticsRpcError::TurnSteer(TurnSteerRequestError::NonSteerableReview)
 }
 
-fn input_too_large_steer_error() -> JSONRPCErrorError {
-    JSONRPCErrorError {
+fn input_too_large_steer_error() -> RpcError {
+    RpcError {
         code: -32602,
         message: "Input exceeds the maximum length of 1048576 characters.".to_string(),
         data: Some(json!({
@@ -474,15 +472,15 @@ fn input_too_large_steer_error() -> JSONRPCErrorError {
     }
 }
 
-fn input_too_large_error_type() -> AnalyticsJsonRpcError {
-    AnalyticsJsonRpcError::Input(InputError::TooLarge)
+fn input_too_large_error_type() -> AnalyticsRpcError {
+    AnalyticsRpcError::Input(InputError::TooLarge)
 }
 
 async fn ingest_rejected_turn_steer(
     reducer: &mut AnalyticsReducer,
     out: &mut Vec<TrackEventRequest>,
-    error: JSONRPCErrorError,
-    error_type: Option<AnalyticsJsonRpcError>,
+    error: RpcError,
+    error_type: Option<AnalyticsRpcError>,
 ) -> serde_json::Value {
     ingest_turn_prerequisites(
         reducer, out, /*include_initialize*/ true, /*include_resolved_config*/ false,
@@ -1426,7 +1424,7 @@ fn command_execution_event_serializes_expected_shape() {
                 requested_additional_permissions: false,
                 requested_network_access: false,
             },
-            command_execution_source: CommandExecutionSource::Agent,
+            command_execution_source: AnalyticsCommandExecutionSource::Agent,
             exit_code: Some(0),
             command_total_action_count: 4,
             command_read_action_count: 1,

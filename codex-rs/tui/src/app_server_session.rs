@@ -1,6 +1,6 @@
 //! App-server session facade used by the TUI event loop.
 //!
-//! This module owns the typed JSON-RPC calls needed by the TUI and keeps
+//! This module owns the typed app-server calls needed by the TUI and keeps
 //! request/response plumbing out of `App` and `ChatWidget`.
 
 use crate::bottom_pane::FeedbackAudience;
@@ -29,7 +29,6 @@ use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
@@ -41,6 +40,7 @@ use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
@@ -121,6 +121,8 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::protocol::RealtimeOutputModality;
+use codex_protocol::protocol::RealtimeVoice;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
@@ -129,17 +131,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-const JSONRPC_INVALID_REQUEST: i64 = -32600;
-const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
+const RPC_INVALID_REQUEST: i64 = -32600;
+const RPC_METHOD_NOT_FOUND: i64 = -32601;
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
 }
 
-fn is_thread_settings_update_unsupported(source: &JSONRPCErrorError) -> bool {
-    source.code == JSONRPC_METHOD_NOT_FOUND
-        || (source.code == JSONRPC_INVALID_REQUEST
+fn is_thread_settings_update_unsupported(source: &RpcError) -> bool {
+    source.code == RPC_METHOD_NOT_FOUND
+        || (source.code == RPC_INVALID_REQUEST
             && source.message.contains(THREAD_SETTINGS_UPDATE_METHOD))
 }
 
@@ -232,10 +234,7 @@ impl AppServerSession {
     }
 
     pub(crate) fn server_version(&self) -> Option<&str> {
-        let AppServerClient::Remote(client) = &self.client else {
-            return None;
-        };
-        client.server_version()
+        None
     }
 
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
@@ -658,11 +657,6 @@ impl AppServerSession {
         thread_id: ThreadId,
         items: Vec<ResponseItem>,
     ) -> Result<ThreadInjectItemsResponse> {
-        let items = items
-            .into_iter()
-            .map(serde_json::to_value)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .wrap_err("failed to encode thread/inject_items payload")?;
         let request_id = self.next_request_id();
         self.client
             .request_typed(ClientRequest::ThreadInjectItems {
@@ -959,8 +953,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadApproveGuardianDeniedActionParams {
                     thread_id: thread_id.to_string(),
-                    event: serde_json::to_value(event)
-                        .wrap_err("failed to serialize Auto Review denial event")?,
+                    event: event.clone().into(),
                 },
             })
             .await
@@ -1056,7 +1049,7 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         transport: Option<ThreadRealtimeStartTransport>,
-        voice: Option<serde_json::Value>,
+        voice: Option<RealtimeVoice>,
     ) -> Result<()> {
         let request_id = self.next_request_id();
         let params = thread_realtime_start_params(thread_id, transport, voice)?;
@@ -1106,17 +1099,16 @@ impl AppServerSession {
     pub(crate) async fn reject_server_request(
         &self,
         request_id: RequestId,
-        error: JSONRPCErrorError,
+        error: RpcError,
     ) -> std::io::Result<()> {
         self.client.reject_server_request(request_id, error).await
     }
 
     pub(crate) async fn resolve_server_request(
         &self,
-        request_id: RequestId,
-        result: serde_json::Value,
+        response: codex_app_server_protocol::ServerResponse,
     ) -> std::io::Result<()> {
-        self.client.resolve_server_request(request_id, result).await
+        self.client.resolve_server_request(response).await
     }
 
     pub(crate) async fn shutdown(self) -> std::io::Result<()> {
@@ -1158,29 +1150,16 @@ pub(crate) async fn start_thread_with_request_handle(
 fn thread_realtime_start_params(
     thread_id: ThreadId,
     transport: Option<ThreadRealtimeStartTransport>,
-    voice: Option<serde_json::Value>,
+    voice: Option<RealtimeVoice>,
 ) -> Result<ThreadRealtimeStartParams> {
-    let mut value = serde_json::Map::new();
-    value.insert(
-        "threadId".to_string(),
-        serde_json::Value::String(thread_id.to_string()),
-    );
-    value.insert(
-        "outputModality".to_string(),
-        serde_json::Value::String("audio".to_string()),
-    );
-    if let Some(transport) = transport {
-        value.insert(
-            "transport".to_string(),
-            serde_json::to_value(transport).wrap_err("serializing realtime transport")?,
-        );
-    }
-    if let Some(voice) = voice {
-        value.insert("voice".to_string(), voice);
-    }
-
-    serde_json::from_value(serde_json::Value::Object(value))
-        .wrap_err("mapping TUI realtime start params to app-server params")
+    Ok(ThreadRealtimeStartParams {
+        thread_id: thread_id.to_string(),
+        output_modality: RealtimeOutputModality::Audio,
+        prompt: None,
+        realtime_session_id: None,
+        transport,
+        voice,
+    })
 }
 
 pub(crate) fn status_account_display_from_auth_mode(
@@ -1834,22 +1813,22 @@ mod tests {
     #[test]
     fn thread_settings_update_compat_detects_unsupported_errors() {
         let cases = [
-            (JSONRPC_METHOD_NOT_FOUND, "method not found", true),
+            (RPC_METHOD_NOT_FOUND, "method not found", true),
             (
-                JSONRPC_INVALID_REQUEST,
+                RPC_INVALID_REQUEST,
                 "thread/settings/update requires experimentalApi capability",
                 true,
             ),
             (
-                JSONRPC_INVALID_REQUEST,
+                RPC_INVALID_REQUEST,
                 "Invalid request: unknown variant `thread/settings/update`",
                 true,
             ),
-            (JSONRPC_INVALID_REQUEST, "invalid thread id", false),
+            (RPC_INVALID_REQUEST, "invalid thread id", false),
         ];
 
         for (code, message, expected) in cases {
-            let source = JSONRPCErrorError {
+            let source = RpcError {
                 code,
                 data: None,
                 message: message.to_string(),

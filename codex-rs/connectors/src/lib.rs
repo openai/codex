@@ -16,6 +16,7 @@ mod directory_cache;
 pub mod filter;
 pub mod merge;
 pub mod metadata;
+mod wire;
 
 pub use directory_cache::ConnectorDirectoryCacheContext;
 
@@ -67,8 +68,13 @@ pub struct DirectoryApp {
     id: String,
     name: String,
     description: Option<String>,
-    #[serde(alias = "appMetadata")]
+    #[serde(
+        default,
+        alias = "appMetadata",
+        deserialize_with = "wire::deserialize_app_metadata"
+    )]
     app_metadata: Option<AppMetadata>,
+    #[serde(default, deserialize_with = "wire::deserialize_app_branding")]
     branding: Option<AppBranding>,
     labels: Option<HashMap<String, String>>,
     #[serde(alias = "logoUrl")]

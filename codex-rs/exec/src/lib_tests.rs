@@ -392,13 +392,8 @@ fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
 
 #[test]
 fn canceled_mcp_server_elicitation_response_uses_cancel_action() {
-    let value = canceled_mcp_server_elicitation_response()
-        .expect("mcp elicitation cancel response should serialize");
-    let response: McpServerElicitationRequestResponse =
-        serde_json::from_value(value).expect("cancel response should deserialize");
-
     assert_eq!(
-        response,
+        canceled_mcp_server_elicitation_response(),
         McpServerElicitationRequestResponse {
             action: McpServerElicitationAction::Cancel,
             content: None,

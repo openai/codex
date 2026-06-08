@@ -11,16 +11,13 @@ impl GitRequestProcessor {
     pub(crate) async fn git_diff_to_remote(
         &self,
         params: GitDiffToRemoteParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.git_diff_to_origin(params.cwd)
             .await
             .map(|response| Some(response.into()))
     }
 
-    async fn git_diff_to_origin(
-        &self,
-        cwd: PathBuf,
-    ) -> Result<GitDiffToRemoteResponse, JSONRPCErrorError> {
+    async fn git_diff_to_origin(&self, cwd: PathBuf) -> Result<GitDiffToRemoteResponse, RpcError> {
         git_diff_to_remote(&cwd)
             .await
             .map(|value| GitDiffToRemoteResponse {

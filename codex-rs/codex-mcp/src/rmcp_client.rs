@@ -59,10 +59,15 @@ use futures::future::FutureExt;
 use futures::future::Shared;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ElicitationCapability;
+use rmcp::model::Icon;
+use rmcp::model::IconTheme;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
+use rmcp::model::Meta;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
+use serde_json::Map as JsonMap;
+use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -553,14 +558,38 @@ fn mcp_server_info_from_implementation(server_info: Implementation) -> McpServer
         title: server_info.title,
         version: server_info.version,
         description: server_info.description,
-        icons: server_info.icons.map(|icons| {
-            icons
-                .into_iter()
-                .filter_map(|icon| serde_json::to_value(icon).ok())
-                .collect()
-        }),
+        icons: server_info
+            .icons
+            .map(|icons| icons.into_iter().map(value_from_icon).collect()),
         website_url: server_info.website_url,
     }
+}
+
+pub(crate) fn value_from_meta(meta: Meta) -> JsonValue {
+    JsonValue::Object(meta.0)
+}
+
+pub(crate) fn value_from_icon(icon: Icon) -> JsonValue {
+    let mut value = JsonMap::new();
+    value.insert("src".to_string(), JsonValue::String(icon.src));
+    if let Some(mime_type) = icon.mime_type {
+        value.insert("mimeType".to_string(), JsonValue::String(mime_type));
+    }
+    if let Some(sizes) = icon.sizes {
+        value.insert(
+            "sizes".to_string(),
+            JsonValue::Array(sizes.into_iter().map(JsonValue::String).collect()),
+        );
+    }
+    if let Some(theme) = icon.theme {
+        let theme = match theme {
+            IconTheme::Light => "light",
+            IconTheme::Dark => "dark",
+            _ => "unknown",
+        };
+        value.insert("theme".to_string(), JsonValue::String(theme.to_string()));
+    }
+    JsonValue::Object(value)
 }
 
 struct StartServerTaskParams {
@@ -752,5 +781,32 @@ mod tests {
         ] {
             assert!(meta.0.contains_key(key), "{key} should be preserved");
         }
+    }
+
+    #[test]
+    fn server_info_icons_are_converted_structurally() {
+        let server_info = Implementation::new("test-server", "1.0").with_icons(vec![
+            Icon::new("data:image/png;base64,abc")
+                .with_mime_type("image/png")
+                .with_sizes(vec!["48x48".to_string(), "any".to_string()])
+                .with_theme(IconTheme::Dark),
+        ]);
+
+        assert_eq!(
+            mcp_server_info_from_implementation(server_info),
+            McpServerInfo {
+                name: "test-server".to_string(),
+                title: None,
+                version: "1.0".to_string(),
+                description: None,
+                icons: Some(vec![serde_json::json!({
+                    "src": "data:image/png;base64,abc",
+                    "mimeType": "image/png",
+                    "sizes": ["48x48", "any"],
+                    "theme": "dark",
+                })]),
+                website_url: None,
+            }
+        );
     }
 }

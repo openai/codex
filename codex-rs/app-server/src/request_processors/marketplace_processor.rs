@@ -23,7 +23,7 @@ impl MarketplaceRequestProcessor {
     pub(crate) async fn marketplace_add(
         &self,
         params: MarketplaceAddParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.marketplace_add_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -32,7 +32,7 @@ impl MarketplaceRequestProcessor {
     pub(crate) async fn marketplace_remove(
         &self,
         params: MarketplaceRemoveParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.marketplace_remove_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -41,7 +41,7 @@ impl MarketplaceRequestProcessor {
     pub(crate) async fn marketplace_upgrade(
         &self,
         params: MarketplaceUpgradeParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.marketplace_upgrade_response_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -50,7 +50,7 @@ impl MarketplaceRequestProcessor {
     async fn marketplace_remove_inner(
         &self,
         params: MarketplaceRemoveParams,
-    ) -> Result<MarketplaceRemoveResponse, JSONRPCErrorError> {
+    ) -> Result<MarketplaceRemoveResponse, RpcError> {
         remove_marketplace(
             self.config.codex_home.to_path_buf(),
             CoreMarketplaceRemoveRequest {
@@ -71,7 +71,7 @@ impl MarketplaceRequestProcessor {
     async fn marketplace_upgrade_response_inner(
         &self,
         params: MarketplaceUpgradeParams,
-    ) -> Result<MarketplaceUpgradeResponse, JSONRPCErrorError> {
+    ) -> Result<MarketplaceUpgradeResponse, RpcError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let plugins_manager = self.thread_manager.plugins_manager();
         let MarketplaceUpgradeParams { marketplace_name } = params;
@@ -104,7 +104,7 @@ impl MarketplaceRequestProcessor {
     async fn marketplace_add_inner(
         &self,
         params: MarketplaceAddParams,
-    ) -> Result<MarketplaceAddResponse, JSONRPCErrorError> {
+    ) -> Result<MarketplaceAddResponse, RpcError> {
         add_marketplace_to_codex_home(
             self.config.codex_home.to_path_buf(),
             MarketplaceAddRequest {
@@ -125,10 +125,7 @@ impl MarketplaceRequestProcessor {
         })
     }
 
-    async fn load_latest_config(
-        &self,
-        fallback_cwd: Option<PathBuf>,
-    ) -> Result<Config, JSONRPCErrorError> {
+    async fn load_latest_config(&self, fallback_cwd: Option<PathBuf>) -> Result<Config, RpcError> {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await

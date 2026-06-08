@@ -1,6 +1,6 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io;
@@ -35,6 +35,7 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::rpc::RpcErrorWire;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
@@ -66,7 +67,7 @@ pub(crate) enum FsHelperRequest {
 #[serde(tag = "status", content = "payload", rename_all = "camelCase")]
 pub(crate) enum FsHelperResponse {
     Ok(FsHelperPayload),
-    Error(JSONRPCErrorError),
+    Error(RpcErrorWire),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,23 +105,21 @@ impl FsHelperPayload {
         }
     }
 
-    pub(crate) fn expect_read_file(self) -> Result<FsReadFileResponse, JSONRPCErrorError> {
+    pub(crate) fn expect_read_file(self) -> Result<FsReadFileResponse, RpcError> {
         match self {
             Self::ReadFile(response) => Ok(response),
             other => Err(unexpected_response(FS_READ_FILE_METHOD, other.operation())),
         }
     }
 
-    pub(crate) fn expect_write_file(self) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
+    pub(crate) fn expect_write_file(self) -> Result<FsWriteFileResponse, RpcError> {
         match self {
             Self::WriteFile(response) => Ok(response),
             other => Err(unexpected_response(FS_WRITE_FILE_METHOD, other.operation())),
         }
     }
 
-    pub(crate) fn expect_create_directory(
-        self,
-    ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
+    pub(crate) fn expect_create_directory(self) -> Result<FsCreateDirectoryResponse, RpcError> {
         match self {
             Self::CreateDirectory(response) => Ok(response),
             other => Err(unexpected_response(
@@ -130,7 +129,7 @@ impl FsHelperPayload {
         }
     }
 
-    pub(crate) fn expect_get_metadata(self) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
+    pub(crate) fn expect_get_metadata(self) -> Result<FsGetMetadataResponse, RpcError> {
         match self {
             Self::GetMetadata(response) => Ok(response),
             other => Err(unexpected_response(
@@ -140,7 +139,7 @@ impl FsHelperPayload {
         }
     }
 
-    pub(crate) fn expect_canonicalize(self) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+    pub(crate) fn expect_canonicalize(self) -> Result<FsCanonicalizeResponse, RpcError> {
         match self {
             Self::Canonicalize(response) => Ok(response),
             other => Err(unexpected_response(
@@ -150,9 +149,7 @@ impl FsHelperPayload {
         }
     }
 
-    pub(crate) fn expect_read_directory(
-        self,
-    ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
+    pub(crate) fn expect_read_directory(self) -> Result<FsReadDirectoryResponse, RpcError> {
         match self {
             Self::ReadDirectory(response) => Ok(response),
             other => Err(unexpected_response(
@@ -162,14 +159,14 @@ impl FsHelperPayload {
         }
     }
 
-    pub(crate) fn expect_remove(self) -> Result<FsRemoveResponse, JSONRPCErrorError> {
+    pub(crate) fn expect_remove(self) -> Result<FsRemoveResponse, RpcError> {
         match self {
             Self::Remove(response) => Ok(response),
             other => Err(unexpected_response(FS_REMOVE_METHOD, other.operation())),
         }
     }
 
-    pub(crate) fn expect_copy(self) -> Result<FsCopyResponse, JSONRPCErrorError> {
+    pub(crate) fn expect_copy(self) -> Result<FsCopyResponse, RpcError> {
         match self {
             Self::Copy(response) => Ok(response),
             other => Err(unexpected_response(FS_COPY_METHOD, other.operation())),
@@ -177,7 +174,7 @@ impl FsHelperPayload {
     }
 }
 
-fn unexpected_response(expected: &str, actual: &str) -> JSONRPCErrorError {
+fn unexpected_response(expected: &str, actual: &str) -> RpcError {
     internal_error(format!(
         "unexpected fs sandbox helper response: expected {expected}, got {actual}"
     ))
@@ -185,7 +182,7 @@ fn unexpected_response(expected: &str, actual: &str) -> JSONRPCErrorError {
 
 pub(crate) async fn run_direct_request(
     request: FsHelperRequest,
-) -> Result<FsHelperPayload, JSONRPCErrorError> {
+) -> Result<FsHelperPayload, RpcError> {
     let file_system = DirectFileSystem;
     match request {
         FsHelperRequest::ReadFile(params) => {
@@ -293,7 +290,7 @@ pub(crate) async fn run_direct_request(
     }
 }
 
-fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
+fn map_fs_error(err: io::Error) -> RpcError {
     match err.kind() {
         io::ErrorKind::NotFound => not_found(err.to_string()),
         io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied => {

@@ -21,7 +21,7 @@ pub use events::GuardianReviewTerminalStatus;
 pub use events::GuardianReviewTrackContext;
 pub use events::GuardianReviewedAction;
 pub use facts::AcceptedLineFingerprint;
-pub use facts::AnalyticsJsonRpcError;
+pub use facts::AnalyticsRpcError;
 pub use facts::AppInvocation;
 pub use facts::CodexCompactionEvent;
 pub use facts::CodexTurnSteerEvent;

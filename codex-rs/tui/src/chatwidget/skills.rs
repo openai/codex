@@ -20,6 +20,7 @@ use codex_core_skills::model::SkillMetadata;
 use codex_core_skills::model::SkillToolDependency;
 use codex_features::Feature;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 
@@ -78,19 +79,19 @@ impl ChatWidget {
         let items: Vec<SkillsToggleItem> = self
             .skills_all
             .iter()
-            .filter_map(|skill| {
-                let core_skill = protocol_skill_to_core(skill)?;
+            .map(|skill| {
+                let core_skill = protocol_skill_to_core(skill);
                 let display_name = skill_display_name(&core_skill);
                 let description = skill_description(&core_skill).to_string();
                 let name = core_skill.name.clone();
                 let path = core_skill.path_to_skills_md;
-                Some(SkillsToggleItem {
+                SkillsToggleItem {
                     name: display_name,
                     skill_name: name,
                     description,
                     enabled: skill.enabled,
                     path,
-                })
+                }
             })
             .collect();
 
@@ -195,23 +196,19 @@ fn enabled_skills_for_mentions(skills: &[ProtocolSkillMetadata]) -> Vec<SkillMet
     skills
         .iter()
         .filter(|skill| skill.enabled)
-        .filter_map(protocol_skill_to_core)
+        .map(protocol_skill_to_core)
         .collect()
 }
 
-fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata> {
-    let scope = serde_json::to_value(skill.scope)
-        .and_then(serde_json::from_value)
-        .inspect_err(|err| {
-            tracing::warn!(
-                skill_name = %skill.name,
-                %err,
-                "Failed to map app-server skill scope"
-            );
-        })
-        .ok()?;
+fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
+    let scope = match skill.scope {
+        codex_app_server_protocol::SkillScope::User => SkillScope::User,
+        codex_app_server_protocol::SkillScope::Repo => SkillScope::Repo,
+        codex_app_server_protocol::SkillScope::System => SkillScope::System,
+        codex_app_server_protocol::SkillScope::Admin => SkillScope::Admin,
+    };
 
-    Some(SkillMetadata {
+    SkillMetadata {
         name: skill.name.clone(),
         description: skill.description.clone(),
         short_description: skill.short_description.clone(),
@@ -244,7 +241,7 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata
         path_to_skills_md: skill.path.clone(),
         scope,
         plugin_id: None,
-    })
+    }
 }
 
 pub(crate) fn collect_tool_mentions(

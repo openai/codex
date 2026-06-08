@@ -574,20 +574,22 @@ mod tests {
             .events
             .into_iter()
             .map(|event| match event {
-                ThreadBufferedEvent::Notification(notification) => {
-                    serde_json::to_value(notification).expect("hook notification should serialize")
-                }
+                ThreadBufferedEvent::Notification(notification) => notification,
                 other => panic!("expected buffered hook notification, saw: {other:?}"),
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            hook_notifications,
-            vec![
-                serde_json::to_value(hook_started_notification(thread_id, "turn-hook"))
-                    .expect("hook notification should serialize"),
-                serde_json::to_value(hook_completed_notification(thread_id, "turn-hook"))
-                    .expect("hook notification should serialize"),
-            ]
-        );
+        let [
+            ServerNotification::HookStarted(started),
+            ServerNotification::HookCompleted(completed),
+        ] = hook_notifications.as_slice()
+        else {
+            panic!("expected hook started and completed notifications: {hook_notifications:?}");
+        };
+        assert_eq!(started.thread_id, thread_id.to_string());
+        assert_eq!(started.turn_id.as_deref(), Some("turn-hook"));
+        assert_eq!(started.run.status, AppServerHookRunStatus::Running);
+        assert_eq!(completed.thread_id, thread_id.to_string());
+        assert_eq!(completed.turn_id.as_deref(), Some("turn-hook"));
+        assert_eq!(completed.run.status, AppServerHookRunStatus::Stopped);
     }
 }

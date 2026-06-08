@@ -32,7 +32,7 @@ impl CommandExecRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: CommandExecParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.require_local_environment()?;
         self.exec_one_off_command(request_id, params)
             .await
@@ -43,7 +43,7 @@ impl CommandExecRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: CommandExecWriteParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.command_exec_manager
             .write(request_id, params)
             .await
@@ -54,7 +54,7 @@ impl CommandExecRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: CommandExecResizeParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.command_exec_manager
             .resize(request_id, params)
             .await
@@ -65,7 +65,7 @@ impl CommandExecRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: CommandExecTerminateParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.command_exec_manager
             .terminate(request_id, params)
             .await
@@ -78,7 +78,7 @@ impl CommandExecRequestProcessor {
             .await;
     }
 
-    fn require_local_environment(&self) -> Result<(), JSONRPCErrorError> {
+    fn require_local_environment(&self) -> Result<(), RpcError> {
         self.environment_manager
             .try_local_environment()
             .is_some()
@@ -90,7 +90,7 @@ impl CommandExecRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: CommandExecParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         self.exec_one_off_command_inner(request_id.clone(), params)
             .await
     }
@@ -99,7 +99,7 @@ impl CommandExecRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: CommandExecParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         tracing::debug!("ExecOneOffCommand params: {params:?}");
 
         let request = request_id.clone();

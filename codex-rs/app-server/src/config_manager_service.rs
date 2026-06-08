@@ -1,5 +1,5 @@
+use crate::config_api::config_toml_to_api;
 use crate::config_manager::ConfigManager;
-use codex_app_server_protocol::Config as ApiConfig;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayerMetadata;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -52,13 +52,6 @@ pub(crate) enum ConfigManagerError {
     },
 
     #[error("{context}: {source}")]
-    Json {
-        context: &'static str,
-        #[source]
-        source: serde_json::Error,
-    },
-
-    #[error("{context}: {source}")]
     Toml {
         context: &'static str,
         #[source]
@@ -83,10 +76,6 @@ impl ConfigManagerError {
 
     fn io(context: &'static str, source: std::io::Error) -> Self {
         Self::Io { context, source }
-    }
-
-    fn json(context: &'static str, source: serde_json::Error) -> Self {
-        Self::Json { context, source }
     }
 
     fn toml(context: &'static str, source: toml::de::Error) -> Self {
@@ -126,13 +115,11 @@ impl ConfigManager {
 
         let effective = layers.effective_config();
         let effective_config_toml: ConfigToml = effective
+            .clone()
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
-
-        let json_value = serde_json::to_value(&effective_config_toml)
-            .map_err(|err| ConfigManagerError::json("failed to serialize configuration", err))?;
-        let config: ApiConfig = serde_json::from_value(json_value)
-            .map_err(|err| ConfigManagerError::json("failed to deserialize configuration", err))?;
+        let config = config_toml_to_api(effective_config_toml, &effective)
+            .map_err(|err| ConfigManagerError::anyhow("failed to convert configuration", err))?;
 
         Ok(ConfigReadResponse {
             config,

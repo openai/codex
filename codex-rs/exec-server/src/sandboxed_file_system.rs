@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use tokio::io;
@@ -265,7 +265,7 @@ fn require_platform_sandbox(
         })
 }
 
-fn map_sandbox_error(error: JSONRPCErrorError) -> io::Error {
+fn map_sandbox_error(error: RpcError) -> io::Error {
     match error.code {
         -32004 => io::Error::new(io::ErrorKind::NotFound, error.message),
         -32600 => io::Error::new(io::ErrorKind::InvalidInput, error.message),

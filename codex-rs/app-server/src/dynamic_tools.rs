@@ -1,5 +1,6 @@
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallResponse;
+use codex_app_server_protocol::ServerResponse;
 use codex_core::CodexThread;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
@@ -18,7 +19,11 @@ pub(crate) async fn on_call_response(
 ) {
     let response = receiver.await;
     let (response, _error) = match response {
-        Ok(Ok(value)) => decode_response(value),
+        Ok(Ok(ServerResponse::DynamicToolCall { response, .. })) => (response, None),
+        Ok(Ok(response)) => {
+            error!("dynamic tool request returned an unexpected response: {response:?}");
+            fallback_response("dynamic tool response was invalid")
+        }
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
@@ -49,16 +54,6 @@ pub(crate) async fn on_call_response(
         .await
     {
         error!("failed to submit DynamicToolResponse: {err}");
-    }
-}
-
-fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option<String>) {
-    match serde_json::from_value::<DynamicToolCallResponse>(value) {
-        Ok(response) => (response, None),
-        Err(err) => {
-            error!("failed to deserialize DynamicToolCallResponse: {err}");
-            fallback_response("dynamic tool response was invalid")
-        }
     }
 }
 

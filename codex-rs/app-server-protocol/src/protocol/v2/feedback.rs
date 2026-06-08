@@ -1,12 +1,15 @@
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct FeedbackUploadParams {
     pub classification: String,
@@ -14,7 +17,10 @@ pub struct FeedbackUploadParams {
     pub reason: Option<String>,
     #[ts(optional = nullable)]
     pub thread_id: Option<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub include_logs: bool,
     #[ts(optional = nullable)]
     pub extra_log_files: Option<Vec<PathBuf>>,
@@ -22,8 +28,9 @@ pub struct FeedbackUploadParams {
     pub tags: Option<BTreeMap<String, String>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct FeedbackUploadResponse {
     pub thread_id: String,

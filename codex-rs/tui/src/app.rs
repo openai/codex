@@ -104,6 +104,7 @@ use codex_app_server_protocol::McpAuthStatus;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::MergeStrategy;
+use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListParams;
@@ -581,12 +582,29 @@ fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<App
     let TypedRequestError::Server { source, .. } = error else {
         return None;
     };
-    let turn_error: AppServerTurnError = serde_json::from_value(source.data.clone()?).ok()?;
-    matches!(
-        turn_error.codex_error_info,
-        Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
-    )
-    .then_some(turn_error)
+    let data = source.data.as_ref()?.as_object()?;
+    let active_turn_not_steerable = data
+        .get("codexErrorInfo")?
+        .as_object()?
+        .get("activeTurnNotSteerable")?
+        .as_object()?;
+    let turn_kind = match active_turn_not_steerable.get("turnKind")?.as_str()? {
+        "review" => AppServerNonSteerableTurnKind::Review,
+        "compact" => AppServerNonSteerableTurnKind::Compact,
+        _ => return None,
+    };
+    Some(AppServerTurnError {
+        message: data
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(source.message.as_str())
+            .to_string(),
+        codex_error_info: Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { turn_kind }),
+        additional_details: data
+            .get("additionalDetails")
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string),
+    })
 }
 
 async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -> Option<String> {
@@ -821,8 +839,7 @@ impl App {
             codex_login::default_client::originator().value,
             config.otel.log_user_prompt,
             user_agent(),
-            serde_json::from_value(serde_json::json!("cli"))
-                .unwrap_or_else(|err| panic!("cli session source should deserialize: {err}")),
+            codex_protocol::protocol::SessionSource::Cli,
         );
         if config
             .tui_status_line

@@ -13,47 +13,21 @@ doctest = false
 workspace = true
 
 [dependencies]
-anyhow = { workspace = true }
-axum = { workspace = true, default-features = false, features = [
-    "http1",
-    "json",
-    "tokio",
-    "ws",
-] }
-base64 = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
-codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
-codex-core = { workspace = true }
-codex-login = { workspace = true }
-codex-model-provider = { workspace = true }
-codex-state = { workspace = true }
-codex-uds = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
-codex-utils-rustls-provider = { workspace = true }
-constant_time_eq = { workspace = true }
+codex-protocol = { workspace = true }
 futures = { workspace = true }
-gethostname = { workspace = true }
-hmac = { workspace = true }
-jsonwebtoken = { workspace = true }
-owo-colors = { workspace = true, features = ["supports-colors"] }
-serde = { workspace = true, features = ["derive"] }
+prost = "0.14.3"
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-time = { workspace = true }
 tokio = { workspace = true, features = [
-    "io-std",
     "macros",
     "rt-multi-thread",
 ] }
-tokio-tungstenite = { workspace = true }
+tokio-stream = { workspace = true, features = ["net"] }
 tokio-util = { workspace = true }
+tonic = { workspace = true, features = ["router", "transport"] }
+tonic-prost = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
-url = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
-chrono = { workspace = true }
-codex-config = { workspace = true }
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }
+tonic-prost-build = { version = "=0.14.3", default-features = false, features = ["transport"] }

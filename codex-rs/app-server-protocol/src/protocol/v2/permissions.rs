@@ -17,7 +17,9 @@ use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionG
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -32,8 +34,9 @@ v2_enum_from_core! {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct NetworkApprovalContext {
     pub host: String,
@@ -49,18 +52,25 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AdditionalFileSystemPermissions {
     /// This will be removed in favor of `entries`.
     pub read: Option<Vec<AbsolutePathBuf>>,
     /// This will be removed in favor of `entries`.
     pub write: Option<Vec<AbsolutePathBuf>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional)]
     pub glob_scan_max_depth: Option<NonZeroUsize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional)]
     pub entries: Option<Vec<FileSystemSandboxEntry>>,
 }
@@ -124,8 +134,9 @@ impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AdditionalNetworkPermissions {
     pub enabled: Option<bool>,
@@ -147,9 +158,10 @@ impl From<AdditionalNetworkPermissions> for CoreNetworkPermissions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(deny_unknown_fields))]
 #[ts(export_to = "v2/")]
 pub struct RequestPermissionProfile {
     pub network: Option<AdditionalNetworkPermissions>,
@@ -182,14 +194,21 @@ v2_enum_from_core!(
     }
 );
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "kind", rename_all = "snake_case")
+)]
 #[ts(tag = "kind")]
 #[ts(export_to = "v2/")]
 pub enum FileSystemSpecialPath {
     Root,
     Minimal,
-    #[serde(alias = "current_working_directory")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(alias = "current_working_directory")
+    )]
     ProjectRoots {
         subpath: Option<PathBuf>,
     },
@@ -227,8 +246,12 @@ impl From<FileSystemSpecialPath> for CoreFileSystemSpecialPath {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "snake_case")
+)]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum FileSystemPath {
@@ -261,8 +284,9 @@ impl From<FileSystemPath> for CoreFileSystemPath {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct FileSystemSandboxEntry {
     pub path: FileSystemPath,
@@ -287,8 +311,9 @@ impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct PermissionProfileListParams {
     /// Opaque pagination cursor returned by a previous call.
@@ -302,8 +327,9 @@ pub struct PermissionProfileListParams {
     pub cwd: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct PermissionProfileSummary {
     /// Available permission profile identifier.
@@ -312,8 +338,9 @@ pub struct PermissionProfileSummary {
     pub description: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct PermissionProfileListResponse {
     pub data: Vec<PermissionProfileSummary>,
@@ -322,8 +349,9 @@ pub struct PermissionProfileListResponse {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ActivePermissionProfile {
     /// Identifier from `default_permissions` or the implicit built-in default,
@@ -331,7 +359,7 @@ pub struct ActivePermissionProfile {
     pub id: String,
     /// Parent profile identifier from the selected permissions profile's
     /// `extends` setting, when present.
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub extends: Option<String>,
 }
 
@@ -366,8 +394,9 @@ impl From<ActivePermissionProfile> for CoreActivePermissionProfile {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
     /// Partial overlay used for per-command permission requests.
@@ -393,14 +422,21 @@ impl From<AdditionalPermissionProfile> for CoreAdditionalPermissionProfile {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GrantedPermissionProfile {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional)]
     pub network: Option<AdditionalNetworkPermissions>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional)]
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
@@ -414,8 +450,9 @@ impl From<GrantedPermissionProfile> for CoreAdditionalPermissionProfile {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum NetworkAccess {
     #[default]
@@ -423,76 +460,89 @@ pub enum NetworkAccess {
     Enabled,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum SandboxPolicy {
     DangerFullAccess,
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     ReadOnly {
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         network_access: bool,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     ExternalSandbox {
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         network_access: NetworkAccess,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     WorkspaceWrite {
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         writable_roots: Vec<AbsolutePathBuf>,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         network_access: bool,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         exclude_tmpdir_env_var: bool,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         exclude_slash_tmp: bool,
     },
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[cfg(any(test, feature = "serde-compat"))]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 enum SandboxPolicyDeserialize {
     DangerFullAccess,
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     ReadOnly {
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         network_access: bool,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         access: Option<LegacyReadOnlyAccess>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     ExternalSandbox {
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         network_access: NetworkAccess,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     WorkspaceWrite {
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         writable_roots: Vec<AbsolutePathBuf>,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         read_only_access: Option<LegacyReadOnlyAccess>,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         network_access: bool,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         exclude_tmpdir_env_var: bool,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         exclude_slash_tmp: bool,
     },
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[cfg(any(test, feature = "serde-compat"))]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 enum LegacyReadOnlyAccess {
     FullAccess,
     Restricted,
 }
 
+#[cfg(any(test, feature = "serde-compat"))]
 impl<'de> Deserialize<'de> for SandboxPolicy {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -603,8 +653,9 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(transparent))]
 #[ts(type = "Array<string>", export_to = "v2/")]
 pub struct ExecPolicyAmendment {
     pub command: Vec<String>,
@@ -630,8 +681,9 @@ v2_enum_from_core!(
     }
 );
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct NetworkPolicyAmendment {
     pub host: String,
@@ -656,14 +708,15 @@ impl From<CoreNetworkPolicyAmendment> for NetworkPolicyAmendment {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct PermissionsRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub environment_id: Option<String>,
     /// Unix timestamp (in milliseconds) when this approval request started.
     #[ts(type = "number")]
@@ -682,15 +735,19 @@ v2_enum_from_core!(
     }
 );
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub scope: PermissionGrantScope,
     /// Review every subsequent command in this turn before normal sandboxed execution.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional)]
     pub strict_auto_review: Option<bool>,
 }

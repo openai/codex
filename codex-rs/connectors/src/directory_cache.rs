@@ -8,6 +8,7 @@ use sha1::Sha1;
 use tracing::warn;
 
 use crate::ConnectorDirectoryCacheKey;
+use crate::wire::AppInfoWire;
 
 pub(crate) const CONNECTOR_DIRECTORY_DISK_CACHE_SCHEMA_VERSION: u8 = 1;
 const CONNECTOR_DIRECTORY_DISK_CACHE_DIR: &str = "cache/codex_app_directory";
@@ -75,7 +76,7 @@ pub(crate) fn load_cached_directory_connectors_from_disk(
     }
 
     CachedConnectorDirectoryDiskLoad::Hit {
-        connectors: cache.connectors,
+        connectors: cache.connectors.into_iter().map(Into::into).collect(),
     }
 }
 
@@ -91,7 +92,7 @@ pub(crate) fn write_cached_directory_connectors_to_disk(
     }
     let Ok(bytes) = serde_json::to_vec_pretty(&ConnectorDirectoryDiskCache {
         schema_version: CONNECTOR_DIRECTORY_DISK_CACHE_SCHEMA_VERSION,
-        connectors: connectors.to_vec(),
+        connectors: connectors.iter().map(Into::into).collect(),
     }) else {
         return;
     };
@@ -101,7 +102,7 @@ pub(crate) fn write_cached_directory_connectors_to_disk(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConnectorDirectoryDiskCache {
     schema_version: u8,
-    connectors: Vec<AppInfo>,
+    connectors: Vec<AppInfoWire>,
 }
 
 fn sha1_hex(value: &str) -> String {

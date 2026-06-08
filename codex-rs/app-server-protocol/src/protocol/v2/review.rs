@@ -1,7 +1,9 @@
 use super::Turn;
 use super::shared::v2_enum_from_core;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -11,8 +13,9 @@ v2_enum_from_core!(
     }
 );
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ReviewStartParams {
     pub thread_id: String,
@@ -20,13 +23,14 @@ pub struct ReviewStartParams {
 
     /// Where to run the review: inline (default) on the current thread or
     /// detached on a new thread (returned in `reviewThreadId`).
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     #[ts(optional = nullable)]
     pub delivery: Option<ReviewDelivery>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ReviewStartResponse {
     pub turn: Turn,
@@ -37,20 +41,24 @@ pub struct ReviewStartResponse {
     pub review_thread_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type", export_to = "v2/")]
 pub enum ReviewTarget {
     /// Review the working tree: staged, unstaged, and untracked files.
     UncommittedChanges,
 
     /// Review changes between the current branch and the given base branch.
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     BaseBranch { branch: String },
 
     /// Review the changes introduced by a specific commit.
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     Commit {
         sha: String,
@@ -59,7 +67,7 @@ pub enum ReviewTarget {
     },
 
     /// Arbitrary instructions, equivalent to the old free-form prompt.
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     Custom { instructions: String },
 }

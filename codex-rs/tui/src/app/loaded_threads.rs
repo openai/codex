@@ -16,6 +16,7 @@
 
 use codex_app_server_protocol::Thread;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SubAgentSource;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -94,13 +95,14 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
 fn thread_spawn_parent_thread_id(
     source: &codex_app_server_protocol::SessionSource,
 ) -> Option<ThreadId> {
-    let value = serde_json::to_value(source).ok()?;
-    let parent_thread_id = value
-        .get("subAgent")?
-        .get("thread_spawn")?
-        .get("parent_thread_id")?
-        .as_str()?;
-    ThreadId::from_string(parent_thread_id).ok()
+    let codex_app_server_protocol::SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        ..
+    }) = source
+    else {
+        return None;
+    };
+    Some(*parent_thread_id)
 }
 
 #[cfg(test)]
@@ -111,6 +113,7 @@ mod tests {
     use codex_app_server_protocol::Thread;
     use codex_app_server_protocol::ThreadStatus;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::SubAgentSource;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
@@ -146,17 +149,13 @@ mod tests {
         agent_nickname: &str,
         agent_role: &str,
     ) -> SessionSource {
-        serde_json::from_value(serde_json::json!({
-            "subAgent": {
-                "thread_spawn": {
-                    "parent_thread_id": parent_thread_id.to_string(),
-                    "depth": depth,
-                    "agent_nickname": agent_nickname,
-                    "agent_role": agent_role,
-                }
-            }
-        }))
-        .expect("valid subagent source")
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth,
+            agent_path: None,
+            agent_nickname: Some(agent_nickname.to_string()),
+            agent_role: Some(agent_role.to_string()),
+        })
     }
 
     #[test]

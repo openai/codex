@@ -7,11 +7,12 @@ use crate::app_server_approval_conversions::granted_permission_profile_from_requ
 use crate::app_server_session::AppServerSession;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 
 impl App {
     pub(super) async fn reject_app_server_request(
@@ -23,7 +24,7 @@ impl App {
         app_server_client
             .reject_server_request(
                 request_id,
-                JSONRPCErrorError {
+                RpcError {
                     code: -32000,
                     message: reason,
                     data: None,
@@ -34,10 +35,9 @@ impl App {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(super) struct AppServerRequestResolution {
-    pub(super) request_id: AppServerRequestId,
-    pub(super) result: serde_json::Value,
+    pub(super) response: ServerResponse,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,15 +171,12 @@ impl PendingAppServerRequests {
                 .remove(id)
                 .map(|request_id| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
-                        request_id,
-                        result: serde_json::to_value(CommandExecutionRequestApprovalResponse {
-                            decision: decision.clone(),
-                        })
-                        .map_err(|err| {
-                            format!(
-                                "failed to serialize command execution approval response: {err}"
-                            )
-                        })?,
+                        response: ServerResponse::CommandExecutionRequestApproval {
+                            request_id,
+                            response: CommandExecutionRequestApprovalResponse {
+                                decision: decision.clone(),
+                            },
+                        },
                     })
                 })
                 .transpose()?,
@@ -188,13 +185,12 @@ impl PendingAppServerRequests {
                 .remove(id)
                 .map(|request_id| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
-                        request_id,
-                        result: serde_json::to_value(FileChangeRequestApprovalResponse {
-                            decision: decision.clone(),
-                        })
-                        .map_err(|err| {
-                            format!("failed to serialize file change approval response: {err}")
-                        })?,
+                        response: ServerResponse::FileChangeRequestApproval {
+                            request_id,
+                            response: FileChangeRequestApprovalResponse {
+                                decision: decision.clone(),
+                            },
+                        },
                     })
                 })
                 .transpose()?,
@@ -203,17 +199,16 @@ impl PendingAppServerRequests {
                 .remove(id)
                 .map(|request_id| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
-                        request_id,
-                        result: serde_json::to_value(PermissionsRequestApprovalResponse {
-                            permissions: granted_permission_profile_from_request(
-                                response.permissions.clone(),
-                            ),
-                            scope: response.scope.into(),
-                            strict_auto_review: response.strict_auto_review.then_some(true),
-                        })
-                        .map_err(|err| {
-                            format!("failed to serialize permissions approval response: {err}")
-                        })?,
+                        response: ServerResponse::PermissionsRequestApproval {
+                            request_id,
+                            response: PermissionsRequestApprovalResponse {
+                                permissions: granted_permission_profile_from_request(
+                                    response.permissions.clone(),
+                                ),
+                                scope: response.scope.into(),
+                                strict_auto_review: response.strict_auto_review.then_some(true),
+                            },
+                        },
                     })
                 })
                 .transpose()?,
@@ -221,10 +216,10 @@ impl PendingAppServerRequests {
                 .pop_user_input_request_for_turn(id)
                 .map(|pending| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
-                        request_id: pending.request_id,
-                        result: serde_json::to_value(response).map_err(|err| {
-                            format!("failed to serialize request_user_input response: {err}")
-                        })?,
+                        response: ServerResponse::ToolRequestUserInput {
+                            request_id: pending.request_id,
+                            response: response.clone(),
+                        },
                     })
                 })
                 .transpose()?,
@@ -242,15 +237,14 @@ impl PendingAppServerRequests {
                 })
                 .map(|request_id| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
-                        request_id,
-                        result: serde_json::to_value(McpServerElicitationRequestResponse {
-                            action: *decision,
-                            content: content.clone(),
-                            meta: meta.clone(),
-                        })
-                        .map_err(|err| {
-                            format!("failed to serialize MCP elicitation response: {err}")
-                        })?,
+                        response: ServerResponse::McpServerElicitationRequest {
+                            request_id,
+                            response: McpServerElicitationRequestResponse {
+                                action: *decision,
+                                content: content.clone(),
+                                meta: meta.clone(),
+                            },
+                        },
                     })
                 })
                 .transpose()?,
@@ -402,24 +396,29 @@ mod tests {
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::CommandExecutionApprovalDecision;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+    use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
     use codex_app_server_protocol::FileChangeApprovalDecision;
     use codex_app_server_protocol::FileChangeRequestApprovalParams;
+    use codex_app_server_protocol::FileChangeRequestApprovalResponse;
     use codex_app_server_protocol::McpElicitationObjectType;
     use codex_app_server_protocol::McpElicitationSchema;
     use codex_app_server_protocol::McpServerElicitationAction;
     use codex_app_server_protocol::McpServerElicitationRequest;
     use codex_app_server_protocol::McpServerElicitationRequestParams;
+    use codex_app_server_protocol::McpServerElicitationRequestResponse;
     use codex_app_server_protocol::PermissionGrantScope;
     use codex_app_server_protocol::PermissionsRequestApprovalParams;
     use codex_app_server_protocol::PermissionsRequestApprovalResponse;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
+    use codex_app_server_protocol::RequestPermissionProfile as ApiRequestPermissionProfile;
     use codex_app_server_protocol::ServerRequest;
+    use codex_app_server_protocol::ServerResponse;
     use codex_app_server_protocol::ToolRequestUserInputAnswer;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::ToolRequestUserInputResponse;
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
-    use codex_protocol::request_permissions::RequestPermissionProfile;
+    use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -461,8 +460,20 @@ mod tests {
             .expect("resolution should serialize")
             .expect("request should be pending");
 
-        assert_eq!(resolution.request_id, AppServerRequestId::Integer(41));
-        assert_eq!(resolution.result, json!({ "decision": "accept" }));
+        let ServerResponse::CommandExecutionRequestApproval {
+            request_id,
+            response,
+        } = resolution.response
+        else {
+            panic!("expected command execution approval response");
+        };
+        assert_eq!(request_id, AppServerRequestId::Integer(41));
+        assert_eq!(
+            response,
+            CommandExecutionRequestApprovalResponse {
+                decision: CommandExecutionApprovalDecision::Accept,
+            }
+        );
     }
 
     #[test]
@@ -493,10 +504,10 @@ mod tests {
                     started_at_ms: 0,
                     cwd: absolute_path(if cfg!(windows) { r"C:\tmp" } else { "/tmp" }),
                     reason: None,
-                    permissions: serde_json::from_value(json!({
-                        "network": { "enabled": null }
-                    }))
-                    .expect("valid permissions"),
+                    permissions: ApiRequestPermissionProfile {
+                        network: Some(AdditionalNetworkPermissions { enabled: None }),
+                        file_system: None,
+                    },
                 },
             }),
             None
@@ -518,7 +529,7 @@ mod tests {
             .take_resolution(&Op::RequestPermissionsResponse {
                 id: "perm-1".to_string(),
                 response: codex_protocol::request_permissions::RequestPermissionsResponse {
-                    permissions: RequestPermissionProfile {
+                    permissions: CoreRequestPermissionProfile {
                         network: Some(NetworkPermissions {
                             enabled: Some(true),
                         }),
@@ -533,10 +544,16 @@ mod tests {
             })
             .expect("permissions response should serialize")
             .expect("permissions request should be pending");
-        assert_eq!(permissions.request_id, AppServerRequestId::Integer(7));
+        let ServerResponse::PermissionsRequestApproval {
+            request_id,
+            response,
+        } = permissions.response
+        else {
+            panic!("expected permissions approval response");
+        };
+        assert_eq!(request_id, AppServerRequestId::Integer(7));
         assert_eq!(
-            serde_json::from_value::<PermissionsRequestApprovalResponse>(permissions.result)
-                .expect("permissions response should decode"),
+            response,
             PermissionsRequestApprovalResponse {
                 permissions: codex_app_server_protocol::GrantedPermissionProfile {
                     network: Some(AdditionalNetworkPermissions {
@@ -582,10 +599,16 @@ mod tests {
             })
             .expect("user input response should serialize")
             .expect("user input request should be pending");
-        assert_eq!(user_input.request_id, AppServerRequestId::Integer(8));
+        let ServerResponse::ToolRequestUserInput {
+            request_id,
+            response,
+        } = user_input.response
+        else {
+            panic!("expected user input response");
+        };
+        assert_eq!(request_id, AppServerRequestId::Integer(8));
         assert_eq!(
-            serde_json::from_value::<ToolRequestUserInputResponse>(user_input.result)
-                .expect("user input response should decode"),
+            response,
             ToolRequestUserInputResponse {
                 answers: std::iter::once((
                     "question".to_string(),
@@ -635,14 +658,21 @@ mod tests {
             .expect("elicitation response should serialize")
             .expect("elicitation request should be pending");
 
-        assert_eq!(resolution.request_id, AppServerRequestId::Integer(12));
+        let ServerResponse::McpServerElicitationRequest {
+            request_id,
+            response,
+        } = resolution.response
+        else {
+            panic!("expected MCP elicitation response");
+        };
+        assert_eq!(request_id, AppServerRequestId::Integer(12));
         assert_eq!(
-            resolution.result,
-            json!({
-                "action": "accept",
-                "content": { "answer": "yes" },
-                "_meta": { "source": "tui" }
-            })
+            response,
+            McpServerElicitationRequestResponse {
+                action: McpServerElicitationAction::Accept,
+                content: Some(json!({ "answer": "yes" })),
+                meta: Some(json!({ "source": "tui" })),
+            }
         );
     }
 
@@ -712,8 +742,20 @@ mod tests {
             .expect("resolution should serialize")
             .expect("request should be pending");
 
-        assert_eq!(resolution.request_id, AppServerRequestId::Integer(13));
-        assert_eq!(resolution.result, json!({ "decision": "cancel" }));
+        let ServerResponse::FileChangeRequestApproval {
+            request_id,
+            response,
+        } = resolution.response
+        else {
+            panic!("expected file change approval response");
+        };
+        assert_eq!(request_id, AppServerRequestId::Integer(13));
+        assert_eq!(
+            response,
+            FileChangeRequestApprovalResponse {
+                decision: FileChangeApprovalDecision::Cancel,
+            }
+        );
     }
 
     #[test]
@@ -842,7 +884,13 @@ mod tests {
             .expect("user input response should serialize")
             .expect("second user input request should be pending");
 
-        assert_eq!(first_response.request_id, AppServerRequestId::Integer(8));
-        assert_eq!(second_response.request_id, AppServerRequestId::Integer(9));
+        assert_eq!(
+            first_response.response.id(),
+            &AppServerRequestId::Integer(8)
+        );
+        assert_eq!(
+            second_response.response.id(),
+            &AppServerRequestId::Integer(9)
+        );
     }
 }

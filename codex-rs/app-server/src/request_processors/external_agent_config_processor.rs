@@ -20,10 +20,10 @@ use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::HookMigration;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerMigration;
 use codex_app_server_protocol::MigrationDetails;
 use codex_app_server_protocol::PluginsMigration;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::StartThreadOptions;
@@ -79,7 +79,7 @@ impl ExternalAgentConfigRequestProcessor {
     pub(crate) async fn detect(
         &self,
         params: ExternalAgentConfigDetectParams,
-    ) -> Result<ExternalAgentConfigDetectResponse, JSONRPCErrorError> {
+    ) -> Result<ExternalAgentConfigDetectResponse, RpcError> {
         let items = self
             .migration_service
             .detect(ExternalAgentConfigDetectOptions {
@@ -174,7 +174,7 @@ impl ExternalAgentConfigRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_migration_items = !params.migration_items.is_empty();
         let has_plugin_imports = params.migration_items.iter().any(|item| {
@@ -277,7 +277,7 @@ impl ExternalAgentConfigRequestProcessor {
     async fn import_external_agent_session(
         &self,
         session: ImportedExternalAgentSession,
-    ) -> Result<ThreadId, JSONRPCErrorError> {
+    ) -> Result<ThreadId, RpcError> {
         let ImportedExternalAgentSession {
             cwd,
             title,
@@ -336,7 +336,7 @@ impl ExternalAgentConfigRequestProcessor {
     fn validate_pending_session_imports(
         &self,
         params: &ExternalAgentConfigImportParams,
-    ) -> Result<Vec<CoreSessionMigration>, JSONRPCErrorError> {
+    ) -> Result<Vec<CoreSessionMigration>, RpcError> {
         let sessions = params
             .migration_items
             .iter()
@@ -392,7 +392,7 @@ impl ExternalAgentConfigRequestProcessor {
     async fn import_external_agent_config(
         &self,
         params: ExternalAgentConfigImportParams,
-    ) -> Result<Vec<PendingPluginImport>, JSONRPCErrorError> {
+    ) -> Result<Vec<PendingPluginImport>, RpcError> {
         self.migration_service
             .import(
                 params
@@ -487,7 +487,7 @@ impl ExternalAgentConfigRequestProcessor {
     async fn complete_pending_plugin_import(
         &self,
         pending_plugin_import: PendingPluginImport,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         self.migration_service
             .import_plugins(
                 pending_plugin_import.cwd.as_deref(),
@@ -513,7 +513,7 @@ fn migration_items_need_runtime_refresh(items: &[ExternalAgentConfigMigrationIte
     })
 }
 
-fn session_not_detected_error(path: &std::path::Path) -> JSONRPCErrorError {
+fn session_not_detected_error(path: &std::path::Path) -> RpcError {
     invalid_params(format!(
         "external agent session was not detected for import: {}",
         path.display()

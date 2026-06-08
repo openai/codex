@@ -16,28 +16,19 @@ use codex_app_server_protocol::NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use serde::Deserialize;
-use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub(crate) struct ExecApprovalRequestEvent {
     pub(crate) call_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) approval_id: Option<String>,
-    #[serde(default)]
     pub(crate) turn_id: String,
     pub(crate) command: Vec<String>,
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
-    #[serde(default)]
     pub(crate) available_decisions: Option<Vec<CommandExecutionApprovalDecision>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) network_approval_context: Option<NetworkApprovalContext>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
@@ -106,14 +97,11 @@ impl ExecApprovalRequestEvent {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub(crate) struct ApplyPatchApprovalRequestEvent {
     pub(crate) call_id: String,
-    #[serde(default)]
     pub(crate) turn_id: String,
     pub(crate) changes: HashMap<PathBuf, FileChange>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) grant_root: Option<PathBuf>,
 }

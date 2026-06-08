@@ -1,11 +1,10 @@
 use std::fmt;
 
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::Result;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use serde::Serialize;
 use tokio::sync::oneshot;
 
 /// Stable identifier for a transport connection.
@@ -19,8 +18,8 @@ impl fmt::Display for ConnectionId {
 }
 
 /// Outgoing message from the server to the client.
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum OutgoingMessage {
     Request(ServerRequest),
     /// AppServerNotification is specific to the case where this is run as an
@@ -30,15 +29,14 @@ pub enum OutgoingMessage {
     Error(OutgoingError),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone)]
 pub struct OutgoingResponse {
-    pub id: RequestId,
-    pub result: Result,
+    pub response: ClientResponse,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OutgoingError {
-    pub error: JSONRPCErrorError,
+    pub error: RpcError,
     pub id: RequestId,
 }
 

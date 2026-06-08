@@ -16,7 +16,7 @@ use codex_app_server_protocol::CommandExecTerminateParams;
 use codex_app_server_protocol::CommandExecTerminateResponse;
 use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::CommandExecWriteResponse;
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::config::StartedNetworkProxy;
 use codex_core::exec::ExecExpiration;
@@ -81,7 +81,7 @@ enum CommandControl {
 
 struct CommandControlRequest {
     control: CommandControl,
-    response_tx: Option<oneshot::Sender<Result<(), JSONRPCErrorError>>>,
+    response_tx: Option<oneshot::Sender<Result<(), RpcError>>>,
 }
 
 pub(crate) struct StartCommandExecParams {
@@ -140,10 +140,7 @@ impl InternalProcessIdExt for InternalProcessId {
 }
 
 impl CommandExecManager {
-    pub(crate) async fn start(
-        &self,
-        params: StartCommandExecParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    pub(crate) async fn start(&self, params: StartCommandExecParams) -> Result<(), RpcError> {
         let StartCommandExecParams {
             outgoing,
             request_id,
@@ -309,7 +306,7 @@ impl CommandExecManager {
         &self,
         request_id: ConnectionRequestId,
         params: CommandExecWriteParams,
-    ) -> Result<CommandExecWriteResponse, JSONRPCErrorError> {
+    ) -> Result<CommandExecWriteResponse, RpcError> {
         if params.delta_base64.is_none() && !params.close_stdin {
             return Err(invalid_params(
                 "command/exec/write requires deltaBase64 or closeStdin",
@@ -343,7 +340,7 @@ impl CommandExecManager {
         &self,
         request_id: ConnectionRequestId,
         params: CommandExecTerminateParams,
-    ) -> Result<CommandExecTerminateResponse, JSONRPCErrorError> {
+    ) -> Result<CommandExecTerminateResponse, RpcError> {
         let target_process_id = ConnectionProcessId {
             connection_id: request_id.connection_id,
             process_id: InternalProcessId::Client(params.process_id),
@@ -357,7 +354,7 @@ impl CommandExecManager {
         &self,
         request_id: ConnectionRequestId,
         params: CommandExecResizeParams,
-    ) -> Result<CommandExecResizeResponse, JSONRPCErrorError> {
+    ) -> Result<CommandExecResizeResponse, RpcError> {
         let target_process_id = ConnectionProcessId {
             connection_id: request_id.connection_id,
             process_id: InternalProcessId::Client(params.process_id),
@@ -405,7 +402,7 @@ impl CommandExecManager {
         &self,
         process_id: ConnectionProcessId,
         control: CommandControl,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let session = {
             self.sessions
                 .lock()
@@ -622,7 +619,7 @@ async fn handle_process_write(
     stream_stdin: bool,
     delta: Vec<u8>,
     close_stdin: bool,
-) -> Result<(), JSONRPCErrorError> {
+) -> Result<(), RpcError> {
     if !stream_stdin {
         return Err(invalid_request(
             "stdin streaming is not enabled for this command/exec",
@@ -641,10 +638,7 @@ async fn handle_process_write(
     Ok(())
 }
 
-fn handle_process_resize(
-    session: &ProcessHandle,
-    size: TerminalSize,
-) -> Result<(), JSONRPCErrorError> {
+fn handle_process_resize(session: &ProcessHandle, size: TerminalSize) -> Result<(), RpcError> {
     session
         .resize(size)
         .map_err(|err| invalid_request(format!("failed to resize PTY: {err}")))
@@ -652,7 +646,7 @@ fn handle_process_resize(
 
 pub(crate) fn terminal_size_from_protocol(
     size: CommandExecTerminalSize,
-) -> Result<TerminalSize, JSONRPCErrorError> {
+) -> Result<TerminalSize, RpcError> {
     if size.rows == 0 || size.cols == 0 {
         return Err(invalid_params(
             "command/exec size rows and cols must be greater than 0",
@@ -664,7 +658,7 @@ pub(crate) fn terminal_size_from_protocol(
     })
 }
 
-fn command_no_longer_running_error(process_id: &InternalProcessId) -> JSONRPCErrorError {
+fn command_no_longer_running_error(process_id: &InternalProcessId) -> RpcError {
     invalid_request(format!(
         "command/exec {} is no longer running",
         process_id.error_repr(),
@@ -869,9 +863,14 @@ mod tests {
         let OutgoingMessage::Response(response) = message else {
             panic!("expected execution response after termination");
         };
-        assert_eq!(response.id, request_id.request_id);
-        let response: CommandExecResponse =
-            serde_json::from_value(response.result).expect("deserialize command/exec response");
+        let codex_app_server_protocol::ClientResponse::OneOffCommandExec {
+            request_id: response_request_id,
+            response,
+        } = response.response
+        else {
+            panic!("expected command/exec response");
+        };
+        assert_eq!(response_request_id, request_id.request_id);
         assert_ne!(response.exit_code, 0);
         assert_eq!(response.stdout, "");
         // The deferred response now drains any already-emitted stderr before
@@ -944,9 +943,14 @@ mod tests {
         let OutgoingMessage::Response(response) = message else {
             panic!("expected execution response after cancellation");
         };
-        assert_eq!(response.id, request_id.request_id);
-        let response: CommandExecResponse =
-            serde_json::from_value(response.result).expect("deserialize command/exec response");
+        let codex_app_server_protocol::ClientResponse::OneOffCommandExec {
+            request_id: response_request_id,
+            response,
+        } = response.response
+        else {
+            panic!("expected command/exec response");
+        };
+        assert_eq!(response_request_id, request_id.request_id);
         assert_ne!(response.exit_code, EXEC_TIMEOUT_EXIT_CODE);
     }
 

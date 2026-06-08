@@ -1,8 +1,6 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::JSONRPCNotification;
-use crate::JSONRPCRequest;
 use crate::RequestId;
 use crate::export::GeneratedSchema;
 use crate::export::write_json_schema;
@@ -10,14 +8,17 @@ use crate::protocol::v1;
 use crate::protocol::v2;
 use codex_experimental_api_macros::ExperimentalApi;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
 
 /// Authentication mode for OpenAI-backed providers.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "lowercase"))]
 pub enum AuthMode {
     /// OpenAI API key provided by the caller and stored by Codex.
     ApiKey,
@@ -27,12 +28,15 @@ pub enum AuthMode {
     ///
     /// ChatGPT auth tokens are supplied by an external host app and are only
     /// stored in memory. Token refresh must be handled by the external host app.
-    #[serde(rename = "chatgptAuthTokens")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "chatgptAuthTokens")
+    )]
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
     ChatgptAuthTokens,
     /// Programmatic Codex auth backed by a registered Agent Identity.
-    #[serde(rename = "agentIdentity")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "agentIdentity"))]
     #[ts(rename = "agentIdentity")]
     #[strum(serialize = "agentIdentity")]
     AgentIdentity,
@@ -173,14 +177,16 @@ macro_rules! client_request_definitions {
         ),* $(,)?
     ) => {
         /// Request from the client to the server.
-        #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-        #[serde(tag = "method", rename_all = "camelCase")]
+        #[derive(Debug, Clone, PartialEq, JsonSchema, TS, Display)]
+        #[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(tag = "method", rename_all = "camelCase"))]
+        #[strum(serialize_all = "camelCase")]
         pub enum ClientRequest {
             $(
                 $(#[doc = $variant_doc])*
-                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
+                $(#[cfg_attr(any(test, feature = "serde-compat"), serde(rename = $wire))] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
                 $variant {
-                    #[serde(rename = "id")]
+                    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "id"))]
                     request_id: RequestId,
                     $(#[$params_meta])*
                     params: $params,
@@ -196,15 +202,7 @@ macro_rules! client_request_definitions {
             }
 
             pub fn method(&self) -> String {
-                serde_json::to_value(self)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("method")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or_else(|| "<unknown>".to_string())
+                self.to_string()
             }
 
             pub fn serialization_scope(&self) -> Option<ClientRequestSerializationScope> {
@@ -222,15 +220,18 @@ macro_rules! client_request_definitions {
         }
 
         /// Typed response from the server to the client.
-        #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[derive(Debug, Clone, Display)]
+        #[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(tag = "method", rename_all = "camelCase"))]
         #[allow(clippy::large_enum_variant)]
-        #[serde(tag = "method", rename_all = "camelCase")]
+        #[strum(serialize_all = "camelCase")]
         pub enum ClientResponse {
             $(
                 $(#[doc = $variant_doc])*
-                $(#[serde(rename = $wire)])?
+                $(#[cfg_attr(any(test, feature = "serde-compat"), serde(rename = $wire))])?
+                $(#[strum(serialize = $wire)])?
                 $variant {
-                    #[serde(rename = "id")]
+                    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "id"))]
                     request_id: RequestId,
                     response: $response,
                 },
@@ -245,28 +246,9 @@ macro_rules! client_request_definitions {
             }
 
             pub fn method(&self) -> String {
-                serde_json::to_value(self)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("method")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or_else(|| "<unknown>".to_string())
+                self.to_string()
             }
 
-            pub fn into_jsonrpc_parts(
-                self,
-            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
-                match self {
-                    $(
-                        Self::$variant { request_id, response } => {
-                            serde_json::to_value(response).map(|result| (request_id, result))
-                        }
-                    )*
-                }
-            }
         }
 
         #[derive(Debug, Clone)]
@@ -277,26 +259,6 @@ macro_rules! client_request_definitions {
         }
 
         impl ClientResponsePayload {
-            pub fn into_jsonrpc_parts_and_payload(
-                self,
-                request_id: RequestId,
-            ) -> std::result::Result<
-                (RequestId, crate::Result, Option<ClientResponsePayload>),
-                serde_json::Error,
-            > {
-                match self {
-                    $(
-                        Self::$variant(response) => {
-                            let result = serde_json::to_value(&response)?;
-                            Ok((request_id, result, Some(Self::$variant(response))))
-                        }
-                    )*
-                    Self::InterruptConversation(response) => {
-                        serde_json::to_value(response).map(|result| (request_id, result, None))
-                    }
-                }
-            }
-
             pub fn into_client_response(self, request_id: RequestId) -> Option<ClientResponse> {
                 match self {
                     $(
@@ -311,28 +273,6 @@ macro_rules! client_request_definitions {
                 }
             }
 
-            pub fn into_jsonrpc_parts(
-                self,
-                request_id: RequestId,
-            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
-                self.to_jsonrpc_parts(request_id)
-            }
-
-            pub fn to_jsonrpc_parts(
-                &self,
-                request_id: RequestId,
-            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
-                match self {
-                    $(
-                        Self::$variant(response) => {
-                            serde_json::to_value(response).map(|result| (request_id, result))
-                        }
-                    )*
-                    Self::InterruptConversation(response) => {
-                        serde_json::to_value(response).map(|result| (request_id, result))
-                    }
-                }
-            }
         }
 
         impl From<v1::InterruptConversationResponse> for ClientResponsePayload {
@@ -529,7 +469,7 @@ client_request_definitions! {
     },
     #[experimental("memory/reset")]
     MemoryReset => "memory/reset" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[ts(type = "undefined")] #[cfg_attr(any(test, feature = "serde-compat"), serde(skip_serializing_if = "Option::is_none"))] Option<()>,
         serialization: global("memory"),
         response: v2::MemoryResetResponse,
     },
@@ -827,19 +767,19 @@ client_request_definitions! {
     },
     #[experimental("remoteControl/enable")]
     RemoteControlEnable => "remoteControl/enable" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[ts(type = "undefined")] #[cfg_attr(any(test, feature = "serde-compat"), serde(skip_serializing_if = "Option::is_none"))] Option<()>,
         serialization: global("remote-control"),
         response: v2::RemoteControlEnableResponse,
     },
     #[experimental("remoteControl/disable")]
     RemoteControlDisable => "remoteControl/disable" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[ts(type = "undefined")] #[cfg_attr(any(test, feature = "serde-compat"), serde(skip_serializing_if = "Option::is_none"))] Option<()>,
         serialization: global("remote-control"),
         response: v2::RemoteControlDisableResponse,
     },
     #[experimental("remoteControl/status/read")]
     RemoteControlStatusRead => "remoteControl/status/read" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[ts(type = "undefined")] #[cfg_attr(any(test, feature = "serde-compat"), serde(skip_serializing_if = "Option::is_none"))] Option<()>,
         serialization: global_shared_read("remote-control"),
         response: v2::RemoteControlStatusReadResponse,
     },
@@ -890,7 +830,7 @@ client_request_definitions! {
     },
 
     McpServerRefresh => "config/mcpServer/reload" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[ts(type = "undefined")] #[cfg_attr(any(test, feature = "serde-compat"), serde(skip_serializing_if = "Option::is_none"))] Option<()>,
         serialization: global("mcp-registry"),
         response: v2::McpServerRefreshResponse,
     },
@@ -919,7 +859,7 @@ client_request_definitions! {
         response: v2::WindowsSandboxSetupStartResponse,
     },
     WindowsSandboxReadiness => "windowsSandbox/readiness" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[ts(type = "undefined")] #[cfg_attr(any(test, feature = "serde-compat"), serde(skip_serializing_if = "Option::is_none"))] Option<()>,
         serialization: global("config"),
         response: v2::WindowsSandboxReadinessResponse,
     },
@@ -938,13 +878,13 @@ client_request_definitions! {
     },
 
     LogoutAccount => "account/logout" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[ts(type = "undefined")] #[cfg_attr(any(test, feature = "serde-compat"), serde(skip_serializing_if = "Option::is_none"))] Option<()>,
         serialization: global("account-auth"),
         response: v2::LogoutAccountResponse,
     },
 
     GetAccountRateLimits => "account/rateLimits/read" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[ts(type = "undefined")] #[cfg_attr(any(test, feature = "serde-compat"), serde(skip_serializing_if = "Option::is_none"))] Option<()>,
         serialization: None,
         response: v2::GetAccountRateLimitsResponse,
     },
@@ -1044,7 +984,7 @@ client_request_definitions! {
     },
 
     ConfigRequirementsRead => "configRequirements/read" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[ts(type = "undefined")] #[cfg_attr(any(test, feature = "serde-compat"), serde(skip_serializing_if = "Option::is_none"))] Option<()>,
         serialization: global("config"),
         response: v2::ConfigRequirementsReadResponse,
     },
@@ -1114,15 +1054,16 @@ macro_rules! server_request_definitions {
         ),* $(,)?
     ) => {
         /// Request initiated from the server and sent to the client.
-        #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+        #[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+        #[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
         #[allow(clippy::large_enum_variant)]
-        #[serde(tag = "method", rename_all = "camelCase")]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(tag = "method", rename_all = "camelCase"))]
         pub enum ServerRequest {
             $(
                 $(#[$variant_meta])*
-                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
+                $(#[cfg_attr(any(test, feature = "serde-compat"), serde(rename = $wire))] #[ts(rename = $wire)])?
                 $variant {
-                    #[serde(rename = "id")]
+                    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "id"))]
                     request_id: RequestId,
                     params: $params,
                 },
@@ -1136,33 +1077,20 @@ macro_rules! server_request_definitions {
                 }
             }
 
-            pub fn response_from_result(
-                &self,
-                result: crate::Result,
-            ) -> serde_json::Result<ServerResponse> {
-                match self {
-                    $(
-                        Self::$variant { request_id, .. } => {
-                            let response = serde_json::from_value::<$response>(result)?;
-                            Ok(ServerResponse::$variant {
-                                request_id: request_id.clone(),
-                                response,
-                            })
-                        }
-                    )*
-                }
-            }
         }
 
         /// Typed response from the client to the server.
-        #[derive(Serialize, Deserialize, Debug, Clone)]
-        #[serde(tag = "method", rename_all = "camelCase")]
+        #[derive(Debug, Clone, Display)]
+        #[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(tag = "method", rename_all = "camelCase"))]
+        #[strum(serialize_all = "camelCase")]
         pub enum ServerResponse {
             $(
                 $(#[$variant_meta])*
-                $(#[serde(rename = $wire)])?
+                $(#[cfg_attr(any(test, feature = "serde-compat"), serde(rename = $wire))])?
+                $(#[strum(serialize = $wire)])?
                 $variant {
-                    #[serde(rename = "id")]
+                    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "id"))]
                     request_id: RequestId,
                     response: $response,
                 },
@@ -1177,15 +1105,7 @@ macro_rules! server_request_definitions {
             }
 
             pub fn method(&self) -> String {
-                serde_json::to_value(self)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("method")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or_else(|| "<unknown>".to_string())
+                self.to_string()
             }
         }
 
@@ -1259,8 +1179,6 @@ macro_rules! server_notification_definitions {
     ) => {
         /// Notification sent from the server to the client.
         #[derive(
-            Serialize,
-            Deserialize,
             Debug,
             Clone,
             JsonSchema,
@@ -1268,31 +1186,16 @@ macro_rules! server_notification_definitions {
             Display,
             ExperimentalApi,
         )]
+        #[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
         #[allow(clippy::large_enum_variant)]
-        #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(tag = "method", content = "params", rename_all = "camelCase"))]
         #[strum(serialize_all = "camelCase")]
         pub enum ServerNotification {
             $(
                 $(#[$variant_meta])*
-                $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
+                $(#[cfg_attr(any(test, feature = "serde-compat"), serde(rename = $wire))] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
                 $variant($payload),
             )*
-        }
-
-        impl ServerNotification {
-            pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
-                match self {
-                    $(Self::$variant(params) => serde_json::to_value(params),)*
-                }
-            }
-        }
-
-        impl TryFrom<JSONRPCNotification> for ServerNotification {
-            type Error = serde_json::Error;
-
-            fn try_from(value: JSONRPCNotification) -> Result<Self, serde_json::Error> {
-                serde_json::from_value(serde_json::to_value(value)?)
-            }
         }
 
         #[allow(clippy::vec_init_then_push)]
@@ -1313,8 +1216,9 @@ macro_rules! client_notification_definitions {
             $variant:ident $( ( $payload:ty ) )?
         ),* $(,)?
     ) => {
-        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
-        #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+        #[derive(Debug, Clone, JsonSchema, TS, Display)]
+        #[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(tag = "method", content = "params", rename_all = "camelCase"))]
         #[strum(serialize_all = "camelCase")]
         pub enum ClientNotification {
             $(
@@ -1331,14 +1235,6 @@ macro_rules! client_notification_definitions {
             Ok(schemas)
         }
     };
-}
-
-impl TryFrom<JSONRPCRequest> for ServerRequest {
-    type Error = serde_json::Error;
-
-    fn try_from(value: JSONRPCRequest) -> Result<Self, Self::Error> {
-        serde_json::from_value(serde_json::to_value(value)?)
-    }
 }
 
 server_request_definitions! {
@@ -1407,8 +1303,9 @@ server_request_definitions! {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchParams {
     pub query: String,
@@ -1418,7 +1315,8 @@ pub struct FuzzyFileSearchParams {
 }
 
 /// Superset of [`codex_file_search::FileMatch`]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
 pub struct FuzzyFileSearchResult {
     pub root: String,
     pub path: String,
@@ -1428,53 +1326,62 @@ pub struct FuzzyFileSearchResult {
     pub indices: Option<Vec<u32>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase")]
 pub enum FuzzyFileSearchMatchType {
     File,
     Directory,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
 pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchSessionStartParams {
     pub session_id: String,
     pub roots: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
 pub struct FuzzyFileSearchSessionStartResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchSessionUpdateParams {
     pub session_id: String,
     pub query: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
 pub struct FuzzyFileSearchSessionUpdateResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchSessionStopParams {
     pub session_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
 pub struct FuzzyFileSearchSessionStopResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchSessionUpdatedNotification {
     pub session_id: String,
@@ -1482,8 +1389,9 @@ pub struct FuzzyFileSearchSessionUpdatedNotification {
     pub files: Vec<FuzzyFileSearchResult>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchSessionCompletedNotification {
     pub session_id: String,
@@ -1576,7 +1484,7 @@ server_notification_definitions! {
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
     WindowsSandboxSetupCompleted => "windowsSandbox/setupCompleted" (v2::WindowsSandboxSetupCompletedNotification),
 
-    #[serde(rename = "account/login/completed")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "account/login/completed"))]
     #[ts(rename = "account/login/completed")]
     #[strum(serialize = "account/login/completed")]
     AccountLoginCompleted(v2::AccountLoginCompletedNotification),
@@ -1867,7 +1775,23 @@ mod tests {
             request_id: request_id(),
             params: v2::ThreadApproveGuardianDeniedActionParams {
                 thread_id: "guardian-thread".to_string(),
-                event: json!({ "type": "guardian" }),
+                event: v2::GuardianAssessmentEvent {
+                    id: "guardian-review".to_string(),
+                    target_item_id: None,
+                    turn_id: "guardian-turn".to_string(),
+                    started_at_ms: 0,
+                    completed_at_ms: Some(1),
+                    status: v2::GuardianApprovalReviewStatus::Denied,
+                    risk_level: None,
+                    user_authorization: None,
+                    rationale: None,
+                    decision_source: None,
+                    action: v2::GuardianApprovalReviewAction::Command {
+                        source: v2::GuardianCommandSource::Shell,
+                        command: "echo denied".to_string(),
+                        cwd: absolute_path("/tmp"),
+                    },
+                },
             },
         };
         assert_eq!(

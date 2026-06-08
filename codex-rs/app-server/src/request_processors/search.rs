@@ -17,7 +17,7 @@ use codex_app_server_protocol::FuzzyFileSearchSessionStopParams;
 use codex_app_server_protocol::FuzzyFileSearchSessionStopResponse;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdateParams;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdateResponse;
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
@@ -39,7 +39,7 @@ impl SearchRequestProcessor {
     pub(crate) async fn fuzzy_file_search(
         &self,
         params: FuzzyFileSearchParams,
-    ) -> Result<FuzzyFileSearchResponse, JSONRPCErrorError> {
+    ) -> Result<FuzzyFileSearchResponse, RpcError> {
         let FuzzyFileSearchParams {
             query,
             roots,
@@ -81,7 +81,7 @@ impl SearchRequestProcessor {
     pub(crate) async fn fuzzy_file_search_session_start_response(
         &self,
         params: FuzzyFileSearchSessionStartParams,
-    ) -> Result<FuzzyFileSearchSessionStartResponse, JSONRPCErrorError> {
+    ) -> Result<FuzzyFileSearchSessionStartResponse, RpcError> {
         let FuzzyFileSearchSessionStartParams { session_id, roots } = params;
         if session_id.is_empty() {
             return Err(invalid_request("sessionId must not be empty"));
@@ -102,7 +102,7 @@ impl SearchRequestProcessor {
     pub(crate) async fn fuzzy_file_search_session_update_response(
         &self,
         params: FuzzyFileSearchSessionUpdateParams,
-    ) -> Result<FuzzyFileSearchSessionUpdateResponse, JSONRPCErrorError> {
+    ) -> Result<FuzzyFileSearchSessionUpdateResponse, RpcError> {
         let FuzzyFileSearchSessionUpdateParams { session_id, query } = params;
         let found = {
             let sessions = self.fuzzy_search_sessions.lock().await;
@@ -125,7 +125,7 @@ impl SearchRequestProcessor {
     pub(crate) async fn fuzzy_file_search_session_stop(
         &self,
         params: FuzzyFileSearchSessionStopParams,
-    ) -> Result<FuzzyFileSearchSessionStopResponse, JSONRPCErrorError> {
+    ) -> Result<FuzzyFileSearchSessionStopResponse, RpcError> {
         let FuzzyFileSearchSessionStopParams { session_id } = params;
         self.fuzzy_search_sessions.lock().await.remove(&session_id);
 

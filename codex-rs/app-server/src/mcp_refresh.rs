@@ -1,10 +1,11 @@
 use crate::config_manager::ConfigManager;
+use codex_config::types::McpServerConfig;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::McpServerRefreshConfig;
-use codex_protocol::protocol::Op;
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use tracing::warn;
@@ -63,7 +64,7 @@ async fn build_refresh_config(
     thread_manager: &ThreadManager,
     config_manager: &ConfigManager,
     thread_config: Arc<Config>,
-) -> io::Result<McpServerRefreshConfig> {
+) -> io::Result<(HashMap<String, McpServerConfig>, OAuthCredentialsStoreMode)> {
     let config = config_manager
         .load_latest_config_for_thread(thread_config.as_ref())
         .await?;
@@ -71,29 +72,20 @@ async fn build_refresh_config(
         .mcp_manager()
         .configured_servers(&config)
         .await;
-    Ok(McpServerRefreshConfig {
-        mcp_servers: serde_json::to_value(mcp_servers).map_err(io::Error::other)?,
-        mcp_oauth_credentials_store_mode: serde_json::to_value(
-            config.mcp_oauth_credentials_store_mode,
-        )
-        .map_err(io::Error::other)?,
-    })
+    Ok((mcp_servers, config.mcp_oauth_credentials_store_mode))
 }
 
 async fn queue_refresh(
     thread_id: ThreadId,
     thread: Arc<CodexThread>,
-    config: McpServerRefreshConfig,
+    config: (HashMap<String, McpServerConfig>, OAuthCredentialsStoreMode),
 ) -> io::Result<()> {
+    let (mcp_servers, mcp_oauth_credentials_store_mode) = config;
     thread
-        .submit(Op::RefreshMcpServers { config })
-        .await
-        .map(|_| ())
-        .map_err(|err| {
-            io::Error::other(format!(
-                "failed to queue MCP refresh for thread {thread_id}: {err}"
-            ))
-        })
+        .queue_mcp_server_refresh(mcp_servers, mcp_oauth_credentials_store_mode)
+        .await;
+    tracing::debug!("queued MCP refresh for thread {thread_id}");
+    Ok(())
 }
 
 #[cfg(test)]

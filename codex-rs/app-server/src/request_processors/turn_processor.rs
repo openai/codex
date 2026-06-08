@@ -109,7 +109,7 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.turn_start_inner(
             request_id,
             params,
@@ -123,7 +123,7 @@ impl TurnRequestProcessor {
     pub(crate) async fn thread_inject_items(
         &self,
         params: ThreadInjectItemsParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_inject_items_response_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -133,7 +133,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadSettingsUpdateParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_settings_update_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
@@ -143,7 +143,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: TurnSteerParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.turn_steer_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
@@ -153,7 +153,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: TurnInterruptParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.turn_interrupt_inner(request_id, params)
             .await
             .map(|response| response.map(Into::into))
@@ -163,7 +163,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_realtime_start_inner(request_id, params)
             .await
             .map(|response| response.map(Into::into))
@@ -173,7 +173,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeAppendAudioParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_realtime_append_audio_inner(request_id, params)
             .await
             .map(|response| response.map(Into::into))
@@ -183,7 +183,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeAppendTextParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_realtime_append_text_inner(request_id, params)
             .await
             .map(|response| response.map(Into::into))
@@ -193,7 +193,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStopParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_realtime_stop_inner(request_id, params)
             .await
             .map(|response| response.map(Into::into))
@@ -201,7 +201,7 @@ impl TurnRequestProcessor {
 
     pub(crate) async fn thread_realtime_list_voices(
         &self,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         Ok(Some(
             ThreadRealtimeListVoicesResponse {
                 voices: RealtimeVoicesList::builtin(),
@@ -214,7 +214,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.review_start_inner(request_id, params)
             .await
             .map(|()| None)
@@ -223,8 +223,8 @@ impl TurnRequestProcessor {
     fn track_error_response(
         &self,
         request_id: &ConnectionRequestId,
-        error: &JSONRPCErrorError,
-        error_type: Option<AnalyticsJsonRpcError>,
+        error: &RpcError,
+        error_type: Option<AnalyticsRpcError>,
     ) {
         self.analytics_events_client.track_error_response(
             request_id.connection_id.0,
@@ -234,10 +234,7 @@ impl TurnRequestProcessor {
         );
     }
 
-    async fn load_thread(
-        &self,
-        thread_id: &str,
-    ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
+    async fn load_thread(&self, thread_id: &str) -> Result<(ThreadId, Arc<CodexThread>), RpcError> {
         // Resolve the core conversation handle from a v2 thread id string.
         let thread_id = ThreadId::from_string(thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
@@ -269,7 +266,7 @@ impl TurnRequestProcessor {
 
     fn review_request_from_target(
         target: ApiReviewTarget,
-    ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
+    ) -> Result<(ReviewRequest, String), RpcError> {
         let cleaned_target = match target {
             ApiReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => {
@@ -321,7 +318,7 @@ impl TurnRequestProcessor {
     fn parse_environment_selections(
         &self,
         environments: Option<Vec<TurnEnvironmentParams>>,
-    ) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
+    ) -> Result<Option<Vec<TurnEnvironmentSelection>>, RpcError> {
         let environment_selections = environments.map(|environments| {
             environments
                 .into_iter()
@@ -357,7 +354,7 @@ impl TurnRequestProcessor {
             .await
     }
 
-    fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
+    fn input_too_large_error(actual_chars: usize) -> RpcError {
         let mut error = invalid_params(format!(
             "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
         ));
@@ -369,7 +366,7 @@ impl TurnRequestProcessor {
         error
     }
 
-    fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
+    fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), RpcError> {
         let actual_chars: usize = items.iter().map(V2UserInput::text_char_count).sum();
         if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
             return Err(Self::input_too_large_error(actual_chars));
@@ -383,12 +380,12 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<TurnStartResponse, JSONRPCErrorError> {
+    ) -> Result<TurnStartResponse, RpcError> {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
             self.track_error_response(
                 &request_id,
                 &error,
-                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
+                Some(AnalyticsRpcError::Input(InputError::TooLarge)),
             );
             return Err(error);
         }
@@ -495,7 +492,7 @@ impl TurnRequestProcessor {
         &self,
         thread: &CodexThread,
         params: ThreadSettingsBuildParams,
-    ) -> Result<codex_protocol::protocol::ThreadSettingsOverrides, JSONRPCErrorError> {
+    ) -> Result<codex_protocol::protocol::ThreadSettingsOverrides, RpcError> {
         let ThreadSettingsBuildParams {
             method,
             cwd,
@@ -664,7 +661,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadSettingsUpdateParams,
-    ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadSettingsUpdateResponse, RpcError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         let thread_settings = self
             .build_thread_settings_overrides(
@@ -703,22 +700,11 @@ impl TurnRequestProcessor {
     async fn thread_inject_items_response_inner(
         &self,
         params: ThreadInjectItemsParams,
-    ) -> Result<ThreadInjectItemsResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadInjectItemsResponse, RpcError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
 
-        let items = params
-            .items
-            .into_iter()
-            .enumerate()
-            .map(|(index, value)| {
-                serde_json::from_value::<ResponseItem>(value)
-                    .map_err(|err| format!("items[{index}] is not a valid response item: {err}"))
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(invalid_request)?;
-
         thread
-            .inject_response_items(items)
+            .inject_response_items(params.items)
             .await
             .map_err(|err| match err {
                 CodexErr::InvalidRequest(message) => invalid_request(message),
@@ -731,7 +717,7 @@ impl TurnRequestProcessor {
         thread: &CodexThread,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
             app_server_client_name.as_deref(),
             app_server_client_version.as_deref(),
@@ -750,7 +736,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: TurnSteerParams,
-    ) -> Result<TurnSteerResponse, JSONRPCErrorError> {
+    ) -> Result<TurnSteerResponse, RpcError> {
         let (_, thread) = self
             .load_thread(&params.thread_id)
             .await
@@ -768,7 +754,7 @@ impl TurnRequestProcessor {
             self.track_error_response(
                 request_id,
                 &error,
-                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
+                Some(AnalyticsRpcError::Input(InputError::TooLarge)),
             );
             return Err(error);
         }
@@ -794,14 +780,14 @@ impl TurnRequestProcessor {
                     SteerInputError::NoActiveTurn(_) => (
                         "no active turn to steer".to_string(),
                         None,
-                        Some(AnalyticsJsonRpcError::TurnSteer(
+                        Some(AnalyticsRpcError::TurnSteer(
                             TurnSteerRequestError::NoActiveTurn,
                         )),
                     ),
                     SteerInputError::ExpectedTurnMismatch { expected, actual } => (
                         format!("expected active turn id `{expected}` but found `{actual}`"),
                         None,
-                        Some(AnalyticsJsonRpcError::TurnSteer(
+                        Some(AnalyticsRpcError::TurnSteer(
                             TurnSteerRequestError::ExpectedTurnMismatch,
                         )),
                     ),
@@ -816,33 +802,29 @@ impl TurnRequestProcessor {
                                 TurnSteerRequestError::NonSteerableCompact,
                             ),
                         };
-                        let error = TurnError {
-                            message: message.clone(),
-                            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
-                                turn_kind: turn_kind.into(),
-                            }),
-                            additional_details: None,
+                        let turn_kind = match turn_kind {
+                            codex_protocol::protocol::NonSteerableTurnKind::Review => "review",
+                            codex_protocol::protocol::NonSteerableTurnKind::Compact => "compact",
                         };
-                        let data = match serde_json::to_value(error) {
-                            Ok(data) => Some(data),
-                            Err(error) => {
-                                tracing::error!(
-                                    ?error,
-                                    "failed to serialize active-turn-not-steerable turn error"
-                                );
-                                None
-                            }
-                        };
+                        let data = Some(serde_json::json!({
+                            "message": message,
+                            "codexErrorInfo": {
+                                "activeTurnNotSteerable": {
+                                    "turnKind": turn_kind,
+                                },
+                            },
+                            "additionalDetails": null,
+                        }));
                         (
                             message,
                             data,
-                            Some(AnalyticsJsonRpcError::TurnSteer(turn_steer_error)),
+                            Some(AnalyticsRpcError::TurnSteer(turn_steer_error)),
                         )
                     }
                     SteerInputError::EmptyInput => (
                         "input must not be empty".to_string(),
                         None,
-                        Some(AnalyticsJsonRpcError::Input(InputError::Empty)),
+                        Some(AnalyticsRpcError::Input(InputError::Empty)),
                     ),
                 };
                 let mut error = invalid_request(message);
@@ -857,7 +839,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         thread_id: &str,
-    ) -> Result<Option<(ThreadId, Arc<CodexThread>)>, JSONRPCErrorError> {
+    ) -> Result<Option<(ThreadId, Arc<CodexThread>)>, RpcError> {
         let (thread_id, thread) = self.load_thread(thread_id).await?;
 
         match self
@@ -888,7 +870,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
-    ) -> Result<Option<ThreadRealtimeStartResponse>, JSONRPCErrorError> {
+    ) -> Result<Option<ThreadRealtimeStartResponse>, RpcError> {
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id, &params.thread_id)
             .await?
@@ -922,7 +904,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeAppendAudioParams,
-    ) -> Result<Option<ThreadRealtimeAppendAudioResponse>, JSONRPCErrorError> {
+    ) -> Result<Option<ThreadRealtimeAppendAudioResponse>, RpcError> {
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id, &params.thread_id)
             .await?
@@ -949,7 +931,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeAppendTextParams,
-    ) -> Result<Option<ThreadRealtimeAppendTextResponse>, JSONRPCErrorError> {
+    ) -> Result<Option<ThreadRealtimeAppendTextResponse>, RpcError> {
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id, &params.thread_id)
             .await?
@@ -974,7 +956,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStopParams,
-    ) -> Result<Option<ThreadRealtimeStopResponse>, JSONRPCErrorError> {
+    ) -> Result<Option<ThreadRealtimeStopResponse>, RpcError> {
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id, &params.thread_id)
             .await?
@@ -1038,7 +1020,7 @@ impl TurnRequestProcessor {
         review_request: ReviewRequest,
         display_text: &str,
         parent_thread_id: String,
-    ) -> std::result::Result<(), JSONRPCErrorError> {
+    ) -> std::result::Result<(), RpcError> {
         let turn_id = self
             .submit_core_op(
                 request_id,
@@ -1060,7 +1042,7 @@ impl TurnRequestProcessor {
         parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
         display_text: &str,
-    ) -> std::result::Result<(), JSONRPCErrorError> {
+    ) -> std::result::Result<(), RpcError> {
         parent_thread.ensure_rollout_materialized().await;
         parent_thread.flush_rollout().await.map_err(|err| {
             internal_error(format!(
@@ -1168,7 +1150,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let ReviewStartParams {
             thread_id,
             target,
@@ -1206,7 +1188,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: TurnInterruptParams,
-    ) -> Result<Option<TurnInterruptResponse>, JSONRPCErrorError> {
+    ) -> Result<Option<TurnInterruptResponse>, RpcError> {
         let TurnInterruptParams { thread_id, turn_id } = params;
         let is_startup_interrupt = turn_id.is_empty();
 
@@ -1286,7 +1268,7 @@ impl TurnRequestProcessor {
         conversation_id: ThreadId,
         connection_id: ConnectionId,
         raw_events_enabled: bool,
-    ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
+    ) -> Result<EnsureConversationListenerResult, RpcError> {
         super::thread_lifecycle::ensure_conversation_listener(
             self.listener_task_context(),
             conversation_id,

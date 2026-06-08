@@ -22,7 +22,7 @@ impl WindowsSandboxRequestProcessor {
 
     pub(crate) async fn windows_sandbox_readiness(
         &self,
-    ) -> Result<WindowsSandboxReadinessResponse, JSONRPCErrorError> {
+    ) -> Result<WindowsSandboxReadinessResponse, RpcError> {
         Ok(determine_windows_sandbox_readiness(&self.config))
     }
 
@@ -30,7 +30,7 @@ impl WindowsSandboxRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: WindowsSandboxSetupStartParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.windows_sandbox_setup_start_inner(request_id, params)
             .await
             .map(|()| None)
@@ -40,7 +40,7 @@ impl WindowsSandboxRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: WindowsSandboxSetupStartParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         // Validate requirements before acknowledging setup so callers do not get a
         // `started` response for a Windows sandbox mode that cannot be persisted.
         let command_cwd = params
@@ -108,7 +108,7 @@ impl WindowsSandboxRequestProcessor {
 fn resolve_allowed_windows_sandbox_setup_mode(
     requirements: &codex_config::ConfigRequirements,
     requested_mode: WindowsSandboxSetupMode,
-) -> Result<CoreWindowsSandboxSetupMode, JSONRPCErrorError> {
+) -> Result<CoreWindowsSandboxSetupMode, RpcError> {
     let (setup_mode, config_mode) = match requested_mode {
         WindowsSandboxSetupMode::Elevated => (
             CoreWindowsSandboxSetupMode::Elevated,

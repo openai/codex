@@ -1806,13 +1806,13 @@ fn mcp_server_elicitation_response_round_trips_rmcp_result() {
 
 #[test]
 fn mcp_server_elicitation_request_from_core_url_request() {
-    let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::Url {
+    let request: McpServerElicitationRequest = CoreElicitationRequest::Url {
         meta: None,
         message: "Finish sign-in".to_string(),
         url: "https://example.com/complete".to_string(),
         elicitation_id: "elicitation-123".to_string(),
-    })
-    .expect("URL request should convert");
+    }
+    .into();
 
     assert_eq!(
         request,
@@ -1827,22 +1827,7 @@ fn mcp_server_elicitation_request_from_core_url_request() {
 
 #[test]
 fn mcp_server_elicitation_request_from_core_form_request() {
-    let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::Form {
-        meta: None,
-        message: "Allow this request?".to_string(),
-        requested_schema: json!({
-            "type": "object",
-            "properties": {
-                "confirmed": {
-                    "type": "boolean",
-                }
-            },
-            "required": ["confirmed"],
-        }),
-    })
-    .expect("form request should convert");
-
-    let expected_schema: McpElicitationSchema = serde_json::from_value(json!({
+    let requested_schema: McpElicitationSchema = serde_json::from_value(json!({
         "type": "object",
         "properties": {
             "confirmed": {
@@ -1852,13 +1837,19 @@ fn mcp_server_elicitation_request_from_core_form_request() {
         "required": ["confirmed"],
     }))
     .expect("expected schema should deserialize");
+    let request: McpServerElicitationRequest = CoreElicitationRequest::Form {
+        meta: None,
+        message: "Allow this request?".to_string(),
+        requested_schema: requested_schema.clone(),
+    }
+    .into();
 
     assert_eq!(
         request,
         McpServerElicitationRequest::Form {
             meta: None,
             message: "Allow this request?".to_string(),
-            requested_schema: expected_schema,
+            requested_schema,
         }
     );
 }
@@ -1958,37 +1949,6 @@ fn mcp_elicitation_schema_matches_mcp_2025_11_25_primitives() {
             required: Some(vec!["email".to_string(), "confirmed".to_string()]),
         }
     );
-}
-
-#[test]
-fn mcp_server_elicitation_request_rejects_null_core_form_schema() {
-    let result = McpServerElicitationRequest::try_from(CoreElicitationRequest::Form {
-        meta: Some(json!({
-            "persist": "session",
-        })),
-        message: "Allow this request?".to_string(),
-        requested_schema: JsonValue::Null,
-    });
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn mcp_server_elicitation_request_rejects_invalid_core_form_schema() {
-    let result = McpServerElicitationRequest::try_from(CoreElicitationRequest::Form {
-        meta: None,
-        message: "Allow this request?".to_string(),
-        requested_schema: json!({
-            "type": "object",
-            "properties": {
-                "confirmed": {
-                    "type": "object",
-                }
-            },
-        }),
-    });
-
-    assert!(result.is_err());
 }
 
 #[test]

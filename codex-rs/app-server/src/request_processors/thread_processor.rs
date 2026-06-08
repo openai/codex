@@ -168,7 +168,7 @@ fn merge_persisted_resume_metadata(
 
 fn normalize_thread_list_cwd_filters(
     cwd: Option<ThreadListCwdFilter>,
-) -> Result<Option<Vec<PathBuf>>, JSONRPCErrorError> {
+) -> Result<Option<Vec<PathBuf>>, RpcError> {
     let Some(cwd) = cwd else {
         return Ok(None);
     };
@@ -381,7 +381,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         request_context: RequestContext,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_start_inner(
             request_id,
             params,
@@ -397,7 +397,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadUnsubscribeParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_unsubscribe_response_inner(params, request_id.connection_id)
             .await
             .map(|response| Some(response.into()))
@@ -409,7 +409,7 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_resume_inner(
             request_id,
             params,
@@ -426,7 +426,7 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_fork_inner(
             request_id,
             params,
@@ -441,7 +441,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadArchiveParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         match self.thread_archive_inner(params).await {
             Ok((response, archived_thread_ids)) => {
                 self.outgoing
@@ -463,7 +463,7 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_increment_elicitation(
         &self,
         params: ThreadIncrementElicitationParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_increment_elicitation_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -472,7 +472,7 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_decrement_elicitation(
         &self,
         params: ThreadDecrementElicitationParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_decrement_elicitation_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -482,7 +482,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadSetNameParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         match self.thread_set_name_response_inner(params).await {
             Ok((response, notification)) => {
                 self.outgoing
@@ -504,7 +504,7 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_metadata_update(
         &self,
         params: ThreadMetadataUpdateParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_metadata_update_response_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -513,15 +513,13 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_memory_mode_set(
         &self,
         params: ThreadMemoryModeSetParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_memory_mode_set_response_inner(params)
             .await
             .map(|response| Some(response.into()))
     }
 
-    pub(crate) async fn memory_reset(
-        &self,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    pub(crate) async fn memory_reset(&self) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.memory_reset_response_inner()
             .await
             .map(|response: MemoryResetResponse| Some(response.into()))
@@ -531,7 +529,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadUnarchiveParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         match self.thread_unarchive_inner(params).await {
             Ok((response, notification)) => {
                 self.outgoing
@@ -550,7 +548,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadCompactStartParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_compact_start_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
@@ -560,7 +558,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadBackgroundTerminalsCleanParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_background_terminals_clean_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
@@ -570,7 +568,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRollbackParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_rollback_inner(request_id, params)
             .await
             .map(|()| None)
@@ -579,7 +577,7 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_list(
         &self,
         params: ThreadListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_list_response_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -588,7 +586,7 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_search(
         &self,
         params: ThreadSearchParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_search_response_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -597,7 +595,7 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_loaded_list(
         &self,
         params: ThreadLoadedListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_loaded_list_response_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -606,7 +604,7 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_read(
         &self,
         params: ThreadReadParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_read_response_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -615,7 +613,7 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_turns_list(
         &self,
         params: ThreadTurnsListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_turns_list_response_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -624,7 +622,7 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_turns_items_list(
         &self,
         _params: ThreadTurnsItemsListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         Err(method_not_found(
             "thread/turns/items/list is not supported yet",
         ))
@@ -634,7 +632,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadShellCommandParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_shell_command_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
@@ -644,7 +642,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadApproveGuardianDeniedActionParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_approve_guardian_denied_action_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
@@ -653,16 +651,13 @@ impl ThreadRequestProcessor {
     pub(crate) async fn conversation_summary(
         &self,
         params: GetConversationSummaryParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.get_thread_summary_response_inner(params)
             .await
             .map(|response| Some(response.into()))
     }
 
-    async fn load_thread(
-        &self,
-        thread_id: &str,
-    ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
+    async fn load_thread(&self, thread_id: &str) -> Result<(ThreadId, Arc<CodexThread>), RpcError> {
         // Resolve the core conversation handle from a v2 thread id string.
         let thread_id = ThreadId::from_string(thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
@@ -675,9 +670,7 @@ impl ThreadRequestProcessor {
 
         Ok((thread_id, thread))
     }
-    async fn acquire_thread_list_state_permit(
-        &self,
-    ) -> Result<SemaphorePermit<'_>, JSONRPCErrorError> {
+    async fn acquire_thread_list_state_permit(&self) -> Result<SemaphorePermit<'_>, RpcError> {
         self.thread_list_state_permit
             .acquire()
             .await
@@ -690,7 +683,7 @@ impl ThreadRequestProcessor {
         thread: &CodexThread,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
             app_server_client_name.as_deref(),
             app_server_client_version.as_deref(),
@@ -722,7 +715,7 @@ impl ThreadRequestProcessor {
         &self,
         params: ThreadUnsubscribeParams,
         connection_id: ConnectionId,
-    ) -> Result<ThreadUnsubscribeResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadUnsubscribeResponse, RpcError> {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
@@ -784,7 +777,7 @@ impl ThreadRequestProcessor {
         conversation_id: ThreadId,
         connection_id: ConnectionId,
         raw_events_enabled: bool,
-    ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
+    ) -> Result<EnsureConversationListenerResult, RpcError> {
         super::thread_lifecycle::ensure_conversation_listener(
             self.listener_task_context(),
             conversation_id,
@@ -799,7 +792,7 @@ impl ThreadRequestProcessor {
         conversation_id: ThreadId,
         conversation: Arc<CodexThread>,
         thread_state: Arc<Mutex<ThreadState>>,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         super::thread_lifecycle::ensure_listener_task_running(
             self.listener_task_context(),
             conversation_id,
@@ -816,7 +809,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         request_context: RequestContext,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let ThreadStartParams {
             model,
             model_provider,
@@ -964,7 +957,7 @@ impl ThreadRequestProcessor {
         service_name: Option<String>,
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = config_manager
@@ -1248,7 +1241,7 @@ impl ThreadRequestProcessor {
     fn parse_environment_selections(
         &self,
         environments: Option<Vec<TurnEnvironmentParams>>,
-    ) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
+    ) -> Result<Option<Vec<TurnEnvironmentSelection>>, RpcError> {
         let environment_selections = environments.map(|environments| {
             environments
                 .into_iter()
@@ -1269,7 +1262,7 @@ impl ThreadRequestProcessor {
     async fn thread_archive_inner(
         &self,
         params: ThreadArchiveParams,
-    ) -> Result<(ThreadArchiveResponse, Vec<String>), JSONRPCErrorError> {
+    ) -> Result<(ThreadArchiveResponse, Vec<String>), RpcError> {
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
         self.thread_archive_response(params).await
     }
@@ -1277,7 +1270,7 @@ impl ThreadRequestProcessor {
     async fn thread_archive_response(
         &self,
         params: ThreadArchiveParams,
-    ) -> Result<(ThreadArchiveResponse, Vec<String>), JSONRPCErrorError> {
+    ) -> Result<(ThreadArchiveResponse, Vec<String>), RpcError> {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid session id: {err}")))?;
 
@@ -1385,7 +1378,7 @@ impl ThreadRequestProcessor {
     async fn thread_increment_elicitation_inner(
         &self,
         params: ThreadIncrementElicitationParams,
-    ) -> Result<ThreadIncrementElicitationResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadIncrementElicitationResponse, RpcError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         let count = thread
             .increment_out_of_band_elicitation_count()
@@ -1404,7 +1397,7 @@ impl ThreadRequestProcessor {
     async fn thread_decrement_elicitation_inner(
         &self,
         params: ThreadDecrementElicitationParams,
-    ) -> Result<ThreadDecrementElicitationResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadDecrementElicitationResponse, RpcError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         let count = thread
             .decrement_out_of_band_elicitation_count()
@@ -1424,8 +1417,7 @@ impl ThreadRequestProcessor {
     async fn thread_set_name_response_inner(
         &self,
         params: ThreadSetNameParams,
-    ) -> Result<(ThreadSetNameResponse, Option<ThreadNameUpdatedNotification>), JSONRPCErrorError>
-    {
+    ) -> Result<(ThreadSetNameResponse, Option<ThreadNameUpdatedNotification>), RpcError> {
         let ThreadSetNameParams { thread_id, name } = params;
         let thread_id = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
@@ -1458,7 +1450,7 @@ impl ThreadRequestProcessor {
     async fn thread_memory_mode_set_response_inner(
         &self,
         params: ThreadMemoryModeSetParams,
-    ) -> Result<ThreadMemoryModeSetResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadMemoryModeSetResponse, RpcError> {
         let ThreadMemoryModeSetParams { thread_id, mode } = params;
         let thread_id = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
@@ -1478,7 +1470,7 @@ impl ThreadRequestProcessor {
         Ok(ThreadMemoryModeSetResponse {})
     }
 
-    async fn memory_reset_response_inner(&self) -> Result<MemoryResetResponse, JSONRPCErrorError> {
+    async fn memory_reset_response_inner(&self) -> Result<MemoryResetResponse, RpcError> {
         let state_db = self
             .state_db
             .clone()
@@ -1507,7 +1499,7 @@ impl ThreadRequestProcessor {
     async fn thread_metadata_update_response_inner(
         &self,
         params: ThreadMetadataUpdateParams,
-    ) -> Result<ThreadMetadataUpdateResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadMetadataUpdateResponse, RpcError> {
         let ThreadMetadataUpdateParams {
             thread_id,
             git_info,
@@ -1572,7 +1564,7 @@ impl ThreadRequestProcessor {
     fn normalize_thread_metadata_git_field(
         value: Option<Option<String>>,
         name: &str,
-    ) -> Result<Option<Option<String>>, JSONRPCErrorError> {
+    ) -> Result<Option<Option<String>>, RpcError> {
         match value {
             Some(Some(value)) => {
                 let value = value.trim().to_string();
@@ -1589,7 +1581,7 @@ impl ThreadRequestProcessor {
     async fn thread_unarchive_inner(
         &self,
         params: ThreadUnarchiveParams,
-    ) -> Result<(ThreadUnarchiveResponse, ThreadUnarchivedNotification), JSONRPCErrorError> {
+    ) -> Result<(ThreadUnarchiveResponse, ThreadUnarchivedNotification), RpcError> {
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
         let (response, thread_id) = self.thread_unarchive_response(params).await?;
         Ok((response, ThreadUnarchivedNotification { thread_id }))
@@ -1598,7 +1590,7 @@ impl ThreadRequestProcessor {
     async fn thread_unarchive_response(
         &self,
         params: ThreadUnarchiveParams,
-    ) -> Result<(ThreadUnarchiveResponse, String), JSONRPCErrorError> {
+    ) -> Result<(ThreadUnarchiveResponse, String), RpcError> {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid session id: {err}")))?;
 
@@ -1626,7 +1618,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRollbackParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         self.thread_rollback_start(request_id, params).await
     }
 
@@ -1634,7 +1626,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRollbackParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let ThreadRollbackParams {
             thread_id,
             num_turns,
@@ -1686,7 +1678,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadCompactStartParams,
-    ) -> Result<ThreadCompactStartResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadCompactStartResponse, RpcError> {
         let ThreadCompactStartParams { thread_id } = params;
 
         let (_, thread) = self.load_thread(&thread_id).await?;
@@ -1700,7 +1692,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadBackgroundTerminalsCleanParams,
-    ) -> Result<ThreadBackgroundTerminalsCleanResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadBackgroundTerminalsCleanResponse, RpcError> {
         let ThreadBackgroundTerminalsCleanParams { thread_id } = params;
 
         let (_, thread) = self.load_thread(&thread_id).await?;
@@ -1716,7 +1708,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadShellCommandParams,
-    ) -> Result<ThreadShellCommandResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadShellCommandResponse, RpcError> {
         let ThreadShellCommandParams { thread_id, command } = params;
         let command = command.trim().to_string();
         if command.is_empty() {
@@ -1748,16 +1740,16 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadApproveGuardianDeniedActionParams,
-    ) -> Result<ThreadApproveGuardianDeniedActionResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadApproveGuardianDeniedActionResponse, RpcError> {
         let ThreadApproveGuardianDeniedActionParams { thread_id, event } = params;
-        let event = serde_json::from_value(event)
-            .map_err(|err| invalid_request(format!("invalid Guardian denial event: {err}")))?;
         let (_, thread) = self.load_thread(&thread_id).await?;
 
         self.submit_core_op(
             request_id,
             thread.as_ref(),
-            Op::ApproveGuardianDeniedAction { event },
+            Op::ApproveGuardianDeniedAction {
+                event: event.into(),
+            },
         )
         .await
         .map_err(|err| internal_error(format!("failed to approve Guardian denial: {err}")))?;
@@ -1767,7 +1759,7 @@ impl ThreadRequestProcessor {
     async fn thread_list_response_inner(
         &self,
         params: ThreadListParams,
-    ) -> Result<ThreadListResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadListResponse, RpcError> {
         let ThreadListParams {
             cursor,
             limit,
@@ -1848,7 +1840,7 @@ impl ThreadRequestProcessor {
     async fn thread_search_response_inner(
         &self,
         params: ThreadSearchParams,
-    ) -> Result<ThreadSearchResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadSearchResponse, RpcError> {
         let ThreadSearchParams {
             cursor,
             limit,
@@ -1973,7 +1965,7 @@ impl ThreadRequestProcessor {
     async fn thread_loaded_list_response_inner(
         &self,
         params: ThreadLoadedListParams,
-    ) -> Result<ThreadLoadedListResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadLoadedListResponse, RpcError> {
         let ThreadLoadedListParams { cursor, limit } = params;
         let mut data: Vec<String> = self
             .thread_manager
@@ -2020,7 +2012,7 @@ impl ThreadRequestProcessor {
     async fn thread_read_response_inner(
         &self,
         params: ThreadReadParams,
-    ) -> Result<ThreadReadResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadReadResponse, RpcError> {
         let ThreadReadParams {
             thread_id,
             include_turns,
@@ -2204,7 +2196,7 @@ impl ThreadRequestProcessor {
     async fn thread_turns_list_response_inner(
         &self,
         params: ThreadTurnsListParams,
-    ) -> Result<ThreadTurnsListResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadTurnsListResponse, RpcError> {
         let ThreadTurnsListParams {
             thread_id,
             cursor,
@@ -2389,7 +2381,7 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
                 .pending_thread_unloads
@@ -2665,7 +2657,7 @@ impl ThreadRequestProcessor {
                         token_usage_thread.turns.as_slice(),
                     );
                     // The client needs restored usage before it starts another turn.
-                    // Sending after the response preserves JSON-RPC request ordering while
+                    // Sending after the response preserves request ordering while
                     // still filling the status line before the next turn lifecycle begins.
                     send_thread_token_usage_update_to_connection(
                         &self.outgoing,
@@ -2714,7 +2706,7 @@ impl ThreadRequestProcessor {
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<bool, JSONRPCErrorError> {
+    ) -> Result<bool, RpcError> {
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
                 && self
@@ -2891,7 +2883,7 @@ impl ThreadRequestProcessor {
     async fn resume_thread_from_history(
         &self,
         history: &[ResponseItem],
-    ) -> Result<InitialHistory, JSONRPCErrorError> {
+    ) -> Result<InitialHistory, RpcError> {
         if history.is_empty() {
             return Err(invalid_request("history must not be empty"));
         }
@@ -2908,7 +2900,7 @@ impl ThreadRequestProcessor {
         &self,
         thread_id: &str,
         path: Option<&PathBuf>,
-    ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
+    ) -> Result<(InitialHistory, StoredThread), RpcError> {
         let stored_thread = self
             .read_stored_thread_for_resume(thread_id, path, /*include_history*/ true)
             .await?;
@@ -2923,7 +2915,7 @@ impl ThreadRequestProcessor {
         thread_id: &str,
         path: Option<&PathBuf>,
         include_history: bool,
-    ) -> Result<StoredThread, JSONRPCErrorError> {
+    ) -> Result<StoredThread, RpcError> {
         let result = if let Some(path) = path {
             self.thread_store
                 .read_thread_by_rollout_path(StoreReadThreadByRolloutPathParams {
@@ -2961,7 +2953,7 @@ impl ThreadRequestProcessor {
     async fn stored_thread_to_initial_history(
         &self,
         stored_thread: &StoredThread,
-    ) -> Result<InitialHistory, JSONRPCErrorError> {
+    ) -> Result<InitialHistory, RpcError> {
         let thread_id = stored_thread.thread_id;
         let history = stored_thread
             .history
@@ -3001,7 +2993,7 @@ impl ThreadRequestProcessor {
         &self,
         thread_id: ThreadId,
         include_history: bool,
-    ) -> Result<StoredThread, JSONRPCErrorError> {
+    ) -> Result<StoredThread, RpcError> {
         self.thread_store
             .read_thread(StoreReadThreadParams {
                 thread_id,
@@ -3134,7 +3126,7 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let ThreadForkParams {
             thread_id,
             path,
@@ -3395,7 +3387,7 @@ impl ThreadRequestProcessor {
     async fn get_thread_summary_response_inner(
         &self,
         params: GetConversationSummaryParams,
-    ) -> Result<GetConversationSummaryResponse, JSONRPCErrorError> {
+    ) -> Result<GetConversationSummaryResponse, RpcError> {
         let fallback_provider = self.config.model_provider_id.as_str();
         let read_result = match params {
             GetConversationSummaryParams::ThreadId { conversation_id } => self
@@ -3441,7 +3433,7 @@ impl ThreadRequestProcessor {
         sort_key: StoreThreadSortKey,
         sort_direction: SortDirection,
         filters: ThreadListFilters,
-    ) -> Result<(Vec<StoredThread>, Option<String>), JSONRPCErrorError> {
+    ) -> Result<(Vec<StoredThread>, Option<String>), RpcError> {
         let ThreadListFilters {
             model_providers,
             source_kinds,
@@ -3589,7 +3581,7 @@ fn paginate_thread_turns(
     cursor: Option<&str>,
     limit: Option<u32>,
     sort_direction: SortDirection,
-) -> Result<ThreadTurnsPage, JSONRPCErrorError> {
+) -> Result<ThreadTurnsPage, RpcError> {
     if turns.is_empty() {
         return Ok(ThreadTurnsPage {
             turns: Vec::new(),
@@ -3663,10 +3655,7 @@ fn paginate_thread_turns(
     })
 }
 
-fn serialize_thread_turns_cursor(
-    turn_id: &str,
-    include_anchor: bool,
-) -> Result<String, JSONRPCErrorError> {
+fn serialize_thread_turns_cursor(turn_id: &str, include_anchor: bool) -> Result<String, RpcError> {
     serde_json::to_string(&ThreadTurnsCursor {
         turn_id: turn_id.to_string(),
         include_anchor,
@@ -3674,7 +3663,7 @@ fn serialize_thread_turns_cursor(
     .map_err(|err| internal_error(format!("failed to serialize cursor: {err}")))
 }
 
-fn parse_thread_turns_cursor(cursor: &str) -> Result<ThreadTurnsCursor, JSONRPCErrorError> {
+fn parse_thread_turns_cursor(cursor: &str) -> Result<ThreadTurnsCursor, RpcError> {
     serde_json::from_str(cursor).map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))
 }
 
@@ -3691,7 +3680,7 @@ fn build_thread_turns_page_response(
     has_live_running_thread: bool,
     active_turn: Option<Turn>,
     options: ThreadTurnsPageOptions<'_>,
-) -> Result<ThreadTurnsListResponse, JSONRPCErrorError> {
+) -> Result<ThreadTurnsListResponse, RpcError> {
     let mut turns = reconstruct_thread_turns_for_turns_list(
         items,
         loaded_status,
@@ -3713,7 +3702,7 @@ pub(super) fn build_thread_resume_initial_turns_page(
     has_live_running_thread: bool,
     active_turn: Option<Turn>,
     params: &ThreadResumeInitialTurnsPageParams,
-) -> Result<codex_app_server_protocol::TurnsPage, JSONRPCErrorError> {
+) -> Result<codex_app_server_protocol::TurnsPage, RpcError> {
     build_thread_turns_page_response(
         items,
         loaded_status,
@@ -3807,7 +3796,7 @@ enum ThreadReadViewError {
     Internal(String),
 }
 
-fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {
+fn thread_read_view_error(err: ThreadReadViewError) -> RpcError {
     match err {
         ThreadReadViewError::InvalidRequest(message) => invalid_request(message),
         ThreadReadViewError::Unsupported(operation) => {
@@ -3817,11 +3806,11 @@ fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {
     }
 }
 
-fn unsupported_thread_store_operation(operation: &'static str) -> JSONRPCErrorError {
+fn unsupported_thread_store_operation(operation: &'static str) -> RpcError {
     method_not_found(format!("{operation} is not supported yet"))
 }
 
-fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
+fn thread_store_list_error(err: ThreadStoreError) -> RpcError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
         ThreadStoreError::Unsupported { operation } => {
@@ -3831,7 +3820,7 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
     }
 }
 
-fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
+fn thread_store_resume_read_error(err: ThreadStoreError) -> RpcError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
         ThreadStoreError::Unsupported { operation } => {
@@ -3896,7 +3885,7 @@ fn thread_read_history_load_error(
 fn conversation_summary_thread_id_read_error(
     conversation_id: ThreadId,
     err: ThreadStoreError,
-) -> JSONRPCErrorError {
+) -> RpcError {
     let no_rollout_message = format!("no rollout found for thread id {conversation_id}");
     match err {
         ThreadStoreError::InvalidRequest { message } if message == no_rollout_message => {
@@ -3915,16 +3904,13 @@ fn conversation_summary_thread_id_read_error(
     }
 }
 
-fn conversation_summary_not_found_error(conversation_id: ThreadId) -> JSONRPCErrorError {
+fn conversation_summary_not_found_error(conversation_id: ThreadId) -> RpcError {
     invalid_request(format!(
         "no rollout found for conversation id {conversation_id}"
     ))
 }
 
-fn conversation_summary_rollout_path_read_error(
-    path: &Path,
-    err: ThreadStoreError,
-) -> JSONRPCErrorError {
+fn conversation_summary_rollout_path_read_error(path: &Path, err: ThreadStoreError) -> RpcError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
         ThreadStoreError::Unsupported { operation } => {
@@ -3938,7 +3924,7 @@ fn conversation_summary_rollout_path_read_error(
     }
 }
 
-fn core_thread_write_error(operation: &str, err: CodexErr) -> JSONRPCErrorError {
+fn core_thread_write_error(operation: &str, err: CodexErr) -> RpcError {
     match err {
         CodexErr::ThreadNotFound(thread_id) => {
             invalid_request(format!("thread not found: {thread_id}"))
@@ -3949,7 +3935,7 @@ fn core_thread_write_error(operation: &str, err: CodexErr) -> JSONRPCErrorError 
     }
 }
 
-fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
+fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> RpcError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
         ThreadStoreError::Unsupported {

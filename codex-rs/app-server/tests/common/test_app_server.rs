@@ -1,20 +1,25 @@
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
-use tokio::process::ChildStdin;
-use tokio::process::ChildStdout;
+use tokio::sync::mpsc;
+use tokio::time::Duration;
+use tokio::time::Instant;
+use tokio::time::timeout;
+use tokio_stream::wrappers::ReceiverStream;
 
 use anyhow::Context;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::CommandExecResizeParams;
@@ -40,12 +45,6 @@ use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::HooksListParams;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::MarketplaceAddParams;
@@ -72,8 +71,11 @@ use codex_app_server_protocol::RemoteControlClientsRevokeParams;
 use codex_app_server_protocol::RemoteControlPairingStartParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 use codex_app_server_protocol::SkillsExtraRootsSetParams;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
@@ -101,13 +103,71 @@ use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
-use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
+use codex_app_server_transport::NativeServerMessage;
+use codex_app_server_transport::decode_grpc_server_message;
+use codex_app_server_transport::encode_grpc_client_error;
+use codex_app_server_transport::encode_grpc_client_notification;
+use codex_app_server_transport::encode_grpc_client_request;
+use codex_app_server_transport::encode_grpc_server_response;
+use codex_app_server_transport::grpc_proto::ClientMessage;
+use codex_app_server_transport::grpc_proto::ServerMessage;
+use codex_app_server_transport::grpc_proto::codex_app_server_client::CodexAppServerClient;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use tokio::process::Command;
+
+pub trait IntoServerResponse {
+    fn into_server_response(self, request_id: RequestId) -> ServerResponse;
+}
+
+macro_rules! server_response_conversions {
+    ($($response:ty => $variant:ident),* $(,)?) => {
+        $(
+            impl IntoServerResponse for $response {
+                fn into_server_response(self, request_id: RequestId) -> ServerResponse {
+                    ServerResponse::$variant {
+                        request_id,
+                        response: self,
+                    }
+                }
+            }
+        )*
+    };
+}
+
+server_response_conversions! {
+    codex_app_server_protocol::CommandExecutionRequestApprovalResponse
+        => CommandExecutionRequestApproval,
+    codex_app_server_protocol::FileChangeRequestApprovalResponse => FileChangeRequestApproval,
+    codex_app_server_protocol::ToolRequestUserInputResponse => ToolRequestUserInput,
+    codex_app_server_protocol::McpServerElicitationRequestResponse => McpServerElicitationRequest,
+    codex_app_server_protocol::PermissionsRequestApprovalResponse => PermissionsRequestApproval,
+    codex_app_server_protocol::DynamicToolCallResponse => DynamicToolCall,
+    codex_app_server_protocol::ChatgptAuthTokensRefreshResponse => ChatgptAuthTokensRefresh,
+    codex_app_server_protocol::AttestationGenerateResponse => AttestationGenerate,
+    codex_app_server_protocol::ApplyPatchApprovalResponse => ApplyPatchApproval,
+    codex_app_server_protocol::ExecCommandApprovalResponse => ExecCommandApproval,
+}
+
+macro_rules! typed_request_helpers {
+    ($($name:ident($params:ident: $params_type:ty) => $variant:ident),* $(,)?) => {
+        $(
+            pub async fn $name(
+                &mut self,
+                $params: $params_type,
+            ) -> anyhow::Result<i64> {
+                self.send_request(|request_id| ClientRequest::$variant {
+                    request_id,
+                    params: $params,
+                })
+                .await
+            }
+        )*
+    };
+}
 
 pub struct TestAppServer {
     next_request_id: AtomicI64,
@@ -116,14 +176,15 @@ pub struct TestAppServer {
     /// not a guarantee. See the `kill_on_drop` documentation for details.
     #[allow(dead_code)]
     process: Child,
-    stdin: Option<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
-    pending_messages: VecDeque<JSONRPCMessage>,
+    client_tx: Option<mpsc::Sender<ClientMessage>>,
+    server_stream: tonic::Streaming<ServerMessage>,
+    pending_messages: VecDeque<NativeServerMessage>,
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 pub const DISABLE_PLUGIN_STARTUP_TASKS_ARG: &str = "--disable-plugin-startup-tasks-for-tests";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
+const GRPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl TestAppServer {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
@@ -209,8 +270,9 @@ impl TestAppServer {
     ) -> anyhow::Result<Self> {
         let mut cmd = Command::new(program);
 
-        cmd.stdin(Stdio::piped());
-        cmd.stdout(Stdio::piped());
+        cmd.arg("--listen").arg("grpc://127.0.0.1:0");
+        cmd.stdin(Stdio::null());
+        cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::piped());
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
@@ -238,55 +300,76 @@ impl TestAppServer {
             .kill_on_drop(true)
             .spawn()
             .context("codex-mcp-server proc should start")?;
-        let stdin = process
-            .stdin
+        let stderr = process
+            .stderr
             .take()
-            .ok_or_else(|| anyhow::format_err!("mcp should have stdin fd"))?;
-        let stdout = process
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow::format_err!("mcp should have stdout fd"))?;
-        let stdout = BufReader::new(stdout);
+            .context("app-server should have stderr fd")?;
+        let mut stderr_reader = BufReader::new(stderr).lines();
+        let deadline = Instant::now() + GRPC_CONNECT_TIMEOUT;
+        let bind_addr = loop {
+            let line = timeout(
+                deadline.saturating_duration_since(Instant::now()),
+                stderr_reader.next_line(),
+            )
+            .await
+            .context("timed out waiting for app-server gRPC address")?
+            .context("failed to read app-server stderr")?
+            .context("app-server exited before reporting its gRPC address")?;
+            eprintln!("[mcp stderr] {line}");
+            if let Some(bind_addr) = line
+                .split_whitespace()
+                .find_map(|token| token.strip_prefix("grpc://"))
+                .and_then(|addr| addr.parse::<SocketAddr>().ok())
+            {
+                break bind_addr;
+            }
+        };
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stderr_reader.next_line().await {
+                eprintln!("[mcp stderr] {line}");
+            }
+        });
 
-        // Forward child's stderr to our stderr so failures are visible even
-        // when stdout/stderr are captured by the test harness.
-        if let Some(stderr) = process.stderr.take() {
-            let mut stderr_reader = BufReader::new(stderr).lines();
-            tokio::spawn(async move {
-                while let Ok(Some(line)) = stderr_reader.next_line().await {
-                    eprintln!("[mcp stderr] {line}");
-                }
-            });
-        }
+        let mut client = CodexAppServerClient::connect(format!("http://{bind_addr}"))
+            .await
+            .context("connect to app-server gRPC endpoint")?
+            .max_decoding_message_size(16 * 1024 * 1024)
+            .max_encoding_message_size(16 * 1024 * 1024);
+        let (client_tx, client_rx) = mpsc::channel(128);
+        let server_stream = client
+            .session(ReceiverStream::new(client_rx))
+            .await
+            .context("open app-server gRPC session")?
+            .into_inner();
         Ok(Self {
             next_request_id: AtomicI64::new(0),
             process,
-            stdin: Some(stdin),
-            stdout,
+            client_tx: Some(client_tx),
+            server_stream,
             pending_messages: VecDeque::new(),
         })
     }
 
-    /// Performs the initialization handshake with the MCP server.
+    /// Performs the initialization handshake with the app server.
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
-        let initialized = self
+        match self
             .initialize_with_client_info(ClientInfo {
                 name: DEFAULT_CLIENT_NAME.to_string(),
                 title: None,
                 version: "0.1.0".to_string(),
             })
-            .await?;
-        let JSONRPCMessage::Response(_) = initialized else {
-            unreachable!("expected JSONRPCMessage::Response for initialize, got {initialized:?}");
-        };
-        Ok(())
+            .await?
+        {
+            Ok(_) => Ok(()),
+            Err(error) => anyhow::bail!("initialize failed: {error:?}"),
+        }
     }
 
-    /// Sends initialize with the provided client info and returns the response/error message.
+    /// Sends initialize with the provided client info and returns the typed response or error.
     pub async fn initialize_with_client_info(
         &mut self,
         client_info: ClientInfo,
-    ) -> anyhow::Result<JSONRPCMessage> {
+    ) -> anyhow::Result<Result<ClientResponse, RpcError>> {
         self.initialize_with_capabilities(
             client_info,
             Some(InitializeCapabilities {
@@ -301,7 +384,7 @@ impl TestAppServer {
         &mut self,
         client_info: ClientInfo,
         capabilities: Option<InitializeCapabilities>,
-    ) -> anyhow::Result<JSONRPCMessage> {
+    ) -> anyhow::Result<Result<ClientResponse, RpcError>> {
         self.initialize_with_params(InitializeParams {
             client_info,
             capabilities,
@@ -312,689 +395,187 @@ impl TestAppServer {
     async fn initialize_with_params(
         &mut self,
         params: InitializeParams,
-    ) -> anyhow::Result<JSONRPCMessage> {
-        let params = Some(serde_json::to_value(params)?);
-        let request_id = self.send_request("initialize", params).await?;
-        let message = self.read_jsonrpc_message().await?;
+    ) -> anyhow::Result<Result<ClientResponse, RpcError>> {
+        let request_id = self
+            .send_request(|request_id| ClientRequest::Initialize { request_id, params })
+            .await?;
+        let request_id = RequestId::Integer(request_id);
+        let message = self
+            .read_stream_until_message(|message| {
+                Self::message_request_id(message) == Some(&request_id)
+            })
+            .await?;
         match message {
-            JSONRPCMessage::Response(response) => {
-                if response.id != RequestId::Integer(request_id) {
-                    anyhow::bail!(
-                        "initialize response id mismatch: expected {}, got {:?}",
-                        request_id,
-                        response.id
-                    );
-                }
-
-                // Send notifications/initialized to ack the response.
+            NativeServerMessage::Response(response) => {
                 self.send_notification(ClientNotification::Initialized)
                     .await?;
-
-                Ok(JSONRPCMessage::Response(response))
+                Ok(Ok(response))
             }
-            JSONRPCMessage::Error(error) => {
-                if error.id != RequestId::Integer(request_id) {
-                    anyhow::bail!(
-                        "initialize error id mismatch: expected {}, got {:?}",
-                        request_id,
-                        error.id
-                    );
-                }
-                Ok(JSONRPCMessage::Error(error))
+            NativeServerMessage::Error { error, .. } => Ok(Err(error)),
+            NativeServerMessage::Notification(notification) => {
+                anyhow::bail!("unexpected server notification during initialize: {notification:?}")
             }
-            JSONRPCMessage::Notification(notification) => {
-                anyhow::bail!("unexpected JSONRPCMessage::Notification: {notification:?}");
-            }
-            JSONRPCMessage::Request(request) => {
-                anyhow::bail!("unexpected JSONRPCMessage::Request: {request:?}");
+            NativeServerMessage::Request(request) => {
+                anyhow::bail!("unexpected server request during initialize: {request:?}")
             }
         }
     }
 
-    /// Send a `getAuthStatus` JSON-RPC request.
-    pub async fn send_get_auth_status_request(
-        &mut self,
-        params: GetAuthStatusParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("getAuthStatus", params).await
+    typed_request_helpers! {
+        send_get_auth_status_request(params: GetAuthStatusParams) => GetAuthStatus,
+        send_get_conversation_summary_request(params: GetConversationSummaryParams)
+            => GetConversationSummary,
+        send_add_credits_nudge_email_request(params: SendAddCreditsNudgeEmailParams)
+            => SendAddCreditsNudgeEmail,
+        send_get_account_request(params: GetAccountParams) => GetAccount,
+        send_feedback_upload_request(params: FeedbackUploadParams) => FeedbackUpload,
+        send_thread_start_request(params: ThreadStartParams) => ThreadStart,
+        send_thread_resume_request(params: ThreadResumeParams) => ThreadResume,
+        send_thread_fork_request(params: ThreadForkParams) => ThreadFork,
+        send_thread_archive_request(params: ThreadArchiveParams) => ThreadArchive,
+        send_thread_set_name_request(params: ThreadSetNameParams) => ThreadSetName,
+        send_thread_metadata_update_request(params: ThreadMetadataUpdateParams)
+            => ThreadMetadataUpdate,
+        send_thread_settings_update_request(params: ThreadSettingsUpdateParams)
+            => ThreadSettingsUpdate,
+        send_thread_unsubscribe_request(params: ThreadUnsubscribeParams) => ThreadUnsubscribe,
+        send_thread_unarchive_request(params: ThreadUnarchiveParams) => ThreadUnarchive,
+        send_thread_compact_start_request(params: ThreadCompactStartParams) => ThreadCompactStart,
+        send_thread_shell_command_request(params: ThreadShellCommandParams) => ThreadShellCommand,
+        send_thread_rollback_request(params: ThreadRollbackParams) => ThreadRollback,
+        send_thread_list_request(params: ThreadListParams) => ThreadList,
+        send_thread_search_request(params: ThreadSearchParams) => ThreadSearch,
+        send_thread_loaded_list_request(params: ThreadLoadedListParams) => ThreadLoadedList,
+        send_thread_read_request(params: ThreadReadParams) => ThreadRead,
+        send_thread_turns_list_request(params: ThreadTurnsListParams) => ThreadTurnsList,
+        send_thread_turns_items_list_request(params: ThreadTurnsItemsListParams)
+            => ThreadTurnsItemsList,
+        send_list_models_request(params: ModelListParams) => ModelList,
+        send_model_provider_capabilities_read_request(
+            params: ModelProviderCapabilitiesReadParams
+        ) => ModelProviderCapabilitiesRead,
+        send_experimental_feature_list_request(params: ExperimentalFeatureListParams)
+            => ExperimentalFeatureList,
+        send_permission_profile_list_request(params: PermissionProfileListParams)
+            => PermissionProfileList,
+        send_experimental_feature_enablement_set_request(
+            params: codex_app_server_protocol::ExperimentalFeatureEnablementSetParams
+        ) => ExperimentalFeatureEnablementSet,
+        send_remote_control_pairing_start_request(params: RemoteControlPairingStartParams)
+            => RemoteControlPairingStart,
+        send_remote_control_clients_list_request(params: RemoteControlClientsListParams)
+            => RemoteControlClientsList,
+        send_remote_control_clients_revoke_request(params: RemoteControlClientsRevokeParams)
+            => RemoteControlClientsRevoke,
+        send_apps_list_request(params: AppsListParams) => AppsList,
+        send_mcp_resource_read_request(params: McpResourceReadParams) => McpResourceRead,
+        send_mcp_server_tool_call_request(params: McpServerToolCallParams) => McpServerToolCall,
+        send_skills_list_request(params: SkillsListParams) => SkillsList,
+        send_skills_extra_roots_set_request(params: SkillsExtraRootsSetParams)
+            => SkillsExtraRootsSet,
+        send_hooks_list_request(params: HooksListParams) => HooksList,
+        send_marketplace_add_request(params: MarketplaceAddParams) => MarketplaceAdd,
+        send_marketplace_remove_request(params: MarketplaceRemoveParams) => MarketplaceRemove,
+        send_marketplace_upgrade_request(params: MarketplaceUpgradeParams) => MarketplaceUpgrade,
+        send_plugin_install_request(params: PluginInstallParams) => PluginInstall,
+        send_plugin_uninstall_request(params: PluginUninstallParams) => PluginUninstall,
+        send_plugin_list_request(params: PluginListParams) => PluginList,
+        send_plugin_installed_request(params: PluginInstalledParams) => PluginInstalled,
+        send_plugin_read_request(params: PluginReadParams) => PluginRead,
+        send_plugin_skill_read_request(params: PluginSkillReadParams) => PluginSkillRead,
+        send_list_mcp_server_status_request(params: ListMcpServerStatusParams)
+            => McpServerStatusList,
+        send_list_collaboration_modes_request(params: CollaborationModeListParams)
+            => CollaborationModeList,
+        send_mock_experimental_method_request(params: MockExperimentalMethodParams)
+            => MockExperimentalMethod,
+        send_thread_memory_mode_set_request(params: ThreadMemoryModeSetParams)
+            => ThreadMemoryModeSet,
+        send_turn_start_request(params: TurnStartParams) => TurnStart,
+        send_thread_inject_items_request(params: ThreadInjectItemsParams) => ThreadInjectItems,
+        send_command_exec_request(params: CommandExecParams) => OneOffCommandExec,
+        send_process_spawn_request(params: ProcessSpawnParams) => ProcessSpawn,
+        send_process_write_stdin_request(params: ProcessWriteStdinParams) => ProcessWriteStdin,
+        send_process_resize_pty_request(params: ProcessResizePtyParams) => ProcessResizePty,
+        send_process_kill_request(params: ProcessKillParams) => ProcessKill,
+        send_command_exec_write_request(params: CommandExecWriteParams) => CommandExecWrite,
+        send_command_exec_resize_request(params: CommandExecResizeParams) => CommandExecResize,
+        send_command_exec_terminate_request(params: CommandExecTerminateParams)
+            => CommandExecTerminate,
+        send_turn_interrupt_request(params: TurnInterruptParams) => TurnInterrupt,
+        send_thread_realtime_start_request(params: ThreadRealtimeStartParams)
+            => ThreadRealtimeStart,
+        send_thread_realtime_append_audio_request(params: ThreadRealtimeAppendAudioParams)
+            => ThreadRealtimeAppendAudio,
+        send_thread_realtime_append_text_request(params: ThreadRealtimeAppendTextParams)
+            => ThreadRealtimeAppendText,
+        send_thread_realtime_stop_request(params: ThreadRealtimeStopParams)
+            => ThreadRealtimeStop,
+        send_thread_realtime_list_voices_request(params: ThreadRealtimeListVoicesParams)
+            => ThreadRealtimeListVoices,
+        send_turn_steer_request(params: TurnSteerParams) => TurnSteer,
+        send_review_start_request(params: ReviewStartParams) => ReviewStart,
+        send_windows_sandbox_setup_start_request(params: WindowsSandboxSetupStartParams)
+            => WindowsSandboxSetupStart,
+        send_config_read_request(params: ConfigReadParams) => ConfigRead,
+        send_config_value_write_request(params: ConfigValueWriteParams) => ConfigValueWrite,
+        send_config_batch_write_request(params: ConfigBatchWriteParams) => ConfigBatchWrite,
+        send_fs_read_file_request(params: FsReadFileParams) => FsReadFile,
+        send_fs_write_file_request(params: FsWriteFileParams) => FsWriteFile,
+        send_fs_create_directory_request(params: FsCreateDirectoryParams) => FsCreateDirectory,
+        send_fs_get_metadata_request(params: FsGetMetadataParams) => FsGetMetadata,
+        send_fs_read_directory_request(params: FsReadDirectoryParams) => FsReadDirectory,
+        send_fs_remove_request(params: FsRemoveParams) => FsRemove,
+        send_fs_copy_request(params: FsCopyParams) => FsCopy,
+        send_fs_watch_request(params: FsWatchParams) => FsWatch,
+        send_fs_unwatch_request(params: FsUnwatchParams) => FsUnwatch,
+        send_cancel_login_account_request(params: CancelLoginAccountParams) => CancelLoginAccount,
     }
 
-    /// Send a `getConversationSummary` JSON-RPC request.
-    pub async fn send_get_conversation_summary_request(
-        &mut self,
-        params: GetConversationSummaryParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("getConversationSummary", params).await
-    }
-
-    /// Send an `account/rateLimits/read` JSON-RPC request.
     pub async fn send_get_account_rate_limits_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("account/rateLimits/read", /*params*/ None)
-            .await
+        self.send_request(|request_id| ClientRequest::GetAccountRateLimits {
+            request_id,
+            params: None,
+        })
+        .await
     }
 
-    /// Send an `account/sendAddCreditsNudgeEmail` JSON-RPC request.
-    pub async fn send_add_credits_nudge_email_request(
-        &mut self,
-        params: SendAddCreditsNudgeEmailParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("account/sendAddCreditsNudgeEmail", params)
-            .await
+    pub async fn send_remote_control_enable_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request(|request_id| ClientRequest::RemoteControlEnable {
+            request_id,
+            params: None,
+        })
+        .await
     }
 
-    /// Send an `account/read` JSON-RPC request.
-    pub async fn send_get_account_request(
-        &mut self,
-        params: GetAccountParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("account/read", params).await
+    pub async fn send_remote_control_disable_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request(|request_id| ClientRequest::RemoteControlDisable {
+            request_id,
+            params: None,
+        })
+        .await
     }
 
-    /// Send an `account/login/start` JSON-RPC request with ChatGPT auth tokens.
+    pub async fn send_remote_control_status_read_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request(|request_id| ClientRequest::RemoteControlStatusRead {
+            request_id,
+            params: None,
+        })
+        .await
+    }
+
     pub async fn send_chatgpt_auth_tokens_login_request(
         &mut self,
         access_token: String,
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
     ) -> anyhow::Result<i64> {
-        let params = LoginAccountParams::ChatgptAuthTokens {
+        self.send_login_account_request(LoginAccountParams::ChatgptAuthTokens {
             access_token,
             chatgpt_account_id,
             chatgpt_plan_type,
-        };
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("account/login/start", params).await
-    }
-
-    /// Send a `feedback/upload` JSON-RPC request.
-    pub async fn send_feedback_upload_request(
-        &mut self,
-        params: FeedbackUploadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("feedback/upload", params).await
-    }
-
-    /// Send a `thread/start` JSON-RPC request.
-    pub async fn send_thread_start_request(
-        &mut self,
-        params: ThreadStartParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/start", params).await
-    }
-
-    /// Send a `thread/resume` JSON-RPC request.
-    pub async fn send_thread_resume_request(
-        &mut self,
-        params: ThreadResumeParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/resume", params).await
-    }
-
-    /// Send a `thread/fork` JSON-RPC request.
-    pub async fn send_thread_fork_request(
-        &mut self,
-        params: ThreadForkParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/fork", params).await
-    }
-
-    /// Send a `thread/archive` JSON-RPC request.
-    pub async fn send_thread_archive_request(
-        &mut self,
-        params: ThreadArchiveParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/archive", params).await
-    }
-
-    /// Send a `thread/name/set` JSON-RPC request.
-    pub async fn send_thread_set_name_request(
-        &mut self,
-        params: ThreadSetNameParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/name/set", params).await
-    }
-
-    /// Send a `thread/metadata/update` JSON-RPC request.
-    pub async fn send_thread_metadata_update_request(
-        &mut self,
-        params: ThreadMetadataUpdateParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/metadata/update", params).await
-    }
-
-    /// Send a `thread/settings/update` JSON-RPC request.
-    pub async fn send_thread_settings_update_request(
-        &mut self,
-        params: ThreadSettingsUpdateParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/settings/update", params).await
-    }
-
-    /// Send a `thread/unsubscribe` JSON-RPC request.
-    pub async fn send_thread_unsubscribe_request(
-        &mut self,
-        params: ThreadUnsubscribeParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/unsubscribe", params).await
-    }
-
-    /// Send a `thread/unarchive` JSON-RPC request.
-    pub async fn send_thread_unarchive_request(
-        &mut self,
-        params: ThreadUnarchiveParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/unarchive", params).await
-    }
-
-    /// Send a `thread/compact/start` JSON-RPC request.
-    pub async fn send_thread_compact_start_request(
-        &mut self,
-        params: ThreadCompactStartParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/compact/start", params).await
-    }
-
-    /// Send a `thread/shellCommand` JSON-RPC request.
-    pub async fn send_thread_shell_command_request(
-        &mut self,
-        params: ThreadShellCommandParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/shellCommand", params).await
-    }
-
-    /// Send a `thread/rollback` JSON-RPC request.
-    pub async fn send_thread_rollback_request(
-        &mut self,
-        params: ThreadRollbackParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/rollback", params).await
-    }
-
-    /// Send a `thread/list` JSON-RPC request.
-    pub async fn send_thread_list_request(
-        &mut self,
-        params: ThreadListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/list", params).await
-    }
-
-    /// Send a `thread/search` JSON-RPC request.
-    pub async fn send_thread_search_request(
-        &mut self,
-        params: ThreadSearchParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/search", params).await
-    }
-
-    /// Send a `thread/loaded/list` JSON-RPC request.
-    pub async fn send_thread_loaded_list_request(
-        &mut self,
-        params: ThreadLoadedListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/loaded/list", params).await
-    }
-
-    /// Send a `thread/read` JSON-RPC request.
-    pub async fn send_thread_read_request(
-        &mut self,
-        params: ThreadReadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/read", params).await
-    }
-
-    /// Send a `thread/turns/list` JSON-RPC request.
-    pub async fn send_thread_turns_list_request(
-        &mut self,
-        params: ThreadTurnsListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/turns/list", params).await
-    }
-
-    /// Send a `thread/turns/items/list` JSON-RPC request.
-    pub async fn send_thread_turns_items_list_request(
-        &mut self,
-        params: ThreadTurnsItemsListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/turns/items/list", params).await
-    }
-
-    /// Send a `model/list` JSON-RPC request.
-    pub async fn send_list_models_request(
-        &mut self,
-        params: ModelListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("model/list", params).await
-    }
-
-    /// Send a `modelProvider/capabilities/read` JSON-RPC request.
-    pub async fn send_model_provider_capabilities_read_request(
-        &mut self,
-        params: ModelProviderCapabilitiesReadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("modelProvider/capabilities/read", params)
-            .await
-    }
-
-    /// Send an `experimentalFeature/list` JSON-RPC request.
-    pub async fn send_experimental_feature_list_request(
-        &mut self,
-        params: ExperimentalFeatureListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("experimentalFeature/list", params).await
-    }
-
-    /// Send a `permissionProfile/list` JSON-RPC request.
-    pub async fn send_permission_profile_list_request(
-        &mut self,
-        params: PermissionProfileListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("permissionProfile/list", params).await
-    }
-
-    /// Send an `experimentalFeature/enablement/set` JSON-RPC request.
-    pub async fn send_experimental_feature_enablement_set_request(
-        &mut self,
-        params: codex_app_server_protocol::ExperimentalFeatureEnablementSetParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("experimentalFeature/enablement/set", params)
-            .await
-    }
-
-    /// Send a `remoteControl/enable` JSON-RPC request.
-    pub async fn send_remote_control_enable_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("remoteControl/enable", /*params*/ None)
-            .await
-    }
-
-    /// Send a `remoteControl/disable` JSON-RPC request.
-    pub async fn send_remote_control_disable_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("remoteControl/disable", /*params*/ None)
-            .await
-    }
-
-    /// Send a `remoteControl/status/read` JSON-RPC request.
-    pub async fn send_remote_control_status_read_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("remoteControl/status/read", /*params*/ None)
-            .await
-    }
-
-    /// Send a `remoteControl/pairing/start` JSON-RPC request.
-    pub async fn send_remote_control_pairing_start_request(
-        &mut self,
-        params: RemoteControlPairingStartParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("remoteControl/pairing/start", params)
-            .await
-    }
-
-    /// Send a `remoteControl/client/list` JSON-RPC request.
-    pub async fn send_remote_control_clients_list_request(
-        &mut self,
-        params: RemoteControlClientsListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("remoteControl/client/list", params).await
-    }
-
-    /// Send a `remoteControl/client/revoke` JSON-RPC request.
-    pub async fn send_remote_control_clients_revoke_request(
-        &mut self,
-        params: RemoteControlClientsRevokeParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("remoteControl/client/revoke", params)
-            .await
-    }
-
-    /// Send an `app/list` JSON-RPC request.
-    pub async fn send_apps_list_request(&mut self, params: AppsListParams) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("app/list", params).await
-    }
-
-    /// Send an `mcpServer/resource/read` JSON-RPC request.
-    pub async fn send_mcp_resource_read_request(
-        &mut self,
-        params: McpResourceReadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("mcpServer/resource/read", params).await
-    }
-
-    /// Send an `mcpServer/tool/call` JSON-RPC request.
-    pub async fn send_mcp_server_tool_call_request(
-        &mut self,
-        params: McpServerToolCallParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("mcpServer/tool/call", params).await
-    }
-
-    /// Send a `skills/list` JSON-RPC request.
-    pub async fn send_skills_list_request(
-        &mut self,
-        params: SkillsListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("skills/list", params).await
-    }
-
-    /// Send a `skills/extraRoots/set` JSON-RPC request.
-    pub async fn send_skills_extra_roots_set_request(
-        &mut self,
-        params: SkillsExtraRootsSetParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("skills/extraRoots/set", params).await
-    }
-
-    /// Send a `hooks/list` JSON-RPC request.
-    pub async fn send_hooks_list_request(
-        &mut self,
-        params: HooksListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("hooks/list", params).await
-    }
-
-    /// Send a `marketplace/add` JSON-RPC request.
-    pub async fn send_marketplace_add_request(
-        &mut self,
-        params: MarketplaceAddParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("marketplace/add", params).await
-    }
-
-    /// Send a `marketplace/remove` JSON-RPC request.
-    pub async fn send_marketplace_remove_request(
-        &mut self,
-        params: MarketplaceRemoveParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("marketplace/remove", params).await
-    }
-
-    /// Send a `marketplace/upgrade` JSON-RPC request.
-    pub async fn send_marketplace_upgrade_request(
-        &mut self,
-        params: MarketplaceUpgradeParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("marketplace/upgrade", params).await
-    }
-
-    /// Send a `plugin/install` JSON-RPC request.
-    pub async fn send_plugin_install_request(
-        &mut self,
-        params: PluginInstallParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("plugin/install", params).await
-    }
-
-    /// Send a `plugin/uninstall` JSON-RPC request.
-    pub async fn send_plugin_uninstall_request(
-        &mut self,
-        params: PluginUninstallParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("plugin/uninstall", params).await
-    }
-
-    /// Send a `plugin/list` JSON-RPC request.
-    pub async fn send_plugin_list_request(
-        &mut self,
-        params: PluginListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("plugin/list", params).await
-    }
-
-    /// Send a `plugin/installed` JSON-RPC request.
-    pub async fn send_plugin_installed_request(
-        &mut self,
-        params: PluginInstalledParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("plugin/installed", params).await
-    }
-
-    /// Send a `plugin/read` JSON-RPC request.
-    pub async fn send_plugin_read_request(
-        &mut self,
-        params: PluginReadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("plugin/read", params).await
-    }
-
-    /// Send a `plugin/skill/read` JSON-RPC request.
-    pub async fn send_plugin_skill_read_request(
-        &mut self,
-        params: PluginSkillReadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("plugin/skill/read", params).await
-    }
-
-    /// Send an `mcpServerStatus/list` JSON-RPC request.
-    pub async fn send_list_mcp_server_status_request(
-        &mut self,
-        params: ListMcpServerStatusParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("mcpServerStatus/list", params).await
-    }
-
-    /// Send a JSON-RPC request with raw params for protocol-level validation tests.
-    pub async fn send_raw_request(
-        &mut self,
-        method: &str,
-        params: Option<serde_json::Value>,
-    ) -> anyhow::Result<i64> {
-        self.send_request(method, params).await
-    }
-    /// Send a `collaborationMode/list` JSON-RPC request.
-    pub async fn send_list_collaboration_modes_request(
-        &mut self,
-        params: CollaborationModeListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("collaborationMode/list", params).await
-    }
-
-    /// Send a `mock/experimentalMethod` JSON-RPC request.
-    pub async fn send_mock_experimental_method_request(
-        &mut self,
-        params: MockExperimentalMethodParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("mock/experimentalMethod", params).await
-    }
-
-    /// Send a `thread/memoryMode/set` JSON-RPC request (v2, experimental).
-    pub async fn send_thread_memory_mode_set_request(
-        &mut self,
-        params: ThreadMemoryModeSetParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/memoryMode/set", params).await
-    }
-
-    /// Send a `turn/start` JSON-RPC request (v2).
-    pub async fn send_turn_start_request(
-        &mut self,
-        params: TurnStartParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("turn/start", params).await
-    }
-
-    /// Send a `thread/inject_items` JSON-RPC request (v2).
-    pub async fn send_thread_inject_items_request(
-        &mut self,
-        params: ThreadInjectItemsParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/inject_items", params).await
-    }
-
-    /// Send a `command/exec` JSON-RPC request (v2).
-    pub async fn send_command_exec_request(
-        &mut self,
-        params: CommandExecParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("command/exec", params).await
-    }
-
-    /// Send a `process/spawn` JSON-RPC request (v2).
-    pub async fn send_process_spawn_request(
-        &mut self,
-        params: ProcessSpawnParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("process/spawn", params).await
-    }
-
-    /// Send a `process/writeStdin` JSON-RPC request (v2).
-    pub async fn send_process_write_stdin_request(
-        &mut self,
-        params: ProcessWriteStdinParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("process/writeStdin", params).await
-    }
-
-    /// Send a `process/resizePty` JSON-RPC request (v2).
-    pub async fn send_process_resize_pty_request(
-        &mut self,
-        params: ProcessResizePtyParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("process/resizePty", params).await
-    }
-
-    /// Send a `process/kill` JSON-RPC request (v2).
-    pub async fn send_process_kill_request(
-        &mut self,
-        params: ProcessKillParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("process/kill", params).await
-    }
-
-    /// Send a `command/exec/write` JSON-RPC request (v2).
-    pub async fn send_command_exec_write_request(
-        &mut self,
-        params: CommandExecWriteParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("command/exec/write", params).await
-    }
-
-    /// Send a `command/exec/resize` JSON-RPC request (v2).
-    pub async fn send_command_exec_resize_request(
-        &mut self,
-        params: CommandExecResizeParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("command/exec/resize", params).await
-    }
-
-    /// Send a `command/exec/terminate` JSON-RPC request (v2).
-    pub async fn send_command_exec_terminate_request(
-        &mut self,
-        params: CommandExecTerminateParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("command/exec/terminate", params).await
-    }
-
-    /// Send a `turn/interrupt` JSON-RPC request (v2).
-    pub async fn send_turn_interrupt_request(
-        &mut self,
-        params: TurnInterruptParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("turn/interrupt", params).await
-    }
-
-    /// Send a `thread/realtime/start` JSON-RPC request (v2).
-    pub async fn send_thread_realtime_start_request(
-        &mut self,
-        params: ThreadRealtimeStartParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/start", params).await
-    }
-
-    /// Send a `thread/realtime/appendAudio` JSON-RPC request (v2).
-    pub async fn send_thread_realtime_append_audio_request(
-        &mut self,
-        params: ThreadRealtimeAppendAudioParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/appendAudio", params)
-            .await
-    }
-
-    /// Send a `thread/realtime/appendText` JSON-RPC request (v2).
-    pub async fn send_thread_realtime_append_text_request(
-        &mut self,
-        params: ThreadRealtimeAppendTextParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/appendText", params)
-            .await
-    }
-
-    /// Send a `thread/realtime/stop` JSON-RPC request (v2).
-    pub async fn send_thread_realtime_stop_request(
-        &mut self,
-        params: ThreadRealtimeStopParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/stop", params).await
-    }
-
-    pub async fn send_thread_realtime_list_voices_request(
-        &mut self,
-        params: ThreadRealtimeListVoicesParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/listVoices", params)
-            .await
+        })
+        .await
     }
 
     /// Deterministically clean up an intentionally in-flight turn.
@@ -1055,176 +636,57 @@ impl TestAppServer {
         Ok(())
     }
 
-    /// Send a `turn/steer` JSON-RPC request (v2).
-    pub async fn send_turn_steer_request(
-        &mut self,
-        params: TurnSteerParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("turn/steer", params).await
-    }
-
-    /// Send a `review/start` JSON-RPC request (v2).
-    pub async fn send_review_start_request(
-        &mut self,
-        params: ReviewStartParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("review/start", params).await
-    }
-
-    pub async fn send_windows_sandbox_setup_start_request(
-        &mut self,
-        params: WindowsSandboxSetupStartParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("windowsSandbox/setupStart", params).await
-    }
-
-    pub async fn send_config_read_request(
-        &mut self,
-        params: ConfigReadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("config/read", params).await
-    }
-
-    pub async fn send_config_value_write_request(
-        &mut self,
-        params: ConfigValueWriteParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("config/value/write", params).await
-    }
-
-    pub async fn send_config_batch_write_request(
-        &mut self,
-        params: ConfigBatchWriteParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("config/batchWrite", params).await
-    }
-
-    pub async fn send_fs_read_file_request(
-        &mut self,
-        params: FsReadFileParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("fs/readFile", params).await
-    }
-
-    pub async fn send_fs_write_file_request(
-        &mut self,
-        params: FsWriteFileParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("fs/writeFile", params).await
-    }
-
-    pub async fn send_fs_create_directory_request(
-        &mut self,
-        params: FsCreateDirectoryParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("fs/createDirectory", params).await
-    }
-
-    pub async fn send_fs_get_metadata_request(
-        &mut self,
-        params: FsGetMetadataParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("fs/getMetadata", params).await
-    }
-
-    pub async fn send_fs_read_directory_request(
-        &mut self,
-        params: FsReadDirectoryParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("fs/readDirectory", params).await
-    }
-
-    pub async fn send_fs_remove_request(&mut self, params: FsRemoveParams) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("fs/remove", params).await
-    }
-
-    pub async fn send_fs_copy_request(&mut self, params: FsCopyParams) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("fs/copy", params).await
-    }
-
-    pub async fn send_fs_watch_request(&mut self, params: FsWatchParams) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("fs/watch", params).await
-    }
-
-    pub async fn send_fs_unwatch_request(
-        &mut self,
-        params: FsUnwatchParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("fs/unwatch", params).await
-    }
-
-    /// Send an `account/logout` JSON-RPC request.
     pub async fn send_logout_account_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("account/logout", /*params*/ None).await
+        self.send_request(|request_id| ClientRequest::LogoutAccount {
+            request_id,
+            params: None,
+        })
+        .await
     }
 
-    /// Send an `account/login/start` JSON-RPC request for API key login.
     pub async fn send_login_account_api_key_request(
         &mut self,
         api_key: &str,
     ) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "type": "apiKey",
-            "apiKey": api_key,
-        });
-        self.send_request("account/login/start", Some(params)).await
+        self.send_login_account_request(LoginAccountParams::ApiKey {
+            api_key: api_key.to_string(),
+        })
+        .await
     }
 
-    /// Send an `account/login/start` JSON-RPC request for ChatGPT login.
     pub async fn send_login_account_chatgpt_request(&mut self) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "type": "chatgpt"
-        });
-        self.send_request("account/login/start", Some(params)).await
+        self.send_login_account_request(LoginAccountParams::Chatgpt {
+            codex_streamlined_login: false,
+        })
+        .await
     }
 
-    /// Send an `account/login/start` JSON-RPC request for ChatGPT device code login.
     pub async fn send_login_account_chatgpt_device_code_request(&mut self) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "type": "chatgptDeviceCode"
-        });
-        self.send_request("account/login/start", Some(params)).await
+        self.send_login_account_request(LoginAccountParams::ChatgptDeviceCode)
+            .await
     }
 
-    /// Send an `account/login/cancel` JSON-RPC request.
-    pub async fn send_cancel_login_account_request(
+    async fn send_login_account_request(
         &mut self,
-        params: CancelLoginAccountParams,
+        params: LoginAccountParams,
     ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("account/login/cancel", params).await
+        self.send_request(|request_id| ClientRequest::LoginAccount { request_id, params })
+            .await
     }
 
-    /// Send a `fuzzyFileSearch` JSON-RPC request.
     pub async fn send_fuzzy_file_search_request(
         &mut self,
         query: &str,
         roots: Vec<String>,
         cancellation_token: Option<String>,
     ) -> anyhow::Result<i64> {
-        let mut params = serde_json::json!({
-            "query": query,
-            "roots": roots,
-        });
-        if let Some(token) = cancellation_token {
-            params["cancellationToken"] = serde_json::json!(token);
-        }
-        self.send_request("fuzzyFileSearch", Some(params)).await
+        let params = codex_app_server_protocol::FuzzyFileSearchParams {
+            query: query.to_string(),
+            roots,
+            cancellation_token,
+        };
+        self.send_request(|request_id| ClientRequest::FuzzyFileSearch { request_id, params })
+            .await
     }
 
     pub async fn send_fuzzy_file_search_session_start_request(
@@ -1232,19 +694,22 @@ impl TestAppServer {
         session_id: &str,
         roots: Vec<String>,
     ) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "sessionId": session_id,
-            "roots": roots,
-        });
-        self.send_request("fuzzyFileSearch/sessionStart", Some(params))
-            .await
+        let params = codex_app_server_protocol::FuzzyFileSearchSessionStartParams {
+            session_id: session_id.to_string(),
+            roots,
+        };
+        self.send_request(|request_id| ClientRequest::FuzzyFileSearchSessionStart {
+            request_id,
+            params,
+        })
+        .await
     }
 
     pub async fn start_fuzzy_file_search_session(
         &mut self,
         session_id: &str,
         roots: Vec<String>,
-    ) -> anyhow::Result<JSONRPCResponse> {
+    ) -> anyhow::Result<ClientResponse> {
         let request_id = self
             .send_fuzzy_file_search_session_start_request(session_id, roots)
             .await?;
@@ -1257,19 +722,22 @@ impl TestAppServer {
         session_id: &str,
         query: &str,
     ) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "sessionId": session_id,
-            "query": query,
-        });
-        self.send_request("fuzzyFileSearch/sessionUpdate", Some(params))
-            .await
+        let params = codex_app_server_protocol::FuzzyFileSearchSessionUpdateParams {
+            session_id: session_id.to_string(),
+            query: query.to_string(),
+        };
+        self.send_request(|request_id| ClientRequest::FuzzyFileSearchSessionUpdate {
+            request_id,
+            params,
+        })
+        .await
     }
 
     pub async fn update_fuzzy_file_search_session(
         &mut self,
         session_id: &str,
         query: &str,
-    ) -> anyhow::Result<JSONRPCResponse> {
+    ) -> anyhow::Result<ClientResponse> {
         let request_id = self
             .send_fuzzy_file_search_session_update_request(session_id, query)
             .await?;
@@ -1281,17 +749,20 @@ impl TestAppServer {
         &mut self,
         session_id: &str,
     ) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "sessionId": session_id,
-        });
-        self.send_request("fuzzyFileSearch/sessionStop", Some(params))
-            .await
+        let params = codex_app_server_protocol::FuzzyFileSearchSessionStopParams {
+            session_id: session_id.to_string(),
+        };
+        self.send_request(|request_id| ClientRequest::FuzzyFileSearchSessionStop {
+            request_id,
+            params,
+        })
+        .await
     }
 
     pub async fn stop_fuzzy_file_search_session(
         &mut self,
         session_id: &str,
-    ) -> anyhow::Result<JSONRPCResponse> {
+    ) -> anyhow::Result<ClientResponse> {
         let request_id = self
             .send_fuzzy_file_search_session_stop_request(session_id)
             .await?;
@@ -1299,38 +770,31 @@ impl TestAppServer {
             .await
     }
 
-    async fn send_request(
-        &mut self,
-        method: &str,
-        params: Option<serde_json::Value>,
-    ) -> anyhow::Result<i64> {
+    async fn send_request<F>(&mut self, build_request: F) -> anyhow::Result<i64>
+    where
+        F: FnOnce(RequestId) -> ClientRequest,
+    {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
-
-        let message = JSONRPCMessage::Request(JSONRPCRequest {
-            id: RequestId::Integer(request_id),
-            method: method.to_string(),
-            params,
-            trace: None,
-        });
-        self.send_jsonrpc_message(message).await?;
+        let request = build_request(RequestId::Integer(request_id));
+        eprintln!("writing native gRPC request: {request:?}");
+        self.send_client_message(encode_grpc_client_request(request, None)?)
+            .await?;
         Ok(request_id)
     }
 
-    pub async fn send_response(
-        &mut self,
-        id: RequestId,
-        result: serde_json::Value,
-    ) -> anyhow::Result<()> {
-        self.send_jsonrpc_message(JSONRPCMessage::Response(JSONRPCResponse { id, result }))
+    pub async fn send_response<R>(&mut self, id: RequestId, response: R) -> anyhow::Result<()>
+    where
+        R: IntoServerResponse,
+    {
+        let response = response.into_server_response(id);
+        eprintln!("writing native gRPC response: {response:?}");
+        self.send_client_message(encode_grpc_server_response(response)?)
             .await
     }
 
-    pub async fn send_error(
-        &mut self,
-        id: RequestId,
-        error: JSONRPCErrorError,
-    ) -> anyhow::Result<()> {
-        self.send_jsonrpc_message(JSONRPCMessage::Error(JSONRPCError { id, error }))
+    pub async fn send_error(&mut self, id: RequestId, error: RpcError) -> anyhow::Result<()> {
+        eprintln!("writing native gRPC error: {error:?}");
+        self.send_client_message(encode_grpc_client_error(id, error)?)
             .await
     }
 
@@ -1338,35 +802,31 @@ impl TestAppServer {
         &mut self,
         notification: ClientNotification,
     ) -> anyhow::Result<()> {
-        let value = serde_json::to_value(notification)?;
-        self.send_jsonrpc_message(JSONRPCMessage::Notification(JSONRPCNotification {
-            method: value
-                .get("method")
-                .and_then(|m| m.as_str())
-                .ok_or_else(|| anyhow::format_err!("notification missing method field"))?
-                .to_string(),
-            params: value.get("params").cloned(),
-        }))
-        .await
+        eprintln!("writing native gRPC notification: {notification:?}");
+        self.send_client_message(encode_grpc_client_notification(notification)?)
+            .await
     }
 
-    async fn send_jsonrpc_message(&mut self, message: JSONRPCMessage) -> anyhow::Result<()> {
-        eprintln!("writing message to stdin: {message:?}");
-        let Some(stdin) = self.stdin.as_mut() else {
-            anyhow::bail!("mcp stdin closed");
+    async fn send_client_message(&mut self, client_message: ClientMessage) -> anyhow::Result<()> {
+        let Some(client_tx) = self.client_tx.as_ref() else {
+            anyhow::bail!("app-server gRPC session closed");
         };
-        let payload = serde_json::to_string(&message)?;
-        stdin.write_all(payload.as_bytes()).await?;
-        stdin.write_all(b"\n").await?;
-        stdin.flush().await?;
+        client_tx
+            .send(client_message)
+            .await
+            .context("send app-server gRPC message")?;
         Ok(())
     }
 
-    async fn read_jsonrpc_message(&mut self) -> anyhow::Result<JSONRPCMessage> {
-        let mut line = String::new();
-        self.stdout.read_line(&mut line).await?;
-        let message = serde_json::from_str::<JSONRPCMessage>(&line)?;
-        eprintln!("read message from stdout: {message:?}");
+    async fn read_native_message(&mut self) -> anyhow::Result<NativeServerMessage> {
+        let message = self
+            .server_stream
+            .message()
+            .await
+            .context("read app-server gRPC message")?
+            .context("app-server gRPC session ended")?;
+        let message = decode_grpc_server_message(message)?;
+        eprintln!("read native gRPC message: {message:?}");
         Ok(message)
     }
 
@@ -1374,31 +834,32 @@ impl TestAppServer {
         eprintln!("in read_stream_until_request_message()");
 
         let message = self
-            .read_stream_until_message(|message| matches!(message, JSONRPCMessage::Request(_)))
+            .read_stream_until_message(|message| matches!(message, NativeServerMessage::Request(_)))
             .await?;
 
-        let JSONRPCMessage::Request(jsonrpc_request) = message else {
-            unreachable!("expected JSONRPCMessage::Request, got {message:?}");
+        let NativeServerMessage::Request(request) = message else {
+            unreachable!("expected native server request, got {message:?}");
         };
-        jsonrpc_request
-            .try_into()
-            .with_context(|| "failed to deserialize ServerRequest from JSONRPCRequest")
+        Ok(request)
     }
 
     pub async fn read_stream_until_response_message(
         &mut self,
         request_id: RequestId,
-    ) -> anyhow::Result<JSONRPCResponse> {
+    ) -> anyhow::Result<ClientResponse> {
         eprintln!("in read_stream_until_response_message({request_id:?})");
 
         let message = self
             .read_stream_until_message(|message| {
-                Self::message_request_id(message) == Some(&request_id)
+                matches!(
+                    message,
+                    NativeServerMessage::Response(response) if response.id() == &request_id
+                )
             })
             .await?;
 
-        let JSONRPCMessage::Response(response) = message else {
-            unreachable!("expected JSONRPCMessage::Response, got {message:?}");
+        let NativeServerMessage::Response(response) = message else {
+            unreachable!("expected native client response, got {message:?}");
         };
         Ok(response)
     }
@@ -1406,36 +867,43 @@ impl TestAppServer {
     pub async fn read_stream_until_error_message(
         &mut self,
         request_id: RequestId,
-    ) -> anyhow::Result<JSONRPCError> {
+    ) -> anyhow::Result<RpcError> {
         let message = self
             .read_stream_until_message(|message| {
-                Self::message_request_id(message) == Some(&request_id)
+                matches!(
+                    message,
+                    NativeServerMessage::Error {
+                        request_id: message_request_id,
+                        ..
+                    } if message_request_id == &request_id
+                )
             })
             .await?;
 
-        let JSONRPCMessage::Error(err) = message else {
-            unreachable!("expected JSONRPCMessage::Error, got {message:?}");
+        let NativeServerMessage::Error { error, .. } = message else {
+            unreachable!("expected native RPC error, got {message:?}");
         };
-        Ok(err)
+        Ok(error)
     }
 
     pub async fn read_stream_until_notification_message(
         &mut self,
         method: &str,
-    ) -> anyhow::Result<JSONRPCNotification> {
+    ) -> anyhow::Result<ServerNotification> {
         eprintln!("in read_stream_until_notification_message({method})");
 
         let message = self
             .read_stream_until_message(|message| {
                 matches!(
                     message,
-                    JSONRPCMessage::Notification(notification) if notification.method == method
+                    NativeServerMessage::Notification(notification)
+                        if notification.to_string() == method
                 )
             })
             .await?;
 
-        let JSONRPCMessage::Notification(notification) = message else {
-            unreachable!("expected JSONRPCMessage::Notification, got {message:?}");
+        let NativeServerMessage::Notification(notification) = message else {
+            unreachable!("expected native server notification, got {message:?}");
         };
         Ok(notification)
     }
@@ -1444,9 +912,9 @@ impl TestAppServer {
         &mut self,
         description: &str,
         predicate: F,
-    ) -> anyhow::Result<JSONRPCNotification>
+    ) -> anyhow::Result<ServerNotification>
     where
-        F: Fn(&JSONRPCNotification) -> bool,
+        F: Fn(&ServerNotification) -> bool,
     {
         eprintln!("in read_stream_until_matching_notification({description})");
 
@@ -1454,18 +922,18 @@ impl TestAppServer {
             .read_stream_until_message(|message| {
                 matches!(
                     message,
-                    JSONRPCMessage::Notification(notification) if predicate(notification)
+                    NativeServerMessage::Notification(notification) if predicate(notification)
                 )
             })
             .await?;
 
-        let JSONRPCMessage::Notification(notification) = message else {
-            unreachable!("expected JSONRPCMessage::Notification, got {message:?}");
+        let NativeServerMessage::Notification(notification) = message else {
+            unreachable!("expected native server notification, got {message:?}");
         };
         Ok(notification)
     }
 
-    pub async fn read_next_message(&mut self) -> anyhow::Result<JSONRPCMessage> {
+    pub async fn read_next_message(&mut self) -> anyhow::Result<NativeServerMessage> {
         self.read_stream_until_message(|_| true).await
     }
 
@@ -1481,7 +949,7 @@ impl TestAppServer {
         self.pending_messages
             .iter()
             .filter_map(|message| match message {
-                JSONRPCMessage::Notification(notification) => Some(notification.method.clone()),
+                NativeServerMessage::Notification(notification) => Some(notification.to_string()),
                 _ => None,
             })
             .collect()
@@ -1489,16 +957,19 @@ impl TestAppServer {
 
     /// Reads the stream until a message matches `predicate`, buffering any non-matching messages
     /// for later reads.
-    async fn read_stream_until_message<F>(&mut self, predicate: F) -> anyhow::Result<JSONRPCMessage>
+    async fn read_stream_until_message<F>(
+        &mut self,
+        predicate: F,
+    ) -> anyhow::Result<NativeServerMessage>
     where
-        F: Fn(&JSONRPCMessage) -> bool,
+        F: Fn(&NativeServerMessage) -> bool,
     {
         if let Some(message) = self.take_pending_message(&predicate) {
             return Ok(message);
         }
 
         loop {
-            let message = self.read_jsonrpc_message().await?;
+            let message = self.read_native_message().await?;
             if predicate(&message) {
                 return Ok(message);
             }
@@ -1506,9 +977,9 @@ impl TestAppServer {
         }
     }
 
-    fn take_pending_message<F>(&mut self, predicate: &F) -> Option<JSONRPCMessage>
+    fn take_pending_message<F>(&mut self, predicate: &F) -> Option<NativeServerMessage>
     where
-        F: Fn(&JSONRPCMessage) -> bool,
+        F: Fn(&NativeServerMessage) -> bool,
     {
         if let Some(pos) = self.pending_messages.iter().position(predicate) {
             return self.pending_messages.remove(pos);
@@ -1518,29 +989,20 @@ impl TestAppServer {
 
     fn pending_turn_completed_notification(&self, thread_id: &str, turn_id: &str) -> bool {
         self.pending_messages.iter().any(|message| {
-            let JSONRPCMessage::Notification(notification) = message else {
-                return false;
-            };
-            if notification.method != "turn/completed" {
-                return false;
-            }
-            let Some(params) = notification.params.as_ref() else {
-                return false;
-            };
-            let Ok(payload) = serde_json::from_value::<TurnCompletedNotification>(params.clone())
-            else {
-                return false;
-            };
-            payload.thread_id == thread_id && payload.turn.id == turn_id
+            matches!(
+                message,
+                NativeServerMessage::Notification(ServerNotification::TurnCompleted(payload))
+                    if payload.thread_id == thread_id && payload.turn.id == turn_id
+            )
         })
     }
 
-    fn message_request_id(message: &JSONRPCMessage) -> Option<&RequestId> {
+    fn message_request_id(message: &NativeServerMessage) -> Option<&RequestId> {
         match message {
-            JSONRPCMessage::Request(request) => Some(&request.id),
-            JSONRPCMessage::Response(response) => Some(&response.id),
-            JSONRPCMessage::Error(err) => Some(&err.id),
-            JSONRPCMessage::Notification(_) => None,
+            NativeServerMessage::Request(request) => Some(request.id()),
+            NativeServerMessage::Response(response) => Some(response.id()),
+            NativeServerMessage::Error { request_id, .. } => Some(request_id),
+            NativeServerMessage::Notification(_) => None,
         }
     }
 }
@@ -1559,11 +1021,11 @@ impl Drop for TestAppServer {
         //
         // Drop can't be async, so we do a bounded synchronous cleanup:
         //
-        // 1. Close stdin to request a graceful shutdown via EOF.
+        // 1. Close the request side of the gRPC stream.
         // 2. Poll briefly for graceful exit.
         // 3. If still alive, request termination with `start_kill()`.
         // 4. Poll `try_wait()` until the OS reports the child exited, with a short timeout.
-        drop(self.stdin.take());
+        drop(self.client_tx.take());
 
         let graceful_start = std::time::Instant::now();
         let graceful_timeout = std::time::Duration::from_millis(200);

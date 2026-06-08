@@ -34,7 +34,7 @@ impl FeedbackRequestProcessor {
     pub(crate) async fn feedback_upload(
         &self,
         params: FeedbackUploadParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.upload_feedback_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -43,7 +43,7 @@ impl FeedbackRequestProcessor {
     async fn upload_feedback_response(
         &self,
         params: FeedbackUploadParams,
-    ) -> Result<FeedbackUploadResponse, JSONRPCErrorError> {
+    ) -> Result<FeedbackUploadResponse, RpcError> {
         if !self.config.feedback_enabled {
             return Err(invalid_request(
                 "sending feedback is disabled by configuration",

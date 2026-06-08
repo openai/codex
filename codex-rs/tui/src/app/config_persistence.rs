@@ -1204,17 +1204,42 @@ terminal_resize_reflow_max_rows = 9000
     async fn overridden_disabled_guardian_does_not_apply_auto_review_companions() -> Result<()> {
         let mut app = make_test_app().await;
         let original_policy = app.config.permissions.approval_policy.value();
-        let effective_config: ConfigReadResponse = serde_json::from_value(serde_json::json!({
-            "config": {
-                "approval_policy": AskForApproval::OnRequest,
-                "approvals_reviewer": codex_app_server_protocol::ApprovalsReviewer::AutoReview,
-                "sandbox_mode": AppServerSandboxMode::WorkspaceWrite,
-                "features": {
-                    "guardian_approval": false,
-                },
+        let effective_config = ConfigReadResponse {
+            config: codex_app_server_protocol::Config {
+                model: None,
+                review_model: None,
+                model_context_window: None,
+                model_auto_compact_token_limit: None,
+                model_auto_compact_token_limit_scope: None,
+                model_provider: None,
+                approval_policy: Some(AskForApproval::OnRequest),
+                approvals_reviewer: Some(codex_app_server_protocol::ApprovalsReviewer::AutoReview),
+                sandbox_mode: Some(AppServerSandboxMode::WorkspaceWrite),
+                sandbox_workspace_write: None,
+                forced_chatgpt_workspace_id: None,
+                forced_login_method: None,
+                web_search: None,
+                tools: None,
+                instructions: None,
+                developer_instructions: None,
+                compact_prompt: None,
+                model_reasoning_effort: None,
+                model_reasoning_summary: None,
+                model_verbosity: None,
+                service_tier: None,
+                analytics: None,
+                apps: None,
+                desktop: None,
+                additional: HashMap::from([(
+                    "features".to_string(),
+                    serde_json::json!({
+                        "guardian_approval": false,
+                    }),
+                )]),
             },
-            "origins": {},
-        }))?;
+            origins: HashMap::new(),
+            layers: None,
+        };
 
         app.sync_feature_state_from_effective_config(
             &effective_config,

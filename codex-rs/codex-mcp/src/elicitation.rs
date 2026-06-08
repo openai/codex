@@ -17,6 +17,28 @@ use anyhow::anyhow;
 use async_channel::Sender;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::approvals::McpElicitationArrayType;
+use codex_protocol::approvals::McpElicitationBooleanSchema;
+use codex_protocol::approvals::McpElicitationBooleanType;
+use codex_protocol::approvals::McpElicitationConstOption;
+use codex_protocol::approvals::McpElicitationEnumSchema;
+use codex_protocol::approvals::McpElicitationLegacyTitledEnumSchema;
+use codex_protocol::approvals::McpElicitationMultiSelectEnumSchema;
+use codex_protocol::approvals::McpElicitationNumberSchema;
+use codex_protocol::approvals::McpElicitationNumberType;
+use codex_protocol::approvals::McpElicitationObjectType;
+use codex_protocol::approvals::McpElicitationPrimitiveSchema;
+use codex_protocol::approvals::McpElicitationSchema;
+use codex_protocol::approvals::McpElicitationSingleSelectEnumSchema;
+use codex_protocol::approvals::McpElicitationStringFormat;
+use codex_protocol::approvals::McpElicitationStringSchema;
+use codex_protocol::approvals::McpElicitationStringType;
+use codex_protocol::approvals::McpElicitationTitledEnumItems;
+use codex_protocol::approvals::McpElicitationTitledMultiSelectEnumSchema;
+use codex_protocol::approvals::McpElicitationTitledSingleSelectEnumSchema;
+use codex_protocol::approvals::McpElicitationUntitledEnumItems;
+use codex_protocol::approvals::McpElicitationUntitledMultiSelectEnumSchema;
+use codex_protocol::approvals::McpElicitationUntitledSingleSelectEnumSchema;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -171,35 +193,7 @@ impl ElicitationRequestManager {
                     }
                 }
 
-                let request = match elicitation {
-                    CreateElicitationRequestParams::FormElicitationParams {
-                        meta,
-                        message,
-                        requested_schema,
-                    } => ElicitationRequest::Form {
-                        meta: meta
-                            .map(serde_json::to_value)
-                            .transpose()
-                            .context("failed to serialize MCP elicitation metadata")?,
-                        message,
-                        requested_schema: serde_json::to_value(requested_schema)
-                            .context("failed to serialize MCP elicitation schema")?,
-                    },
-                    CreateElicitationRequestParams::UrlElicitationParams {
-                        meta,
-                        message,
-                        url,
-                        elicitation_id,
-                    } => ElicitationRequest::Url {
-                        meta: meta
-                            .map(serde_json::to_value)
-                            .transpose()
-                            .context("failed to serialize MCP elicitation metadata")?,
-                        message,
-                        url,
-                        elicitation_id,
-                    },
-                };
+                let request = elicitation_request_from_rmcp(elicitation)?;
                 let (tx, rx) = oneshot::channel();
                 {
                     let mut lock = elicitation_requests.lock().await;
@@ -254,3 +248,215 @@ fn can_auto_accept_elicitation(elicitation: &CreateElicitationRequestParams) -> 
         CreateElicitationRequestParams::UrlElicitationParams { .. } => false,
     }
 }
+
+fn elicitation_request_from_rmcp(
+    elicitation: CreateElicitationRequestParams,
+) -> Result<ElicitationRequest> {
+    match elicitation {
+        CreateElicitationRequestParams::FormElicitationParams {
+            meta,
+            message,
+            requested_schema,
+        } => Ok(ElicitationRequest::Form {
+            meta: meta.map(|meta| serde_json::Value::Object(meta.0)),
+            message,
+            requested_schema: elicitation_schema_from_rmcp(requested_schema)?,
+        }),
+        CreateElicitationRequestParams::UrlElicitationParams {
+            meta,
+            message,
+            url,
+            elicitation_id,
+        } => Ok(ElicitationRequest::Url {
+            meta: meta.map(|meta| serde_json::Value::Object(meta.0)),
+            message,
+            url,
+            elicitation_id,
+        }),
+    }
+}
+
+fn elicitation_schema_from_rmcp(
+    schema: rmcp::model::ElicitationSchema,
+) -> Result<McpElicitationSchema> {
+    if schema.title.is_some() || schema.description.is_some() {
+        return Err(anyhow!(
+            "top-level MCP elicitation schema title and description are not supported"
+        ));
+    }
+
+    Ok(McpElicitationSchema {
+        schema_uri: None,
+        type_: McpElicitationObjectType::Object,
+        properties: schema
+            .properties
+            .into_iter()
+            .map(|(name, schema)| (name, primitive_schema_from_rmcp(schema)))
+            .collect(),
+        required: schema.required,
+    })
+}
+
+fn primitive_schema_from_rmcp(
+    schema: rmcp::model::PrimitiveSchema,
+) -> McpElicitationPrimitiveSchema {
+    match schema {
+        rmcp::model::PrimitiveSchema::Enum(schema) => {
+            McpElicitationPrimitiveSchema::Enum(enum_schema_from_rmcp(schema))
+        }
+        rmcp::model::PrimitiveSchema::String(schema) => {
+            McpElicitationPrimitiveSchema::String(McpElicitationStringSchema {
+                type_: McpElicitationStringType::String,
+                title: schema.title.map(|value| value.into_owned()),
+                description: schema.description.map(|value| value.into_owned()),
+                min_length: schema.min_length,
+                max_length: schema.max_length,
+                format: schema.format.map(string_format_from_rmcp),
+                default: schema.default,
+            })
+        }
+        rmcp::model::PrimitiveSchema::Number(schema) => {
+            McpElicitationPrimitiveSchema::Number(McpElicitationNumberSchema {
+                type_: McpElicitationNumberType::Number,
+                title: schema.title.map(|value| value.into_owned()),
+                description: schema.description.map(|value| value.into_owned()),
+                minimum: schema.minimum,
+                maximum: schema.maximum,
+                default: schema.default,
+            })
+        }
+        rmcp::model::PrimitiveSchema::Integer(schema) => {
+            McpElicitationPrimitiveSchema::Number(McpElicitationNumberSchema {
+                type_: McpElicitationNumberType::Integer,
+                title: schema.title.map(|value| value.into_owned()),
+                description: schema.description.map(|value| value.into_owned()),
+                minimum: schema.minimum.map(|value| value as f64),
+                maximum: schema.maximum.map(|value| value as f64),
+                default: schema.default.map(|value| value as f64),
+            })
+        }
+        rmcp::model::PrimitiveSchema::Boolean(schema) => {
+            McpElicitationPrimitiveSchema::Boolean(McpElicitationBooleanSchema {
+                type_: McpElicitationBooleanType::Boolean,
+                title: schema.title.map(|value| value.into_owned()),
+                description: schema.description.map(|value| value.into_owned()),
+                default: schema.default,
+            })
+        }
+    }
+}
+
+fn string_format_from_rmcp(format: rmcp::model::StringFormat) -> McpElicitationStringFormat {
+    match format {
+        rmcp::model::StringFormat::Email => McpElicitationStringFormat::Email,
+        rmcp::model::StringFormat::Uri => McpElicitationStringFormat::Uri,
+        rmcp::model::StringFormat::Date => McpElicitationStringFormat::Date,
+        rmcp::model::StringFormat::DateTime => McpElicitationStringFormat::DateTime,
+    }
+}
+
+fn enum_schema_from_rmcp(schema: rmcp::model::EnumSchema) -> McpElicitationEnumSchema {
+    match schema {
+        rmcp::model::EnumSchema::Single(schema) => {
+            McpElicitationEnumSchema::SingleSelect(single_select_enum_schema_from_rmcp(schema))
+        }
+        rmcp::model::EnumSchema::Multi(schema) => {
+            McpElicitationEnumSchema::MultiSelect(multi_select_enum_schema_from_rmcp(schema))
+        }
+        rmcp::model::EnumSchema::Legacy(schema) => {
+            McpElicitationEnumSchema::Legacy(McpElicitationLegacyTitledEnumSchema {
+                type_: McpElicitationStringType::String,
+                title: schema.title.map(|value| value.into_owned()),
+                description: schema.description.map(|value| value.into_owned()),
+                enum_: schema.enum_,
+                enum_names: schema.enum_names,
+                default: None,
+            })
+        }
+    }
+}
+
+fn single_select_enum_schema_from_rmcp(
+    schema: rmcp::model::SingleSelectEnumSchema,
+) -> McpElicitationSingleSelectEnumSchema {
+    match schema {
+        rmcp::model::SingleSelectEnumSchema::Untitled(schema) => {
+            McpElicitationSingleSelectEnumSchema::Untitled(
+                McpElicitationUntitledSingleSelectEnumSchema {
+                    type_: McpElicitationStringType::String,
+                    title: schema.title.map(|value| value.into_owned()),
+                    description: schema.description.map(|value| value.into_owned()),
+                    enum_: schema.enum_,
+                    default: schema.default,
+                },
+            )
+        }
+        rmcp::model::SingleSelectEnumSchema::Titled(schema) => {
+            McpElicitationSingleSelectEnumSchema::Titled(
+                McpElicitationTitledSingleSelectEnumSchema {
+                    type_: McpElicitationStringType::String,
+                    title: schema.title.map(|value| value.into_owned()),
+                    description: schema.description.map(|value| value.into_owned()),
+                    one_of: schema
+                        .one_of
+                        .into_iter()
+                        .map(const_option_from_rmcp)
+                        .collect(),
+                    default: schema.default,
+                },
+            )
+        }
+    }
+}
+
+fn multi_select_enum_schema_from_rmcp(
+    schema: rmcp::model::MultiSelectEnumSchema,
+) -> McpElicitationMultiSelectEnumSchema {
+    match schema {
+        rmcp::model::MultiSelectEnumSchema::Untitled(schema) => {
+            McpElicitationMultiSelectEnumSchema::Untitled(
+                McpElicitationUntitledMultiSelectEnumSchema {
+                    type_: McpElicitationArrayType::Array,
+                    title: schema.title.map(|value| value.into_owned()),
+                    description: schema.description.map(|value| value.into_owned()),
+                    min_items: schema.min_items,
+                    max_items: schema.max_items,
+                    items: McpElicitationUntitledEnumItems {
+                        type_: McpElicitationStringType::String,
+                        enum_: schema.items.enum_,
+                    },
+                    default: schema.default,
+                },
+            )
+        }
+        rmcp::model::MultiSelectEnumSchema::Titled(schema) => {
+            McpElicitationMultiSelectEnumSchema::Titled(McpElicitationTitledMultiSelectEnumSchema {
+                type_: McpElicitationArrayType::Array,
+                title: schema.title.map(|value| value.into_owned()),
+                description: schema.description.map(|value| value.into_owned()),
+                min_items: schema.min_items,
+                max_items: schema.max_items,
+                items: McpElicitationTitledEnumItems {
+                    any_of: schema
+                        .items
+                        .any_of
+                        .into_iter()
+                        .map(const_option_from_rmcp)
+                        .collect(),
+                },
+                default: schema.default,
+            })
+        }
+    }
+}
+
+fn const_option_from_rmcp(option: rmcp::model::ConstTitle) -> McpElicitationConstOption {
+    McpElicitationConstOption {
+        const_: option.const_,
+        title: option.title,
+    }
+}
+
+#[cfg(test)]
+#[path = "elicitation_tests.rs"]
+mod tests;

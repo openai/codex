@@ -12,6 +12,8 @@ use crate::protocol::item_builders::convert_patch_changes;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
 use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianAssessmentDecisionSource;
+use codex_protocol::approvals::GuardianAssessmentEvent as CoreGuardianAssessmentEvent;
+use codex_protocol::approvals::GuardianAssessmentStatus as CoreGuardianAssessmentStatus;
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
@@ -31,16 +33,20 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde_with::serde_as;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum CommandExecutionApprovalDecision {
     /// User approved the command.
@@ -85,8 +91,9 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum FileChangeApprovalDecision {
     /// User approved the file changes.
@@ -99,8 +106,12 @@ pub enum FileChangeApprovalDecision {
     Cancel,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum CommandAction {
@@ -123,8 +134,9 @@ pub enum CommandAction {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct MemoryCitation {
     pub entries: Vec<MemoryCitationEntry>,
@@ -140,8 +152,9 @@ impl From<CoreMemoryCitation> for MemoryCitation {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct MemoryCitationEntry {
     pub path: String,
@@ -205,49 +218,53 @@ impl CommandAction {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ThreadItem {
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     UserMessage {
         id: String,
         client_id: Option<String>,
         content: Vec<UserInput>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     HookPrompt {
         id: String,
         fragments: Vec<HookPromptFragment>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     AgentMessage {
         id: String,
         text: String,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         phase: Option<MessagePhase>,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         memory_citation: Option<MemoryCitation>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     /// EXPERIMENTAL - proposed plan item content. The completed plan item is
     /// authoritative and may not match the concatenation of `PlanDelta` text.
     Plan { id: String, text: String },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     Reasoning {
         id: String,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         summary: Vec<String>,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         content: Vec<String>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     CommandExecution {
         id: String,
@@ -257,7 +274,7 @@ pub enum ThreadItem {
         cwd: AbsolutePathBuf,
         /// Identifier for the underlying PTY process (when available).
         process_id: Option<String>,
-        #[serde(default)]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
         source: CommandExecutionSource,
         status: CommandExecutionStatus,
         /// A best-effort parsing of the command to understand the action(s) it will perform.
@@ -272,14 +289,14 @@ pub enum ThreadItem {
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     FileChange {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     McpToolCall {
         id: String,
@@ -287,7 +304,10 @@ pub enum ThreadItem {
         tool: String,
         status: McpToolCallStatus,
         arguments: JsonValue,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            any(test, feature = "serde-compat"),
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
         #[ts(optional)]
         mcp_app_resource_uri: Option<String>,
         plugin_id: Option<String>,
@@ -297,7 +317,7 @@ pub enum ThreadItem {
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     DynamicToolCall {
         id: String,
@@ -311,7 +331,7 @@ pub enum ThreadItem {
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     CollabAgentToolCall {
         /// Unique identifier for this collab tool call.
@@ -334,40 +354,44 @@ pub enum ThreadItem {
         /// Last known status of the target agents, when available.
         agents_states: HashMap<String, CollabAgentState>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     WebSearch {
         id: String,
         query: String,
         action: Option<WebSearchAction>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     ImageView { id: String, path: AbsolutePathBuf },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     ImageGeneration {
         id: String,
         status: String,
         revised_prompt: Option<String>,
         result: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            any(test, feature = "serde-compat"),
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
         #[ts(optional)]
         saved_path: Option<AbsolutePathBuf>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     EnteredReviewMode { id: String, review: String },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     ExitedReviewMode { id: String, review: String },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     ContextCompaction { id: String },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct HookPromptFragment {
     pub text: String,
@@ -397,8 +421,9 @@ impl ThreadItem {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Lifecycle state for an approval auto-review.
 pub enum GuardianApprovalReviewStatus {
@@ -409,8 +434,33 @@ pub enum GuardianApprovalReviewStatus {
     Aborted,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+impl From<CoreGuardianAssessmentStatus> for GuardianApprovalReviewStatus {
+    fn from(value: CoreGuardianAssessmentStatus) -> Self {
+        match value {
+            CoreGuardianAssessmentStatus::InProgress => Self::InProgress,
+            CoreGuardianAssessmentStatus::Approved => Self::Approved,
+            CoreGuardianAssessmentStatus::Denied => Self::Denied,
+            CoreGuardianAssessmentStatus::TimedOut => Self::TimedOut,
+            CoreGuardianAssessmentStatus::Aborted => Self::Aborted,
+        }
+    }
+}
+
+impl From<GuardianApprovalReviewStatus> for CoreGuardianAssessmentStatus {
+    fn from(value: GuardianApprovalReviewStatus) -> Self {
+        match value {
+            GuardianApprovalReviewStatus::InProgress => Self::InProgress,
+            GuardianApprovalReviewStatus::Approved => Self::Approved,
+            GuardianApprovalReviewStatus::Denied => Self::Denied,
+            GuardianApprovalReviewStatus::TimedOut => Self::TimedOut,
+            GuardianApprovalReviewStatus::Aborted => Self::Aborted,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Source that produced a terminal approval auto-review decision.
 pub enum AutoReviewDecisionSource {
@@ -425,8 +475,17 @@ impl From<CoreGuardianAssessmentDecisionSource> for AutoReviewDecisionSource {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
+impl From<AutoReviewDecisionSource> for CoreGuardianAssessmentDecisionSource {
+    fn from(value: AutoReviewDecisionSource) -> Self {
+        match value {
+            AutoReviewDecisionSource::Agent => Self::Agent,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "lowercase"))]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Risk level assigned by approval auto-review.
 pub enum GuardianRiskLevel {
@@ -447,8 +506,20 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
+impl From<GuardianRiskLevel> for CoreGuardianRiskLevel {
+    fn from(value: GuardianRiskLevel) -> Self {
+        match value {
+            GuardianRiskLevel::Low => Self::Low,
+            GuardianRiskLevel::Medium => Self::Medium,
+            GuardianRiskLevel::High => Self::High,
+            GuardianRiskLevel::Critical => Self::Critical,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "lowercase"))]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Authorization level assigned by approval auto-review.
 pub enum GuardianUserAuthorization {
@@ -469,11 +540,23 @@ impl From<CoreGuardianUserAuthorization> for GuardianUserAuthorization {
     }
 }
 
+impl From<GuardianUserAuthorization> for CoreGuardianUserAuthorization {
+    fn from(value: GuardianUserAuthorization) -> Self {
+        match value {
+            GuardianUserAuthorization::Unknown => Self::Unknown,
+            GuardianUserAuthorization::Low => Self::Low,
+            GuardianUserAuthorization::Medium => Self::Medium,
+            GuardianUserAuthorization::High => Self::High,
+        }
+    }
+}
+
 /// [UNSTABLE] Temporary approval auto-review payload used by
 /// `item/autoApprovalReview/*` notifications. This shape is expected to change
 /// soon.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GuardianApprovalReview {
     pub status: GuardianApprovalReviewStatus,
@@ -482,8 +565,9 @@ pub struct GuardianApprovalReview {
     pub rationale: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum GuardianCommandSource {
@@ -509,8 +593,9 @@ impl From<GuardianCommandSource> for CoreGuardianCommandSource {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GuardianCommandReviewAction {
     pub source: GuardianCommandSource,
@@ -518,8 +603,9 @@ pub struct GuardianCommandReviewAction {
     pub cwd: AbsolutePathBuf,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GuardianExecveReviewAction {
     pub source: GuardianCommandSource,
@@ -528,16 +614,18 @@ pub struct GuardianExecveReviewAction {
     pub cwd: AbsolutePathBuf,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GuardianApplyPatchReviewAction {
     pub cwd: AbsolutePathBuf,
     pub files: Vec<AbsolutePathBuf>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GuardianNetworkAccessReviewAction {
     pub target: String,
@@ -546,8 +634,9 @@ pub struct GuardianNetworkAccessReviewAction {
     pub port: u16,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GuardianMcpToolCallReviewAction {
     pub server: String,
@@ -557,27 +646,32 @@ pub struct GuardianMcpToolCallReviewAction {
     pub tool_title: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GuardianRequestPermissionsReviewAction {
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type", rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum GuardianApprovalReviewAction {
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     Command {
         source: GuardianCommandSource,
         command: String,
         cwd: AbsolutePathBuf,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     Execve {
         source: GuardianCommandSource,
@@ -585,13 +679,13 @@ pub enum GuardianApprovalReviewAction {
         argv: Vec<String>,
         cwd: AbsolutePathBuf,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     ApplyPatch {
         cwd: AbsolutePathBuf,
         files: Vec<AbsolutePathBuf>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     NetworkAccess {
         target: String,
@@ -599,7 +693,7 @@ pub enum GuardianApprovalReviewAction {
         protocol: NetworkApprovalProtocol,
         port: u16,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     McpToolCall {
         server: String,
@@ -608,7 +702,7 @@ pub enum GuardianApprovalReviewAction {
         connector_name: Option<String>,
         tool_title: Option<String>,
     },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     RequestPermissions {
         reason: Option<String>,
@@ -738,8 +832,68 @@ impl From<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
+#[ts(export_to = "v2/")]
+pub struct GuardianAssessmentEvent {
+    pub id: String,
+    pub target_item_id: Option<String>,
+    pub turn_id: String,
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
+    #[ts(type = "number")]
+    pub completed_at_ms: Option<i64>,
+    pub status: GuardianApprovalReviewStatus,
+    pub risk_level: Option<GuardianRiskLevel>,
+    pub user_authorization: Option<GuardianUserAuthorization>,
+    pub rationale: Option<String>,
+    pub decision_source: Option<AutoReviewDecisionSource>,
+    pub action: GuardianApprovalReviewAction,
+}
+
+impl From<CoreGuardianAssessmentEvent> for GuardianAssessmentEvent {
+    fn from(value: CoreGuardianAssessmentEvent) -> Self {
+        Self {
+            id: value.id,
+            target_item_id: value.target_item_id,
+            turn_id: value.turn_id,
+            started_at_ms: value.started_at_ms,
+            completed_at_ms: value.completed_at_ms,
+            status: value.status.into(),
+            risk_level: value.risk_level.map(Into::into),
+            user_authorization: value.user_authorization.map(Into::into),
+            rationale: value.rationale,
+            decision_source: value.decision_source.map(Into::into),
+            action: value.action.into(),
+        }
+    }
+}
+
+impl From<GuardianAssessmentEvent> for CoreGuardianAssessmentEvent {
+    fn from(value: GuardianAssessmentEvent) -> Self {
+        Self {
+            id: value.id,
+            target_item_id: value.target_item_id,
+            turn_id: value.turn_id,
+            started_at_ms: value.started_at_ms,
+            completed_at_ms: value.completed_at_ms,
+            status: value.status.into(),
+            risk_level: value.risk_level.map(Into::into),
+            user_authorization: value.user_authorization.map(Into::into),
+            rationale: value.rationale,
+            decision_source: value.decision_source.map(Into::into),
+            action: value.action.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type", rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum WebSearchAction {
@@ -754,7 +908,7 @@ pub enum WebSearchAction {
         url: Option<String>,
         pattern: Option<String>,
     },
-    #[serde(other)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(other))]
     Other,
 }
 
@@ -874,8 +1028,9 @@ impl From<codex_protocol::items::HookPromptFragment> for HookPromptFragment {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum CommandExecutionStatus {
     InProgress,
@@ -911,8 +1066,9 @@ v2_enum_from_core! {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum CollabAgentTool {
     SpawnAgent,
@@ -922,8 +1078,9 @@ pub enum CollabAgentTool {
     CloseAgent,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct FileUpdateChange {
     pub path: String,
@@ -931,8 +1088,12 @@ pub struct FileUpdateChange {
     pub diff: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum PatchChangeKind {
@@ -941,8 +1102,9 @@ pub enum PatchChangeKind {
     Update { move_path: Option<PathBuf> },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum PatchApplyStatus {
     InProgress,
@@ -977,8 +1139,9 @@ impl From<CoreMcpToolCallStatus> for McpToolCallStatus {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum McpToolCallStatus {
     InProgress,
@@ -986,8 +1149,9 @@ pub enum McpToolCallStatus {
     Failed,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum DynamicToolCallStatus {
     InProgress,
@@ -995,8 +1159,9 @@ pub enum DynamicToolCallStatus {
     Failed,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum CollabAgentToolCallStatus {
     InProgress,
@@ -1004,8 +1169,9 @@ pub enum CollabAgentToolCallStatus {
     Failed,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum CollabAgentStatus {
     PendingInit,
@@ -1017,8 +1183,9 @@ pub enum CollabAgentStatus {
     NotFound,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct CollabAgentState {
     pub status: CollabAgentStatus,
@@ -1060,8 +1227,9 @@ impl From<CoreAgentStatus> for CollabAgentState {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ItemStartedNotification {
     pub item: ThreadItem,
@@ -1072,8 +1240,9 @@ pub struct ItemStartedNotification {
     pub started_at_ms: i64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for approval auto-review. This
 /// shape is expected to change soon.
@@ -1101,8 +1270,9 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
     pub action: GuardianApprovalReviewAction,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for approval auto-review. This
 /// shape is expected to change soon.
@@ -1134,8 +1304,9 @@ pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub action: GuardianApprovalReviewAction,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ItemCompletedNotification {
     pub item: ThreadItem,
@@ -1146,8 +1317,9 @@ pub struct ItemCompletedNotification {
     pub completed_at_ms: i64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct RawResponseItemCompletedNotification {
     pub thread_id: String,
@@ -1156,8 +1328,9 @@ pub struct RawResponseItemCompletedNotification {
 }
 
 // Item-specific progress notifications
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AgentMessageDeltaNotification {
     pub thread_id: String,
@@ -1166,8 +1339,9 @@ pub struct AgentMessageDeltaNotification {
     pub delta: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL - proposed plan streaming deltas for plan items. Clients should
 /// not assume concatenated deltas match the completed plan item content.
@@ -1178,8 +1352,9 @@ pub struct PlanDeltaNotification {
     pub delta: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryTextDeltaNotification {
     pub thread_id: String,
@@ -1190,8 +1365,9 @@ pub struct ReasoningSummaryTextDeltaNotification {
     pub summary_index: i64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryPartAddedNotification {
     pub thread_id: String,
@@ -1201,8 +1377,9 @@ pub struct ReasoningSummaryPartAddedNotification {
     pub summary_index: i64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ReasoningTextDeltaNotification {
     pub thread_id: String,
@@ -1213,8 +1390,9 @@ pub struct ReasoningTextDeltaNotification {
     pub content_index: i64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct TerminalInteractionNotification {
     pub thread_id: String,
@@ -1224,9 +1402,10 @@ pub struct TerminalInteractionNotification {
     pub stdin: String,
 }
 
-#[serde_as]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[cfg_attr(any(test, feature = "serde-compat"), serde_as)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionOutputDeltaNotification {
     pub thread_id: String,
@@ -1237,8 +1416,9 @@ pub struct CommandExecutionOutputDeltaNotification {
 /// Deprecated legacy notification for `apply_patch` textual output.
 ///
 /// The server no longer emits this notification.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct FileChangeOutputDeltaNotification {
     pub thread_id: String,
@@ -1247,8 +1427,9 @@ pub struct FileChangeOutputDeltaNotification {
     pub delta: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct FileChangePatchUpdatedNotification {
     pub thread_id: String,
@@ -1257,8 +1438,9 @@ pub struct FileChangePatchUpdatedNotification {
     pub changes: Vec<FileUpdateChange>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionRequestApprovalParams {
     pub thread_id: String,
@@ -1274,45 +1456,75 @@ pub struct CommandExecutionRequestApprovalParams {
     /// For zsh-exec-bridge subcommand approvals, multiple callbacks can belong to
     /// one parent `itemId`, so `approvalId` is a distinct opaque callback id
     /// (a UUID) used to disambiguate routing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional = nullable)]
     pub approval_id: Option<String>,
     /// Optional explanatory reason (e.g. request for network access).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional = nullable)]
     pub reason: Option<String>,
     /// Optional context for a managed-network approval prompt.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional = nullable)]
     pub network_approval_context: Option<NetworkApprovalContext>,
     /// The command to be executed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional = nullable)]
     pub command: Option<String>,
     /// The command's working directory.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional = nullable)]
     pub cwd: Option<AbsolutePathBuf>,
     /// Best-effort parsed command actions for friendly display.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional = nullable)]
     pub command_actions: Option<Vec<CommandAction>>,
     /// Optional additional permissions requested for this command.
     #[experimental("item/commandExecution/requestApproval.additionalPermissions")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional = nullable)]
     pub additional_permissions: Option<AdditionalPermissionProfile>,
     /// Optional proposed execpolicy amendment to allow similar commands without prompting.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional = nullable)]
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     /// Optional proposed network policy amendments (allow/deny host) for future requests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional = nullable)]
     pub proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
     /// Ordered list of decisions the client may present for this prompt.
     #[experimental("item/commandExecution/requestApproval.availableDecisions")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional = nullable)]
     pub available_decisions: Option<Vec<CommandExecutionApprovalDecision>>,
 }
@@ -1326,15 +1538,17 @@ impl CommandExecutionRequestApprovalParams {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionRequestApprovalResponse {
     pub decision: CommandExecutionApprovalDecision,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalParams {
     pub thread_id: String,
@@ -1352,14 +1566,16 @@ pub struct FileChangeRequestApprovalParams {
     pub grant_root: Option<PathBuf>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalResponse {
     pub decision: FileChangeApprovalDecision,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolCallParams {
     pub thread_id: String,
@@ -1370,22 +1586,27 @@ pub struct DynamicToolCallParams {
     pub arguments: JsonValue,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolCallResponse {
     pub content_items: Vec<DynamicToolCallOutputContentItem>,
     pub success: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum DynamicToolCallOutputContentItem {
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     InputText { text: String },
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     InputImage { image_url: String },
 }
 
@@ -1402,8 +1623,9 @@ impl From<DynamicToolCallOutputContentItem>
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL. Defines a single selectable option for request_user_input.
 pub struct ToolRequestUserInputOption {
@@ -1411,23 +1633,25 @@ pub struct ToolRequestUserInputOption {
     pub description: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL. Represents one request_user_input question and its required options.
 pub struct ToolRequestUserInputQuestion {
     pub id: String,
     pub header: String,
     pub question: String,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub is_other: bool,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub is_secret: bool,
     pub options: Option<Vec<ToolRequestUserInputOption>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL. Params sent with a request_user_input event.
 pub struct ToolRequestUserInputParams {
@@ -1437,16 +1661,18 @@ pub struct ToolRequestUserInputParams {
     pub questions: Vec<ToolRequestUserInputQuestion>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL. Captures a user's answer to a request_user_input question.
 pub struct ToolRequestUserInputAnswer {
     pub answers: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL. Response payload mapping question ids to answers.
 pub struct ToolRequestUserInputResponse {

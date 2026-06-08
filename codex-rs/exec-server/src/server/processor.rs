@@ -8,6 +8,7 @@ use crate::ExecServerRuntimePaths;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
+use crate::rpc::JSONRPCMessage;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::encode_server_message;
@@ -99,7 +100,7 @@ async fn run_connection(
                 }
             }
             JsonRpcConnectionEvent::Message(message) => match message {
-                codex_app_server_protocol::JSONRPCMessage::Request(request) => {
+                JSONRPCMessage::Request(request) => {
                     if let Some(route) = router.request_route(request.method.as_str()) {
                         let message = tokio::select! {
                             message = route(Arc::clone(&handler), request) => message,
@@ -127,7 +128,7 @@ async fn run_connection(
                         break;
                     }
                 }
-                codex_app_server_protocol::JSONRPCMessage::Notification(notification) => {
+                JSONRPCMessage::Notification(notification) => {
                     let Some(route) = router.notification_route(notification.method.as_str())
                     else {
                         warn!(
@@ -150,14 +151,14 @@ async fn run_connection(
                         break;
                     }
                 }
-                codex_app_server_protocol::JSONRPCMessage::Response(response) => {
+                JSONRPCMessage::Response(response) => {
                     warn!(
                         "closing exec-server connection after unexpected client response: {:?}",
                         response.id
                     );
                     break;
                 }
-                codex_app_server_protocol::JSONRPCMessage::Error(error) => {
+                JSONRPCMessage::Error(error) => {
                     warn!(
                         "closing exec-server connection after unexpected client error: {:?}",
                         error.id
@@ -190,10 +191,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use codex_app_server_protocol::JSONRPCMessage;
-    use codex_app_server_protocol::JSONRPCNotification;
-    use codex_app_server_protocol::JSONRPCRequest;
-    use codex_app_server_protocol::JSONRPCResponse;
+    use crate::rpc::JSONRPCMessage;
+    use crate::rpc::JSONRPCNotification;
+    use crate::rpc::JSONRPCRequest;
+    use crate::rpc::JSONRPCResponse;
     use codex_app_server_protocol::RequestId;
     use serde::Serialize;
     use serde::de::DeserializeOwned;

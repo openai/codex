@@ -7,9 +7,8 @@ use std::time::UNIX_EPOCH;
 
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ClientResponsePayload;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::Result;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
@@ -33,10 +32,7 @@ pub(crate) use codex_app_server_transport::OutgoingMessage;
 pub(crate) use codex_app_server_transport::OutgoingResponse;
 pub(crate) use codex_app_server_transport::QueuedOutgoingMessage;
 
-#[cfg(test)]
-use codex_protocol::account::PlanType;
-
-pub(crate) type ClientRequestResult = std::result::Result<Result, JSONRPCErrorError>;
+pub(crate) type ClientRequestResult = std::result::Result<ServerResponse, RpcError>;
 
 /// Stable identifier for a client request scoped to a transport connection.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -200,7 +196,7 @@ impl ThreadScopedOutgoingMessageSender {
     pub(crate) async fn send_error(
         &self,
         request_id: ConnectionRequestId,
-        error: impl Into<JSONRPCErrorError>,
+        error: impl Into<RpcError>,
     ) {
         self.outgoing.send_error(request_id, error).await;
     }
@@ -370,19 +366,18 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn notify_client_response(&self, id: RequestId, result: Result) {
+    pub(crate) async fn notify_client_response(&self, response: ServerResponse) {
+        let id = response.id().clone();
         let entry = self.take_request_callback(&id).await;
 
         match entry {
             Some((id, entry)) => {
                 let completed_at_ms = now_unix_timestamp_ms();
-                if let Ok(response) = entry.request.response_from_result(result.clone())
-                    && !matches!(response, ServerResponse::PermissionsRequestApproval { .. })
-                {
+                if !matches!(response, ServerResponse::PermissionsRequestApproval { .. }) {
                     self.analytics_events_client
-                        .track_server_response(completed_at_ms, response);
+                        .track_server_response(completed_at_ms, response.clone());
                 }
-                if let Err(err) = entry.callback.send(Ok(result)) {
+                if let Err(err) = entry.callback.send(Ok(response)) {
                     warn!("could not notify callback for {id:?} due to: {err:?}");
                 }
             }
@@ -392,7 +387,7 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn notify_client_error(&self, id: RequestId, error: JSONRPCErrorError) {
+    pub(crate) async fn notify_client_error(&self, id: RequestId, error: RpcError) {
         let entry = self.take_request_callback(&id).await;
 
         match entry {
@@ -421,7 +416,7 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn cancel_all_requests(&self, error: Option<JSONRPCErrorError>) {
+    pub(crate) async fn cancel_all_requests(&self, error: Option<RpcError>) {
         let entries = {
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
             request_id_to_callback
@@ -468,7 +463,7 @@ impl OutgoingMessageSender {
     pub(crate) async fn cancel_requests_for_thread(
         &self,
         thread_id: ThreadId,
-        error: Option<JSONRPCErrorError>,
+        error: Option<RpcError>,
     ) {
         let entries = {
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
@@ -513,24 +508,21 @@ impl OutgoingMessageSender {
         response: ClientResponsePayload,
     ) {
         let connection_id = request_id.connection_id;
-        let request_id_for_analytics = request_id.request_id.clone();
-        let serialized_response = response
-            .into_jsonrpc_parts_and_payload(request_id.request_id.clone())
-            .map(|(id, result, response)| {
-                if let Some(response) = response {
-                    self.analytics_events_client.track_response(
-                        connection_id.0,
-                        request_id_for_analytics,
-                        response,
-                    );
-                }
-                (id, result)
-            });
+        let native_response = response
+            .clone()
+            .into_client_response(request_id.request_id.clone());
         let request_context = self.take_request_context(&request_id).await;
 
-        match serialized_response {
-            Ok((id, result)) => {
-                let outgoing_message = OutgoingMessage::Response(OutgoingResponse { id, result });
+        match native_response {
+            Some(native_response) => {
+                self.analytics_events_client.track_response(
+                    connection_id.0,
+                    request_id.request_id,
+                    response,
+                );
+                let outgoing_message = OutgoingMessage::Response(OutgoingResponse {
+                    response: native_response,
+                });
                 self.send_outgoing_message_to_connection(
                     request_context,
                     connection_id,
@@ -539,11 +531,11 @@ impl OutgoingMessageSender {
                 )
                 .await;
             }
-            Err(err) => {
+            None => {
                 self.send_error_inner(
                     request_context,
                     request_id,
-                    internal_error(format!("failed to serialize response: {err}")),
+                    internal_error("response has no native app-server representation"),
                 )
                 .await;
             }
@@ -627,7 +619,7 @@ impl OutgoingMessageSender {
     pub(crate) async fn send_error(
         &self,
         request_id: ConnectionRequestId,
-        error: impl Into<JSONRPCErrorError>,
+        error: impl Into<RpcError>,
     ) {
         let request_context = self.take_request_context(&request_id).await;
         self.send_error_inner(request_context, request_id, error.into())
@@ -640,7 +632,7 @@ impl OutgoingMessageSender {
         result: std::result::Result<T, E>,
     ) where
         T: Into<ClientResponsePayload>,
-        E: Into<JSONRPCErrorError>,
+        E: Into<RpcError>,
     {
         match result {
             Ok(response) => {
@@ -654,7 +646,7 @@ impl OutgoingMessageSender {
         &self,
         request_context: Option<RequestContext>,
         request_id: ConnectionRequestId,
-        error: JSONRPCErrorError,
+        error: RpcError,
     ) {
         let outgoing_message = OutgoingMessage::Error(OutgoingError {
             id: request_id.request_id,
@@ -706,292 +698,21 @@ fn now_unix_timestamp_ms() -> u64 {
 mod tests {
     use std::time::Duration;
 
-    use codex_app_server_protocol::AccountLoginCompletedNotification;
-    use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
-    use codex_app_server_protocol::AccountUpdatedNotification;
     use codex_app_server_protocol::ApplyPatchApprovalParams;
-    use codex_app_server_protocol::AuthMode;
-    use codex_app_server_protocol::CommandExecutionApprovalDecision;
-    use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
-    use codex_app_server_protocol::ConfigWarningNotification;
+    use codex_app_server_protocol::ClientResponse;
     use codex_app_server_protocol::DynamicToolCallParams;
     use codex_app_server_protocol::FileChangeRequestApprovalParams;
-    use codex_app_server_protocol::GuardianWarningNotification;
     use codex_app_server_protocol::ModelRerouteReason;
     use codex_app_server_protocol::ModelReroutedNotification;
-    use codex_app_server_protocol::ModelVerification;
-    use codex_app_server_protocol::ModelVerificationNotification;
-    use codex_app_server_protocol::RateLimitSnapshot;
-    use codex_app_server_protocol::RateLimitWindow;
-    use codex_app_server_protocol::ServerResponse;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::time::timeout;
-    use uuid::Uuid;
 
     use super::*;
 
-    #[test]
-    fn verify_server_notification_serialization() {
-        let notification =
-            ServerNotification::AccountLoginCompleted(AccountLoginCompletedNotification {
-                login_id: Some(Uuid::nil().to_string()),
-                success: true,
-                error: None,
-            });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/login/completed",
-                "params": {
-                    "loginId": Uuid::nil().to_string(),
-                    "success": true,
-                    "error": null,
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the strum macros serialize the method field correctly"),
-            "ensure the strum macros serialize the method field correctly"
-        );
-    }
-
-    #[test]
-    fn verify_account_login_completed_notification_serialization() {
-        let notification =
-            ServerNotification::AccountLoginCompleted(AccountLoginCompletedNotification {
-                login_id: Some(Uuid::nil().to_string()),
-                success: true,
-                error: None,
-            });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/login/completed",
-                "params": {
-                    "loginId": Uuid::nil().to_string(),
-                    "success": true,
-                    "error": null,
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_account_rate_limits_notification_serialization() {
-        let notification =
-            ServerNotification::AccountRateLimitsUpdated(AccountRateLimitsUpdatedNotification {
-                rate_limits: RateLimitSnapshot {
-                    limit_id: Some("codex".to_string()),
-                    limit_name: None,
-                    primary: Some(RateLimitWindow {
-                        used_percent: 25,
-                        window_duration_mins: Some(15),
-                        resets_at: Some(123),
-                    }),
-                    secondary: None,
-                    credits: None,
-                    individual_limit: None,
-                    plan_type: Some(PlanType::Plus),
-                    rate_limit_reached_type: None,
-                },
-            });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/rateLimits/updated",
-                "params": {
-                        "rateLimits": {
-                        "limitId": "codex",
-                        "limitName": null,
-                        "primary": {
-                            "usedPercent": 25,
-                            "windowDurationMins": 15,
-                            "resetsAt": 123
-                        },
-                        "secondary": null,
-                        "credits": null,
-                        "individualLimit": null,
-                        "planType": "plus",
-                        "rateLimitReachedType": null
-                    }
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_account_updated_notification_serialization() {
-        let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
-            auth_mode: Some(AuthMode::ApiKey),
-            plan_type: None,
-        });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/updated",
-                "params": {
-                    "authMode": "apikey",
-                    "planType": null
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_config_warning_notification_serialization() {
-        let notification = ServerNotification::ConfigWarning(ConfigWarningNotification {
-            summary: "Config error: using defaults".to_string(),
-            details: Some("error loading config: bad config".to_string()),
-            path: None,
-            range: None,
-        });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!( {
-                "method": "configWarning",
-                "params": {
-                    "summary": "Config error: using defaults",
-                    "details": "error loading config: bad config",
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_guardian_warning_notification_serialization() {
-        let notification = ServerNotification::GuardianWarning(GuardianWarningNotification {
-            thread_id: "thread-1".to_string(),
-            message: "Automatic approval review denied the requested action.".to_string(),
-        });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "guardianWarning",
-                "params": {
-                    "threadId": "thread-1",
-                    "message": "Automatic approval review denied the requested action.",
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_model_rerouted_notification_serialization() {
-        let notification = ServerNotification::ModelRerouted(ModelReroutedNotification {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            from_model: "gpt-5.3-codex".to_string(),
-            to_model: "gpt-5.2".to_string(),
-            reason: ModelRerouteReason::HighRiskCyberActivity,
-        });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "model/rerouted",
-                "params": {
-                    "threadId": "thread-1",
-                    "turnId": "turn-1",
-                    "fromModel": "gpt-5.3-codex",
-                    "toModel": "gpt-5.2",
-                    "reason": "highRiskCyberActivity",
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_model_verification_notification_serialization() {
-        let notification = ServerNotification::ModelVerification(ModelVerificationNotification {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            verifications: vec![ModelVerification::TrustedAccessForCyber],
-        });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "model/verification",
-                "params": {
-                    "threadId": "thread-1",
-                    "turnId": "turn-1",
-                    "verifications": ["trustedAccessForCyber"],
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn server_request_response_from_result_decodes_typed_response() {
-        let request = ServerRequest::CommandExecutionRequestApproval {
-            request_id: RequestId::Integer(7),
-            params: CommandExecutionRequestApprovalParams {
-                thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "item-1".to_string(),
-                started_at_ms: 0,
-                approval_id: None,
-                reason: None,
-                network_approval_context: None,
-                command: Some("echo hi".to_string()),
-                cwd: None,
-                command_actions: None,
-                additional_permissions: None,
-                proposed_execpolicy_amendment: None,
-                proposed_network_policy_amendments: None,
-                available_decisions: None,
-            },
-        };
-
-        let response = request
-            .response_from_result(json!({
-                "decision": "acceptForSession",
-            }))
-            .expect("decode typed server response");
-
-        let ServerResponse::CommandExecutionRequestApproval {
-            request_id,
-            response,
-        } = response
-        else {
-            panic!("expected command execution approval response");
-        };
-        assert_eq!(request_id, RequestId::Integer(7));
-        assert_eq!(
-            response.decision,
-            CommandExecutionApprovalDecision::AcceptForSession
-        );
-    }
     #[tokio::test]
     async fn send_response_routes_to_target_connection() {
         let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
@@ -1026,8 +747,18 @@ mod tests {
                 let OutgoingMessage::Response(response) = message else {
                     panic!("expected response message");
                 };
-                assert_eq!(response.id, request_id.request_id);
-                assert_eq!(response.result, json!({}));
+                let ClientResponse::ThreadArchive {
+                    request_id: response_request_id,
+                    response,
+                } = response.response
+                else {
+                    panic!("expected thread/archive response");
+                };
+                assert_eq!(response_request_id, request_id.request_id);
+                assert_eq!(
+                    response,
+                    codex_app_server_protocol::ThreadArchiveResponse {}
+                );
             }
             other => panic!("expected targeted response envelope, got: {other:?}"),
         }
@@ -1207,7 +938,7 @@ mod tests {
             .await
             .expect("wait should not time out")
             .expect("waiter should receive a callback");
-        assert_eq!(result, Err(error));
+        assert_eq!(result.expect_err("request should fail"), error);
     }
 
     #[tokio::test]
@@ -1322,8 +1053,14 @@ mod tests {
             .await
             .expect("user input waiter should resolve")
             .expect("user input waiter should receive a callback");
-        assert_eq!(dynamic_tool_result, Err(error.clone()));
-        assert_eq!(user_input_result, Err(error));
+        assert_eq!(
+            dynamic_tool_result.expect_err("dynamic tool request should fail"),
+            error
+        );
+        assert_eq!(
+            user_input_result.expect_err("user input request should fail"),
+            error
+        );
         assert!(
             outgoing
                 .pending_requests_for_thread(thread_id)

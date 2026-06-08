@@ -44,25 +44,20 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
-use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::AuthMode as LoginAuthMode;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
-use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::ServerResponse;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
@@ -124,11 +119,11 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
             .send_request(ServerRequestPayload::ChatgptAuthTokensRefresh(params))
             .await;
 
-        let result = match timeout(EXTERNAL_AUTH_REFRESH_TIMEOUT, rx).await {
+        let response = match timeout(EXTERNAL_AUTH_REFRESH_TIMEOUT, rx).await {
             Ok(result) => {
                 // Two failure scenarios:
                 // 1) `oneshot::Receiver` failed (sender dropped) => request canceled/channel closed.
-                // 2) client answered with JSON-RPC error payload => propagate code/message.
+                // 2) client answered with an RPC error payload => propagate code/message.
                 let result = result.map_err(|err| {
                     std::io::Error::other(format!("auth refresh request canceled: {err}"))
                 })?;
@@ -148,8 +143,11 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
             }
         };
 
-        let response: ChatgptAuthTokensRefreshResponse =
-            serde_json::from_value(result).map_err(std::io::Error::other)?;
+        let ServerResponse::ChatgptAuthTokensRefresh { response, .. } = response else {
+            return Err(std::io::Error::other(
+                "auth refresh request returned an unexpected response type",
+            ));
+        };
 
         Ok(ExternalAuthTokens::chatgpt(
             response.access_token,
@@ -270,7 +268,6 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) installation_id: String,
     pub(crate) rpc_transport: AppServerRpcTransport,
-    pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     pub(crate) plugin_startup_tasks: crate::PluginStartupTasks,
 }
 
@@ -293,7 +290,6 @@ impl MessageProcessor {
             auth_manager,
             installation_id,
             rpc_transport,
-            remote_control_handle,
             plugin_startup_tasks,
         } = args;
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
@@ -319,7 +315,7 @@ impl MessageProcessor {
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
                 state_db.clone(),
-                installation_id,
+                installation_id.clone(),
                 Some(app_server_attestation_provider(
                     outgoing.clone(),
                     thread_state_manager.clone(),
@@ -408,7 +404,7 @@ impl MessageProcessor {
             config_manager.clone(),
             workspace_settings_cache,
         );
-        let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
+        let remote_control_processor = RemoteControlRequestProcessor::new(installation_id);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
@@ -519,65 +515,6 @@ impl MessageProcessor {
         self.skills_watcher.shutdown();
     }
 
-    pub(crate) async fn process_request(
-        self: &Arc<Self>,
-        connection_id: ConnectionId,
-        request: JSONRPCRequest,
-        transport: &AppServerTransport,
-        session: Arc<ConnectionSessionState>,
-    ) {
-        let request_method = request.method.as_str();
-        tracing::trace!(
-            ?connection_id,
-            request_id = ?request.id,
-            "app-server request: {request_method}"
-        );
-        let request_id = ConnectionRequestId {
-            connection_id,
-            request_id: request.id.clone(),
-        };
-        let request_span =
-            crate::app_server_tracing::request_span(&request, transport, connection_id, &session);
-        let request_trace = request.trace.as_ref().map(|trace| W3cTraceContext {
-            traceparent: trace.traceparent.clone(),
-            tracestate: trace.tracestate.clone(),
-        });
-        let request_context = RequestContext::new(request_id.clone(), request_span, request_trace);
-        Self::run_request_with_context(
-            Arc::clone(&self.outgoing),
-            request_context.clone(),
-            async {
-                let codex_request = serde_json::to_value(&request)
-                    .map_err(|err| invalid_request(format!("Invalid request: {err}")))
-                    .and_then(|request_json| {
-                        serde_json::from_value::<ClientRequest>(request_json)
-                            .map_err(|err| invalid_request(format!("Invalid request: {err}")))
-                    });
-                let result = match codex_request {
-                    Ok(codex_request) => {
-                        // Websocket callers finalize outbound readiness in lib.rs after mirroring
-                        // session state into outbound state and sending initialize notifications to
-                        // this specific connection. Passing `None` avoids marking the connection
-                        // ready too early from inside the shared request handler.
-                        self.handle_client_request(
-                            request_id.clone(),
-                            codex_request,
-                            Arc::clone(&session),
-                            /*outbound_initialized*/ None,
-                            request_context.clone(),
-                        )
-                        .await
-                    }
-                    Err(error) => Err(error),
-                };
-                if let Err(error) = result {
-                    self.outgoing.send_error(request_id.clone(), error).await;
-                }
-            },
-        )
-        .await;
-    }
-
     /// Handles a typed request path used by in-process embedders.
     ///
     /// This bypasses JSON request deserialization but keeps identical request
@@ -626,10 +563,50 @@ impl MessageProcessor {
         .await;
     }
 
-    pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {
-        // Currently, we do not expect to receive any notifications from the
-        // client, so we just log them.
-        tracing::info!("<- notification: {:?}", notification);
+    pub(crate) async fn process_native_request(
+        self: &Arc<Self>,
+        connection_id: ConnectionId,
+        request: ClientRequest,
+        trace: Option<W3cTraceContext>,
+        transport: &AppServerTransport,
+        session: Arc<ConnectionSessionState>,
+    ) {
+        let request_id = ConnectionRequestId {
+            connection_id,
+            request_id: request.id().clone(),
+        };
+        let request_span = crate::app_server_tracing::native_request_span(
+            &request,
+            transport,
+            connection_id,
+            &session,
+            trace.as_ref(),
+        );
+        let request_context = RequestContext::new(request_id.clone(), request_span, trace);
+        tracing::trace!(
+            ?connection_id,
+            request_id = ?request_id.request_id,
+            "app-server native gRPC request"
+        );
+        Self::run_request_with_context(
+            Arc::clone(&self.outgoing),
+            request_context.clone(),
+            async {
+                let result = self
+                    .handle_client_request(
+                        request_id.clone(),
+                        request,
+                        Arc::clone(&session),
+                        /*outbound_initialized*/ None,
+                        request_context.clone(),
+                    )
+                    .await;
+                if let Err(error) = result {
+                    self.outgoing.send_error(request_id.clone(), error).await;
+                }
+            },
+        )
+        .await;
     }
 
     /// Handles typed notifications from in-process clients.
@@ -734,17 +711,18 @@ impl MessageProcessor {
             .subscribe_running_assistant_turn_count()
     }
 
-    /// Handle a standalone JSON-RPC response originating from the peer.
-    pub(crate) async fn process_response(&self, response: JSONRPCResponse) {
-        tracing::info!("<- response: {:?}", response);
-        let JSONRPCResponse { id, result, .. } = response;
-        self.outgoing.notify_client_response(id, result).await
+    pub(crate) async fn process_server_response(&self, response: ServerResponse) {
+        tracing::info!("<- native response: {:?}", response);
+        self.outgoing.notify_client_response(response).await;
     }
 
-    /// Handle an error object received from the peer.
-    pub(crate) async fn process_error(&self, err: JSONRPCError) {
-        tracing::error!("<- error: {:?}", err);
-        self.outgoing.notify_client_error(err.id, err.error).await;
+    pub(crate) async fn process_client_error(
+        &self,
+        request_id: codex_app_server_protocol::RequestId,
+        error: RpcError,
+    ) {
+        tracing::error!(?request_id, ?error, "<- native error");
+        self.outgoing.notify_client_error(request_id, error).await;
     }
 
     async fn handle_client_request(
@@ -752,12 +730,12 @@ impl MessageProcessor {
         connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
         session: Arc<ConnectionSessionState>,
-        // `Some(...)` means the caller wants initialize to immediately mark the
-        // connection outbound-ready. Websocket JSON-RPC calls pass `None` so
-        // lib.rs can deliver connection-scoped initialize notifications first.
+        // `Some(...)` means the in-process caller wants initialize to
+        // immediately mark the connection outbound-ready. gRPC passes `None`
+        // so lib.rs can deliver connection-scoped initialize notifications first.
         outbound_initialized: Option<&AtomicBool>,
         request_context: RequestContext,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let connection_id = connection_request_id.connection_id;
         if let ClientRequest::Initialize { request_id, params } = codex_request {
             let connection_initialized = self
@@ -798,7 +776,7 @@ impl MessageProcessor {
         codex_request: ClientRequest,
         session: Arc<ConnectionSessionState>,
         request_context: RequestContext,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         if !session.initialized() {
             return Err(invalid_request("Not initialized"));
         }
@@ -862,14 +840,14 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
             connection_id,
             request_id: codex_request.id().clone(),
         };
 
-        let result: Result<Option<ClientResponsePayload>, JSONRPCErrorError> = match codex_request {
+        let result: Result<Option<ClientResponsePayload>, RpcError> = match codex_request {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled before initialized request dispatch");
             }

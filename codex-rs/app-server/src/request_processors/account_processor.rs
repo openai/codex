@@ -85,21 +85,21 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.login_v2(request_id, params).await.map(|()| None)
     }
 
     pub(crate) async fn logout_account(
         &self,
         request_id: ConnectionRequestId,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.logout_v2(request_id).await.map(|()| None)
     }
 
     pub(crate) async fn cancel_login_account(
         &self,
         params: CancelLoginAccountParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.cancel_login_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -108,7 +108,7 @@ impl AccountRequestProcessor {
     pub(crate) async fn get_account(
         &self,
         params: GetAccountParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.get_account_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -117,7 +117,7 @@ impl AccountRequestProcessor {
     pub(crate) async fn get_auth_status(
         &self,
         params: GetAuthStatusParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.get_auth_status_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -125,7 +125,7 @@ impl AccountRequestProcessor {
 
     pub(crate) async fn get_account_rate_limits(
         &self,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.get_account_rate_limits_response()
             .await
             .map(|response| Some(response.into()))
@@ -134,7 +134,7 @@ impl AccountRequestProcessor {
     pub(crate) async fn send_add_credits_nudge_email(
         &self,
         params: SendAddCreditsNudgeEmailParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.send_add_credits_nudge_email_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -210,7 +210,7 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
                 self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
@@ -242,7 +242,7 @@ impl AccountRequestProcessor {
         Ok(())
     }
 
-    fn external_auth_active_error(&self) -> JSONRPCErrorError {
+    fn external_auth_active_error(&self) -> RpcError {
         invalid_request(
             "External auth is active. Use account/login/start (chatgptAuthTokens) to update it or account/logout to clear it.",
         )
@@ -251,7 +251,7 @@ impl AccountRequestProcessor {
     async fn login_api_key_common(
         &self,
         params: &LoginApiKeyParams,
-    ) -> std::result::Result<(), JSONRPCErrorError> {
+    ) -> std::result::Result<(), RpcError> {
         if self.auth_manager.is_external_chatgpt_auth_active() {
             return Err(self.external_auth_active_error());
         }
@@ -304,7 +304,7 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_common(
         &self,
         codex_streamlined_login: bool,
-    ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
+    ) -> std::result::Result<LoginServerOptions, RpcError> {
         let config = self.config.as_ref();
 
         if self.auth_manager.is_external_chatgpt_auth_active() {
@@ -341,7 +341,7 @@ impl AccountRequestProcessor {
         Ok(opts)
     }
 
-    fn login_chatgpt_device_code_start_error(err: IoError) -> JSONRPCErrorError {
+    fn login_chatgpt_device_code_start_error(err: IoError) -> RpcError {
         let is_not_found = err.kind() == std::io::ErrorKind::NotFound;
         if is_not_found {
             invalid_request(err.to_string())
@@ -362,7 +362,7 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_response(
         &self,
         codex_streamlined_login: bool,
-    ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+    ) -> Result<LoginAccountResponse, RpcError> {
         let opts = self.login_chatgpt_common(codex_streamlined_login).await?;
         let server = run_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
@@ -431,9 +431,7 @@ impl AccountRequestProcessor {
         self.outgoing.send_result(request_id, result).await;
     }
 
-    async fn login_chatgpt_device_code_response(
-        &self,
-    ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+    async fn login_chatgpt_device_code_response(&self) -> Result<LoginAccountResponse, RpcError> {
         let opts = self
             .login_chatgpt_common(/*codex_streamlined_login*/ false)
             .await?;
@@ -517,7 +515,7 @@ impl AccountRequestProcessor {
     async fn cancel_login_response(
         &self,
         params: CancelLoginAccountParams,
-    ) -> Result<CancelLoginAccountResponse, JSONRPCErrorError> {
+    ) -> Result<CancelLoginAccountResponse, RpcError> {
         let login_id = params.login_id;
         let uuid = Uuid::parse_str(&login_id)
             .map_err(|_| invalid_request(format!("invalid login id: {login_id}")))?;
@@ -552,7 +550,7 @@ impl AccountRequestProcessor {
         access_token: String,
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
-    ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+    ) -> Result<LoginAccountResponse, RpcError> {
         if matches!(
             self.config.forced_login_method,
             Some(ForcedLoginMethod::Api)
@@ -667,7 +665,7 @@ impl AccountRequestProcessor {
         }
     }
 
-    async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
+    async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, RpcError> {
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -698,7 +696,7 @@ impl AccountRequestProcessor {
             .map(CodexAuth::api_auth_mode))
     }
 
-    async fn logout_v2(&self, request_id: ConnectionRequestId) -> Result<(), JSONRPCErrorError> {
+    async fn logout_v2(&self, request_id: ConnectionRequestId) -> Result<(), RpcError> {
         let result = self.logout_common().await;
         let account_updated =
             result
@@ -739,7 +737,7 @@ impl AccountRequestProcessor {
     async fn get_auth_status_response(
         &self,
         params: GetAuthStatusParams,
-    ) -> Result<GetAuthStatusResponse, JSONRPCErrorError> {
+    ) -> Result<GetAuthStatusResponse, RpcError> {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
@@ -805,7 +803,7 @@ impl AccountRequestProcessor {
     async fn get_account_response(
         &self,
         params: GetAccountParams,
-    ) -> Result<GetAccountResponse, JSONRPCErrorError> {
+    ) -> Result<GetAccountResponse, RpcError> {
         let do_refresh = params.refresh_token;
 
         self.refresh_token_if_requested(do_refresh).await;
@@ -832,7 +830,7 @@ impl AccountRequestProcessor {
 
     async fn get_account_rate_limits_response(
         &self,
-    ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
+    ) -> Result<GetAccountRateLimitsResponse, RpcError> {
         self.fetch_account_rate_limits()
             .await
             .map(
@@ -851,7 +849,7 @@ impl AccountRequestProcessor {
     async fn send_add_credits_nudge_email_response(
         &self,
         params: SendAddCreditsNudgeEmailParams,
-    ) -> Result<SendAddCreditsNudgeEmailResponse, JSONRPCErrorError> {
+    ) -> Result<SendAddCreditsNudgeEmailResponse, RpcError> {
         self.send_add_credits_nudge_email_inner(params)
             .await
             .map(|status| SendAddCreditsNudgeEmailResponse { status })
@@ -860,7 +858,7 @@ impl AccountRequestProcessor {
     async fn send_add_credits_nudge_email_inner(
         &self,
         params: SendAddCreditsNudgeEmailParams,
-    ) -> Result<AddCreditsNudgeEmailStatus, JSONRPCErrorError> {
+    ) -> Result<AddCreditsNudgeEmailStatus, RpcError> {
         let Some(auth) = self.auth_manager.auth().await else {
             return Err(invalid_request(
                 "codex account authentication required to notify workspace owner",
@@ -904,7 +902,7 @@ impl AccountRequestProcessor {
             CoreRateLimitSnapshot,
             HashMap<String, CoreRateLimitSnapshot>,
         ),
-        JSONRPCErrorError,
+        RpcError,
     > {
         let Some(auth) = self.auth_manager.auth().await else {
             return Err(invalid_request(

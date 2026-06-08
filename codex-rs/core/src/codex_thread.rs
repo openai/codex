@@ -5,6 +5,8 @@ use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
+use codex_config::types::McpServerConfig;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -16,6 +18,8 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::ReadResourceResult;
+use codex_protocol::mcp::ResourceContent;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -43,6 +47,7 @@ use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
+use rmcp::model::ResourceContents;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -558,6 +563,17 @@ impl CodexThread {
         self.codex.session.get_config().await
     }
 
+    pub async fn queue_mcp_server_refresh(
+        &self,
+        mcp_servers: HashMap<String, McpServerConfig>,
+        mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
+    ) {
+        self.codex
+            .session
+            .queue_mcp_server_refresh(mcp_servers, mcp_oauth_credentials_store_mode)
+            .await;
+    }
+
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
         self.codex.session.multi_agent_version()
     }
@@ -577,14 +593,42 @@ impl CodexThread {
         &self,
         server: &str,
         uri: &str,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ReadResourceResult> {
         let result = self
             .codex
             .session
             .read_resource(server, ReadResourceRequestParams::new(uri))
             .await?;
-
-        Ok(serde_json::to_value(result)?)
+        Ok(ReadResourceResult {
+            contents: result
+                .contents
+                .into_iter()
+                .map(|content| match content {
+                    ResourceContents::TextResourceContents {
+                        uri,
+                        mime_type,
+                        text,
+                        meta,
+                    } => ResourceContent::Text {
+                        uri,
+                        mime_type,
+                        text,
+                        meta: meta.map(|meta| serde_json::Value::Object(meta.0)),
+                    },
+                    ResourceContents::BlobResourceContents {
+                        uri,
+                        mime_type,
+                        blob,
+                        meta,
+                    } => ResourceContent::Blob {
+                        uri,
+                        mime_type,
+                        blob,
+                        meta: meta.map(|meta| serde_json::Value::Object(meta.0)),
+                    },
+                })
+                .collect(),
+        })
     }
 
     pub async fn call_mcp_tool(

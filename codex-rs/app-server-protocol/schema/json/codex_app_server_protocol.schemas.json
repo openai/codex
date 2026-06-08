@@ -2871,123 +2871,6 @@
       "title": "InitializeResponse",
       "type": "object"
     },
-    "JSONRPCError": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "A response to a request that indicates an error occurred.",
-      "properties": {
-        "error": {
-          "$ref": "#/definitions/JSONRPCErrorError"
-        },
-        "id": {
-          "$ref": "#/definitions/v2/RequestId"
-        }
-      },
-      "required": [
-        "error",
-        "id"
-      ],
-      "title": "JSONRPCError",
-      "type": "object"
-    },
-    "JSONRPCErrorError": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "code": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "data": true,
-        "message": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "code",
-        "message"
-      ],
-      "title": "JSONRPCErrorError",
-      "type": "object"
-    },
-    "JSONRPCMessage": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "anyOf": [
-        {
-          "$ref": "#/definitions/JSONRPCRequest"
-        },
-        {
-          "$ref": "#/definitions/JSONRPCNotification"
-        },
-        {
-          "$ref": "#/definitions/JSONRPCResponse"
-        },
-        {
-          "$ref": "#/definitions/JSONRPCError"
-        }
-      ],
-      "description": "Refers to any valid JSON-RPC object that can be decoded off the wire, or encoded to be sent.",
-      "title": "JSONRPCMessage"
-    },
-    "JSONRPCNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "A notification which does not expect a response.",
-      "properties": {
-        "method": {
-          "type": "string"
-        },
-        "params": true
-      },
-      "required": [
-        "method"
-      ],
-      "title": "JSONRPCNotification",
-      "type": "object"
-    },
-    "JSONRPCRequest": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "A request that expects a response.",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/v2/RequestId"
-        },
-        "method": {
-          "type": "string"
-        },
-        "params": true,
-        "trace": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/W3cTraceContext"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional W3C Trace Context for distributed tracing."
-        }
-      },
-      "required": [
-        "id",
-        "method"
-      ],
-      "title": "JSONRPCRequest",
-      "type": "object"
-    },
-    "JSONRPCResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "A successful (non-error) response to a request.",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/v2/RequestId"
-        },
-        "result": true
-      },
-      "required": [
-        "id",
-        "result"
-      ],
-      "title": "JSONRPCResponse",
-      "type": "object"
-    },
     "McpElicitationArrayType": {
       "enum": [
         "array"
@@ -3191,7 +3074,7 @@
     },
     "McpElicitationSchema": {
       "additionalProperties": false,
-      "description": "Typed form schema for MCP `elicitation/create` requests.\n\nThis matches the `requestedSchema` shape from the MCP 2025-11-25 `ElicitRequestFormParams` schema.",
+      "description": "Typed form schema for MCP `elicitation/create` requests.\n\nThis is the Codex-owned representation shared by core protocol events and the app-server API.",
       "properties": {
         "$schema": {
           "type": [
@@ -3952,6 +3835,25 @@
           "type": "string"
         }
       ]
+    },
+    "RpcError": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "code": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "data": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "RpcError",
+      "type": "object"
     },
     "ServerNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -5616,23 +5518,6 @@
         "answers"
       ],
       "title": "ToolRequestUserInputResponse",
-      "type": "object"
-    },
-    "W3cTraceContext": {
-      "properties": {
-        "traceparent": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tracestate": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
       "type": "object"
     },
     "v2": {
@@ -9849,6 +9734,83 @@
           "aborted"
         ],
         "type": "string"
+      },
+      "GuardianAssessmentEvent": {
+        "properties": {
+          "action": {
+            "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
+          },
+          "completedAtMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "decisionSource": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AutoReviewDecisionSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "riskLevel": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/GuardianRiskLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "startedAtMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/GuardianApprovalReviewStatus"
+          },
+          "targetItemId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "userAuthorization": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/GuardianUserAuthorization"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "id",
+          "startedAtMs",
+          "status",
+          "turnId"
+        ],
+        "type": "object"
       },
       "GuardianCommandSource": {
         "enum": [
@@ -15718,7 +15680,7 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "event": {
-            "description": "Serialized `codex_protocol::protocol::GuardianAssessmentEvent`."
+            "$ref": "#/definitions/v2/GuardianAssessmentEvent"
           },
           "threadId": {
             "type": "string"
@@ -16177,8 +16139,10 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "items": {
-            "description": "Raw Responses API items to append to the thread's model-visible history.",
-            "items": true,
+            "description": "Responses API items to append to the thread's model-visible history.",
+            "items": {
+              "$ref": "#/definitions/v2/ResponseItem"
+            },
             "type": "array"
           },
           "threadId": {

@@ -25,15 +25,24 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::mcp::McpServerInfo;
+use codex_protocol::mcp::ReadResourceResult;
 use codex_protocol::mcp::Resource;
+use codex_protocol::mcp::ResourceContent;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::mcp::Tool;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
+use rmcp::model::Annotations;
 use rmcp::model::ElicitationCapability;
+use rmcp::model::Icon;
+use rmcp::model::IconTheme;
+use rmcp::model::Meta;
 use rmcp::model::ReadResourceRequestParams;
-use rmcp::model::ReadResourceResult;
+use rmcp::model::ResourceContents;
+use rmcp::model::Role;
+use rmcp::model::ToolAnnotations;
+use serde_json::Map;
 use serde_json::Value;
 
 use crate::codex_apps::codex_apps_tools_cache_key;
@@ -300,7 +309,37 @@ pub async fn read_mcp_resource(
 
     let result = manager
         .read_resource(server, ReadResourceRequestParams::new(uri))
-        .await;
+        .await
+        .map(|result| ReadResourceResult {
+            contents: result
+                .contents
+                .into_iter()
+                .map(|content| match content {
+                    ResourceContents::TextResourceContents {
+                        uri,
+                        mime_type,
+                        text,
+                        meta,
+                    } => ResourceContent::Text {
+                        uri,
+                        mime_type,
+                        text,
+                        meta: meta.map(|meta| Value::Object(meta.0)),
+                    },
+                    ResourceContents::BlobResourceContents {
+                        uri,
+                        mime_type,
+                        blob,
+                        meta,
+                    } => ResourceContent::Blob {
+                        uri,
+                        mime_type,
+                        blob,
+                        meta: meta.map(|meta| Value::Object(meta.0)),
+                    },
+                })
+                .collect(),
+        });
     cancel_token.cancel();
     result
 }
@@ -473,19 +512,97 @@ fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
     }
 }
 
-fn protocol_tool_from_rmcp_tool(name: &str, tool: &rmcp::model::Tool) -> Option<Tool> {
-    match serde_json::to_value(tool) {
-        Ok(value) => match Tool::from_mcp_value(value) {
-            Ok(tool) => Some(tool),
-            Err(err) => {
-                tracing::warn!("Failed to convert MCP tool '{name}': {err}");
-                None
-            }
-        },
-        Err(err) => {
-            tracing::warn!("Failed to serialize MCP tool '{name}': {err}");
-            None
-        }
+fn value_from_meta(meta: Meta) -> Value {
+    Value::Object(meta.0)
+}
+
+fn value_from_icon(icon: Icon) -> Value {
+    let mut value = Map::new();
+    value.insert("src".to_string(), Value::String(icon.src));
+    if let Some(mime_type) = icon.mime_type {
+        value.insert("mimeType".to_string(), Value::String(mime_type));
+    }
+    if let Some(sizes) = icon.sizes {
+        value.insert(
+            "sizes".to_string(),
+            Value::Array(sizes.into_iter().map(Value::String).collect()),
+        );
+    }
+    if let Some(theme) = icon.theme {
+        let theme = match theme {
+            IconTheme::Light => "light",
+            IconTheme::Dark => "dark",
+            _ => "unknown",
+        };
+        value.insert("theme".to_string(), Value::String(theme.to_string()));
+    }
+    Value::Object(value)
+}
+
+fn value_from_annotations(annotations: Annotations) -> Value {
+    let mut value = Map::new();
+    if let Some(audience) = annotations.audience {
+        value.insert(
+            "audience".to_string(),
+            Value::Array(
+                audience
+                    .into_iter()
+                    .map(|role| match role {
+                        Role::User => Value::String("user".to_string()),
+                        Role::Assistant => Value::String("assistant".to_string()),
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(priority) = annotations.priority {
+        value.insert("priority".to_string(), Value::from(priority));
+    }
+    if let Some(last_modified) = annotations.last_modified {
+        value.insert(
+            "lastModified".to_string(),
+            Value::String(last_modified.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
+        );
+    }
+    Value::Object(value)
+}
+
+fn value_from_tool_annotations(annotations: ToolAnnotations) -> Value {
+    let mut value = Map::new();
+    if let Some(title) = annotations.title {
+        value.insert("title".to_string(), Value::String(title));
+    }
+    if let Some(read_only_hint) = annotations.read_only_hint {
+        value.insert("readOnlyHint".to_string(), Value::Bool(read_only_hint));
+    }
+    if let Some(destructive_hint) = annotations.destructive_hint {
+        value.insert("destructiveHint".to_string(), Value::Bool(destructive_hint));
+    }
+    if let Some(idempotent_hint) = annotations.idempotent_hint {
+        value.insert("idempotentHint".to_string(), Value::Bool(idempotent_hint));
+    }
+    if let Some(open_world_hint) = annotations.open_world_hint {
+        value.insert("openWorldHint".to_string(), Value::Bool(open_world_hint));
+    }
+    Value::Object(value)
+}
+
+fn protocol_tool_from_rmcp_tool(tool: &rmcp::model::Tool) -> Tool {
+    Tool {
+        name: tool.name.to_string(),
+        title: tool.title.clone(),
+        description: tool.description.as_ref().map(ToString::to_string),
+        input_schema: Value::Object(tool.input_schema.as_ref().clone()),
+        output_schema: tool
+            .output_schema
+            .as_ref()
+            .map(|schema| Value::Object(schema.as_ref().clone())),
+        annotations: tool.annotations.clone().map(value_from_tool_annotations),
+        icons: tool
+            .icons
+            .clone()
+            .map(|icons| icons.into_iter().map(value_from_icon).collect()),
+        meta: tool.meta.clone().map(value_from_meta),
     }
 }
 
@@ -506,29 +623,20 @@ fn convert_mcp_resources(
         .map(|(name, resources)| {
             let resources = resources
                 .into_iter()
-                .filter_map(|resource| match serde_json::to_value(resource) {
-                    Ok(value) => match Resource::from_mcp_value(value.clone()) {
-                        Ok(resource) => Some(resource),
-                        Err(err) => {
-                            let (uri, resource_name) = match value {
-                                Value::Object(obj) => (
-                                    obj.get("uri")
-                                        .and_then(|v| v.as_str().map(ToString::to_string)),
-                                    obj.get("name")
-                                        .and_then(|v| v.as_str().map(ToString::to_string)),
-                                ),
-                                _ => (None, None),
-                            };
-
-                            tracing::warn!(
-                                "Failed to convert MCP resource (uri={uri:?}, name={resource_name:?}): {err}"
-                            );
-                            None
-                        }
-                    },
-                    Err(err) => {
-                        tracing::warn!("Failed to serialize MCP resource: {err}");
-                        None
+                .map(|resource| {
+                    let rmcp::model::Resource { raw, annotations } = resource;
+                    Resource {
+                        annotations: annotations.map(value_from_annotations),
+                        description: raw.description,
+                        mime_type: raw.mime_type,
+                        name: raw.name,
+                        size: raw.size.map(i64::from),
+                        title: raw.title,
+                        uri: raw.uri,
+                        icons: raw
+                            .icons
+                            .map(|icons| icons.into_iter().map(value_from_icon).collect()),
+                        meta: raw.meta.map(value_from_meta),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -545,30 +653,15 @@ fn convert_mcp_resource_templates(
         .map(|(name, templates)| {
             let templates = templates
                 .into_iter()
-                .filter_map(|template| match serde_json::to_value(template) {
-                    Ok(value) => match ResourceTemplate::from_mcp_value(value.clone()) {
-                        Ok(template) => Some(template),
-                        Err(err) => {
-                            let (uri_template, template_name) = match value {
-                                Value::Object(obj) => (
-                                    obj.get("uriTemplate")
-                                        .or_else(|| obj.get("uri_template"))
-                                        .and_then(|v| v.as_str().map(ToString::to_string)),
-                                    obj.get("name")
-                                        .and_then(|v| v.as_str().map(ToString::to_string)),
-                                ),
-                                _ => (None, None),
-                            };
-
-                            tracing::warn!(
-                                "Failed to convert MCP resource template (uri_template={uri_template:?}, name={template_name:?}): {err}"
-                            );
-                            None
-                        }
-                    },
-                    Err(err) => {
-                        tracing::warn!("Failed to serialize MCP resource template: {err}");
-                        None
+                .map(|template| {
+                    let rmcp::model::ResourceTemplate { raw, annotations } = template;
+                    ResourceTemplate {
+                        annotations: annotations.map(value_from_annotations),
+                        uri_template: raw.uri_template,
+                        name: raw.name,
+                        title: raw.title,
+                        description: raw.description,
+                        mime_type: raw.mime_type,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -604,10 +697,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
 
     let mut tools_by_server = HashMap::<String, HashMap<String, Tool>>::new();
     for tool_info in tools {
-        let raw_tool_name = tool_info.tool.name.to_string();
-        let Some(tool) = protocol_tool_from_rmcp_tool(&raw_tool_name, &tool_info.tool) else {
-            continue;
-        };
+        let tool = protocol_tool_from_rmcp_tool(&tool_info.tool);
         let tool_name = tool.name.clone();
         tools_by_server
             .entry(tool_info.server_name)

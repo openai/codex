@@ -1,0 +1,4318 @@
+syntax = "proto3";
+
+package codex.app_server.v2;
+
+// Native protobuf app-server session protocol.
+//
+// Every registered app-server method has an explicit oneof variant and a
+// concrete protobuf message. DynamicValue is reserved for fields whose API
+// contract is intentionally open JSON or cannot be represented by proto3.
+service CodexAppServer {
+  rpc Session(stream ClientMessage) returns (stream ServerMessage);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Schema(SchemaRequest) returns (SchemaResponse);
+}
+
+message Empty {}
+
+message RequestId {
+  oneof value {
+    string string_id = 1;
+    int64 integer_id = 2;
+  }
+}
+
+message TraceContext {
+  optional string traceparent = 1;
+  optional string tracestate = 2;
+}
+
+message DynamicValue {
+  oneof kind {
+    Empty null_value = 1;
+    bool bool_value = 2;
+    int64 integer_value = 3;
+    uint64 unsigned_integer_value = 4;
+    double number_value = 5;
+    string string_value = 6;
+    DynamicList list_value = 7;
+    DynamicObject object_value = 8;
+  }
+}
+
+message DynamicList {
+  repeated DynamicValue values = 1;
+}
+
+message DynamicObject {
+  map<string, DynamicValue> fields = 1;
+}
+
+
+message OptionalInt64 {
+  oneof value {
+    int64 some = 1;
+    Empty null = 2;
+  }
+}
+
+message OptionalUint64 {
+  oneof value {
+    uint64 some = 1;
+    Empty null = 2;
+  }
+}
+
+message NullableString {
+  optional string value = 1;
+}
+
+message NullableStringMap {
+  map<string, NullableString> values = 1;
+}
+
+message ThreadIdParams {
+  string thread_id = 1;
+}
+
+message ThreadSetNameParams {
+  string thread_id = 1;
+  string name = 2;
+}
+
+message ElicitationCounterResponse {
+  uint64 count = 1;
+  bool paused = 2;
+}
+
+enum ThreadGoalStatus {
+  THREAD_GOAL_STATUS_UNSPECIFIED = 0;
+  THREAD_GOAL_STATUS_ACTIVE = 1;
+  THREAD_GOAL_STATUS_PAUSED = 2;
+  THREAD_GOAL_STATUS_BLOCKED = 3;
+  THREAD_GOAL_STATUS_USAGE_LIMITED = 4;
+  THREAD_GOAL_STATUS_BUDGET_LIMITED = 5;
+  THREAD_GOAL_STATUS_COMPLETE = 6;
+}
+
+message ThreadGoal {
+  string thread_id = 1;
+  string objective = 2;
+  ThreadGoalStatus status = 3;
+  optional int64 token_budget = 4;
+  int64 tokens_used = 5;
+  int64 time_used_seconds = 6;
+  int64 created_at = 7;
+  int64 updated_at = 8;
+}
+
+message ThreadGoalSetParams {
+  string thread_id = 1;
+  optional string objective = 2;
+  optional ThreadGoalStatus status = 3;
+  OptionalInt64 token_budget = 4;
+}
+
+message ThreadGoalResponse {
+  optional ThreadGoal goal = 1;
+}
+
+message ThreadGoalClearResponse {
+  bool cleared = 1;
+}
+
+enum ThreadMemoryMode {
+  THREAD_MEMORY_MODE_UNSPECIFIED = 0;
+  THREAD_MEMORY_MODE_ENABLED = 1;
+  THREAD_MEMORY_MODE_DISABLED = 2;
+}
+
+message ThreadMemoryModeSetParams {
+  string thread_id = 1;
+  ThreadMemoryMode mode = 2;
+}
+
+message ThreadShellCommandParams {
+  string thread_id = 1;
+  string command = 2;
+}
+
+message TurnInterruptParams {
+  string thread_id = 1;
+  string turn_id = 2;
+}
+
+message ThreadNameUpdatedNotification {
+  string thread_id = 1;
+  optional string thread_name = 2;
+}
+
+message ThreadGoalUpdatedNotification {
+  string thread_id = 1;
+  optional string turn_id = 2;
+  ThreadGoal goal = 3;
+}
+
+message FsPathParams {
+  string path = 1;
+}
+
+message FsWriteFileParams {
+  string path = 1;
+  string data_base64 = 2;
+}
+
+message FsCreateDirectoryParams {
+  string path = 1;
+  optional bool recursive = 2;
+}
+
+message FsRemoveParams {
+  string path = 1;
+  optional bool recursive = 2;
+  optional bool force = 3;
+}
+
+message FsCopyParams {
+  string source_path = 1;
+  string destination_path = 2;
+  bool recursive = 3;
+}
+
+message FsWatchParams {
+  string watch_id = 1;
+  string path = 2;
+}
+
+message FsUnwatchParams {
+  string watch_id = 1;
+}
+
+message FsReadFileResponse {
+  string data_base64 = 1;
+}
+
+message FsGetMetadataResponse {
+  bool is_directory = 1;
+  bool is_file = 2;
+  bool is_symlink = 3;
+  int64 created_at_ms = 4;
+  int64 modified_at_ms = 5;
+}
+
+message FsReadDirectoryEntry {
+  string file_name = 1;
+  bool is_directory = 2;
+  bool is_file = 3;
+}
+
+message FsReadDirectoryResponse {
+  repeated FsReadDirectoryEntry entries = 1;
+}
+
+message FsWatchResponse {
+  string path = 1;
+}
+
+message FsChangedNotification {
+  string watch_id = 1;
+  repeated string changed_paths = 2;
+}
+
+message EnvironmentAddParams {
+  string environment_id = 1;
+  string exec_server_url = 2;
+}
+
+message TerminalSize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
+
+message SandboxPolicy {
+  oneof kind {
+    Empty danger_full_access = 1;
+    SandboxReadOnly read_only = 2;
+    SandboxExternal external_sandbox = 3;
+    SandboxWorkspaceWrite workspace_write = 4;
+  }
+}
+
+message SandboxReadOnly {
+  bool network_access = 1;
+}
+
+enum NetworkAccess {
+  NETWORK_ACCESS_UNSPECIFIED = 0;
+  NETWORK_ACCESS_RESTRICTED = 1;
+  NETWORK_ACCESS_ENABLED = 2;
+}
+
+message SandboxExternal {
+  NetworkAccess network_access = 1;
+}
+
+message SandboxWorkspaceWrite {
+  repeated string writable_roots = 1;
+  bool network_access = 2;
+  bool exclude_tmpdir_env_var = 3;
+  bool exclude_slash_tmp = 4;
+}
+
+message CommandExecParams {
+  repeated string command = 1;
+  optional string process_id = 2;
+  bool tty = 3;
+  bool stream_stdin = 4;
+  bool stream_stdout_stderr = 5;
+  optional uint64 output_bytes_cap = 6;
+  bool disable_output_cap = 7;
+  bool disable_timeout = 8;
+  optional int64 timeout_ms = 9;
+  optional string cwd = 10;
+  NullableStringMap env = 11;
+  TerminalSize size = 12;
+  SandboxPolicy sandbox_policy = 13;
+  optional string permission_profile = 14;
+}
+
+message CommandExecResponse {
+  int32 exit_code = 1;
+  string stdout = 2;
+  string stderr = 3;
+}
+
+message CommandExecWriteParams {
+  string process_id = 1;
+  optional string delta_base64 = 2;
+  bool close_stdin = 3;
+}
+
+message CommandExecTerminateParams {
+  string process_id = 1;
+}
+
+message CommandExecResizeParams {
+  string process_id = 1;
+  TerminalSize size = 2;
+}
+
+enum OutputStream {
+  OUTPUT_STREAM_UNSPECIFIED = 0;
+  OUTPUT_STREAM_STDOUT = 1;
+  OUTPUT_STREAM_STDERR = 2;
+}
+
+message CommandExecOutputDeltaNotification {
+  string process_id = 1;
+  OutputStream stream = 2;
+  string delta_base64 = 3;
+  bool cap_reached = 4;
+}
+
+message ProcessSpawnParams {
+  repeated string command = 1;
+  string process_handle = 2;
+  string cwd = 3;
+  bool tty = 4;
+  bool stream_stdin = 5;
+  bool stream_stdout_stderr = 6;
+  OptionalUint64 output_bytes_cap = 7;
+  OptionalInt64 timeout_ms = 8;
+  NullableStringMap env = 9;
+  TerminalSize size = 10;
+}
+
+message ProcessWriteStdinParams {
+  string process_handle = 1;
+  optional string delta_base64 = 2;
+  bool close_stdin = 3;
+}
+
+message ProcessKillParams {
+  string process_handle = 1;
+}
+
+message ProcessResizePtyParams {
+  string process_handle = 1;
+  TerminalSize size = 2;
+}
+
+message ProcessOutputDeltaNotification {
+  string process_handle = 1;
+  OutputStream stream = 2;
+  string delta_base64 = 3;
+  bool cap_reached = 4;
+}
+
+message ProcessExitedNotification {
+  string process_handle = 1;
+  int32 exit_code = 2;
+  string stdout = 3;
+  bool stdout_cap_reached = 4;
+  string stderr = 5;
+  bool stderr_cap_reached = 6;
+}
+
+message LoginAccountParams {
+  oneof account {
+    LoginApiKey api_key = 1;
+    LoginChatgpt chatgpt = 2;
+    Empty chatgpt_device_code = 3;
+    LoginChatgptAuthTokens chatgpt_auth_tokens = 4;
+  }
+}
+
+message LoginApiKey {
+  string api_key = 1;
+}
+
+message LoginChatgpt {
+  bool codex_streamlined_login = 1;
+}
+
+message LoginChatgptAuthTokens {
+  string access_token = 1;
+  string chatgpt_account_id = 2;
+  optional string chatgpt_plan_type = 3;
+}
+
+message LoginAccountResponse {
+  oneof account {
+    Empty api_key = 1;
+    LoginChatgptResponse chatgpt = 2;
+    LoginChatgptDeviceCodeResponse chatgpt_device_code = 3;
+    Empty chatgpt_auth_tokens = 4;
+  }
+}
+
+message LoginChatgptResponse {
+  string login_id = 1;
+  string auth_url = 2;
+}
+
+message LoginChatgptDeviceCodeResponse {
+  string login_id = 1;
+  string verification_url = 2;
+  string user_code = 3;
+}
+
+message CancelLoginAccountParams {
+  string login_id = 1;
+}
+
+enum CancelLoginAccountStatus {
+  CANCEL_LOGIN_ACCOUNT_STATUS_UNSPECIFIED = 0;
+  CANCEL_LOGIN_ACCOUNT_STATUS_CANCELED = 1;
+  CANCEL_LOGIN_ACCOUNT_STATUS_NOT_FOUND = 2;
+}
+
+message CancelLoginAccountResponse {
+  CancelLoginAccountStatus status = 1;
+}
+
+enum AddCreditsNudgeCreditType {
+  ADD_CREDITS_NUDGE_CREDIT_TYPE_UNSPECIFIED = 0;
+  ADD_CREDITS_NUDGE_CREDIT_TYPE_CREDITS = 1;
+  ADD_CREDITS_NUDGE_CREDIT_TYPE_USAGE_LIMIT = 2;
+}
+
+message SendAddCreditsNudgeEmailParams {
+  AddCreditsNudgeCreditType credit_type = 1;
+}
+
+enum AddCreditsNudgeEmailStatus {
+  ADD_CREDITS_NUDGE_EMAIL_STATUS_UNSPECIFIED = 0;
+  ADD_CREDITS_NUDGE_EMAIL_STATUS_SENT = 1;
+  ADD_CREDITS_NUDGE_EMAIL_STATUS_COOLDOWN_ACTIVE = 2;
+}
+
+message SendAddCreditsNudgeEmailResponse {
+  AddCreditsNudgeEmailStatus status = 1;
+}
+
+message GetAccountParams {
+  bool refresh_token = 1;
+}
+
+message ChatgptAuthTokensRefreshParams {
+  optional string previous_account_id = 1;
+}
+
+message ChatgptAuthTokensRefreshResponse {
+  string access_token = 1;
+  string chatgpt_account_id = 2;
+  optional string chatgpt_plan_type = 3;
+}
+
+message AttestationGenerateResponse {
+  string token = 1;
+}
+
+message AccountLoginCompletedNotification {
+  optional string login_id = 1;
+  bool success = 2;
+  optional string error = 3;
+}
+
+message RemoteControlPairingStartParams {
+  bool manual_code = 1;
+}
+
+message RemoteControlPairingStartResponse {
+  string pairing_code = 1;
+  optional string manual_pairing_code = 2;
+  string environment_id = 3;
+  int64 expires_at = 4;
+}
+
+message RemoteControlClientsRevokeParams {
+  string environment_id = 1;
+  string client_id = 2;
+}
+
+message FuzzyFileSearchSessionStartParams {
+  string session_id = 1;
+  repeated string roots = 2;
+}
+
+message FuzzyFileSearchSessionUpdateParams {
+  string session_id = 1;
+  string query = 2;
+}
+
+message FuzzyFileSearchSessionStopParams {
+  string session_id = 1;
+}
+
+message FuzzyFileSearchSessionCompletedNotification {
+  string session_id = 1;
+}
+
+message ThreadRealtimeAppendTextParams {
+  string thread_id = 1;
+  string text = 2;
+}
+
+message ThreadRealtimeTranscriptDeltaNotification {
+  string thread_id = 1;
+  string role = 2;
+  string delta = 3;
+}
+
+message ThreadRealtimeTranscriptDoneNotification {
+  string thread_id = 1;
+  string role = 2;
+  string text = 3;
+}
+
+message ThreadRealtimeSdpNotification {
+  string thread_id = 1;
+  string sdp = 2;
+}
+
+message ThreadRealtimeErrorNotification {
+  string thread_id = 1;
+  string message = 2;
+}
+
+message ThreadRealtimeClosedNotification {
+  string thread_id = 1;
+  optional string reason = 2;
+}
+
+message WarningNotification {
+  optional string thread_id = 1;
+  string message = 2;
+}
+
+message GuardianWarningNotification {
+  string thread_id = 1;
+  string message = 2;
+}
+
+message DeprecationNoticeNotification {
+  string summary = 1;
+  optional string details = 2;
+}
+
+
+message LegacyInitializeCapabilitiesOptOutNotificationMethodsList {
+  repeated string values = 1;
+}
+
+message LegacyInitializeCapabilities {
+  optional bool experimental_api = 1;
+  LegacyInitializeCapabilitiesOptOutNotificationMethodsList opt_out_notification_methods = 2;
+  optional bool request_attestation = 3;
+}
+
+message LegacyClientInfo {
+  string name = 1;
+  optional string title = 2;
+  string version = 3;
+}
+
+message LegacyInitializeParams {
+  LegacyInitializeCapabilities capabilities = 1;
+  LegacyClientInfo client_info = 2;
+}
+
+message V2AskForApprovalGranularAskForApprovalGranular {
+  bool mcp_elicitations = 1;
+  optional bool request_permissions = 2;
+  bool rules = 3;
+  bool sandbox_approval = 4;
+  optional bool skill_approval = 5;
+}
+
+message V2AskForApprovalGranularAskForApproval {
+  V2AskForApprovalGranularAskForApprovalGranular granular = 1;
+}
+
+message V2AskForApproval {
+  oneof value {
+    string string_value = 1;
+    V2AskForApprovalGranularAskForApproval granular_ask_for_approval = 2;
+  }
+}
+
+message V2ApprovalsReviewer {
+  string value = 1;
+}
+
+message V2ThreadStartParamsConfigMap {
+  map<string, DynamicValue> values = 1;
+}
+
+message V2DynamicToolSpec {
+  optional bool defer_loading = 1;
+  string description = 2;
+  DynamicValue input_schema = 3;
+  string name = 4;
+  optional string namespace = 5;
+}
+
+message V2ThreadStartParamsDynamicToolsList {
+  repeated V2DynamicToolSpec values = 1;
+}
+
+message V2AbsolutePathBuf {
+  string value = 1;
+}
+
+message V2TurnEnvironmentParams {
+  V2AbsolutePathBuf cwd = 1;
+  string environment_id = 2;
+}
+
+message V2ThreadStartParamsEnvironmentsList {
+  repeated V2TurnEnvironmentParams values = 1;
+}
+
+message V2Personality {
+  string value = 1;
+}
+
+message V2ThreadStartParamsRuntimeWorkspaceRootsList {
+  repeated string values = 1;
+}
+
+message V2SandboxMode {
+  string value = 1;
+}
+
+message V2ThreadStartSource {
+  string value = 1;
+}
+
+message V2ThreadSource {
+  string value = 1;
+}
+
+message V2ThreadStartParams {
+  V2AskForApproval approval_policy = 1;
+  V2ApprovalsReviewer approvals_reviewer = 2;
+  optional string base_instructions = 3;
+  V2ThreadStartParamsConfigMap config = 4;
+  optional string cwd = 5;
+  optional string developer_instructions = 6;
+  V2ThreadStartParamsDynamicToolsList dynamic_tools = 7;
+  V2ThreadStartParamsEnvironmentsList environments = 8;
+  optional bool ephemeral = 9;
+  optional bool experimental_raw_events = 10;
+  optional string mock_experimental_field = 11;
+  optional string model = 12;
+  optional string model_provider = 13;
+  optional string permissions = 14;
+  V2Personality personality = 15;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList runtime_workspace_roots = 16;
+  V2SandboxMode sandbox = 17;
+  optional string service_name = 18;
+  NullableString service_tier = 19;
+  V2ThreadStartSource session_start_source = 20;
+  V2ThreadSource thread_source = 21;
+}
+
+message V2ImageDetail {
+  string value = 1;
+}
+
+message V2ContentItem {
+  optional string text = 1;
+  string type = 2;
+  V2ImageDetail detail = 3;
+  optional string image_url = 4;
+}
+
+message V2ReasoningItemContent {
+  string text = 1;
+  string type = 2;
+}
+
+message V2ResponseItemContentItem {
+  oneof value {
+    V2ContentItem variant_1 = 1;
+    V2ReasoningItemContent variant_2 = 2;
+  }
+}
+
+message V2ResponseItemContentList {
+  repeated V2ResponseItemContentItem values = 1;
+}
+
+message V2MessagePhase {
+  string value = 1;
+}
+
+message V2ReasoningItemReasoningSummary {
+  string text = 1;
+  string type = 2;
+}
+
+message V2ResponseItemSummaryList {
+  repeated V2ReasoningItemReasoningSummary values = 1;
+}
+
+message V2LocalShellActionEnvMap {
+  map<string, string> values = 1;
+}
+
+message V2LocalShellAction {
+  repeated string command = 1;
+  V2LocalShellActionEnvMap env = 2;
+  optional uint64 timeout_ms = 3;
+  string type = 4;
+  optional string user = 5;
+  optional string working_directory = 6;
+}
+
+message V2ResponsesApiWebSearchAction {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList queries = 1;
+  optional string query = 2;
+  string type = 3;
+  optional string url = 4;
+  optional string pattern = 5;
+}
+
+message V2ResponseItemAction {
+  oneof value {
+    V2LocalShellAction variant_1 = 1;
+    V2ResponsesApiWebSearchAction variant_2 = 2;
+  }
+}
+
+message V2ResponseItemArguments {
+  oneof value {
+    string string_value = 1;
+    DynamicValue variant_2 = 2;
+  }
+}
+
+message V2FunctionCallOutputContentItem {
+  optional string text = 1;
+  string type = 2;
+  V2ImageDetail detail = 3;
+  optional string image_url = 4;
+  optional string encrypted_content = 5;
+}
+
+message V2FunctionCallOutputBodyVariant2 {
+  repeated V2FunctionCallOutputContentItem values = 1;
+}
+
+message V2FunctionCallOutputBody {
+  oneof value {
+    string string_value = 1;
+    V2FunctionCallOutputBodyVariant2 variant_2 = 2;
+  }
+}
+
+message V2ResponseItemToolsList {
+  repeated DynamicValue values = 1;
+}
+
+message V2ResponseItem {
+  V2ResponseItemContentList content = 1;
+  optional string id = 2;
+  V2MessagePhase phase = 3;
+  optional string role = 4;
+  string type = 5;
+  optional string encrypted_content = 6;
+  V2ResponseItemSummaryList summary = 7;
+  V2ResponseItemAction action = 8;
+  optional string call_id = 9;
+  optional string status = 10;
+  V2ResponseItemArguments arguments = 11;
+  optional string name = 12;
+  optional string namespace = 13;
+  optional string execution = 14;
+  V2FunctionCallOutputBody output = 15;
+  optional string input = 16;
+  V2ResponseItemToolsList tools = 17;
+  optional string result = 18;
+  optional string revised_prompt = 19;
+}
+
+message V2ThreadResumeParamsHistoryList {
+  repeated V2ResponseItem values = 1;
+}
+
+message V2TurnItemsView {
+  string value = 1;
+}
+
+message V2SortDirection {
+  string value = 1;
+}
+
+message V2ThreadResumeInitialTurnsPageParams {
+  V2TurnItemsView items_view = 1;
+  optional uint64 limit = 2;
+  V2SortDirection sort_direction = 3;
+}
+
+message V2ThreadResumeParams {
+  V2AskForApproval approval_policy = 1;
+  V2ApprovalsReviewer approvals_reviewer = 2;
+  optional string base_instructions = 3;
+  V2ThreadStartParamsConfigMap config = 4;
+  optional string cwd = 5;
+  optional string developer_instructions = 6;
+  optional bool exclude_turns = 7;
+  V2ThreadResumeParamsHistoryList history = 8;
+  V2ThreadResumeInitialTurnsPageParams initial_turns_page = 9;
+  optional string model = 10;
+  optional string model_provider = 11;
+  optional string path = 12;
+  optional string permissions = 13;
+  V2Personality personality = 14;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList runtime_workspace_roots = 15;
+  V2SandboxMode sandbox = 16;
+  NullableString service_tier = 17;
+  string thread_id = 18;
+}
+
+message V2ThreadForkParams {
+  V2AskForApproval approval_policy = 1;
+  V2ApprovalsReviewer approvals_reviewer = 2;
+  optional string base_instructions = 3;
+  V2ThreadStartParamsConfigMap config = 4;
+  optional string cwd = 5;
+  optional string developer_instructions = 6;
+  optional bool ephemeral = 7;
+  optional bool exclude_turns = 8;
+  optional string model = 9;
+  optional string model_provider = 10;
+  optional string path = 11;
+  optional string permissions = 12;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList runtime_workspace_roots = 13;
+  V2SandboxMode sandbox = 14;
+  NullableString service_tier = 15;
+  string thread_id = 16;
+  V2ThreadSource thread_source = 17;
+}
+
+message V2ThreadUnsubscribeParams {
+  string thread_id = 1;
+}
+
+message V2ThreadMetadataGitInfoUpdateParams {
+  NullableString branch = 1;
+  NullableString origin_url = 2;
+  NullableString sha = 3;
+}
+
+message V2ThreadMetadataUpdateParams {
+  V2ThreadMetadataGitInfoUpdateParams git_info = 1;
+  string thread_id = 2;
+}
+
+message V2ModeKind {
+  string value = 1;
+}
+
+message V2ReasoningEffort {
+  string value = 1;
+}
+
+message V2Settings {
+  optional string developer_instructions = 1;
+  string model = 2;
+  V2ReasoningEffort reasoning_effort = 3;
+}
+
+message V2CollaborationMode {
+  V2ModeKind mode = 1;
+  V2Settings settings = 2;
+}
+
+message V2SandboxPolicyNetworkAccess {
+  oneof value {
+    bool bool_value = 1;
+    string string_value = 2;
+  }
+}
+
+message V2SandboxPolicyWritableRootsList {
+  repeated V2AbsolutePathBuf values = 1;
+}
+
+message V2SandboxPolicy {
+  string type = 1;
+  V2SandboxPolicyNetworkAccess network_access = 2;
+  optional bool exclude_slash_tmp = 3;
+  optional bool exclude_tmpdir_env_var = 4;
+  V2SandboxPolicyWritableRootsList writable_roots = 5;
+}
+
+message V2ReasoningSummary {
+  string value = 1;
+}
+
+message V2ThreadSettingsUpdateParams {
+  V2AskForApproval approval_policy = 1;
+  V2ApprovalsReviewer approvals_reviewer = 2;
+  V2CollaborationMode collaboration_mode = 3;
+  optional string cwd = 4;
+  V2ReasoningEffort effort = 5;
+  optional string model = 6;
+  optional string permissions = 7;
+  V2Personality personality = 8;
+  V2SandboxPolicy sandbox_policy = 9;
+  NullableString service_tier = 10;
+  V2ReasoningSummary summary = 11;
+  string thread_id = 12;
+}
+
+message V2ThreadUnarchiveParams {
+  string thread_id = 1;
+}
+
+message V2GuardianCommandSource {
+  string value = 1;
+}
+
+message V2NetworkApprovalProtocol {
+  string value = 1;
+}
+
+message V2FileSystemAccessMode {
+  string value = 1;
+}
+
+message V2FileSystemSpecialPath {
+  string kind = 1;
+  optional string subpath = 2;
+  optional string path = 3;
+}
+
+message V2FileSystemPath {
+  V2AbsolutePathBuf path = 1;
+  string type = 2;
+  optional string pattern = 3;
+  V2FileSystemSpecialPath value = 4;
+}
+
+message V2FileSystemSandboxEntry {
+  V2FileSystemAccessMode access = 1;
+  V2FileSystemPath path = 2;
+}
+
+message V2AdditionalFileSystemPermissionsEntriesList {
+  repeated V2FileSystemSandboxEntry values = 1;
+}
+
+message V2AdditionalFileSystemPermissions {
+  V2AdditionalFileSystemPermissionsEntriesList entries = 1;
+  optional uint64 glob_scan_max_depth = 2;
+  V2SandboxPolicyWritableRootsList read = 3;
+  V2SandboxPolicyWritableRootsList write = 4;
+}
+
+message V2AdditionalNetworkPermissions {
+  optional bool enabled = 1;
+}
+
+message V2RequestPermissionProfile {
+  V2AdditionalFileSystemPermissions file_system = 1;
+  V2AdditionalNetworkPermissions network = 2;
+}
+
+message V2GuardianApprovalReviewAction {
+  optional string command = 1;
+  V2AbsolutePathBuf cwd = 2;
+  V2GuardianCommandSource source = 3;
+  string type = 4;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList argv = 5;
+  optional string program = 6;
+  V2SandboxPolicyWritableRootsList files = 7;
+  optional string host = 8;
+  optional uint64 port = 9;
+  V2NetworkApprovalProtocol protocol = 10;
+  optional string target = 11;
+  optional string connector_id = 12;
+  optional string connector_name = 13;
+  optional string server = 14;
+  optional string tool_name = 15;
+  optional string tool_title = 16;
+  V2RequestPermissionProfile permissions = 17;
+  optional string reason = 18;
+}
+
+message V2AutoReviewDecisionSource {
+  string value = 1;
+}
+
+message V2GuardianRiskLevel {
+  string value = 1;
+}
+
+message V2GuardianApprovalReviewStatus {
+  string value = 1;
+}
+
+message V2GuardianUserAuthorization {
+  string value = 1;
+}
+
+message V2GuardianAssessmentEvent {
+  V2GuardianApprovalReviewAction action = 1;
+  optional int64 completed_at_ms = 2;
+  V2AutoReviewDecisionSource decision_source = 3;
+  string id = 4;
+  optional string rationale = 5;
+  V2GuardianRiskLevel risk_level = 6;
+  int64 started_at_ms = 7;
+  V2GuardianApprovalReviewStatus status = 8;
+  optional string target_item_id = 9;
+  string turn_id = 10;
+  V2GuardianUserAuthorization user_authorization = 11;
+}
+
+message V2ThreadApproveGuardianDeniedActionParams {
+  V2GuardianAssessmentEvent event = 1;
+  string thread_id = 2;
+}
+
+message V2ThreadRollbackParams {
+  uint64 num_turns = 1;
+  string thread_id = 2;
+}
+
+message V2ThreadListCwdFilter {
+  oneof value {
+    string string_value = 1;
+    V2ThreadStartParamsRuntimeWorkspaceRootsList variant_2 = 2;
+  }
+}
+
+message V2ThreadSortKey {
+  string value = 1;
+}
+
+message V2ThreadSourceKind {
+  string value = 1;
+}
+
+message V2ThreadListParamsSourceKindsList {
+  repeated V2ThreadSourceKind values = 1;
+}
+
+message V2ThreadListParams {
+  optional bool archived = 1;
+  optional string cursor = 2;
+  V2ThreadListCwdFilter cwd = 3;
+  optional uint64 limit = 4;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList model_providers = 5;
+  optional string search_term = 6;
+  V2SortDirection sort_direction = 7;
+  V2ThreadSortKey sort_key = 8;
+  V2ThreadListParamsSourceKindsList source_kinds = 9;
+  optional bool use_state_db_only = 10;
+}
+
+message V2ThreadSearchParams {
+  optional bool archived = 1;
+  optional string cursor = 2;
+  optional uint64 limit = 3;
+  string search_term = 4;
+  V2SortDirection sort_direction = 5;
+  V2ThreadSortKey sort_key = 6;
+  V2ThreadListParamsSourceKindsList source_kinds = 7;
+}
+
+message V2ThreadLoadedListParams {
+  optional string cursor = 1;
+  optional uint64 limit = 2;
+}
+
+message V2ThreadReadParams {
+  optional bool include_turns = 1;
+  string thread_id = 2;
+}
+
+message V2ThreadTurnsListParams {
+  optional string cursor = 1;
+  V2TurnItemsView items_view = 2;
+  optional uint64 limit = 3;
+  V2SortDirection sort_direction = 4;
+  string thread_id = 5;
+}
+
+message V2ThreadTurnsItemsListParams {
+  optional string cursor = 1;
+  optional uint64 limit = 2;
+  V2SortDirection sort_direction = 3;
+  string thread_id = 4;
+  string turn_id = 5;
+}
+
+message V2ThreadInjectItemsParams {
+  repeated V2ResponseItem items = 1;
+  string thread_id = 2;
+}
+
+message V2SkillsListParams {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList cwds = 1;
+  optional bool force_reload = 2;
+}
+
+message V2SkillsExtraRootsSetParams {
+  repeated V2AbsolutePathBuf extra_roots = 1;
+}
+
+message V2HooksListParams {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList cwds = 1;
+}
+
+message V2MarketplaceAddParams {
+  optional string ref_name = 1;
+  string source = 2;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList sparse_paths = 3;
+}
+
+message V2MarketplaceRemoveParams {
+  string marketplace_name = 1;
+}
+
+message V2MarketplaceUpgradeParams {
+  optional string marketplace_name = 1;
+}
+
+message V2PluginListMarketplaceKind {
+  string value = 1;
+}
+
+message V2PluginListParamsMarketplaceKindsList {
+  repeated V2PluginListMarketplaceKind values = 1;
+}
+
+message V2PluginListParams {
+  V2SandboxPolicyWritableRootsList cwds = 1;
+  V2PluginListParamsMarketplaceKindsList marketplace_kinds = 2;
+}
+
+message V2PluginInstalledParams {
+  V2SandboxPolicyWritableRootsList cwds = 1;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList install_suggestion_plugin_names = 2;
+}
+
+message V2PluginReadParams {
+  V2AbsolutePathBuf marketplace_path = 1;
+  string plugin_name = 2;
+  optional string remote_marketplace_name = 3;
+}
+
+message V2PluginSkillReadParams {
+  string remote_marketplace_name = 1;
+  string remote_plugin_id = 2;
+  string skill_name = 3;
+}
+
+message V2PluginShareDiscoverability {
+  string value = 1;
+}
+
+message V2PluginSharePrincipalType {
+  string value = 1;
+}
+
+message V2PluginShareTargetRole {
+  string value = 1;
+}
+
+message V2PluginShareTarget {
+  string principal_id = 1;
+  V2PluginSharePrincipalType principal_type = 2;
+  V2PluginShareTargetRole role = 3;
+}
+
+message V2PluginShareSaveParamsShareTargetsList {
+  repeated V2PluginShareTarget values = 1;
+}
+
+message V2PluginShareSaveParams {
+  V2PluginShareDiscoverability discoverability = 1;
+  V2AbsolutePathBuf plugin_path = 2;
+  optional string remote_plugin_id = 3;
+  V2PluginShareSaveParamsShareTargetsList share_targets = 4;
+}
+
+message V2PluginShareUpdateDiscoverability {
+  string value = 1;
+}
+
+message V2PluginShareUpdateTargetsParams {
+  V2PluginShareUpdateDiscoverability discoverability = 1;
+  string remote_plugin_id = 2;
+  repeated V2PluginShareTarget share_targets = 3;
+}
+
+message V2PluginShareCheckoutParams {
+  string remote_plugin_id = 1;
+}
+
+message V2PluginShareDeleteParams {
+  string remote_plugin_id = 1;
+}
+
+message V2AppsListParams {
+  optional string cursor = 1;
+  optional bool force_refetch = 2;
+  optional uint64 limit = 3;
+  optional string thread_id = 4;
+}
+
+message V2SkillsConfigWriteParams {
+  bool enabled = 1;
+  optional string name = 2;
+  V2AbsolutePathBuf path = 3;
+}
+
+message V2PluginInstallParams {
+  V2AbsolutePathBuf marketplace_path = 1;
+  string plugin_name = 2;
+  optional string remote_marketplace_name = 3;
+}
+
+message V2PluginUninstallParams {
+  string plugin_id = 1;
+}
+
+message V2AdditionalContextKind {
+  string value = 1;
+}
+
+message V2AdditionalContextEntry {
+  V2AdditionalContextKind kind = 1;
+  string value = 2;
+}
+
+message V2TurnStartParamsAdditionalContextMap {
+  map<string, V2AdditionalContextEntry> values = 1;
+}
+
+message V2ByteRange {
+  uint64 end = 1;
+  uint64 start = 2;
+}
+
+message V2TextElement {
+  V2ByteRange byte_range = 1;
+  optional string placeholder = 2;
+}
+
+message V2UserInputTextElementsList {
+  repeated V2TextElement values = 1;
+}
+
+message V2UserInput {
+  optional string text = 1;
+  V2UserInputTextElementsList text_elements = 2;
+  string type = 3;
+  V2ImageDetail detail = 4;
+  optional string url = 5;
+  optional string path = 6;
+  optional string name = 7;
+}
+
+message V2TurnStartParamsResponsesapiClientMetadataMap {
+  map<string, string> values = 1;
+}
+
+message V2TurnStartParams {
+  V2TurnStartParamsAdditionalContextMap additional_context = 1;
+  V2AskForApproval approval_policy = 2;
+  V2ApprovalsReviewer approvals_reviewer = 3;
+  optional string client_user_message_id = 4;
+  V2CollaborationMode collaboration_mode = 5;
+  optional string cwd = 6;
+  V2ReasoningEffort effort = 7;
+  V2ThreadStartParamsEnvironmentsList environments = 8;
+  repeated V2UserInput input = 9;
+  optional string model = 10;
+  DynamicValue output_schema = 11;
+  optional string permissions = 12;
+  V2Personality personality = 13;
+  V2TurnStartParamsResponsesapiClientMetadataMap responsesapi_client_metadata = 14;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList runtime_workspace_roots = 15;
+  V2SandboxPolicy sandbox_policy = 16;
+  NullableString service_tier = 17;
+  V2ReasoningSummary summary = 18;
+  string thread_id = 19;
+}
+
+message V2TurnSteerParams {
+  V2TurnStartParamsAdditionalContextMap additional_context = 1;
+  optional string client_user_message_id = 2;
+  string expected_turn_id = 3;
+  repeated V2UserInput input = 4;
+  V2TurnStartParamsResponsesapiClientMetadataMap responsesapi_client_metadata = 5;
+  string thread_id = 6;
+}
+
+message V2RealtimeOutputModality {
+  string value = 1;
+}
+
+message V2ThreadRealtimeStartTransport {
+  string type = 1;
+  optional string sdp = 2;
+}
+
+message V2RealtimeVoice {
+  string value = 1;
+}
+
+message V2ThreadRealtimeStartParams {
+  V2RealtimeOutputModality output_modality = 1;
+  NullableString prompt = 2;
+  optional string realtime_session_id = 3;
+  string thread_id = 4;
+  V2ThreadRealtimeStartTransport transport = 5;
+  V2RealtimeVoice voice = 6;
+}
+
+message V2ThreadRealtimeAudioChunk {
+  string data = 1;
+  optional string item_id = 2;
+  uint64 num_channels = 3;
+  uint64 sample_rate = 4;
+  optional uint64 samples_per_channel = 5;
+}
+
+message V2ThreadRealtimeAppendAudioParams {
+  V2ThreadRealtimeAudioChunk audio = 1;
+  string thread_id = 2;
+}
+
+message V2ReviewDelivery {
+  string value = 1;
+}
+
+message V2ReviewTarget {
+  string type = 1;
+  optional string branch = 2;
+  optional string sha = 3;
+  optional string title = 4;
+  optional string instructions = 5;
+}
+
+message V2ReviewStartParams {
+  V2ReviewDelivery delivery = 1;
+  V2ReviewTarget target = 2;
+  string thread_id = 3;
+}
+
+message V2ModelListParams {
+  optional string cursor = 1;
+  optional bool include_hidden = 2;
+  optional uint64 limit = 3;
+}
+
+message V2ExperimentalFeatureListParams {
+  optional string cursor = 1;
+  optional uint64 limit = 2;
+  optional string thread_id = 3;
+}
+
+message V2PermissionProfileListParams {
+  optional string cursor = 1;
+  optional string cwd = 2;
+  optional uint64 limit = 3;
+}
+
+message V2ExperimentalFeatureEnablementSetParamsEnablementMap {
+  map<string, bool> values = 1;
+}
+
+message V2ExperimentalFeatureEnablementSetParams {
+  V2ExperimentalFeatureEnablementSetParamsEnablementMap enablement = 1;
+}
+
+message V2RemoteControlClientsListOrder {
+  string value = 1;
+}
+
+message V2RemoteControlClientsListParams {
+  optional string cursor = 1;
+  string environment_id = 2;
+  optional uint64 limit = 3;
+  V2RemoteControlClientsListOrder order = 4;
+}
+
+message V2MockExperimentalMethodParams {
+  optional string value = 1;
+}
+
+message V2McpServerOauthLoginParams {
+  string name = 1;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList scopes = 2;
+  optional int64 timeout_secs = 3;
+}
+
+message V2McpServerStatusDetail {
+  string value = 1;
+}
+
+message V2ListMcpServerStatusParams {
+  optional string cursor = 1;
+  V2McpServerStatusDetail detail = 2;
+  optional uint64 limit = 3;
+  optional string thread_id = 4;
+}
+
+message V2McpResourceReadParams {
+  string server = 1;
+  optional string thread_id = 2;
+  string uri = 3;
+}
+
+message V2McpServerToolCallParams {
+  DynamicValue _meta = 1;
+  DynamicValue arguments = 2;
+  string server = 3;
+  string thread_id = 4;
+  string tool = 5;
+}
+
+message V2WindowsSandboxSetupMode {
+  string value = 1;
+}
+
+message V2WindowsSandboxSetupStartParams {
+  V2AbsolutePathBuf cwd = 1;
+  V2WindowsSandboxSetupMode mode = 2;
+}
+
+message V2FeedbackUploadParams {
+  string classification = 1;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList extra_log_files = 2;
+  optional bool include_logs = 3;
+  optional string reason = 4;
+  V2LocalShellActionEnvMap tags = 5;
+  optional string thread_id = 6;
+}
+
+message V2ConfigReadParams {
+  optional string cwd = 1;
+  optional bool include_layers = 2;
+}
+
+message V2ExternalAgentConfigDetectParams {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList cwds = 1;
+  optional bool include_home = 2;
+}
+
+message V2CommandMigration {
+  string name = 1;
+}
+
+message V2MigrationDetailsCommandsList {
+  repeated V2CommandMigration values = 1;
+}
+
+message V2HookMigration {
+  string name = 1;
+}
+
+message V2MigrationDetailsHooksList {
+  repeated V2HookMigration values = 1;
+}
+
+message V2McpServerMigration {
+  string name = 1;
+}
+
+message V2MigrationDetailsMcpServersList {
+  repeated V2McpServerMigration values = 1;
+}
+
+message V2PluginsMigration {
+  string marketplace_name = 1;
+  repeated string plugin_names = 2;
+}
+
+message V2MigrationDetailsPluginsList {
+  repeated V2PluginsMigration values = 1;
+}
+
+message V2SessionMigration {
+  string cwd = 1;
+  string path = 2;
+  optional string title = 3;
+}
+
+message V2MigrationDetailsSessionsList {
+  repeated V2SessionMigration values = 1;
+}
+
+message V2SubagentMigration {
+  string name = 1;
+}
+
+message V2MigrationDetailsSubagentsList {
+  repeated V2SubagentMigration values = 1;
+}
+
+message V2MigrationDetails {
+  V2MigrationDetailsCommandsList commands = 1;
+  V2MigrationDetailsHooksList hooks = 2;
+  V2MigrationDetailsMcpServersList mcp_servers = 3;
+  V2MigrationDetailsPluginsList plugins = 4;
+  V2MigrationDetailsSessionsList sessions = 5;
+  V2MigrationDetailsSubagentsList subagents = 6;
+}
+
+message V2ExternalAgentConfigMigrationItemType {
+  string value = 1;
+}
+
+message V2ExternalAgentConfigMigrationItem {
+  optional string cwd = 1;
+  string description = 2;
+  V2MigrationDetails details = 3;
+  V2ExternalAgentConfigMigrationItemType item_type = 4;
+}
+
+message V2ExternalAgentConfigImportParams {
+  repeated V2ExternalAgentConfigMigrationItem migration_items = 1;
+}
+
+message V2MergeStrategy {
+  string value = 1;
+}
+
+message V2ConfigValueWriteParams {
+  optional string expected_version = 1;
+  optional string file_path = 2;
+  string key_path = 3;
+  V2MergeStrategy merge_strategy = 4;
+  DynamicValue value = 5;
+}
+
+message V2ConfigEdit {
+  string key_path = 1;
+  V2MergeStrategy merge_strategy = 2;
+  DynamicValue value = 3;
+}
+
+message V2ConfigBatchWriteParams {
+  repeated V2ConfigEdit edits = 1;
+  optional string expected_version = 2;
+  optional string file_path = 3;
+  optional bool reload_user_config = 4;
+}
+
+message LegacyGetConversationSummaryParams {
+  optional string rollout_path = 1;
+  optional string conversation_id = 2;
+}
+
+message LegacyGitDiffToRemoteParams {
+  string cwd = 1;
+}
+
+message LegacyGetAuthStatusParams {
+  optional bool include_token = 1;
+  optional bool refresh_token = 2;
+}
+
+message LegacyFuzzyFileSearchParams {
+  optional string cancellation_token = 1;
+  string query = 2;
+  repeated string roots = 3;
+}
+
+message LegacyInitializeResponse {
+  V2AbsolutePathBuf codex_home = 1;
+  string platform_family = 2;
+  string platform_os = 3;
+  string user_agent = 4;
+}
+
+message V2ActivePermissionProfile {
+  optional string extends = 1;
+  string id = 2;
+}
+
+message V2GitInfo {
+  optional string branch = 1;
+  optional string origin_url = 2;
+  optional string sha = 3;
+}
+
+message V2SessionSourceCustomSessionSource {
+  string custom = 1;
+}
+
+message V2AgentPath {
+  string value = 1;
+}
+
+message V2ThreadId {
+  string value = 1;
+}
+
+message V2SubAgentSourceThreadSpawnSubAgentSourceThreadSpawn {
+  optional string agent_nickname = 1;
+  V2AgentPath agent_path = 2;
+  optional string agent_role = 3;
+  int64 depth = 4;
+  V2ThreadId parent_thread_id = 5;
+}
+
+message V2SubAgentSourceThreadSpawnSubAgentSource {
+  V2SubAgentSourceThreadSpawnSubAgentSourceThreadSpawn thread_spawn = 1;
+}
+
+message V2SubAgentSourceOtherSubAgentSource {
+  string other = 1;
+}
+
+message V2SubAgentSource {
+  oneof value {
+    string string_value = 1;
+    V2SubAgentSourceThreadSpawnSubAgentSource thread_spawn_sub_agent_source = 2;
+    V2SubAgentSourceOtherSubAgentSource other_sub_agent_source = 3;
+  }
+}
+
+message V2SessionSourceSubAgentSessionSource {
+  V2SubAgentSource sub_agent = 1;
+}
+
+message V2SessionSource {
+  oneof value {
+    string string_value = 1;
+    V2SessionSourceCustomSessionSource custom_session_source = 2;
+    V2SessionSourceSubAgentSessionSource sub_agent_session_source = 3;
+  }
+}
+
+message V2ThreadActiveFlag {
+  string value = 1;
+}
+
+message V2ThreadStatusActiveFlagsList {
+  repeated V2ThreadActiveFlag values = 1;
+}
+
+message V2ThreadStatus {
+  string type = 1;
+  V2ThreadStatusActiveFlagsList active_flags = 2;
+}
+
+message V2CodexErrorInfoHttpConnectionFailedCodexErrorInfoHttpConnectionFailed {
+  optional uint64 http_status_code = 1;
+}
+
+message V2CodexErrorInfoHttpConnectionFailedCodexErrorInfo {
+  V2CodexErrorInfoHttpConnectionFailedCodexErrorInfoHttpConnectionFailed http_connection_failed = 1;
+}
+
+message V2CodexErrorInfoResponseStreamConnectionFailedCodexErrorInfo {
+  V2CodexErrorInfoHttpConnectionFailedCodexErrorInfoHttpConnectionFailed response_stream_connection_failed = 1;
+}
+
+message V2CodexErrorInfoResponseStreamDisconnectedCodexErrorInfo {
+  V2CodexErrorInfoHttpConnectionFailedCodexErrorInfoHttpConnectionFailed response_stream_disconnected = 1;
+}
+
+message V2CodexErrorInfoResponseTooManyFailedAttemptsCodexErrorInfo {
+  V2CodexErrorInfoHttpConnectionFailedCodexErrorInfoHttpConnectionFailed response_too_many_failed_attempts = 1;
+}
+
+message V2NonSteerableTurnKind {
+  string value = 1;
+}
+
+message V2CodexErrorInfoActiveTurnNotSteerableCodexErrorInfoActiveTurnNotSteerable {
+  V2NonSteerableTurnKind turn_kind = 1;
+}
+
+message V2CodexErrorInfoActiveTurnNotSteerableCodexErrorInfo {
+  V2CodexErrorInfoActiveTurnNotSteerableCodexErrorInfoActiveTurnNotSteerable active_turn_not_steerable = 1;
+}
+
+message V2CodexErrorInfo {
+  oneof value {
+    string string_value = 1;
+    V2CodexErrorInfoHttpConnectionFailedCodexErrorInfo http_connection_failed_codex_error_info = 2;
+    V2CodexErrorInfoResponseStreamConnectionFailedCodexErrorInfo response_stream_connection_failed_codex_error_info = 3;
+    V2CodexErrorInfoResponseStreamDisconnectedCodexErrorInfo response_stream_disconnected_codex_error_info = 4;
+    V2CodexErrorInfoResponseTooManyFailedAttemptsCodexErrorInfo response_too_many_failed_attempts_codex_error_info = 5;
+    V2CodexErrorInfoActiveTurnNotSteerableCodexErrorInfo active_turn_not_steerable_codex_error_info = 6;
+  }
+}
+
+message V2TurnError {
+  optional string additional_details = 1;
+  V2CodexErrorInfo codex_error_info = 2;
+  string message_field = 3;
+}
+
+message V2ThreadItemContentItem {
+  oneof value {
+    V2UserInput variant_1 = 1;
+    string string_value = 2;
+  }
+}
+
+message V2ThreadItemContentList {
+  repeated V2ThreadItemContentItem values = 1;
+}
+
+message V2HookPromptFragment {
+  string hook_run_id = 1;
+  string text = 2;
+}
+
+message V2ThreadItemFragmentsList {
+  repeated V2HookPromptFragment values = 1;
+}
+
+message V2MemoryCitationEntry {
+  uint64 line_end = 1;
+  uint64 line_start = 2;
+  string note = 3;
+  string path = 4;
+}
+
+message V2MemoryCitation {
+  repeated V2MemoryCitationEntry entries = 1;
+  repeated string thread_ids = 2;
+}
+
+message V2CommandAction {
+  string command = 1;
+  optional string name = 2;
+  optional string path = 3;
+  string type = 4;
+  optional string query = 5;
+}
+
+message V2ThreadItemCommandActionsList {
+  repeated V2CommandAction values = 1;
+}
+
+message V2CommandExecutionSource {
+  string value = 1;
+}
+
+message V2PatchChangeKind {
+  string type = 1;
+  optional string move_path = 2;
+}
+
+message V2FileUpdateChange {
+  string diff = 1;
+  V2PatchChangeKind kind = 2;
+  string path = 3;
+}
+
+message V2ThreadItemChangesList {
+  repeated V2FileUpdateChange values = 1;
+}
+
+message V2McpToolCallError {
+  string message_field = 1;
+}
+
+message V2McpToolCallResult {
+  DynamicValue _meta = 1;
+  repeated DynamicValue content = 2;
+  DynamicValue structured_content = 3;
+}
+
+message V2ThreadItemResult {
+  oneof value {
+    V2McpToolCallResult variant_1 = 1;
+    string string_value = 2;
+  }
+}
+
+message V2DynamicToolCallOutputContentItem {
+  optional string text = 1;
+  string type = 2;
+  optional string image_url = 3;
+}
+
+message V2ThreadItemContentItemsList {
+  repeated V2DynamicToolCallOutputContentItem values = 1;
+}
+
+message V2CollabAgentStatus {
+  string value = 1;
+}
+
+message V2CollabAgentState {
+  optional string message_field = 1;
+  V2CollabAgentStatus status = 2;
+}
+
+message V2ThreadItemAgentsStatesMap {
+  map<string, V2CollabAgentState> values = 1;
+}
+
+message V2WebSearchAction {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList queries = 1;
+  optional string query = 2;
+  string type = 3;
+  optional string url = 4;
+  optional string pattern = 5;
+}
+
+message V2ThreadItem {
+  optional string client_id = 1;
+  V2ThreadItemContentList content = 2;
+  string id = 3;
+  string type = 4;
+  V2ThreadItemFragmentsList fragments = 5;
+  V2MemoryCitation memory_citation = 6;
+  V2MessagePhase phase = 7;
+  optional string text = 8;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList summary = 9;
+  optional string aggregated_output = 10;
+  optional string command = 11;
+  V2ThreadItemCommandActionsList command_actions = 12;
+  V2AbsolutePathBuf cwd = 13;
+  optional int64 duration_ms = 14;
+  optional int64 exit_code = 15;
+  optional string process_id = 16;
+  V2CommandExecutionSource source = 17;
+  optional string status = 18;
+  V2ThreadItemChangesList changes = 19;
+  DynamicValue arguments = 20;
+  V2McpToolCallError error = 21;
+  optional string mcp_app_resource_uri = 22;
+  optional string plugin_id = 23;
+  V2ThreadItemResult result = 24;
+  optional string server = 25;
+  optional string tool = 26;
+  V2ThreadItemContentItemsList content_items = 27;
+  optional string namespace = 28;
+  optional bool success = 29;
+  V2ThreadItemAgentsStatesMap agents_states = 30;
+  optional string model = 31;
+  optional string prompt = 32;
+  V2ReasoningEffort reasoning_effort = 33;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList receiver_thread_ids = 34;
+  optional string sender_thread_id = 35;
+  V2WebSearchAction action = 36;
+  optional string query = 37;
+  V2AbsolutePathBuf path = 38;
+  optional string revised_prompt = 39;
+  V2AbsolutePathBuf saved_path = 40;
+  optional string review = 41;
+}
+
+message V2TurnStatus {
+  string value = 1;
+}
+
+message V2Turn {
+  optional int64 completed_at = 1;
+  optional int64 duration_ms = 2;
+  V2TurnError error = 3;
+  string id = 4;
+  repeated V2ThreadItem items = 5;
+  V2TurnItemsView items_view = 6;
+  optional int64 started_at = 7;
+  V2TurnStatus status = 8;
+}
+
+message V2Thread {
+  optional string agent_nickname = 1;
+  optional string agent_role = 2;
+  string cli_version = 3;
+  int64 created_at = 4;
+  V2AbsolutePathBuf cwd = 5;
+  bool ephemeral = 6;
+  optional string forked_from_id = 7;
+  V2GitInfo git_info = 8;
+  string id = 9;
+  string model_provider = 10;
+  optional string name = 11;
+  optional string parent_thread_id = 12;
+  optional string path = 13;
+  string preview = 14;
+  string session_id = 15;
+  V2SessionSource source = 16;
+  V2ThreadStatus status = 17;
+  V2ThreadSource thread_source = 18;
+  repeated V2Turn turns = 19;
+  int64 updated_at = 20;
+}
+
+message V2ThreadStartResponse {
+  V2ActivePermissionProfile active_permission_profile = 1;
+  V2AskForApproval approval_policy = 2;
+  V2ApprovalsReviewer approvals_reviewer = 3;
+  V2AbsolutePathBuf cwd = 4;
+  V2SandboxPolicyWritableRootsList instruction_sources = 5;
+  string model = 6;
+  string model_provider = 7;
+  V2ReasoningEffort reasoning_effort = 8;
+  V2SandboxPolicyWritableRootsList runtime_workspace_roots = 9;
+  V2SandboxPolicy sandbox = 10;
+  optional string service_tier = 11;
+  V2Thread thread = 12;
+}
+
+message V2TurnsPage {
+  optional string backwards_cursor = 1;
+  repeated V2Turn data = 2;
+  optional string next_cursor = 3;
+}
+
+message V2ThreadResumeResponse {
+  V2ActivePermissionProfile active_permission_profile = 1;
+  V2AskForApproval approval_policy = 2;
+  V2ApprovalsReviewer approvals_reviewer = 3;
+  V2AbsolutePathBuf cwd = 4;
+  V2TurnsPage initial_turns_page = 5;
+  V2SandboxPolicyWritableRootsList instruction_sources = 6;
+  string model = 7;
+  string model_provider = 8;
+  V2ReasoningEffort reasoning_effort = 9;
+  V2SandboxPolicyWritableRootsList runtime_workspace_roots = 10;
+  V2SandboxPolicy sandbox = 11;
+  optional string service_tier = 12;
+  V2Thread thread = 13;
+}
+
+message V2ThreadForkResponse {
+  V2ActivePermissionProfile active_permission_profile = 1;
+  V2AskForApproval approval_policy = 2;
+  V2ApprovalsReviewer approvals_reviewer = 3;
+  V2AbsolutePathBuf cwd = 4;
+  V2SandboxPolicyWritableRootsList instruction_sources = 5;
+  string model = 6;
+  string model_provider = 7;
+  V2ReasoningEffort reasoning_effort = 8;
+  V2SandboxPolicyWritableRootsList runtime_workspace_roots = 9;
+  V2SandboxPolicy sandbox = 10;
+  optional string service_tier = 11;
+  V2Thread thread = 12;
+}
+
+message V2ThreadUnsubscribeStatus {
+  string value = 1;
+}
+
+message V2ThreadUnsubscribeResponse {
+  V2ThreadUnsubscribeStatus status = 1;
+}
+
+message V2ThreadMetadataUpdateResponse {
+  V2Thread thread = 1;
+}
+
+message V2ThreadUnarchiveResponse {
+  V2Thread thread = 1;
+}
+
+message V2ThreadRollbackResponse {
+  V2Thread thread = 1;
+}
+
+message V2ThreadListResponse {
+  optional string backwards_cursor = 1;
+  repeated V2Thread data = 2;
+  optional string next_cursor = 3;
+}
+
+message V2ThreadSearchResult {
+  string snippet = 1;
+  V2Thread thread = 2;
+}
+
+message V2ThreadSearchResponse {
+  optional string backwards_cursor = 1;
+  repeated V2ThreadSearchResult data = 2;
+  optional string next_cursor = 3;
+}
+
+message V2ThreadLoadedListResponse {
+  repeated string data = 1;
+  optional string next_cursor = 2;
+}
+
+message V2ThreadReadResponse {
+  V2Thread thread = 1;
+}
+
+message V2ThreadTurnsListResponse {
+  optional string backwards_cursor = 1;
+  repeated V2Turn data = 2;
+  optional string next_cursor = 3;
+}
+
+message V2ThreadTurnsItemsListResponse {
+  optional string backwards_cursor = 1;
+  repeated V2ThreadItem data = 2;
+  optional string next_cursor = 3;
+}
+
+message V2SkillErrorInfo {
+  string message_field = 1;
+  string path = 2;
+}
+
+message V2SkillToolDependency {
+  optional string command = 1;
+  optional string description = 2;
+  optional string transport = 3;
+  string type = 4;
+  optional string url = 5;
+  string value = 6;
+}
+
+message V2SkillDependencies {
+  repeated V2SkillToolDependency tools = 1;
+}
+
+message V2SkillInterface {
+  optional string brand_color = 1;
+  optional string default_prompt = 2;
+  optional string display_name = 3;
+  V2AbsolutePathBuf icon_large = 4;
+  V2AbsolutePathBuf icon_small = 5;
+  optional string short_description = 6;
+}
+
+message V2SkillScope {
+  string value = 1;
+}
+
+message V2SkillMetadata {
+  V2SkillDependencies dependencies = 1;
+  string description = 2;
+  bool enabled = 3;
+  V2SkillInterface interface = 4;
+  string name = 5;
+  V2AbsolutePathBuf path = 6;
+  V2SkillScope scope = 7;
+  optional string short_description = 8;
+}
+
+message V2SkillsListEntry {
+  string cwd = 1;
+  repeated V2SkillErrorInfo errors = 2;
+  repeated V2SkillMetadata skills = 3;
+}
+
+message V2SkillsListResponse {
+  repeated V2SkillsListEntry data = 1;
+}
+
+message V2HookErrorInfo {
+  string message_field = 1;
+  string path = 2;
+}
+
+message V2HookEventName {
+  string value = 1;
+}
+
+message V2HookHandlerType {
+  string value = 1;
+}
+
+message V2HookSource {
+  string value = 1;
+}
+
+message V2HookTrustStatus {
+  string value = 1;
+}
+
+message V2HookMetadata {
+  optional string command = 1;
+  string current_hash = 2;
+  int64 display_order = 3;
+  bool enabled = 4;
+  V2HookEventName event_name = 5;
+  V2HookHandlerType handler_type = 6;
+  bool is_managed = 7;
+  string key = 8;
+  optional string matcher = 9;
+  optional string plugin_id = 10;
+  V2HookSource source = 11;
+  V2AbsolutePathBuf source_path = 12;
+  optional string status_message = 13;
+  uint64 timeout_sec = 14;
+  V2HookTrustStatus trust_status = 15;
+}
+
+message V2HooksListEntry {
+  string cwd = 1;
+  repeated V2HookErrorInfo errors = 2;
+  repeated V2HookMetadata hooks = 3;
+  repeated string warnings = 4;
+}
+
+message V2HooksListResponse {
+  repeated V2HooksListEntry data = 1;
+}
+
+message V2MarketplaceAddResponse {
+  bool already_added = 1;
+  V2AbsolutePathBuf installed_root = 2;
+  string marketplace_name = 3;
+}
+
+message V2MarketplaceRemoveResponse {
+  V2AbsolutePathBuf installed_root = 1;
+  string marketplace_name = 2;
+}
+
+message V2MarketplaceUpgradeErrorInfo {
+  string marketplace_name = 1;
+  string message_field = 2;
+}
+
+message V2MarketplaceUpgradeResponse {
+  repeated V2MarketplaceUpgradeErrorInfo errors = 1;
+  repeated string selected_marketplaces = 2;
+  repeated V2AbsolutePathBuf upgraded_roots = 3;
+}
+
+message V2MarketplaceLoadErrorInfo {
+  V2AbsolutePathBuf marketplace_path = 1;
+  string message_field = 2;
+}
+
+message V2PluginListResponseMarketplaceLoadErrorsList {
+  repeated V2MarketplaceLoadErrorInfo values = 1;
+}
+
+message V2MarketplaceInterface {
+  optional string display_name = 1;
+}
+
+message V2PluginAuthPolicy {
+  string value = 1;
+}
+
+message V2PluginAvailability {
+  string value = 1;
+}
+
+message V2PluginInstallPolicy {
+  string value = 1;
+}
+
+message V2PluginInterface {
+  optional string brand_color = 1;
+  repeated string capabilities = 2;
+  optional string category = 3;
+  V2AbsolutePathBuf composer_icon = 4;
+  optional string composer_icon_url = 5;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList default_prompt = 6;
+  optional string developer_name = 7;
+  optional string display_name = 8;
+  V2AbsolutePathBuf logo = 9;
+  optional string logo_url = 10;
+  optional string long_description = 11;
+  optional string privacy_policy_url = 12;
+  repeated string screenshot_urls = 13;
+  repeated V2AbsolutePathBuf screenshots = 14;
+  optional string short_description = 15;
+  optional string terms_of_service_url = 16;
+  optional string website_url = 17;
+}
+
+message V2PluginSharePrincipalRole {
+  string value = 1;
+}
+
+message V2PluginSharePrincipal {
+  string name = 1;
+  string principal_id = 2;
+  V2PluginSharePrincipalType principal_type = 3;
+  V2PluginSharePrincipalRole role = 4;
+}
+
+message V2PluginShareContextSharePrincipalsList {
+  repeated V2PluginSharePrincipal values = 1;
+}
+
+message V2PluginShareContext {
+  optional string creator_account_user_id = 1;
+  optional string creator_name = 2;
+  V2PluginShareDiscoverability discoverability = 3;
+  string remote_plugin_id = 4;
+  optional string remote_version = 5;
+  V2PluginShareContextSharePrincipalsList share_principals = 6;
+  optional string share_url = 7;
+}
+
+message V2PluginSource {
+  optional string path = 1;
+  string type = 2;
+  optional string ref_name = 3;
+  optional string sha = 4;
+  optional string url = 5;
+}
+
+message V2PluginSummary {
+  V2PluginAuthPolicy auth_policy = 1;
+  V2PluginAvailability availability = 2;
+  bool enabled = 3;
+  string id = 4;
+  V2PluginInstallPolicy install_policy = 5;
+  bool installed = 6;
+  V2PluginInterface interface = 7;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList keywords = 8;
+  optional string local_version = 9;
+  string name = 10;
+  optional string remote_plugin_id = 11;
+  V2PluginShareContext share_context = 12;
+  V2PluginSource source = 13;
+}
+
+message V2PluginMarketplaceEntry {
+  V2MarketplaceInterface interface = 1;
+  string name = 2;
+  V2AbsolutePathBuf path = 3;
+  repeated V2PluginSummary plugins = 4;
+}
+
+message V2PluginListResponse {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList featured_plugin_ids = 1;
+  V2PluginListResponseMarketplaceLoadErrorsList marketplace_load_errors = 2;
+  repeated V2PluginMarketplaceEntry marketplaces = 3;
+}
+
+message V2PluginInstalledResponse {
+  V2PluginListResponseMarketplaceLoadErrorsList marketplace_load_errors = 1;
+  repeated V2PluginMarketplaceEntry marketplaces = 2;
+}
+
+message V2AppTemplateUnavailableReason {
+  string value = 1;
+}
+
+message V2AppTemplateSummary {
+  optional string canonical_connector_id = 1;
+  optional string description = 2;
+  optional string logo_url = 3;
+  optional string logo_url_dark = 4;
+  repeated string materialized_app_ids = 5;
+  string name = 6;
+  V2AppTemplateUnavailableReason reason = 7;
+  string template_id = 8;
+}
+
+message V2AppSummary {
+  optional string description = 1;
+  string id = 2;
+  optional string install_url = 3;
+  string name = 4;
+  bool needs_auth = 5;
+}
+
+message V2PluginHookSummary {
+  V2HookEventName event_name = 1;
+  string key = 2;
+}
+
+message V2SkillSummary {
+  string description = 1;
+  bool enabled = 2;
+  V2SkillInterface interface = 3;
+  string name = 4;
+  V2AbsolutePathBuf path = 5;
+  optional string short_description = 6;
+}
+
+message V2PluginDetail {
+  repeated V2AppTemplateSummary app_templates = 1;
+  repeated V2AppSummary apps = 2;
+  optional string description = 3;
+  repeated V2PluginHookSummary hooks = 4;
+  string marketplace_name = 5;
+  V2AbsolutePathBuf marketplace_path = 6;
+  repeated string mcp_servers = 7;
+  repeated V2SkillSummary skills = 8;
+  V2PluginSummary summary = 9;
+}
+
+message V2PluginReadResponse {
+  V2PluginDetail plugin = 1;
+}
+
+message V2PluginSkillReadResponse {
+  optional string contents = 1;
+}
+
+message V2PluginShareSaveResponse {
+  string remote_plugin_id = 1;
+  string share_url = 2;
+}
+
+message V2PluginShareUpdateTargetsResponse {
+  V2PluginShareDiscoverability discoverability = 1;
+  repeated V2PluginSharePrincipal principals = 2;
+}
+
+message V2PluginShareListItem {
+  V2AbsolutePathBuf local_plugin_path = 1;
+  V2PluginSummary plugin = 2;
+}
+
+message V2PluginShareListResponse {
+  repeated V2PluginShareListItem data = 1;
+}
+
+message V2PluginShareCheckoutResponse {
+  string marketplace_name = 1;
+  V2AbsolutePathBuf marketplace_path = 2;
+  string plugin_id = 3;
+  string plugin_name = 4;
+  V2AbsolutePathBuf plugin_path = 5;
+  string remote_plugin_id = 6;
+  optional string remote_version = 7;
+}
+
+message V2AppReview {
+  string status = 1;
+}
+
+message V2AppScreenshot {
+  optional string file_id = 1;
+  optional string url = 2;
+  string user_prompt = 3;
+}
+
+message V2AppMetadataScreenshotsList {
+  repeated V2AppScreenshot values = 1;
+}
+
+message V2AppMetadata {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList categories = 1;
+  optional string developer = 2;
+  optional bool first_party_requires_install = 3;
+  optional string first_party_type = 4;
+  V2AppReview review = 5;
+  V2AppMetadataScreenshotsList screenshots = 6;
+  optional string seo_description = 7;
+  optional bool show_in_composer_when_unlinked = 8;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList sub_categories = 9;
+  optional string version = 10;
+  optional string version_id = 11;
+  optional string version_notes = 12;
+}
+
+message V2AppBranding {
+  optional string category = 1;
+  optional string developer = 2;
+  bool is_discoverable_app = 3;
+  optional string privacy_policy = 4;
+  optional string terms_of_service = 5;
+  optional string website = 6;
+}
+
+message V2AppInfo {
+  V2AppMetadata app_metadata = 1;
+  V2AppBranding branding = 2;
+  optional string description = 3;
+  optional string distribution_channel = 4;
+  string id = 5;
+  optional string install_url = 6;
+  optional bool is_accessible = 7;
+  optional bool is_enabled = 8;
+  V2LocalShellActionEnvMap labels = 9;
+  optional string logo_url = 10;
+  optional string logo_url_dark = 11;
+  string name = 12;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList plugin_display_names = 13;
+}
+
+message V2AppsListResponse {
+  repeated V2AppInfo data = 1;
+  optional string next_cursor = 2;
+}
+
+message V2SkillsConfigWriteResponse {
+  bool effective_enabled = 1;
+}
+
+message V2PluginInstallResponse {
+  repeated V2AppSummary apps_needing_auth = 1;
+  V2PluginAuthPolicy auth_policy = 2;
+}
+
+message V2TurnStartResponse {
+  V2Turn turn = 1;
+}
+
+message V2TurnSteerResponse {
+  string turn_id = 1;
+}
+
+message V2RealtimeVoicesList {
+  V2RealtimeVoice default_v1 = 1;
+  V2RealtimeVoice default_v2 = 2;
+  repeated V2RealtimeVoice v1 = 3;
+  repeated V2RealtimeVoice v2 = 4;
+}
+
+message V2ThreadRealtimeListVoicesResponse {
+  V2RealtimeVoicesList voices = 1;
+}
+
+message V2ReviewStartResponse {
+  string review_thread_id = 1;
+  V2Turn turn = 2;
+}
+
+message V2ModelAvailabilityNux {
+  string message_field = 1;
+}
+
+message V2InputModality {
+  string value = 1;
+}
+
+message V2ModelInputModalitiesList {
+  repeated V2InputModality values = 1;
+}
+
+message V2ModelServiceTier {
+  string description = 1;
+  string id = 2;
+  string name = 3;
+}
+
+message V2ModelServiceTiersList {
+  repeated V2ModelServiceTier values = 1;
+}
+
+message V2ReasoningEffortOption {
+  string description = 1;
+  V2ReasoningEffort reasoning_effort = 2;
+}
+
+message V2ModelUpgradeInfo {
+  optional string migration_markdown = 1;
+  string model = 2;
+  optional string model_link = 3;
+  optional string upgrade_copy = 4;
+}
+
+message V2Model {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList additional_speed_tiers = 1;
+  V2ModelAvailabilityNux availability_nux = 2;
+  V2ReasoningEffort default_reasoning_effort = 3;
+  optional string default_service_tier = 4;
+  string description = 5;
+  string display_name = 6;
+  bool hidden = 7;
+  string id = 8;
+  V2ModelInputModalitiesList input_modalities = 9;
+  bool is_default = 10;
+  string model = 11;
+  V2ModelServiceTiersList service_tiers = 12;
+  repeated V2ReasoningEffortOption supported_reasoning_efforts = 13;
+  optional bool supports_personality = 14;
+  optional string upgrade = 15;
+  V2ModelUpgradeInfo upgrade_info = 16;
+}
+
+message V2ModelListResponse {
+  repeated V2Model data = 1;
+  optional string next_cursor = 2;
+}
+
+message V2ModelProviderCapabilitiesReadResponse {
+  bool image_generation = 1;
+  bool namespace_tools = 2;
+  bool web_search = 3;
+}
+
+message V2ExperimentalFeatureStage {
+  string value = 1;
+}
+
+message V2ExperimentalFeature {
+  optional string announcement = 1;
+  bool default_enabled = 2;
+  optional string description = 3;
+  optional string display_name = 4;
+  bool enabled = 5;
+  string name = 6;
+  V2ExperimentalFeatureStage stage = 7;
+}
+
+message V2ExperimentalFeatureListResponse {
+  repeated V2ExperimentalFeature data = 1;
+  optional string next_cursor = 2;
+}
+
+message V2PermissionProfileSummary {
+  optional string description = 1;
+  string id = 2;
+}
+
+message V2PermissionProfileListResponse {
+  repeated V2PermissionProfileSummary data = 1;
+  optional string next_cursor = 2;
+}
+
+message V2ExperimentalFeatureEnablementSetResponseEnablementMap {
+  map<string, bool> values = 1;
+}
+
+message V2ExperimentalFeatureEnablementSetResponse {
+  V2ExperimentalFeatureEnablementSetResponseEnablementMap enablement = 1;
+}
+
+message V2RemoteControlConnectionStatus {
+  string value = 1;
+}
+
+message V2RemoteControlEnableResponse {
+  optional string environment_id = 1;
+  string installation_id = 2;
+  string server_name = 3;
+  V2RemoteControlConnectionStatus status = 4;
+}
+
+message V2RemoteControlDisableResponse {
+  optional string environment_id = 1;
+  string installation_id = 2;
+  string server_name = 3;
+  V2RemoteControlConnectionStatus status = 4;
+}
+
+message V2RemoteControlStatusReadResponse {
+  optional string environment_id = 1;
+  string installation_id = 2;
+  string server_name = 3;
+  V2RemoteControlConnectionStatus status = 4;
+}
+
+message V2RemoteControlClient {
+  optional string app_version = 1;
+  string client_id = 2;
+  optional string device_model = 3;
+  optional string device_type = 4;
+  optional string display_name = 5;
+  optional int64 last_seen_at = 6;
+  optional string os_version = 7;
+  optional string platform = 8;
+}
+
+message V2RemoteControlClientsListResponse {
+  repeated V2RemoteControlClient data = 1;
+  optional string next_cursor = 2;
+}
+
+message NullableV2ReasoningEffort {
+  oneof value {
+    V2ReasoningEffort some = 1;
+    Empty null = 2;
+  }
+}
+
+message V2CollaborationModeMask {
+  V2ModeKind mode = 1;
+  optional string model = 2;
+  string name = 3;
+  NullableV2ReasoningEffort reasoning_effort = 4;
+}
+
+message V2CollaborationModeListResponse {
+  repeated V2CollaborationModeMask data = 1;
+}
+
+message V2MockExperimentalMethodResponse {
+  optional string echoed = 1;
+}
+
+message V2McpServerOauthLoginResponse {
+  string authorization_url = 1;
+}
+
+message V2McpAuthStatus {
+  string value = 1;
+}
+
+message V2ResourceTemplate {
+  DynamicValue annotations = 1;
+  optional string description = 2;
+  optional string mime_type = 3;
+  string name = 4;
+  optional string title = 5;
+  string uri_template = 6;
+}
+
+message V2Resource {
+  DynamicValue _meta = 1;
+  DynamicValue annotations = 2;
+  optional string description = 3;
+  V2ResponseItemToolsList icons = 4;
+  optional string mime_type = 5;
+  string name = 6;
+  optional int64 size = 7;
+  optional string title = 8;
+  string uri = 9;
+}
+
+message V2McpServerInfo {
+  optional string description = 1;
+  V2ResponseItemToolsList icons = 2;
+  string name = 3;
+  optional string title = 4;
+  string version = 5;
+  optional string website_url = 6;
+}
+
+message V2Tool {
+  DynamicValue _meta = 1;
+  DynamicValue annotations = 2;
+  optional string description = 3;
+  V2ResponseItemToolsList icons = 4;
+  DynamicValue input_schema = 5;
+  string name = 6;
+  DynamicValue output_schema = 7;
+  optional string title = 8;
+}
+
+message V2McpServerStatusToolsMap {
+  map<string, V2Tool> values = 1;
+}
+
+message V2McpServerStatus {
+  V2McpAuthStatus auth_status = 1;
+  string name = 2;
+  repeated V2ResourceTemplate resource_templates = 3;
+  repeated V2Resource resources = 4;
+  V2McpServerInfo server_info = 5;
+  V2McpServerStatusToolsMap tools = 6;
+}
+
+message V2ListMcpServerStatusResponse {
+  repeated V2McpServerStatus data = 1;
+  optional string next_cursor = 2;
+}
+
+message V2ResourceContent {
+  DynamicValue _meta = 1;
+  optional string mime_type = 2;
+  optional string text = 3;
+  string uri = 4;
+  optional string blob = 5;
+}
+
+message V2McpResourceReadResponse {
+  repeated V2ResourceContent contents = 1;
+}
+
+message V2McpServerToolCallResponse {
+  DynamicValue _meta = 1;
+  repeated DynamicValue content = 2;
+  optional bool is_error = 3;
+  DynamicValue structured_content = 4;
+}
+
+message V2WindowsSandboxSetupStartResponse {
+  bool started = 1;
+}
+
+message V2WindowsSandboxReadiness {
+  string value = 1;
+}
+
+message V2WindowsSandboxReadinessResponse {
+  V2WindowsSandboxReadiness status = 1;
+}
+
+message V2CreditsSnapshot {
+  optional string balance = 1;
+  bool has_credits = 2;
+  bool unlimited = 3;
+}
+
+message V2SpendControlLimitSnapshot {
+  string limit = 1;
+  int64 remaining_percent = 2;
+  int64 resets_at = 3;
+  string used = 4;
+}
+
+message V2PlanType {
+  string value = 1;
+}
+
+message V2RateLimitWindow {
+  optional int64 resets_at = 1;
+  int64 used_percent = 2;
+  optional int64 window_duration_mins = 3;
+}
+
+message V2RateLimitReachedType {
+  string value = 1;
+}
+
+message V2RateLimitSnapshot {
+  V2CreditsSnapshot credits = 1;
+  V2SpendControlLimitSnapshot individual_limit = 2;
+  optional string limit_id = 3;
+  optional string limit_name = 4;
+  V2PlanType plan_type = 5;
+  V2RateLimitWindow primary = 6;
+  V2RateLimitReachedType rate_limit_reached_type = 7;
+  V2RateLimitWindow secondary = 8;
+}
+
+message V2GetAccountRateLimitsResponseRateLimitsByLimitIdMap {
+  map<string, V2RateLimitSnapshot> values = 1;
+}
+
+message V2GetAccountRateLimitsResponse {
+  V2RateLimitSnapshot rate_limits = 1;
+  V2GetAccountRateLimitsResponseRateLimitsByLimitIdMap rate_limits_by_limit_id = 2;
+}
+
+message V2FeedbackUploadResponse {
+  string thread_id = 1;
+}
+
+message V2AnalyticsConfigAdditionalMap {
+  map<string, DynamicValue> values = 1;
+}
+
+message V2AnalyticsConfig {
+  optional bool enabled = 1;
+  V2AnalyticsConfigAdditionalMap additional = 2;
+}
+
+message V2AppsDefaultConfig {
+  optional bool destructive_enabled = 1;
+  optional bool enabled = 2;
+  optional bool open_world_enabled = 3;
+}
+
+message V2AppToolApproval {
+  string value = 1;
+}
+
+message V2AppToolConfig {
+  V2AppToolApproval approval_mode = 1;
+  optional bool enabled = 2;
+}
+
+message V2AppToolsConfigToolsMap {
+  map<string, V2AppToolConfig> values = 1;
+}
+
+message V2AppToolsConfig {
+  V2AppToolsConfigToolsMap tools = 1;
+}
+
+message V2AppConfig {
+  V2ApprovalsReviewer approvals_reviewer = 1;
+  V2AppToolApproval default_tools_approval_mode = 2;
+  optional bool default_tools_enabled = 3;
+  optional bool destructive_enabled = 4;
+  optional bool enabled = 5;
+  optional bool open_world_enabled = 6;
+  V2AppToolsConfig tools = 7;
+}
+
+message V2AppsConfigAppsMap {
+  map<string, V2AppConfig> values = 1;
+}
+
+message V2AppsConfig {
+  V2AppsDefaultConfig _default = 1;
+  V2AppsConfigAppsMap apps = 2;
+}
+
+message V2ForcedChatgptWorkspaceIds {
+  oneof value {
+    string string_value = 1;
+    V2ThreadStartParamsRuntimeWorkspaceRootsList variant_2 = 2;
+  }
+}
+
+message V2ForcedLoginMethod {
+  string value = 1;
+}
+
+message V2AutoCompactTokenLimitScope {
+  string value = 1;
+}
+
+message V2Verbosity {
+  string value = 1;
+}
+
+message V2SandboxWorkspaceWrite {
+  optional bool exclude_slash_tmp = 1;
+  optional bool exclude_tmpdir_env_var = 2;
+  optional bool network_access = 3;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList writable_roots = 4;
+}
+
+message V2WebSearchContextSize {
+  string value = 1;
+}
+
+message V2WebSearchLocation {
+  optional string city = 1;
+  optional string country = 2;
+  optional string region = 3;
+  optional string timezone = 4;
+}
+
+message V2WebSearchToolConfig {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList allowed_domains = 1;
+  V2WebSearchContextSize context_size = 2;
+  V2WebSearchLocation location = 3;
+}
+
+message V2ToolsV2 {
+  V2WebSearchToolConfig web_search = 1;
+}
+
+message V2WebSearchMode {
+  string value = 1;
+}
+
+message V2Config {
+  V2AnalyticsConfig analytics = 1;
+  V2AskForApproval approval_policy = 2;
+  V2ApprovalsReviewer approvals_reviewer = 3;
+  V2AppsConfig apps = 4;
+  optional string compact_prompt = 5;
+  V2ThreadStartParamsConfigMap desktop = 6;
+  optional string developer_instructions = 7;
+  V2ForcedChatgptWorkspaceIds forced_chatgpt_workspace_id = 8;
+  V2ForcedLoginMethod forced_login_method = 9;
+  optional string instructions = 10;
+  optional string model = 11;
+  optional int64 model_auto_compact_token_limit = 12;
+  V2AutoCompactTokenLimitScope model_auto_compact_token_limit_scope = 13;
+  optional int64 model_context_window = 14;
+  optional string model_provider = 15;
+  V2ReasoningEffort model_reasoning_effort = 16;
+  V2ReasoningSummary model_reasoning_summary = 17;
+  V2Verbosity model_verbosity = 18;
+  optional string review_model = 19;
+  V2SandboxMode sandbox_mode = 20;
+  V2SandboxWorkspaceWrite sandbox_workspace_write = 21;
+  optional string service_tier = 22;
+  V2ToolsV2 tools = 23;
+  V2WebSearchMode web_search = 24;
+  V2AnalyticsConfigAdditionalMap additional = 25;
+}
+
+message V2ConfigLayerSource {
+  optional string domain = 1;
+  optional string key = 2;
+  string type = 3;
+  optional string file = 4;
+  optional string id = 5;
+  optional string name = 6;
+  optional string profile = 7;
+  V2AbsolutePathBuf dot_codex_folder = 8;
+}
+
+message V2ConfigLayer {
+  DynamicValue config = 1;
+  optional string disabled_reason = 2;
+  V2ConfigLayerSource name = 3;
+  string version = 4;
+}
+
+message V2ConfigReadResponseLayersList {
+  repeated V2ConfigLayer values = 1;
+}
+
+message V2ConfigLayerMetadata {
+  V2ConfigLayerSource name = 1;
+  string version = 2;
+}
+
+message V2ConfigReadResponseOriginsMap {
+  map<string, V2ConfigLayerMetadata> values = 1;
+}
+
+message V2ConfigReadResponse {
+  V2Config config = 1;
+  V2ConfigReadResponseLayersList layers = 2;
+  V2ConfigReadResponseOriginsMap origins = 3;
+}
+
+message V2ExternalAgentConfigDetectResponse {
+  repeated V2ExternalAgentConfigMigrationItem items = 1;
+}
+
+message V2OverriddenMetadata {
+  DynamicValue effective_value = 1;
+  string message_field = 2;
+  V2ConfigLayerMetadata overriding_layer = 3;
+}
+
+message V2WriteStatus {
+  string value = 1;
+}
+
+message V2ConfigWriteResponse {
+  V2AbsolutePathBuf file_path = 1;
+  V2OverriddenMetadata overridden_metadata = 2;
+  V2WriteStatus status = 3;
+  string version = 4;
+}
+
+message V2ConfigRequirementsAllowedApprovalPoliciesList {
+  repeated V2AskForApproval values = 1;
+}
+
+message V2ConfigRequirementsAllowedApprovalsReviewersList {
+  repeated V2ApprovalsReviewer values = 1;
+}
+
+message V2ConfigRequirementsAllowedSandboxModesList {
+  repeated V2SandboxMode values = 1;
+}
+
+message V2ConfigRequirementsAllowedWebSearchModesList {
+  repeated V2WebSearchMode values = 1;
+}
+
+message V2ConfigRequirementsAllowedWindowsSandboxImplementationsList {
+  repeated V2WindowsSandboxSetupMode values = 1;
+}
+
+message V2ComputerUseRequirements {
+  optional bool allow_locked_computer_use = 1;
+}
+
+message V2ResidencyRequirement {
+  string value = 1;
+}
+
+message V2ConfigRequirementsFeatureRequirementsMap {
+  map<string, bool> values = 1;
+}
+
+message V2ConfiguredHookHandler {
+  optional bool async = 1;
+  optional string command = 2;
+  optional string command_windows = 3;
+  optional string status_message = 4;
+  optional uint64 timeout_sec = 5;
+  string type = 6;
+}
+
+message V2ConfiguredHookMatcherGroup {
+  repeated V2ConfiguredHookHandler hooks = 1;
+  optional string matcher = 2;
+}
+
+message V2ManagedHooksRequirements {
+  repeated V2ConfiguredHookMatcherGroup permission_request = 1;
+  repeated V2ConfiguredHookMatcherGroup post_compact = 2;
+  repeated V2ConfiguredHookMatcherGroup post_tool_use = 3;
+  repeated V2ConfiguredHookMatcherGroup pre_compact = 4;
+  repeated V2ConfiguredHookMatcherGroup pre_tool_use = 5;
+  repeated V2ConfiguredHookMatcherGroup session_start = 6;
+  repeated V2ConfiguredHookMatcherGroup stop = 7;
+  repeated V2ConfiguredHookMatcherGroup subagent_start = 8;
+  repeated V2ConfiguredHookMatcherGroup subagent_stop = 9;
+  repeated V2ConfiguredHookMatcherGroup user_prompt_submit = 10;
+  optional string managed_dir = 11;
+  optional string windows_managed_dir = 12;
+}
+
+message V2NetworkDomainPermission {
+  string value = 1;
+}
+
+message V2NetworkRequirementsDomainsMap {
+  map<string, V2NetworkDomainPermission> values = 1;
+}
+
+message V2NetworkUnixSocketPermission {
+  string value = 1;
+}
+
+message V2NetworkRequirementsUnixSocketsMap {
+  map<string, V2NetworkUnixSocketPermission> values = 1;
+}
+
+message V2NetworkRequirements {
+  optional bool allow_local_binding = 1;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList allow_unix_sockets = 2;
+  optional bool allow_upstream_proxy = 3;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList allowed_domains = 4;
+  optional bool dangerously_allow_all_unix_sockets = 5;
+  optional bool dangerously_allow_non_loopback_proxy = 6;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList denied_domains = 7;
+  V2NetworkRequirementsDomainsMap domains = 8;
+  optional bool enabled = 9;
+  optional uint64 http_port = 10;
+  optional bool managed_allowed_domains_only = 11;
+  optional uint64 socks_port = 12;
+  V2NetworkRequirementsUnixSocketsMap unix_sockets = 13;
+}
+
+message V2ConfigRequirements {
+  optional bool allow_appshots = 1;
+  optional bool allow_managed_hooks_only = 2;
+  V2ConfigRequirementsAllowedApprovalPoliciesList allowed_approval_policies = 3;
+  V2ConfigRequirementsAllowedApprovalsReviewersList allowed_approvals_reviewers = 4;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList allowed_permissions = 5;
+  V2ConfigRequirementsAllowedSandboxModesList allowed_sandbox_modes = 6;
+  V2ConfigRequirementsAllowedWebSearchModesList allowed_web_search_modes = 7;
+  V2ConfigRequirementsAllowedWindowsSandboxImplementationsList allowed_windows_sandbox_implementations = 8;
+  V2ComputerUseRequirements computer_use = 9;
+  V2ResidencyRequirement enforce_residency = 10;
+  V2ConfigRequirementsFeatureRequirementsMap feature_requirements = 11;
+  V2ManagedHooksRequirements hooks = 12;
+  V2NetworkRequirements network = 13;
+}
+
+message V2ConfigRequirementsReadResponse {
+  V2ConfigRequirements requirements = 1;
+}
+
+message V2Account {
+  string type = 1;
+  optional string email = 2;
+  V2PlanType plan_type = 3;
+}
+
+message V2GetAccountResponse {
+  V2Account account = 1;
+  bool requires_openai_auth = 2;
+}
+
+message LegacyGetConversationSummaryResponseSummaryGitInfo {
+  optional string sha = 1;
+  optional string branch = 2;
+  optional string origin_url = 3;
+}
+
+message LegacyGetConversationSummaryResponseSummary {
+  string conversation_id = 1;
+  string path = 2;
+  string preview = 3;
+  optional string timestamp = 4;
+  optional string updated_at = 5;
+  string model_provider = 6;
+  string cwd = 7;
+  string cli_version = 8;
+  string source = 9;
+  LegacyGetConversationSummaryResponseSummaryGitInfo git_info = 10;
+}
+
+message LegacyGetConversationSummaryResponse {
+  LegacyGetConversationSummaryResponseSummary summary = 1;
+}
+
+message LegacyGitDiffToRemoteResponse {
+  string sha = 1;
+  string diff = 2;
+}
+
+message LegacyGetAuthStatusResponse {
+  optional string auth_method = 1;
+  optional string auth_token = 2;
+  optional bool requires_openai_auth = 3;
+}
+
+message LegacyFuzzyFileSearchResultIndicesList {
+  repeated uint64 values = 1;
+}
+
+message LegacyFuzzyFileSearchMatchType {
+  string value = 1;
+}
+
+message LegacyFuzzyFileSearchResult {
+  string file_name = 1;
+  LegacyFuzzyFileSearchResultIndicesList indices = 2;
+  LegacyFuzzyFileSearchMatchType match_type = 3;
+  string path = 4;
+  string root = 5;
+  uint64 score = 6;
+}
+
+message LegacyFuzzyFileSearchResponse {
+  repeated LegacyFuzzyFileSearchResult files = 1;
+}
+
+message V2AdditionalPermissionProfile {
+  V2AdditionalFileSystemPermissions file_system = 1;
+  V2AdditionalNetworkPermissions network = 2;
+}
+
+message V2CommandExecutionApprovalDecisionAcceptWithExecpolicyAmendmentCommandExecutionApprovalDecisionAcceptWithExecpolicyAmendment {
+  repeated string execpolicy_amendment = 1;
+}
+
+message V2CommandExecutionApprovalDecisionAcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision {
+  V2CommandExecutionApprovalDecisionAcceptWithExecpolicyAmendmentCommandExecutionApprovalDecisionAcceptWithExecpolicyAmendment accept_with_execpolicy_amendment = 1;
+}
+
+message V2NetworkPolicyRuleAction {
+  string value = 1;
+}
+
+message V2NetworkPolicyAmendment {
+  V2NetworkPolicyRuleAction action = 1;
+  string host = 2;
+}
+
+message V2CommandExecutionApprovalDecisionApplyNetworkPolicyAmendmentCommandExecutionApprovalDecisionApplyNetworkPolicyAmendment {
+  V2NetworkPolicyAmendment network_policy_amendment = 1;
+}
+
+message V2CommandExecutionApprovalDecisionApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision {
+  V2CommandExecutionApprovalDecisionApplyNetworkPolicyAmendmentCommandExecutionApprovalDecisionApplyNetworkPolicyAmendment apply_network_policy_amendment = 1;
+}
+
+message V2CommandExecutionApprovalDecision {
+  oneof value {
+    string string_value = 1;
+    string string_value_2 = 2;
+    V2CommandExecutionApprovalDecisionAcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision accept_with_execpolicy_amendment_command_execution_approval_decision = 3;
+    V2CommandExecutionApprovalDecisionApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision apply_network_policy_amendment_command_execution_approval_decision = 4;
+    string string_value_5 = 5;
+    string string_value_6 = 6;
+  }
+}
+
+message V2CommandExecutionRequestApprovalParamsAvailableDecisionsList {
+  repeated V2CommandExecutionApprovalDecision values = 1;
+}
+
+message V2CommandExecutionRequestApprovalParamsCommandActionsList {
+  repeated V2CommandAction values = 1;
+}
+
+message V2NetworkApprovalContext {
+  string host = 1;
+  V2NetworkApprovalProtocol protocol = 2;
+}
+
+message V2CommandExecutionRequestApprovalParamsProposedNetworkPolicyAmendmentsList {
+  repeated V2NetworkPolicyAmendment values = 1;
+}
+
+message V2CommandExecutionRequestApprovalParams {
+  V2AdditionalPermissionProfile additional_permissions = 1;
+  optional string approval_id = 2;
+  V2CommandExecutionRequestApprovalParamsAvailableDecisionsList available_decisions = 3;
+  optional string command = 4;
+  V2CommandExecutionRequestApprovalParamsCommandActionsList command_actions = 5;
+  V2AbsolutePathBuf cwd = 6;
+  string item_id = 7;
+  V2NetworkApprovalContext network_approval_context = 8;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList proposed_execpolicy_amendment = 9;
+  V2CommandExecutionRequestApprovalParamsProposedNetworkPolicyAmendmentsList proposed_network_policy_amendments = 10;
+  optional string reason = 11;
+  int64 started_at_ms = 12;
+  string thread_id = 13;
+  string turn_id = 14;
+}
+
+message V2FileChangeRequestApprovalParams {
+  optional string grant_root = 1;
+  string item_id = 2;
+  optional string reason = 3;
+  int64 started_at_ms = 4;
+  string thread_id = 5;
+  string turn_id = 6;
+}
+
+message V2ToolRequestUserInputOption {
+  string description = 1;
+  string label = 2;
+}
+
+message V2ToolRequestUserInputQuestionOptionsList {
+  repeated V2ToolRequestUserInputOption values = 1;
+}
+
+message V2ToolRequestUserInputQuestion {
+  string header = 1;
+  string id = 2;
+  optional bool is_other = 3;
+  optional bool is_secret = 4;
+  V2ToolRequestUserInputQuestionOptionsList options = 5;
+  string question = 6;
+}
+
+message V2ToolRequestUserInputParams {
+  string item_id = 1;
+  repeated V2ToolRequestUserInputQuestion questions = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2McpElicitationStringType {
+  string value = 1;
+}
+
+message V2McpElicitationUntitledSingleSelectEnumSchema {
+  optional string default = 1;
+  optional string description = 2;
+  repeated string enum_field = 3;
+  optional string title = 4;
+  V2McpElicitationStringType type = 5;
+}
+
+message V2McpElicitationConstOption {
+  string const = 1;
+  string title = 2;
+}
+
+message V2McpElicitationTitledSingleSelectEnumSchema {
+  optional string default = 1;
+  optional string description = 2;
+  repeated V2McpElicitationConstOption one_of = 3;
+  optional string title = 4;
+  V2McpElicitationStringType type = 5;
+}
+
+message V2McpElicitationSingleSelectEnumSchema {
+  oneof value {
+    V2McpElicitationUntitledSingleSelectEnumSchema variant_1 = 1;
+    V2McpElicitationTitledSingleSelectEnumSchema variant_2 = 2;
+  }
+}
+
+message V2McpElicitationUntitledEnumItems {
+  repeated string enum_field = 1;
+  V2McpElicitationStringType type = 2;
+}
+
+message V2McpElicitationArrayType {
+  string value = 1;
+}
+
+message V2McpElicitationUntitledMultiSelectEnumSchema {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList default = 1;
+  optional string description = 2;
+  V2McpElicitationUntitledEnumItems items = 3;
+  optional uint64 max_items = 4;
+  optional uint64 min_items = 5;
+  optional string title = 6;
+  V2McpElicitationArrayType type = 7;
+}
+
+message V2McpElicitationTitledEnumItems {
+  repeated V2McpElicitationConstOption any_of = 1;
+}
+
+message V2McpElicitationTitledMultiSelectEnumSchema {
+  V2ThreadStartParamsRuntimeWorkspaceRootsList default = 1;
+  optional string description = 2;
+  V2McpElicitationTitledEnumItems items = 3;
+  optional uint64 max_items = 4;
+  optional uint64 min_items = 5;
+  optional string title = 6;
+  V2McpElicitationArrayType type = 7;
+}
+
+message V2McpElicitationMultiSelectEnumSchema {
+  oneof value {
+    V2McpElicitationUntitledMultiSelectEnumSchema variant_1 = 1;
+    V2McpElicitationTitledMultiSelectEnumSchema variant_2 = 2;
+  }
+}
+
+message V2McpElicitationLegacyTitledEnumSchema {
+  optional string default = 1;
+  optional string description = 2;
+  repeated string enum_field = 3;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList enum_names = 4;
+  optional string title = 5;
+  V2McpElicitationStringType type = 6;
+}
+
+message V2McpElicitationEnumSchema {
+  oneof value {
+    V2McpElicitationSingleSelectEnumSchema variant_1 = 1;
+    V2McpElicitationMultiSelectEnumSchema variant_2 = 2;
+    V2McpElicitationLegacyTitledEnumSchema variant_3 = 3;
+  }
+}
+
+message V2McpElicitationStringFormat {
+  string value = 1;
+}
+
+message V2McpElicitationStringSchema {
+  optional string default = 1;
+  optional string description = 2;
+  V2McpElicitationStringFormat format = 3;
+  optional uint64 max_length = 4;
+  optional uint64 min_length = 5;
+  optional string title = 6;
+  V2McpElicitationStringType type = 7;
+}
+
+message V2McpElicitationNumberType {
+  string value = 1;
+}
+
+message V2McpElicitationNumberSchema {
+  optional double default = 1;
+  optional string description = 2;
+  optional double maximum = 3;
+  optional double minimum = 4;
+  optional string title = 5;
+  V2McpElicitationNumberType type = 6;
+}
+
+message V2McpElicitationBooleanType {
+  string value = 1;
+}
+
+message V2McpElicitationBooleanSchema {
+  optional bool default = 1;
+  optional string description = 2;
+  optional string title = 3;
+  V2McpElicitationBooleanType type = 4;
+}
+
+message V2McpElicitationPrimitiveSchema {
+  oneof value {
+    V2McpElicitationEnumSchema variant_1 = 1;
+    V2McpElicitationStringSchema variant_2 = 2;
+    V2McpElicitationNumberSchema variant_3 = 3;
+    V2McpElicitationBooleanSchema variant_4 = 4;
+  }
+}
+
+message V2McpElicitationSchemaPropertiesMap {
+  map<string, V2McpElicitationPrimitiveSchema> values = 1;
+}
+
+message V2McpElicitationObjectType {
+  string value = 1;
+}
+
+message V2McpElicitationSchema {
+  optional string _schema = 1;
+  V2McpElicitationSchemaPropertiesMap properties = 2;
+  V2ThreadStartParamsRuntimeWorkspaceRootsList required = 3;
+  V2McpElicitationObjectType type = 4;
+}
+
+message V2McpServerElicitationRequest {
+  DynamicValue _meta = 1;
+  string message_field = 2;
+  string mode = 3;
+  V2McpElicitationSchema requested_schema = 4;
+  optional string elicitation_id = 5;
+  optional string url = 6;
+}
+
+message V2McpServerElicitationRequestParams {
+  string server_name = 1;
+  string thread_id = 2;
+  optional string turn_id = 3;
+  V2McpServerElicitationRequest request = 4;
+}
+
+message V2PermissionsRequestApprovalParams {
+  V2AbsolutePathBuf cwd = 1;
+  optional string environment_id = 2;
+  string item_id = 3;
+  V2RequestPermissionProfile permissions = 4;
+  optional string reason = 5;
+  int64 started_at_ms = 6;
+  string thread_id = 7;
+  string turn_id = 8;
+}
+
+message V2DynamicToolCallParams {
+  DynamicValue arguments = 1;
+  string call_id = 2;
+  optional string namespace = 3;
+  string thread_id = 4;
+  string tool = 5;
+  string turn_id = 6;
+}
+
+message LegacyFileChange {
+  optional string content = 1;
+  string type = 2;
+  optional string move_path = 3;
+  optional string unified_diff = 4;
+}
+
+message LegacyApplyPatchApprovalParamsFileChangesMap {
+  map<string, LegacyFileChange> values = 1;
+}
+
+message LegacyApplyPatchApprovalParams {
+  string call_id = 1;
+  V2ThreadId conversation_id = 2;
+  LegacyApplyPatchApprovalParamsFileChangesMap file_changes = 3;
+  optional string grant_root = 4;
+  optional string reason = 5;
+}
+
+message LegacyParsedCommand {
+  string cmd = 1;
+  optional string name = 2;
+  optional string path = 3;
+  string type = 4;
+  optional string query = 5;
+}
+
+message LegacyExecCommandApprovalParams {
+  optional string approval_id = 1;
+  string call_id = 2;
+  repeated string command = 3;
+  V2ThreadId conversation_id = 4;
+  string cwd = 5;
+  repeated LegacyParsedCommand parsed_cmd = 6;
+  optional string reason = 7;
+}
+
+message V2CommandExecutionRequestApprovalResponse {
+  V2CommandExecutionApprovalDecision decision = 1;
+}
+
+message V2FileChangeApprovalDecision {
+  string value = 1;
+}
+
+message V2FileChangeRequestApprovalResponse {
+  V2FileChangeApprovalDecision decision = 1;
+}
+
+message V2ToolRequestUserInputAnswer {
+  repeated string answers = 1;
+}
+
+message V2ToolRequestUserInputResponseAnswersMap {
+  map<string, V2ToolRequestUserInputAnswer> values = 1;
+}
+
+message V2ToolRequestUserInputResponse {
+  V2ToolRequestUserInputResponseAnswersMap answers = 1;
+}
+
+message V2McpServerElicitationAction {
+  string value = 1;
+}
+
+message V2McpServerElicitationRequestResponse {
+  DynamicValue _meta = 1;
+  V2McpServerElicitationAction action = 2;
+  DynamicValue content = 3;
+}
+
+message V2GrantedPermissionProfile {
+  V2AdditionalFileSystemPermissions file_system = 1;
+  V2AdditionalNetworkPermissions network = 2;
+}
+
+message V2PermissionGrantScope {
+  string value = 1;
+}
+
+message V2PermissionsRequestApprovalResponse {
+  V2GrantedPermissionProfile permissions = 1;
+  V2PermissionGrantScope scope = 2;
+  optional bool strict_auto_review = 3;
+}
+
+message V2DynamicToolCallResponse {
+  repeated V2DynamicToolCallOutputContentItem content_items = 1;
+  bool success = 2;
+}
+
+message LegacyReviewDecisionApprovedExecpolicyAmendmentReviewDecisionApprovedExecpolicyAmendment {
+  repeated string proposed_execpolicy_amendment = 1;
+}
+
+message LegacyReviewDecisionApprovedExecpolicyAmendmentReviewDecision {
+  LegacyReviewDecisionApprovedExecpolicyAmendmentReviewDecisionApprovedExecpolicyAmendment approved_execpolicy_amendment = 1;
+}
+
+message LegacyNetworkPolicyRuleAction {
+  string value = 1;
+}
+
+message LegacyNetworkPolicyAmendment {
+  LegacyNetworkPolicyRuleAction action = 1;
+  string host = 2;
+}
+
+message LegacyReviewDecisionNetworkPolicyAmendmentReviewDecisionNetworkPolicyAmendment {
+  LegacyNetworkPolicyAmendment network_policy_amendment = 1;
+}
+
+message LegacyReviewDecisionNetworkPolicyAmendmentReviewDecision {
+  LegacyReviewDecisionNetworkPolicyAmendmentReviewDecisionNetworkPolicyAmendment network_policy_amendment = 1;
+}
+
+message LegacyReviewDecision {
+  oneof value {
+    string string_value = 1;
+    LegacyReviewDecisionApprovedExecpolicyAmendmentReviewDecision approved_execpolicy_amendment_review_decision = 2;
+    string string_value_3 = 3;
+    LegacyReviewDecisionNetworkPolicyAmendmentReviewDecision network_policy_amendment_review_decision = 4;
+    string string_value_5 = 5;
+    string string_value_6 = 6;
+    string string_value_7 = 7;
+  }
+}
+
+message LegacyApplyPatchApprovalResponse {
+  LegacyReviewDecision decision = 1;
+}
+
+message LegacyExecCommandApprovalResponse {
+  LegacyReviewDecision decision = 1;
+}
+
+message V2ErrorNotification {
+  V2TurnError error = 1;
+  string thread_id = 2;
+  string turn_id = 3;
+  bool will_retry = 4;
+}
+
+message V2ThreadStartedNotification {
+  V2Thread thread = 1;
+}
+
+message V2ThreadStatusChangedNotification {
+  V2ThreadStatus status = 1;
+  string thread_id = 2;
+}
+
+message V2ThreadSettings {
+  V2ActivePermissionProfile active_permission_profile = 1;
+  V2AskForApproval approval_policy = 2;
+  V2ApprovalsReviewer approvals_reviewer = 3;
+  V2CollaborationMode collaboration_mode = 4;
+  V2AbsolutePathBuf cwd = 5;
+  V2ReasoningEffort effort = 6;
+  string model = 7;
+  string model_provider = 8;
+  V2Personality personality = 9;
+  V2SandboxPolicy sandbox_policy = 10;
+  optional string service_tier = 11;
+  V2ReasoningSummary summary = 12;
+}
+
+message V2ThreadSettingsUpdatedNotification {
+  string thread_id = 1;
+  V2ThreadSettings thread_settings = 2;
+}
+
+message V2TokenUsageBreakdown {
+  int64 cached_input_tokens = 1;
+  int64 input_tokens = 2;
+  int64 output_tokens = 3;
+  int64 reasoning_output_tokens = 4;
+  int64 total_tokens = 5;
+}
+
+message V2ThreadTokenUsage {
+  V2TokenUsageBreakdown last = 1;
+  optional int64 model_context_window = 2;
+  V2TokenUsageBreakdown total = 3;
+}
+
+message V2ThreadTokenUsageUpdatedNotification {
+  string thread_id = 1;
+  V2ThreadTokenUsage token_usage = 2;
+  string turn_id = 3;
+}
+
+message V2TurnStartedNotification {
+  string thread_id = 1;
+  V2Turn turn = 2;
+}
+
+message V2HookOutputEntryKind {
+  string value = 1;
+}
+
+message V2HookOutputEntry {
+  V2HookOutputEntryKind kind = 1;
+  string text = 2;
+}
+
+message V2HookExecutionMode {
+  string value = 1;
+}
+
+message V2HookScope {
+  string value = 1;
+}
+
+message V2HookRunStatus {
+  string value = 1;
+}
+
+message V2HookRunSummary {
+  optional int64 completed_at = 1;
+  int64 display_order = 2;
+  optional int64 duration_ms = 3;
+  repeated V2HookOutputEntry entries = 4;
+  V2HookEventName event_name = 5;
+  V2HookExecutionMode execution_mode = 6;
+  V2HookHandlerType handler_type = 7;
+  string id = 8;
+  V2HookScope scope = 9;
+  V2HookSource source = 10;
+  V2AbsolutePathBuf source_path = 11;
+  int64 started_at = 12;
+  V2HookRunStatus status = 13;
+  optional string status_message = 14;
+}
+
+message V2HookStartedNotification {
+  V2HookRunSummary run = 1;
+  string thread_id = 2;
+  optional string turn_id = 3;
+}
+
+message V2TurnCompletedNotification {
+  string thread_id = 1;
+  V2Turn turn = 2;
+}
+
+message V2HookCompletedNotification {
+  V2HookRunSummary run = 1;
+  string thread_id = 2;
+  optional string turn_id = 3;
+}
+
+message V2TurnDiffUpdatedNotification {
+  string diff = 1;
+  string thread_id = 2;
+  string turn_id = 3;
+}
+
+message V2TurnPlanStepStatus {
+  string value = 1;
+}
+
+message V2TurnPlanStep {
+  V2TurnPlanStepStatus status = 1;
+  string step = 2;
+}
+
+message V2TurnPlanUpdatedNotification {
+  optional string explanation = 1;
+  repeated V2TurnPlanStep plan = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2ItemStartedNotification {
+  V2ThreadItem item = 1;
+  int64 started_at_ms = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2GuardianApprovalReview {
+  optional string rationale = 1;
+  V2GuardianRiskLevel risk_level = 2;
+  V2GuardianApprovalReviewStatus status = 3;
+  V2GuardianUserAuthorization user_authorization = 4;
+}
+
+message V2ItemGuardianApprovalReviewStartedNotification {
+  V2GuardianApprovalReviewAction action = 1;
+  V2GuardianApprovalReview review = 2;
+  string review_id = 3;
+  int64 started_at_ms = 4;
+  optional string target_item_id = 5;
+  string thread_id = 6;
+  string turn_id = 7;
+}
+
+message V2ItemGuardianApprovalReviewCompletedNotification {
+  V2GuardianApprovalReviewAction action = 1;
+  int64 completed_at_ms = 2;
+  V2AutoReviewDecisionSource decision_source = 3;
+  V2GuardianApprovalReview review = 4;
+  string review_id = 5;
+  int64 started_at_ms = 6;
+  optional string target_item_id = 7;
+  string thread_id = 8;
+  string turn_id = 9;
+}
+
+message V2ItemCompletedNotification {
+  int64 completed_at_ms = 1;
+  V2ThreadItem item = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2RawResponseItemCompletedNotification {
+  V2ResponseItem item = 1;
+  string thread_id = 2;
+  string turn_id = 3;
+}
+
+message V2AgentMessageDeltaNotification {
+  string delta = 1;
+  string item_id = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2PlanDeltaNotification {
+  string delta = 1;
+  string item_id = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2CommandExecutionOutputDeltaNotification {
+  string delta = 1;
+  string item_id = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2TerminalInteractionNotification {
+  string item_id = 1;
+  string process_id = 2;
+  string stdin = 3;
+  string thread_id = 4;
+  string turn_id = 5;
+}
+
+message V2FileChangeOutputDeltaNotification {
+  string delta = 1;
+  string item_id = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2FileChangePatchUpdatedNotification {
+  repeated V2FileUpdateChange changes = 1;
+  string item_id = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2RequestId {
+  oneof value {
+    string string_value = 1;
+    int64 int64_value = 2;
+  }
+}
+
+message V2ServerRequestResolvedNotification {
+  V2RequestId request_id = 1;
+  string thread_id = 2;
+}
+
+message V2McpToolCallProgressNotification {
+  string item_id = 1;
+  string message_field = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2McpServerOauthLoginCompletedNotification {
+  optional string error = 1;
+  string name = 2;
+  bool success = 3;
+}
+
+message V2McpServerStartupState {
+  string value = 1;
+}
+
+message V2McpServerStatusUpdatedNotification {
+  optional string error = 1;
+  string name = 2;
+  V2McpServerStartupState status = 3;
+}
+
+message V2AuthMode {
+  string value = 1;
+}
+
+message V2AccountUpdatedNotification {
+  V2AuthMode auth_mode = 1;
+  V2PlanType plan_type = 2;
+}
+
+message V2AccountRateLimitsUpdatedNotification {
+  V2RateLimitSnapshot rate_limits = 1;
+}
+
+message V2AppListUpdatedNotification {
+  repeated V2AppInfo data = 1;
+}
+
+message V2RemoteControlStatusChangedNotification {
+  optional string environment_id = 1;
+  string installation_id = 2;
+  string server_name = 3;
+  V2RemoteControlConnectionStatus status = 4;
+}
+
+message V2ReasoningSummaryTextDeltaNotification {
+  string delta = 1;
+  string item_id = 2;
+  int64 summary_index = 3;
+  string thread_id = 4;
+  string turn_id = 5;
+}
+
+message V2ReasoningSummaryPartAddedNotification {
+  string item_id = 1;
+  int64 summary_index = 2;
+  string thread_id = 3;
+  string turn_id = 4;
+}
+
+message V2ReasoningTextDeltaNotification {
+  int64 content_index = 1;
+  string delta = 2;
+  string item_id = 3;
+  string thread_id = 4;
+  string turn_id = 5;
+}
+
+message V2ContextCompactedNotification {
+  string thread_id = 1;
+  string turn_id = 2;
+}
+
+message V2ModelRerouteReason {
+  string value = 1;
+}
+
+message V2ModelReroutedNotification {
+  string from_model = 1;
+  V2ModelRerouteReason reason = 2;
+  string thread_id = 3;
+  string to_model = 4;
+  string turn_id = 5;
+}
+
+message V2ModelVerification {
+  string value = 1;
+}
+
+message V2ModelVerificationNotification {
+  string thread_id = 1;
+  string turn_id = 2;
+  repeated V2ModelVerification verifications = 3;
+}
+
+message V2TextPosition {
+  uint64 column = 1;
+  uint64 line = 2;
+}
+
+message V2TextRange {
+  V2TextPosition end = 1;
+  V2TextPosition start = 2;
+}
+
+message V2ConfigWarningNotification {
+  optional string details = 1;
+  optional string path = 2;
+  V2TextRange range = 3;
+  string summary = 4;
+}
+
+message LegacyFuzzyFileSearchSessionUpdatedNotification {
+  repeated LegacyFuzzyFileSearchResult files = 1;
+  string query = 2;
+  string session_id = 3;
+}
+
+message V2RealtimeConversationVersion {
+  string value = 1;
+}
+
+message V2ThreadRealtimeStartedNotification {
+  optional string realtime_session_id = 1;
+  string thread_id = 2;
+  V2RealtimeConversationVersion version = 3;
+}
+
+message V2ThreadRealtimeItemAddedNotification {
+  DynamicValue item = 1;
+  string thread_id = 2;
+}
+
+message V2ThreadRealtimeOutputAudioDeltaNotification {
+  V2ThreadRealtimeAudioChunk audio = 1;
+  string thread_id = 2;
+}
+
+message V2WindowsWorldWritableWarningNotification {
+  uint64 extra_count = 1;
+  bool failed_scan = 2;
+  repeated string sample_paths = 3;
+}
+
+message V2WindowsSandboxSetupCompletedNotification {
+  optional string error = 1;
+  V2WindowsSandboxSetupMode mode = 2;
+  bool success = 3;
+}
+
+message ClientMessage {
+  oneof payload {
+    ClientRequest request = 1;
+    ClientNotification notification = 2;
+    ServerResponse response = 3;
+    ClientError error = 4;
+  }
+}
+
+message ClientRequest {
+  RequestId id = 1;
+  TraceContext trace = 2;
+  oneof method {
+    LegacyInitializeParams initialize = 10;
+    V2ThreadStartParams thread_start = 11;
+    V2ThreadResumeParams thread_resume = 12;
+    V2ThreadForkParams thread_fork = 13;
+    ThreadIdParams thread_archive = 14;
+    V2ThreadUnsubscribeParams thread_unsubscribe = 15;
+    ThreadIdParams thread_increment_elicitation = 16;
+    ThreadIdParams thread_decrement_elicitation = 17;
+    ThreadSetNameParams thread_set_name = 18;
+    ThreadGoalSetParams thread_goal_set = 19;
+    ThreadIdParams thread_goal_get = 20;
+    ThreadIdParams thread_goal_clear = 21;
+    V2ThreadMetadataUpdateParams thread_metadata_update = 22;
+    V2ThreadSettingsUpdateParams thread_settings_update = 23;
+    ThreadMemoryModeSetParams thread_memory_mode_set = 24;
+    Empty memory_reset = 25;
+    V2ThreadUnarchiveParams thread_unarchive = 26;
+    ThreadIdParams thread_compact_start = 27;
+    ThreadShellCommandParams thread_shell_command = 28;
+    V2ThreadApproveGuardianDeniedActionParams thread_approve_guardian_denied_action = 29;
+    ThreadIdParams thread_background_terminals_clean = 30;
+    V2ThreadRollbackParams thread_rollback = 31;
+    V2ThreadListParams thread_list = 32;
+    V2ThreadSearchParams thread_search = 33;
+    V2ThreadLoadedListParams thread_loaded_list = 34;
+    V2ThreadReadParams thread_read = 35;
+    V2ThreadTurnsListParams thread_turns_list = 36;
+    V2ThreadTurnsItemsListParams thread_turns_items_list = 37;
+    V2ThreadInjectItemsParams thread_inject_items = 38;
+    V2SkillsListParams skills_list = 39;
+    V2SkillsExtraRootsSetParams skills_extra_roots_set = 40;
+    V2HooksListParams hooks_list = 41;
+    V2MarketplaceAddParams marketplace_add = 42;
+    V2MarketplaceRemoveParams marketplace_remove = 43;
+    V2MarketplaceUpgradeParams marketplace_upgrade = 44;
+    V2PluginListParams plugin_list = 45;
+    V2PluginInstalledParams plugin_installed = 46;
+    V2PluginReadParams plugin_read = 47;
+    V2PluginSkillReadParams plugin_skill_read = 48;
+    V2PluginShareSaveParams plugin_share_save = 49;
+    V2PluginShareUpdateTargetsParams plugin_share_update_targets = 50;
+    Empty plugin_share_list = 51;
+    V2PluginShareCheckoutParams plugin_share_checkout = 52;
+    V2PluginShareDeleteParams plugin_share_delete = 53;
+    V2AppsListParams apps_list = 54;
+    FsPathParams fs_read_file = 55;
+    FsWriteFileParams fs_write_file = 56;
+    FsCreateDirectoryParams fs_create_directory = 57;
+    FsPathParams fs_get_metadata = 58;
+    FsPathParams fs_read_directory = 59;
+    FsRemoveParams fs_remove = 60;
+    FsCopyParams fs_copy = 61;
+    FsWatchParams fs_watch = 62;
+    FsUnwatchParams fs_unwatch = 63;
+    V2SkillsConfigWriteParams skills_config_write = 64;
+    V2PluginInstallParams plugin_install = 65;
+    V2PluginUninstallParams plugin_uninstall = 66;
+    V2TurnStartParams turn_start = 67;
+    V2TurnSteerParams turn_steer = 68;
+    TurnInterruptParams turn_interrupt = 69;
+    V2ThreadRealtimeStartParams thread_realtime_start = 70;
+    V2ThreadRealtimeAppendAudioParams thread_realtime_append_audio = 71;
+    ThreadRealtimeAppendTextParams thread_realtime_append_text = 72;
+    ThreadIdParams thread_realtime_stop = 73;
+    Empty thread_realtime_list_voices = 74;
+    V2ReviewStartParams review_start = 75;
+    V2ModelListParams model_list = 76;
+    Empty model_provider_capabilities_read = 77;
+    V2ExperimentalFeatureListParams experimental_feature_list = 78;
+    V2PermissionProfileListParams permission_profile_list = 79;
+    V2ExperimentalFeatureEnablementSetParams experimental_feature_enablement_set = 80;
+    Empty remote_control_enable = 81;
+    Empty remote_control_disable = 82;
+    Empty remote_control_status_read = 83;
+    RemoteControlPairingStartParams remote_control_pairing_start = 84;
+    V2RemoteControlClientsListParams remote_control_clients_list = 85;
+    RemoteControlClientsRevokeParams remote_control_clients_revoke = 86;
+    Empty collaboration_mode_list = 87;
+    V2MockExperimentalMethodParams mock_experimental_method = 88;
+    EnvironmentAddParams environment_add = 89;
+    V2McpServerOauthLoginParams mcp_server_oauth_login = 90;
+    Empty mcp_server_refresh = 91;
+    V2ListMcpServerStatusParams mcp_server_status_list = 92;
+    V2McpResourceReadParams mcp_resource_read = 93;
+    V2McpServerToolCallParams mcp_server_tool_call = 94;
+    V2WindowsSandboxSetupStartParams windows_sandbox_setup_start = 95;
+    Empty windows_sandbox_readiness = 96;
+    LoginAccountParams login_account = 97;
+    CancelLoginAccountParams cancel_login_account = 98;
+    Empty logout_account = 99;
+    Empty get_account_rate_limits = 100;
+    SendAddCreditsNudgeEmailParams send_add_credits_nudge_email = 101;
+    V2FeedbackUploadParams feedback_upload = 102;
+    CommandExecParams one_off_command_exec = 103;
+    CommandExecWriteParams command_exec_write = 104;
+    CommandExecTerminateParams command_exec_terminate = 105;
+    CommandExecResizeParams command_exec_resize = 106;
+    ProcessSpawnParams process_spawn = 107;
+    ProcessWriteStdinParams process_write_stdin = 108;
+    ProcessKillParams process_kill = 109;
+    ProcessResizePtyParams process_resize_pty = 110;
+    V2ConfigReadParams config_read = 111;
+    V2ExternalAgentConfigDetectParams external_agent_config_detect = 112;
+    V2ExternalAgentConfigImportParams external_agent_config_import = 113;
+    V2ConfigValueWriteParams config_value_write = 114;
+    V2ConfigBatchWriteParams config_batch_write = 115;
+    Empty config_requirements_read = 116;
+    GetAccountParams get_account = 117;
+    LegacyGetConversationSummaryParams get_conversation_summary = 118;
+    LegacyGitDiffToRemoteParams git_diff_to_remote = 119;
+    LegacyGetAuthStatusParams get_auth_status = 120;
+    LegacyFuzzyFileSearchParams fuzzy_file_search = 121;
+    FuzzyFileSearchSessionStartParams fuzzy_file_search_session_start = 122;
+    FuzzyFileSearchSessionUpdateParams fuzzy_file_search_session_update = 123;
+    FuzzyFileSearchSessionStopParams fuzzy_file_search_session_stop = 124;
+  }
+}
+
+message ClientNotification {
+  oneof method {
+    Empty initialized = 1;
+  }
+}
+
+message ServerResponse {
+  RequestId id = 1;
+  oneof method {
+    V2CommandExecutionRequestApprovalResponse command_execution_request_approval = 10;
+    V2FileChangeRequestApprovalResponse file_change_request_approval = 11;
+    V2ToolRequestUserInputResponse tool_request_user_input = 12;
+    V2McpServerElicitationRequestResponse mcp_server_elicitation_request = 13;
+    V2PermissionsRequestApprovalResponse permissions_request_approval = 14;
+    V2DynamicToolCallResponse dynamic_tool_call = 15;
+    ChatgptAuthTokensRefreshResponse chatgpt_auth_tokens_refresh = 16;
+    AttestationGenerateResponse attestation_generate = 17;
+    LegacyApplyPatchApprovalResponse apply_patch_approval = 18;
+    LegacyExecCommandApprovalResponse exec_command_approval = 19;
+  }
+}
+
+message ClientError {
+  RequestId id = 1;
+  RpcError error = 2;
+}
+
+message ServerMessage {
+  oneof payload {
+    ClientResponse response = 1;
+    RpcErrorResponse error = 2;
+    ServerNotification notification = 3;
+    ServerRequest request = 4;
+  }
+}
+
+message ClientResponse {
+  RequestId id = 1;
+  oneof method {
+    LegacyInitializeResponse initialize = 10;
+    V2ThreadStartResponse thread_start = 11;
+    V2ThreadResumeResponse thread_resume = 12;
+    V2ThreadForkResponse thread_fork = 13;
+    Empty thread_archive = 14;
+    V2ThreadUnsubscribeResponse thread_unsubscribe = 15;
+    ElicitationCounterResponse thread_increment_elicitation = 16;
+    ElicitationCounterResponse thread_decrement_elicitation = 17;
+    Empty thread_set_name = 18;
+    ThreadGoalResponse thread_goal_set = 19;
+    ThreadGoalResponse thread_goal_get = 20;
+    ThreadGoalClearResponse thread_goal_clear = 21;
+    V2ThreadMetadataUpdateResponse thread_metadata_update = 22;
+    Empty thread_settings_update = 23;
+    Empty thread_memory_mode_set = 24;
+    Empty memory_reset = 25;
+    V2ThreadUnarchiveResponse thread_unarchive = 26;
+    Empty thread_compact_start = 27;
+    Empty thread_shell_command = 28;
+    Empty thread_approve_guardian_denied_action = 29;
+    Empty thread_background_terminals_clean = 30;
+    V2ThreadRollbackResponse thread_rollback = 31;
+    V2ThreadListResponse thread_list = 32;
+    V2ThreadSearchResponse thread_search = 33;
+    V2ThreadLoadedListResponse thread_loaded_list = 34;
+    V2ThreadReadResponse thread_read = 35;
+    V2ThreadTurnsListResponse thread_turns_list = 36;
+    V2ThreadTurnsItemsListResponse thread_turns_items_list = 37;
+    Empty thread_inject_items = 38;
+    V2SkillsListResponse skills_list = 39;
+    Empty skills_extra_roots_set = 40;
+    V2HooksListResponse hooks_list = 41;
+    V2MarketplaceAddResponse marketplace_add = 42;
+    V2MarketplaceRemoveResponse marketplace_remove = 43;
+    V2MarketplaceUpgradeResponse marketplace_upgrade = 44;
+    V2PluginListResponse plugin_list = 45;
+    V2PluginInstalledResponse plugin_installed = 46;
+    V2PluginReadResponse plugin_read = 47;
+    V2PluginSkillReadResponse plugin_skill_read = 48;
+    V2PluginShareSaveResponse plugin_share_save = 49;
+    V2PluginShareUpdateTargetsResponse plugin_share_update_targets = 50;
+    V2PluginShareListResponse plugin_share_list = 51;
+    V2PluginShareCheckoutResponse plugin_share_checkout = 52;
+    Empty plugin_share_delete = 53;
+    V2AppsListResponse apps_list = 54;
+    FsReadFileResponse fs_read_file = 55;
+    Empty fs_write_file = 56;
+    Empty fs_create_directory = 57;
+    FsGetMetadataResponse fs_get_metadata = 58;
+    FsReadDirectoryResponse fs_read_directory = 59;
+    Empty fs_remove = 60;
+    Empty fs_copy = 61;
+    FsWatchResponse fs_watch = 62;
+    Empty fs_unwatch = 63;
+    V2SkillsConfigWriteResponse skills_config_write = 64;
+    V2PluginInstallResponse plugin_install = 65;
+    Empty plugin_uninstall = 66;
+    V2TurnStartResponse turn_start = 67;
+    V2TurnSteerResponse turn_steer = 68;
+    Empty turn_interrupt = 69;
+    Empty thread_realtime_start = 70;
+    Empty thread_realtime_append_audio = 71;
+    Empty thread_realtime_append_text = 72;
+    Empty thread_realtime_stop = 73;
+    V2ThreadRealtimeListVoicesResponse thread_realtime_list_voices = 74;
+    V2ReviewStartResponse review_start = 75;
+    V2ModelListResponse model_list = 76;
+    V2ModelProviderCapabilitiesReadResponse model_provider_capabilities_read = 77;
+    V2ExperimentalFeatureListResponse experimental_feature_list = 78;
+    V2PermissionProfileListResponse permission_profile_list = 79;
+    V2ExperimentalFeatureEnablementSetResponse experimental_feature_enablement_set = 80;
+    V2RemoteControlEnableResponse remote_control_enable = 81;
+    V2RemoteControlDisableResponse remote_control_disable = 82;
+    V2RemoteControlStatusReadResponse remote_control_status_read = 83;
+    RemoteControlPairingStartResponse remote_control_pairing_start = 84;
+    V2RemoteControlClientsListResponse remote_control_clients_list = 85;
+    Empty remote_control_clients_revoke = 86;
+    V2CollaborationModeListResponse collaboration_mode_list = 87;
+    V2MockExperimentalMethodResponse mock_experimental_method = 88;
+    Empty environment_add = 89;
+    V2McpServerOauthLoginResponse mcp_server_oauth_login = 90;
+    Empty mcp_server_refresh = 91;
+    V2ListMcpServerStatusResponse mcp_server_status_list = 92;
+    V2McpResourceReadResponse mcp_resource_read = 93;
+    V2McpServerToolCallResponse mcp_server_tool_call = 94;
+    V2WindowsSandboxSetupStartResponse windows_sandbox_setup_start = 95;
+    V2WindowsSandboxReadinessResponse windows_sandbox_readiness = 96;
+    LoginAccountResponse login_account = 97;
+    CancelLoginAccountResponse cancel_login_account = 98;
+    Empty logout_account = 99;
+    V2GetAccountRateLimitsResponse get_account_rate_limits = 100;
+    SendAddCreditsNudgeEmailResponse send_add_credits_nudge_email = 101;
+    V2FeedbackUploadResponse feedback_upload = 102;
+    CommandExecResponse one_off_command_exec = 103;
+    Empty command_exec_write = 104;
+    Empty command_exec_terminate = 105;
+    Empty command_exec_resize = 106;
+    Empty process_spawn = 107;
+    Empty process_write_stdin = 108;
+    Empty process_kill = 109;
+    Empty process_resize_pty = 110;
+    V2ConfigReadResponse config_read = 111;
+    V2ExternalAgentConfigDetectResponse external_agent_config_detect = 112;
+    Empty external_agent_config_import = 113;
+    V2ConfigWriteResponse config_value_write = 114;
+    V2ConfigWriteResponse config_batch_write = 115;
+    V2ConfigRequirementsReadResponse config_requirements_read = 116;
+    V2GetAccountResponse get_account = 117;
+    LegacyGetConversationSummaryResponse get_conversation_summary = 118;
+    LegacyGitDiffToRemoteResponse git_diff_to_remote = 119;
+    LegacyGetAuthStatusResponse get_auth_status = 120;
+    LegacyFuzzyFileSearchResponse fuzzy_file_search = 121;
+    Empty fuzzy_file_search_session_start = 122;
+    Empty fuzzy_file_search_session_update = 123;
+    Empty fuzzy_file_search_session_stop = 124;
+  }
+}
+
+message RpcErrorResponse {
+  RequestId id = 1;
+  RpcError error = 2;
+}
+
+message RpcError {
+  int64 code = 1;
+  string message = 2;
+  DynamicValue data = 3;
+}
+
+message ServerNotification {
+  oneof method {
+    V2ErrorNotification error = 10;
+    V2ThreadStartedNotification thread_started = 11;
+    V2ThreadStatusChangedNotification thread_status_changed = 12;
+    ThreadIdParams thread_archived = 13;
+    ThreadIdParams thread_unarchived = 14;
+    ThreadIdParams thread_closed = 15;
+    Empty skills_changed = 16;
+    ThreadNameUpdatedNotification thread_name_updated = 17;
+    ThreadGoalUpdatedNotification thread_goal_updated = 18;
+    ThreadIdParams thread_goal_cleared = 19;
+    V2ThreadSettingsUpdatedNotification thread_settings_updated = 20;
+    V2ThreadTokenUsageUpdatedNotification thread_token_usage_updated = 21;
+    V2TurnStartedNotification turn_started = 22;
+    V2HookStartedNotification hook_started = 23;
+    V2TurnCompletedNotification turn_completed = 24;
+    V2HookCompletedNotification hook_completed = 25;
+    V2TurnDiffUpdatedNotification turn_diff_updated = 26;
+    V2TurnPlanUpdatedNotification turn_plan_updated = 27;
+    V2ItemStartedNotification item_started = 28;
+    V2ItemGuardianApprovalReviewStartedNotification item_guardian_approval_review_started = 29;
+    V2ItemGuardianApprovalReviewCompletedNotification item_guardian_approval_review_completed = 30;
+    V2ItemCompletedNotification item_completed = 31;
+    V2RawResponseItemCompletedNotification raw_response_item_completed = 32;
+    V2AgentMessageDeltaNotification agent_message_delta = 33;
+    V2PlanDeltaNotification plan_delta = 34;
+    CommandExecOutputDeltaNotification command_exec_output_delta = 35;
+    ProcessOutputDeltaNotification process_output_delta = 36;
+    ProcessExitedNotification process_exited = 37;
+    V2CommandExecutionOutputDeltaNotification command_execution_output_delta = 38;
+    V2TerminalInteractionNotification terminal_interaction = 39;
+    V2FileChangeOutputDeltaNotification file_change_output_delta = 40;
+    V2FileChangePatchUpdatedNotification file_change_patch_updated = 41;
+    V2ServerRequestResolvedNotification server_request_resolved = 42;
+    V2McpToolCallProgressNotification mcp_tool_call_progress = 43;
+    V2McpServerOauthLoginCompletedNotification mcp_server_oauth_login_completed = 44;
+    V2McpServerStatusUpdatedNotification mcp_server_status_updated = 45;
+    V2AccountUpdatedNotification account_updated = 46;
+    V2AccountRateLimitsUpdatedNotification account_rate_limits_updated = 47;
+    V2AppListUpdatedNotification app_list_updated = 48;
+    V2RemoteControlStatusChangedNotification remote_control_status_changed = 49;
+    Empty external_agent_config_import_completed = 50;
+    FsChangedNotification fs_changed = 51;
+    V2ReasoningSummaryTextDeltaNotification reasoning_summary_text_delta = 52;
+    V2ReasoningSummaryPartAddedNotification reasoning_summary_part_added = 53;
+    V2ReasoningTextDeltaNotification reasoning_text_delta = 54;
+    V2ContextCompactedNotification context_compacted = 55;
+    V2ModelReroutedNotification model_rerouted = 56;
+    V2ModelVerificationNotification model_verification = 57;
+    WarningNotification warning = 58;
+    GuardianWarningNotification guardian_warning = 59;
+    DeprecationNoticeNotification deprecation_notice = 60;
+    V2ConfigWarningNotification config_warning = 61;
+    LegacyFuzzyFileSearchSessionUpdatedNotification fuzzy_file_search_session_updated = 62;
+    FuzzyFileSearchSessionCompletedNotification fuzzy_file_search_session_completed = 63;
+    V2ThreadRealtimeStartedNotification thread_realtime_started = 64;
+    V2ThreadRealtimeItemAddedNotification thread_realtime_item_added = 65;
+    ThreadRealtimeTranscriptDeltaNotification thread_realtime_transcript_delta = 66;
+    ThreadRealtimeTranscriptDoneNotification thread_realtime_transcript_done = 67;
+    V2ThreadRealtimeOutputAudioDeltaNotification thread_realtime_output_audio_delta = 68;
+    ThreadRealtimeSdpNotification thread_realtime_sdp = 69;
+    ThreadRealtimeErrorNotification thread_realtime_error = 70;
+    ThreadRealtimeClosedNotification thread_realtime_closed = 71;
+    V2WindowsWorldWritableWarningNotification windows_world_writable_warning = 72;
+    V2WindowsSandboxSetupCompletedNotification windows_sandbox_setup_completed = 73;
+    AccountLoginCompletedNotification account_login_completed = 74;
+  }
+}
+
+message ServerRequest {
+  RequestId id = 1;
+  oneof method {
+    V2CommandExecutionRequestApprovalParams command_execution_request_approval = 10;
+    V2FileChangeRequestApprovalParams file_change_request_approval = 11;
+    V2ToolRequestUserInputParams tool_request_user_input = 12;
+    V2McpServerElicitationRequestParams mcp_server_elicitation_request = 13;
+    V2PermissionsRequestApprovalParams permissions_request_approval = 14;
+    V2DynamicToolCallParams dynamic_tool_call = 15;
+    ChatgptAuthTokensRefreshParams chatgpt_auth_tokens_refresh = 16;
+    Empty attestation_generate = 17;
+    LegacyApplyPatchApprovalParams apply_patch_approval = 18;
+    LegacyExecCommandApprovalParams exec_command_approval = 19;
+  }
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  enum ServingStatus {
+    SERVING_STATUS_UNSPECIFIED = 0;
+    SERVING = 1;
+  }
+  ServingStatus status = 1;
+}
+
+message SchemaRequest {}
+
+message SchemaResponse {
+  string proto_source = 1;
+}

@@ -10,8 +10,18 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
+use rmcp::model::Annotated;
+use rmcp::model::Annotations;
+use rmcp::model::Icon;
+use rmcp::model::IconTheme;
+use rmcp::model::Meta;
+use rmcp::model::RawResource;
+use rmcp::model::RawResourceTemplate;
+use rmcp::model::Role;
+use rmcp::model::ToolAnnotations;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
@@ -40,6 +50,169 @@ fn qualified_mcp_tool_name_prefix_sanitizes_server_names_without_lowercasing() {
     assert_eq!(
         qualified_mcp_tool_name_prefix("Some-Server"),
         "mcp__Some_Server__".to_string()
+    );
+}
+
+#[test]
+fn protocol_tool_conversion_preserves_typed_fields_and_open_json() {
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"}
+        }
+    })
+    .as_object()
+    .expect("input schema")
+    .clone();
+    let output_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "result": {"type": "string"}
+        }
+    })
+    .as_object()
+    .expect("output schema")
+    .clone();
+    let tool = rmcp::model::Tool::new("search", "Search documents", Arc::new(input_schema))
+        .with_title("Document search")
+        .with_raw_output_schema(Arc::new(output_schema))
+        .with_annotations(ToolAnnotations::from_raw(
+            Some("Search".to_string()),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(false),
+        ))
+        .with_icons(vec![
+            Icon::new("https://example.com/search.svg")
+                .with_mime_type("image/svg+xml")
+                .with_sizes(vec!["any".to_string()])
+                .with_theme(IconTheme::Dark),
+        ])
+        .with_meta(Meta(
+            serde_json::json!({"connectorId": "docs"})
+                .as_object()
+                .expect("tool metadata")
+                .clone(),
+        ));
+
+    assert_eq!(
+        protocol_tool_from_rmcp_tool(&tool),
+        Tool {
+            name: "search".to_string(),
+            title: Some("Document search".to_string()),
+            description: Some("Search documents".to_string()),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"}
+                }
+            }),
+            output_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "result": {"type": "string"}
+                }
+            })),
+            annotations: Some(serde_json::json!({
+                "title": "Search",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            })),
+            icons: Some(vec![serde_json::json!({
+                "src": "https://example.com/search.svg",
+                "mimeType": "image/svg+xml",
+                "sizes": ["any"],
+                "theme": "dark"
+            })]),
+            meta: Some(serde_json::json!({"connectorId": "docs"})),
+        }
+    );
+}
+
+#[test]
+fn resource_conversion_preserves_typed_fields_and_open_json() {
+    let mut annotations = Annotations::default();
+    annotations.audience = Some(vec![Role::User, Role::Assistant]);
+    annotations.priority = Some(0.75);
+    annotations.last_modified = Some(
+        "2026-06-07T12:34:56.123Z"
+            .parse()
+            .expect("last modified timestamp"),
+    );
+    let resource = Annotated::new(
+        RawResource::new("file:///docs/guide.md", "guide")
+            .with_title("Guide")
+            .with_description("Product guide")
+            .with_mime_type("text/markdown")
+            .with_size(4_000_000_000)
+            .with_icons(vec![Icon::new("https://example.com/guide.png")])
+            .with_meta(Meta(
+                serde_json::json!({"etag": "abc"})
+                    .as_object()
+                    .expect("resource metadata")
+                    .clone(),
+            )),
+        Some(annotations),
+    );
+
+    assert_eq!(
+        convert_mcp_resources(HashMap::from([("docs".to_string(), vec![resource])])),
+        HashMap::from([(
+            "docs".to_string(),
+            vec![Resource {
+                annotations: Some(serde_json::json!({
+                    "audience": ["user", "assistant"],
+                    "priority": 0.75,
+                    "lastModified": "2026-06-07T12:34:56.123Z"
+                })),
+                description: Some("Product guide".to_string()),
+                mime_type: Some("text/markdown".to_string()),
+                name: "guide".to_string(),
+                size: Some(4_000_000_000),
+                title: Some("Guide".to_string()),
+                uri: "file:///docs/guide.md".to_string(),
+                icons: Some(vec![serde_json::json!({
+                    "src": "https://example.com/guide.png"
+                })]),
+                meta: Some(serde_json::json!({"etag": "abc"})),
+            }]
+        )])
+    );
+}
+
+#[test]
+fn resource_template_conversion_preserves_supported_fields() {
+    let mut annotations = Annotations::default();
+    annotations.audience = Some(vec![Role::User]);
+    annotations.priority = Some(0.5);
+    let template = Annotated::new(
+        RawResourceTemplate::new("file:///docs/{name}", "document")
+            .with_title("Document")
+            .with_description("A document by name")
+            .with_mime_type("text/markdown")
+            .with_icons(vec![Icon::new("https://example.com/document.png")]),
+        Some(annotations),
+    );
+
+    assert_eq!(
+        convert_mcp_resource_templates(HashMap::from([("docs".to_string(), vec![template])])),
+        HashMap::from([(
+            "docs".to_string(),
+            vec![ResourceTemplate {
+                annotations: Some(serde_json::json!({
+                    "audience": ["user"],
+                    "priority": 0.5
+                })),
+                uri_template: "file:///docs/{name}".to_string(),
+                name: "document".to_string(),
+                title: Some("Document".to_string()),
+                description: Some("A document by name".to_string()),
+                mime_type: Some("text/markdown".to_string()),
+            }]
+        )])
     );
 }
 

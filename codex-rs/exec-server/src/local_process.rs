@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::shell_environment;
@@ -145,7 +145,7 @@ impl LocalProcess {
     async fn start_process(
         &self,
         params: ExecParams,
-    ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
+    ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), RpcError> {
         let process_id = params.process_id.clone();
         let (program, args) = params
             .argv
@@ -262,16 +262,13 @@ impl LocalProcess {
         Ok((ExecResponse { process_id }, wake_tx, events))
     }
 
-    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, RpcError> {
         self.start_process(params)
             .await
             .map(|(response, _, _)| response)
     }
 
-    pub(crate) async fn exec_read(
-        &self,
-        params: ReadParams,
-    ) -> Result<ReadResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec_read(&self, params: ReadParams) -> Result<ReadResponse, RpcError> {
         let _process_id = params.process_id.clone();
         let after_seq = params.after_seq.unwrap_or(0);
         let max_bytes = params.max_bytes.unwrap_or(usize::MAX);
@@ -347,10 +344,7 @@ impl LocalProcess {
         }
     }
 
-    pub(crate) async fn exec_write(
-        &self,
-        params: WriteParams,
-    ) -> Result<WriteResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec_write(&self, params: WriteParams) -> Result<WriteResponse, RpcError> {
         let _process_id = params.process_id.clone();
         let _input_bytes = params.chunk.0.len();
         let writer_tx = {
@@ -386,7 +380,7 @@ impl LocalProcess {
     pub(crate) async fn terminate_process(
         &self,
         params: TerminateParams,
-    ) -> Result<TerminateResponse, JSONRPCErrorError> {
+    ) -> Result<TerminateResponse, RpcError> {
         let _process_id = params.process_id.clone();
         let running = {
             let process_map = self.inner.processes.lock().await;
@@ -529,7 +523,7 @@ impl LocalProcess {
     }
 }
 
-fn map_handler_error(error: JSONRPCErrorError) -> ExecServerError {
+fn map_handler_error(error: RpcError) -> ExecServerError {
     ExecServerError::Server {
         code: error.code,
         message: error.message,

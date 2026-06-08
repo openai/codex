@@ -3,8 +3,8 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RpcError;
 use serde_json::to_value;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
@@ -101,7 +101,7 @@ impl ExecServerHandler {
     pub(crate) async fn initialize(
         &self,
         params: InitializeParams,
-    ) -> Result<InitializeResponse, JSONRPCErrorError> {
+    ) -> Result<InitializeResponse, RpcError> {
         if self.initialize_requested.swap(true, Ordering::SeqCst) {
             return Err(invalid_request(
                 "initialize may only be sent once per connection".to_string(),
@@ -142,25 +142,19 @@ impl ExecServerHandler {
         Ok(())
     }
 
-    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, RpcError> {
         let session = self.require_initialized_for("exec")?;
         session.process().exec(params).await
     }
 
-    pub(crate) async fn exec_read(
-        &self,
-        params: ReadParams,
-    ) -> Result<ReadResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec_read(&self, params: ReadParams) -> Result<ReadResponse, RpcError> {
         let session = self.require_initialized_for("exec")?;
         let response = session.process().exec_read(params).await?;
         self.require_session_attached()?;
         Ok(response)
     }
 
-    pub(crate) async fn exec_write(
-        &self,
-        params: WriteParams,
-    ) -> Result<WriteResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec_write(&self, params: WriteParams) -> Result<WriteResponse, RpcError> {
         let session = self.require_initialized_for("exec")?;
         session.process().exec_write(params).await
     }
@@ -168,7 +162,7 @@ impl ExecServerHandler {
     pub(crate) async fn terminate(
         &self,
         params: TerminateParams,
-    ) -> Result<TerminateResponse, JSONRPCErrorError> {
+    ) -> Result<TerminateResponse, RpcError> {
         let session = self.require_initialized_for("exec")?;
         session.process().terminate(params).await
     }
@@ -177,7 +171,7 @@ impl ExecServerHandler {
         self: &Arc<Self>,
         request_id: RequestId,
         params: HttpRequestParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         self.require_initialized_for("http")?;
         let stream_response = params.stream_response;
         let http_request_id = params.request_id.clone();
@@ -217,7 +211,7 @@ impl ExecServerHandler {
     pub(crate) async fn fs_read_file(
         &self,
         params: FsReadFileParams,
-    ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
+    ) -> Result<FsReadFileResponse, RpcError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.read_file(params).await
     }
@@ -225,7 +219,7 @@ impl ExecServerHandler {
     pub(crate) async fn fs_write_file(
         &self,
         params: FsWriteFileParams,
-    ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
+    ) -> Result<FsWriteFileResponse, RpcError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.write_file(params).await
     }
@@ -233,7 +227,7 @@ impl ExecServerHandler {
     pub(crate) async fn fs_create_directory(
         &self,
         params: FsCreateDirectoryParams,
-    ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
+    ) -> Result<FsCreateDirectoryResponse, RpcError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.create_directory(params).await
     }
@@ -241,7 +235,7 @@ impl ExecServerHandler {
     pub(crate) async fn fs_get_metadata(
         &self,
         params: FsGetMetadataParams,
-    ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
+    ) -> Result<FsGetMetadataResponse, RpcError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.get_metadata(params).await
     }
@@ -249,15 +243,12 @@ impl ExecServerHandler {
     pub(crate) async fn fs_canonicalize(
         &self,
         params: FsCanonicalizeParams,
-    ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+    ) -> Result<FsCanonicalizeResponse, RpcError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.canonicalize(params).await
     }
 
-    pub(crate) async fn fs_join(
-        &self,
-        params: FsJoinParams,
-    ) -> Result<FsJoinResponse, JSONRPCErrorError> {
+    pub(crate) async fn fs_join(&self, params: FsJoinParams) -> Result<FsJoinResponse, RpcError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.join(params).await
     }
@@ -265,7 +256,7 @@ impl ExecServerHandler {
     pub(crate) async fn fs_parent(
         &self,
         params: FsParentParams,
-    ) -> Result<FsParentResponse, JSONRPCErrorError> {
+    ) -> Result<FsParentResponse, RpcError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.parent(params).await
     }
@@ -273,7 +264,7 @@ impl ExecServerHandler {
     pub(crate) async fn fs_read_directory(
         &self,
         params: FsReadDirectoryParams,
-    ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
+    ) -> Result<FsReadDirectoryResponse, RpcError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.read_directory(params).await
     }
@@ -281,23 +272,17 @@ impl ExecServerHandler {
     pub(crate) async fn fs_remove(
         &self,
         params: FsRemoveParams,
-    ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
+    ) -> Result<FsRemoveResponse, RpcError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.remove(params).await
     }
 
-    pub(crate) async fn fs_copy(
-        &self,
-        params: FsCopyParams,
-    ) -> Result<FsCopyResponse, JSONRPCErrorError> {
+    pub(crate) async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, RpcError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.copy(params).await
     }
 
-    fn require_initialized_for(
-        &self,
-        method_family: &str,
-    ) -> Result<SessionHandle, JSONRPCErrorError> {
+    fn require_initialized_for(&self, method_family: &str) -> Result<SessionHandle, RpcError> {
         if !self.initialize_requested.load(Ordering::SeqCst) {
             return Err(invalid_request(format!(
                 "client must call initialize before using {method_family} methods"
@@ -312,7 +297,7 @@ impl ExecServerHandler {
         Ok(session)
     }
 
-    fn require_session_attached(&self) -> Result<SessionHandle, JSONRPCErrorError> {
+    fn require_session_attached(&self) -> Result<SessionHandle, RpcError> {
         let Some(session) = self.session() else {
             return Err(invalid_request(
                 "client must call initialize before using methods".to_string(),
@@ -361,7 +346,7 @@ impl ExecServerHandler {
         active_body_stream_ids.remove(request_id);
     }
 
-    async fn reserve_http_body_stream(&self, request_id: &str) -> Result<(), JSONRPCErrorError> {
+    async fn reserve_http_body_stream(&self, request_id: &str) -> Result<(), RpcError> {
         let mut active_body_stream_ids = self.active_body_stream_ids.lock().await;
         if active_body_stream_ids.contains(request_id) {
             return Err(invalid_params(format!(

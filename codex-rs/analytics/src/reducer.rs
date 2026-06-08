@@ -2,6 +2,7 @@ use crate::accepted_lines::AcceptedLineFingerprintEventInput;
 use crate::accepted_lines::accepted_line_fingerprint_event_requests;
 use crate::accepted_lines::accepted_line_fingerprints_from_unified_diff;
 use crate::accepted_lines::accepted_line_repo_hash_for_cwd;
+use crate::events::AnalyticsCodexErrorInfo;
 use crate::events::AppServerRpcTransport;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
@@ -58,7 +59,7 @@ use crate::events::plugin_state_event_type;
 use crate::events::subagent_source_name;
 use crate::events::subagent_thread_started_event_request;
 use crate::facts::AnalyticsFact;
-use crate::facts::AnalyticsJsonRpcError;
+use crate::facts::AnalyticsRpcError;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
@@ -83,7 +84,6 @@ use crate::serialize_enum_as_string;
 use crate::usize_to_u64;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
-use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
@@ -311,7 +311,7 @@ struct PendingTurnSteerState {
 #[derive(Clone)]
 struct CompletedTurnState {
     status: Option<TurnStatus>,
-    turn_error: Option<CodexErrorInfo>,
+    turn_error: Option<AnalyticsCodexErrorInfo>,
     completed_at: u64,
     duration_ms: Option<u64>,
 }
@@ -1051,7 +1051,7 @@ impl AnalyticsReducer {
         &mut self,
         connection_id: u64,
         request_id: RequestId,
-        error_type: Option<AnalyticsJsonRpcError>,
+        error_type: Option<AnalyticsRpcError>,
         out: &mut Vec<TrackEventRequest>,
     ) {
         let Some(request) = self.requests.remove(&(connection_id, request_id)) else {
@@ -1064,7 +1064,7 @@ impl AnalyticsReducer {
         &mut self,
         connection_id: u64,
         request: RequestState,
-        error_type: Option<AnalyticsJsonRpcError>,
+        error_type: Option<AnalyticsRpcError>,
         out: &mut Vec<TrackEventRequest>,
     ) {
         match request {
@@ -1084,7 +1084,7 @@ impl AnalyticsReducer {
         &mut self,
         connection_id: u64,
         pending_request: PendingTurnSteerState,
-        error_type: Option<AnalyticsJsonRpcError>,
+        error_type: Option<AnalyticsRpcError>,
         out: &mut Vec<TrackEventRequest>,
     ) {
         self.emit_turn_steer_event(
@@ -1238,7 +1238,8 @@ impl AnalyticsReducer {
                     turn_error: notification
                         .turn
                         .error
-                        .and_then(|error| error.codex_error_info),
+                        .and_then(|error| error.codex_error_info)
+                        .map(Into::into),
                     completed_at: notification
                         .turn
                         .completed_at
@@ -1710,7 +1711,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                     event_type: "codex_command_execution_event",
                     event_params: CodexCommandExecutionEventParams {
                         base,
-                        command_execution_source: *source,
+                        command_execution_source: (*source).into(),
                         exit_code: *exit_code,
                         command_total_action_count: action_counts.total,
                         command_read_action_count: action_counts.read,
@@ -2618,11 +2619,11 @@ fn num_input_images(input: &[UserInput]) -> usize {
 }
 
 fn rejection_reason_from_error_type(
-    error_type: Option<AnalyticsJsonRpcError>,
+    error_type: Option<AnalyticsRpcError>,
 ) -> Option<TurnSteerRejectionReason> {
     match error_type? {
-        AnalyticsJsonRpcError::TurnSteer(error) => Some(error.into()),
-        AnalyticsJsonRpcError::Input(error) => Some(error.into()),
+        AnalyticsRpcError::TurnSteer(error) => Some(error.into()),
+        AnalyticsRpcError::Input(error) => Some(error.into()),
     }
 }
 

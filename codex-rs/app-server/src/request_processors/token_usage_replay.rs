@@ -1,6 +1,6 @@
 //! Replays persisted token usage snapshots when a client attaches to an existing thread.
 //!
-//! The message processor decides when replay is allowed and preserves JSON-RPC response
+//! The message processor decides when replay is allowed and preserves request/response
 //! ordering. This module owns notification construction and the attribution rules that
 //! map the latest persisted `TokenCount` back to a v2 turn id.
 //!

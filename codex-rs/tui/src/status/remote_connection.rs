@@ -14,9 +14,7 @@ pub(crate) fn remote_connection_status_value(
 ) -> Option<RemoteConnectionStatus> {
     let endpoint = match app_server_target {
         AppServerTarget::Embedded => return None,
-        AppServerTarget::LocalDaemon { endpoint } | AppServerTarget::Remote { endpoint } => {
-            endpoint
-        }
+        AppServerTarget::Remote { endpoint } => endpoint,
     };
     let address = match endpoint {
         RemoteAppServerEndpoint::WebSocket { websocket_url, .. } => {
@@ -69,13 +67,13 @@ mod tests {
         );
 
         let socket_path = AbsolutePathBuf::relative_to_current_dir("codex.sock")?;
-        let daemon_target = AppServerTarget::LocalDaemon {
+        let unix_socket_target = AppServerTarget::Remote {
             endpoint: RemoteAppServerEndpoint::UnixSocket {
                 socket_path: socket_path.clone(),
             },
         };
         assert_eq!(
-            remote_connection_status_value(&daemon_target, /*server_version*/ None),
+            remote_connection_status_value(&unix_socket_target, /*server_version*/ None),
             Some(RemoteConnectionStatus {
                 address: format!("unix://{}", socket_path.display()),
                 version: "unknown".to_string(),

@@ -23,6 +23,7 @@ use crate::facts::TurnSubmissionType;
 use crate::now_unix_millis;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CommandExecutionSource;
+use codex_app_server_protocol::NonSteerableTurnKind;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -45,6 +46,7 @@ use serde::Serialize;
 pub enum AppServerRpcTransport {
     Stdio,
     Websocket,
+    Grpc,
     InProcess,
 }
 
@@ -587,13 +589,33 @@ pub(crate) enum WebSearchActionKind {
 pub(crate) struct CodexCommandExecutionEventParams {
     #[serde(flatten)]
     pub(crate) base: CodexToolItemEventBase,
-    pub(crate) command_execution_source: CommandExecutionSource,
+    pub(crate) command_execution_source: AnalyticsCommandExecutionSource,
     pub(crate) exit_code: Option<i32>,
     pub(crate) command_total_action_count: u64,
     pub(crate) command_read_action_count: u64,
     pub(crate) command_list_files_action_count: u64,
     pub(crate) command_search_action_count: u64,
     pub(crate) command_unknown_action_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum AnalyticsCommandExecutionSource {
+    Agent,
+    UserShell,
+    UnifiedExecStartup,
+    UnifiedExecInteraction,
+}
+
+impl From<CommandExecutionSource> for AnalyticsCommandExecutionSource {
+    fn from(value: CommandExecutionSource) -> Self {
+        match value {
+            CommandExecutionSource::Agent => Self::Agent,
+            CommandExecutionSource::UserShell => Self::UserShell,
+            CommandExecutionSource::UnifiedExecStartup => Self::UnifiedExecStartup,
+            CommandExecutionSource::UnifiedExecInteraction => Self::UnifiedExecInteraction,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -799,7 +821,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) num_input_images: usize,
     pub(crate) is_first_turn: bool,
     pub(crate) status: Option<TurnStatus>,
-    pub(crate) turn_error: Option<CodexErrorInfo>,
+    pub(crate) turn_error: Option<AnalyticsCodexErrorInfo>,
     pub(crate) codex_error_kind: Option<CodexErrKind>,
     pub(crate) codex_error_subreason: Option<String>,
     pub(crate) codex_error_http_status_code: Option<u16>,
@@ -820,6 +842,89 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) duration_ms: Option<u64>,
     pub(crate) started_at: Option<u64>,
     pub(crate) completed_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum AnalyticsCodexErrorInfo {
+    ContextWindowExceeded,
+    UsageLimitExceeded,
+    ServerOverloaded,
+    CyberPolicy,
+    HttpConnectionFailed {
+        #[serde(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    ResponseStreamConnectionFailed {
+        #[serde(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    InternalServerError,
+    Unauthorized,
+    BadRequest,
+    ThreadRollbackFailed,
+    SandboxError,
+    ResponseStreamDisconnected {
+        #[serde(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    ResponseTooManyFailedAttempts {
+        #[serde(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    ActiveTurnNotSteerable {
+        #[serde(rename = "turnKind")]
+        turn_kind: AnalyticsNonSteerableTurnKind,
+    },
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum AnalyticsNonSteerableTurnKind {
+    Review,
+    Compact,
+}
+
+impl From<CodexErrorInfo> for AnalyticsCodexErrorInfo {
+    fn from(value: CodexErrorInfo) -> Self {
+        match value {
+            CodexErrorInfo::ContextWindowExceeded => Self::ContextWindowExceeded,
+            CodexErrorInfo::UsageLimitExceeded => Self::UsageLimitExceeded,
+            CodexErrorInfo::ServerOverloaded => Self::ServerOverloaded,
+            CodexErrorInfo::CyberPolicy => Self::CyberPolicy,
+            CodexErrorInfo::HttpConnectionFailed { http_status_code } => {
+                Self::HttpConnectionFailed { http_status_code }
+            }
+            CodexErrorInfo::ResponseStreamConnectionFailed { http_status_code } => {
+                Self::ResponseStreamConnectionFailed { http_status_code }
+            }
+            CodexErrorInfo::InternalServerError => Self::InternalServerError,
+            CodexErrorInfo::Unauthorized => Self::Unauthorized,
+            CodexErrorInfo::BadRequest => Self::BadRequest,
+            CodexErrorInfo::ThreadRollbackFailed => Self::ThreadRollbackFailed,
+            CodexErrorInfo::SandboxError => Self::SandboxError,
+            CodexErrorInfo::ResponseStreamDisconnected { http_status_code } => {
+                Self::ResponseStreamDisconnected { http_status_code }
+            }
+            CodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code } => {
+                Self::ResponseTooManyFailedAttempts { http_status_code }
+            }
+            CodexErrorInfo::ActiveTurnNotSteerable { turn_kind } => Self::ActiveTurnNotSteerable {
+                turn_kind: turn_kind.into(),
+            },
+            CodexErrorInfo::Other => Self::Other,
+        }
+    }
+}
+
+impl From<NonSteerableTurnKind> for AnalyticsNonSteerableTurnKind {
+    fn from(value: NonSteerableTurnKind) -> Self {
+        match value {
+            NonSteerableTurnKind::Review => Self::Review,
+            NonSteerableTurnKind::Compact => Self::Compact,
+        }
+    }
 }
 
 #[derive(Serialize)]

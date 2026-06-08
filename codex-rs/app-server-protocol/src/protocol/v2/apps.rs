@@ -1,12 +1,16 @@
+#[cfg(any(test, feature = "serde-compat"))]
 use super::shared::default_enabled;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use std::collections::HashMap;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL - list available apps/connectors.
 pub struct AppsListParams {
@@ -20,12 +24,16 @@ pub struct AppsListParams {
     #[ts(optional = nullable)]
     pub thread_id: Option<String>,
     /// When true, bypass app caches and fetch the latest data from sources.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub force_refetch: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL - app metadata returned by app-list APIs.
 pub struct AppBranding {
@@ -37,26 +45,29 @@ pub struct AppBranding {
     pub is_discoverable_app: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AppReview {
     pub status: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AppScreenshot {
     pub url: Option<String>,
-    #[serde(alias = "file_id")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(alias = "file_id"))]
     pub file_id: Option<String>,
-    #[serde(alias = "user_prompt")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(alias = "user_prompt"))]
     pub user_prompt: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct AppMetadata {
     pub review: Option<AppReview>,
@@ -73,8 +84,9 @@ pub struct AppMetadata {
     pub show_in_composer_when_unlinked: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL - app metadata returned by app-list APIs.
 pub struct AppInfo {
@@ -88,7 +100,7 @@ pub struct AppInfo {
     pub app_metadata: Option<AppMetadata>,
     pub labels: Option<HashMap<String, String>>,
     pub install_url: Option<String>,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub is_accessible: bool,
     /// Whether this app is enabled in config.toml.
     /// Example:
@@ -96,14 +108,18 @@ pub struct AppInfo {
     /// [apps.bad_app]
     /// enabled = false
     /// ```
-    #[serde(default = "default_enabled")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default = "default_enabled")
+    )]
     pub is_enabled: bool,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub plugin_display_names: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL - app metadata summary for plugin responses.
 pub struct AppSummary {
@@ -126,8 +142,9 @@ impl From<AppInfo> for AppSummary {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL - app list response.
 pub struct AppsListResponse {
@@ -137,8 +154,9 @@ pub struct AppsListResponse {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL - notification emitted when the app list changes.
 pub struct AppListUpdatedNotification {

@@ -31,7 +31,11 @@ use once_cell::sync::Lazy;
 /// Expected structure for $CODEX_HOME/auth.json.
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct AuthDotJson {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "auth_mode_serde"
+    )]
     pub auth_mode: Option<AuthMode>,
 
     #[serde(rename = "OPENAI_API_KEY")]
@@ -45,6 +49,46 @@ pub struct AuthDotJson {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_identity: Option<String>,
+}
+
+mod auth_mode_serde {
+    use codex_app_server_protocol::AuthMode;
+    use serde::Deserialize;
+    use serde::Deserializer;
+    use serde::Serializer;
+    use serde::de::Error;
+
+    pub fn serialize<S>(value: &Option<AuthMode>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(AuthMode::ApiKey) => serializer.serialize_str("apikey"),
+            Some(AuthMode::Chatgpt) => serializer.serialize_str("chatgpt"),
+            Some(AuthMode::ChatgptAuthTokens) => serializer.serialize_str("chatgptAuthTokens"),
+            Some(AuthMode::AgentIdentity) => serializer.serialize_str("agentIdentity"),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<AuthMode>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Option::<String>::deserialize(deserializer)?;
+        value
+            .map(|value| match value.as_str() {
+                "apikey" => Ok(AuthMode::ApiKey),
+                "chatgpt" => Ok(AuthMode::Chatgpt),
+                "chatgptAuthTokens" => Ok(AuthMode::ChatgptAuthTokens),
+                "agentIdentity" => Ok(AuthMode::AgentIdentity),
+                _ => Err(D::Error::unknown_variant(
+                    &value,
+                    &["apikey", "chatgpt", "chatgptAuthTokens", "agentIdentity"],
+                )),
+            })
+            .transpose()
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]

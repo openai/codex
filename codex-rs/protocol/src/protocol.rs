@@ -147,13 +147,6 @@ pub struct W3cTraceContext {
     pub tracestate: Option<String>,
 }
 
-/// Config payload for refreshing MCP servers.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
-pub struct McpServerRefreshConfig {
-    pub mcp_servers: Value,
-    pub mcp_oauth_credentials_store_mode: Value,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationStartParams {
     /// Selects whether the realtime session should produce text or audio output.
@@ -617,9 +610,6 @@ pub enum Op {
         response: DynamicToolResponse,
     },
 
-    /// Request MCP servers to reinitialize and refresh cached tool lists.
-    RefreshMcpServers { config: McpServerRefreshConfig },
-
     /// Reload user config layer overrides for the active session.
     ///
     /// This updates runtime config-derived behavior (for example app
@@ -753,7 +743,6 @@ impl Op {
             Self::UserInputAnswer { .. } => "user_input_answer",
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
-            Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",

@@ -1,6 +1,7 @@
 use super::ActivePermissionProfile;
 use super::ApprovalsReviewer;
 use super::AskForApproval;
+use super::GuardianAssessmentEvent;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
@@ -21,23 +22,27 @@ use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub enum ThreadStartSource {
     Startup,
     Clear,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolSpec {
     #[ts(optional)]
@@ -45,12 +50,16 @@ pub struct DynamicToolSpec {
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub defer_loading: bool,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[cfg(any(test, feature = "serde-compat"))]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 struct DynamicToolSpecDe {
     namespace: Option<String>,
     name: String,
@@ -60,6 +69,7 @@ struct DynamicToolSpecDe {
     expose_to_context: Option<bool>,
 }
 
+#[cfg(any(test, feature = "serde-compat"))]
 impl<'de> Deserialize<'de> for DynamicToolSpec {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -87,21 +97,23 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
 
 // === Threads, Turns, and Items ===
 // Thread APIs
-#[derive(
-    Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS, ExperimentalApi,
-)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     #[ts(optional = nullable)]
     pub service_tier: Option<Option<String>>,
@@ -162,12 +174,16 @@ pub struct ThreadStartParams {
     /// If true, opt into emitting raw Responses API items on the event stream.
     /// This is for internal use only (e.g. Codex Cloud).
     #[experimental("thread/start.experimentalRawEvents")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub experimental_raw_events: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct MockExperimentalMethodParams {
     /// Test-only payload field.
@@ -175,16 +191,18 @@ pub struct MockExperimentalMethodParams {
     pub value: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct MockExperimentalMethodResponse {
     /// Echoes the input `value`.
     pub echoed: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartResponse {
     pub thread: Thread,
@@ -195,10 +213,10 @@ pub struct ThreadStartResponse {
     /// Thread-scoped runtime workspace roots used to materialize
     /// `:workspace_roots`.
     #[experimental("thread/start.runtimeWorkspaceRoots")]
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
     /// Instruction source files currently loaded for this thread.
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub instruction_sources: Vec<AbsolutePathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
@@ -210,15 +228,14 @@ pub struct ThreadStartResponse {
     /// Named or implicit built-in profile that produced the active
     /// permissions, when known.
     #[experimental("thread/start.activePermissionProfile")]
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
-#[derive(
-    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
-)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadSettingsUpdateParams {
     pub thread_id: String,
@@ -245,11 +262,14 @@ pub struct ThreadSettingsUpdateParams {
     pub model: Option<String>,
     /// Override the service tier for subsequent turns. `null` clears the
     /// current service tier; omission leaves it unchanged.
-    #[serde(
-        default,
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     #[ts(optional = nullable)]
     pub service_tier: Option<Option<String>>,
@@ -271,13 +291,15 @@ pub struct ThreadSettingsUpdateParams {
     pub personality: Option<Personality>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadSettingsUpdateResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadSettings {
     pub cwd: AbsolutePathBuf,
@@ -294,18 +316,18 @@ pub struct ThreadSettings {
     pub personality: Option<Personality>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadSettingsUpdatedNotification {
     pub thread_id: String,
     pub thread_settings: ThreadSettings,
 }
 
-#[derive(
-    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
-)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// There are three ways to resume a thread:
 /// 1. By thread_id: load the thread from disk by thread_id and resume it.
@@ -336,9 +358,12 @@ pub struct ThreadResumeParams {
     /// If thread_id identifies a running thread, the path must match the active
     /// rollout path.
     #[experimental("thread/resume.path")]
-    #[serde(
-        default,
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_empty_path_as_none"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_empty_path_as_none"
+        )
     )]
     #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
@@ -348,11 +373,14 @@ pub struct ThreadResumeParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     #[ts(optional = nullable)]
     pub service_tier: Option<Option<String>>,
@@ -389,7 +417,10 @@ pub struct ThreadResumeParams {
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after resuming.
     #[experimental("thread/resume.excludeTurns")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub exclude_turns: bool,
     /// When present, include a `thread/turns/list` page in the resume response
     /// so clients can bootstrap recent turns without a second request.
@@ -398,8 +429,9 @@ pub struct ThreadResumeParams {
     pub initial_turns_page: Option<ThreadResumeInitialTurnsPageParams>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadResumeResponse {
     pub thread: Thread,
@@ -410,10 +442,10 @@ pub struct ThreadResumeResponse {
     /// Thread-scoped runtime workspace roots used to materialize
     /// `:workspace_roots`.
     #[experimental("thread/resume.runtimeWorkspaceRoots")]
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
     /// Instruction source files currently loaded for this thread.
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub instruction_sources: Vec<AbsolutePathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
@@ -425,17 +457,18 @@ pub struct ThreadResumeResponse {
     /// Named or implicit built-in profile that produced the active
     /// permissions, when known.
     #[experimental("thread/resume.activePermissionProfile")]
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
     /// `thread/turns/list` page returned when requested by `initialTurnsPage`.
     #[experimental("thread/resume.initialTurnsPage")]
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub initial_turns_page: Option<TurnsPage>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadResumeInitialTurnsPageParams {
     /// Optional turn page size.
@@ -449,8 +482,9 @@ pub struct ThreadResumeInitialTurnsPageParams {
     pub items_view: Option<TurnItemsView>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct TurnsPage {
     pub data: Vec<Turn>,
@@ -468,10 +502,9 @@ impl From<ThreadTurnsListResponse> for TurnsPage {
     }
 }
 
-#[derive(
-    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
-)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 /// There are two ways to fork a thread:
 /// 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread.
@@ -487,9 +520,12 @@ pub struct ThreadForkParams {
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.
     #[experimental("thread/fork.path")]
-    #[serde(
-        default,
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_empty_path_as_none"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_empty_path_as_none"
+        )
     )]
     #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
@@ -499,11 +535,14 @@ pub struct ThreadForkParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     #[ts(optional = nullable)]
     pub service_tier: Option<Option<String>>,
@@ -534,7 +573,10 @@ pub struct ThreadForkParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub ephemeral: bool,
     /// Optional client-supplied analytics source classification for this forked thread.
     #[ts(optional = nullable)]
@@ -543,12 +585,16 @@ pub struct ThreadForkParams {
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after forking.
     #[experimental("thread/fork.excludeTurns")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub exclude_turns: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadForkResponse {
     pub thread: Thread,
@@ -559,10 +605,10 @@ pub struct ThreadForkResponse {
     /// Thread-scoped runtime workspace roots used to materialize
     /// `:workspace_roots`.
     #[experimental("thread/fork.runtimeWorkspaceRoots")]
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
     /// Instruction source files currently loaded for this thread.
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub instruction_sources: Vec<AbsolutePathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
@@ -574,39 +620,44 @@ pub struct ThreadForkResponse {
     /// Named or implicit built-in profile that produced the active
     /// permissions, when known.
     #[experimental("thread/fork.activePermissionProfile")]
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadArchiveParams {
     pub thread_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadArchiveResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadUnsubscribeParams {
     pub thread_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadUnsubscribeResponse {
     pub status: ThreadUnsubscribeStatus,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum ThreadUnsubscribeStatus {
     NotLoaded,
@@ -615,8 +666,9 @@ pub enum ThreadUnsubscribeStatus {
 }
 
 /// Parameters for `thread/increment_elicitation`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadIncrementElicitationParams {
     /// Thread whose out-of-band elicitation counter should be incremented.
@@ -624,8 +676,9 @@ pub struct ThreadIncrementElicitationParams {
 }
 
 /// Response for `thread/increment_elicitation`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadIncrementElicitationResponse {
     /// Current out-of-band elicitation count after the increment.
@@ -635,8 +688,9 @@ pub struct ThreadIncrementElicitationResponse {
 }
 
 /// Parameters for `thread/decrement_elicitation`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadDecrementElicitationParams {
     /// Thread whose out-of-band elicitation counter should be decremented.
@@ -644,8 +698,9 @@ pub struct ThreadDecrementElicitationParams {
 }
 
 /// Response for `thread/decrement_elicitation`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadDecrementElicitationResponse {
     /// Current out-of-band elicitation count after the decrement.
@@ -654,23 +709,26 @@ pub struct ThreadDecrementElicitationResponse {
     pub paused: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadSetNameParams {
     pub thread_id: String,
     pub name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadUnarchiveParams {
     pub thread_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadSetNameResponse {}
 
@@ -685,8 +743,9 @@ v2_enum_from_core! {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoal {
     pub thread_id: String,
@@ -719,8 +778,9 @@ impl From<codex_protocol::protocol::ThreadGoal> for ThreadGoal {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalSetParams {
     pub thread_id: String,
@@ -728,53 +788,62 @@ pub struct ThreadGoalSetParams {
     pub objective: Option<String>,
     #[ts(optional = nullable)]
     pub status: Option<ThreadGoalStatus>,
-    #[serde(
-        default,
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     #[ts(optional = nullable, type = "number | null")]
     pub token_budget: Option<Option<i64>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalSetResponse {
     pub goal: ThreadGoal,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalGetParams {
     pub thread_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalGetResponse {
     pub goal: Option<ThreadGoal>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalClearParams {
     pub thread_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalClearResponse {
     pub cleared: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadMetadataUpdateParams {
     pub thread_id: String,
@@ -785,51 +854,63 @@ pub struct ThreadMetadataUpdateParams {
     pub git_info: Option<ThreadMetadataGitInfoUpdateParams>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadMetadataGitInfoUpdateParams {
     /// Omit to leave the stored commit unchanged, set to `null` to clear it,
     /// or provide a non-empty string to replace it.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
+        )
     )]
     #[ts(optional = nullable, type = "string | null")]
     pub sha: Option<Option<String>>,
     /// Omit to leave the stored branch unchanged, set to `null` to clear it,
     /// or provide a non-empty string to replace it.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
+        )
     )]
     #[ts(optional = nullable, type = "string | null")]
     pub branch: Option<Option<String>>,
     /// Omit to leave the stored origin URL unchanged, set to `null` to clear it,
     /// or provide a non-empty string to replace it.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
+        )
     )]
     #[ts(optional = nullable, type = "string | null")]
     pub origin_url: Option<Option<String>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadMetadataUpdateResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "lowercase"))]
 #[ts(rename_all = "lowercase")]
 pub enum ThreadMemoryMode {
     Enabled,
@@ -852,45 +933,52 @@ impl ThreadMemoryMode {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadMemoryModeSetParams {
     pub thread_id: String,
     pub mode: ThreadMemoryMode,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadMemoryModeSetResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct MemoryResetResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadUnarchiveResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadCompactStartParams {
     pub thread_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadCompactStartResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadShellCommandParams {
     pub thread_id: String,
@@ -901,39 +989,44 @@ pub struct ThreadShellCommandParams {
     pub command: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadShellCommandResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadApproveGuardianDeniedActionParams {
     pub thread_id: String,
-    /// Serialized `codex_protocol::protocol::GuardianAssessmentEvent`.
-    pub event: JsonValue,
+    pub event: GuardianAssessmentEvent,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadApproveGuardianDeniedActionResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsCleanParams {
     pub thread_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsCleanResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRollbackParams {
     pub thread_id: String,
@@ -944,8 +1037,9 @@ pub struct ThreadRollbackParams {
     pub num_turns: u32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRollbackResponse {
     /// The updated thread after applying the rollback, with `turns` populated.
@@ -956,8 +1050,9 @@ pub struct ThreadRollbackResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadListParams {
     /// Opaque pagination cursor returned by a previous call.
@@ -991,15 +1086,19 @@ pub struct ThreadListParams {
     /// If true, return from the state DB without scanning JSONL rollouts to
     /// repair thread metadata. Omitted or false preserves scan-and-repair
     /// behavior.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub use_state_db_only: bool,
     /// Optional substring filter for the extracted thread title.
     #[ts(optional = nullable)]
     pub search_term: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadSearchParams {
     /// Opaque pagination cursor returned by a previous call.
@@ -1026,19 +1125,21 @@ pub struct ThreadSearchParams {
     pub search_term: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(untagged))]
 pub enum ThreadListCwdFilter {
     One(String),
     Many(Vec<String>),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub enum ThreadSourceKind {
     Cli,
-    #[serde(rename = "vscode")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "vscode"))]
     #[ts(rename = "vscode")]
     VsCode,
     Exec,
@@ -1051,24 +1152,27 @@ pub enum ThreadSourceKind {
     Unknown,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub enum ThreadSortKey {
     CreatedAt,
     UpdatedAt,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub enum SortDirection {
     Asc,
     Desc,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadListResponse {
     pub data: Vec<Thread>,
@@ -1082,16 +1186,18 @@ pub struct ThreadListResponse {
     pub backwards_cursor: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadSearchResult {
     pub thread: Thread,
     pub snippet: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadSearchResponse {
     pub data: Vec<ThreadSearchResult>,
@@ -1105,8 +1211,9 @@ pub struct ThreadSearchResponse {
     pub backwards_cursor: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadLoadedListParams {
     /// Opaque pagination cursor returned by a previous call.
@@ -1117,8 +1224,9 @@ pub struct ThreadLoadedListParams {
     pub limit: Option<u32>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadLoadedListResponse {
     /// Thread ids for sessions currently loaded in memory.
@@ -1128,62 +1236,75 @@ pub struct ThreadLoadedListResponse {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ThreadStatus {
     NotLoaded,
     Idle,
     SystemError,
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     Active {
         active_flags: Vec<ThreadActiveFlag>,
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum ThreadActiveFlag {
     WaitingOnApproval,
     WaitingOnUserInput,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadReadParams {
     pub thread_id: String,
     /// When true, include turns and their items from rollout history.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub include_turns: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadReadResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadInjectItemsParams {
     pub thread_id: String,
-    /// Raw Responses API items to append to the thread's model-visible history.
-    pub items: Vec<JsonValue>,
+    /// Responses API items to append to the thread's model-visible history.
+    pub items: Vec<ResponseItem>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadInjectItemsResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadTurnsListParams {
     pub thread_id: String,
@@ -1201,8 +1322,9 @@ pub struct ThreadTurnsListParams {
     pub items_view: Option<TurnItemsView>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadTurnsListResponse {
     pub data: Vec<Turn>,
@@ -1216,8 +1338,9 @@ pub struct ThreadTurnsListResponse {
     pub backwards_cursor: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadTurnsItemsListParams {
     pub thread_id: String,
@@ -1233,8 +1356,9 @@ pub struct ThreadTurnsItemsListParams {
     pub sort_direction: Option<SortDirection>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadTurnsItemsListResponse {
     pub data: Vec<ThreadItem>,
@@ -1246,8 +1370,9 @@ pub struct ThreadTurnsItemsListResponse {
     pub backwards_cursor: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadTokenUsageUpdatedNotification {
     pub thread_id: String,
@@ -1255,8 +1380,9 @@ pub struct ThreadTokenUsageUpdatedNotification {
     pub token_usage: ThreadTokenUsage,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadTokenUsage {
     pub total: TokenUsageBreakdown,
@@ -1276,8 +1402,9 @@ impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct TokenUsageBreakdown {
     #[ts(type = "number")]
@@ -1305,53 +1432,63 @@ impl From<CoreTokenUsage> for TokenUsageBreakdown {
 }
 
 // Thread/Turn lifecycle notifications and item progress events
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartedNotification {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadStatusChangedNotification {
     pub thread_id: String,
     pub status: ThreadStatus,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadArchivedNotification {
     pub thread_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadUnarchivedNotification {
     pub thread_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadClosedNotification {
     pub thread_id: String,
 }
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadNameUpdatedNotification {
     pub thread_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional)]
     pub thread_name: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalUpdatedNotification {
     pub thread_id: String,
@@ -1359,16 +1496,18 @@ pub struct ThreadGoalUpdatedNotification {
     pub goal: ThreadGoal,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalClearedNotification {
     pub thread_id: String,
 }
 
 /// Deprecated: Use `ContextCompaction` item type instead.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ContextCompactedNotification {
     pub thread_id: String,

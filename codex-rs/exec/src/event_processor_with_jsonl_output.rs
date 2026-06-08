@@ -303,10 +303,20 @@ impl EventProcessorWithJsonOutput {
                     id: raw_id,
                     query,
                     action: match action {
-                        Some(action) => serde_json::from_value(
-                            serde_json::to_value(action).unwrap_or_else(|_| json!("other")),
-                        )
-                        .unwrap_or(WebSearchAction::Other),
+                        Some(codex_app_server_protocol::WebSearchAction::Search {
+                            query,
+                            queries,
+                        }) => WebSearchAction::Search { query, queries },
+                        Some(codex_app_server_protocol::WebSearchAction::OpenPage { url }) => {
+                            WebSearchAction::OpenPage { url }
+                        }
+                        Some(codex_app_server_protocol::WebSearchAction::FindInPage {
+                            url,
+                            pattern,
+                        }) => WebSearchAction::FindInPage { url, pattern },
+                        Some(codex_app_server_protocol::WebSearchAction::Other) => {
+                            WebSearchAction::Other
+                        }
                         None => WebSearchAction::Other,
                     },
                 }),

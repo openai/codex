@@ -17,7 +17,6 @@ use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
-use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::DeprecationNoticeNotification;
@@ -27,7 +26,6 @@ use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
-use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::GrantedPermissionProfile as V2GrantedPermissionProfile;
 use codex_app_server_protocol::GuardianWarningNotification;
 use codex_app_server_protocol::HookCompletedNotification;
@@ -50,6 +48,7 @@ use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::ServerResponse;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -701,31 +700,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     state.active_turn_snapshot().map(|turn| turn.id)
                 }
             };
-            let server_name = request.server_name.clone();
-            let request_body = match request.request.try_into() {
-                Ok(request_body) => request_body,
-                Err(err) => {
-                    error!(
-                        error = %err,
-                        server_name,
-                        request_id = ?request.id,
-                        "failed to parse typed MCP elicitation schema"
-                    );
-                    if let Err(err) = conversation
-                        .submit(Op::ResolveElicitation {
-                            server_name: request.server_name,
-                            request_id: request.id,
-                            decision: codex_protocol::approvals::ElicitationAction::Cancel,
-                            content: None,
-                            meta: None,
-                        })
-                        .await
-                    {
-                        error!("failed to submit ResolveElicitation: {err}");
-                    }
-                    return;
-                }
-            };
+            let request_body = request.request.into();
             let params = McpServerElicitationRequestParams {
                 thread_id: conversation_id.to_string(),
                 turn_id,
@@ -1620,8 +1595,14 @@ async fn on_request_user_input_response(
     let response = receiver.await;
     resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(user_input_guard);
-    let value = match response {
-        Ok(Ok(value)) => value,
+    let response = match response {
+        Ok(Ok(ServerResponse::ToolRequestUserInput { response, .. })) => response,
+        Ok(Ok(response)) => {
+            error!("request user input returned an unexpected response: {response:?}");
+            ToolRequestUserInputResponse {
+                answers: HashMap::new(),
+            }
+        }
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
@@ -1657,13 +1638,6 @@ async fn on_request_user_input_response(
         }
     };
 
-    let response =
-        serde_json::from_value::<ToolRequestUserInputResponse>(value).unwrap_or_else(|err| {
-            error!("failed to deserialize ToolRequestUserInputResponse: {err}");
-            ToolRequestUserInputResponse {
-                answers: HashMap::new(),
-            }
-        });
     let response = CoreRequestUserInputResponse {
         answers: response
             .answers
@@ -1722,15 +1696,15 @@ fn mcp_server_elicitation_response_from_client_result(
     response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
 ) -> McpServerElicitationRequestResponse {
     match response {
-        Ok(Ok(value)) => serde_json::from_value::<McpServerElicitationRequestResponse>(value)
-            .unwrap_or_else(|err| {
-                error!("failed to deserialize McpServerElicitationRequestResponse: {err}");
-                McpServerElicitationRequestResponse {
-                    action: McpServerElicitationAction::Decline,
-                    content: None,
-                    meta: None,
-                }
-            }),
+        Ok(Ok(ServerResponse::McpServerElicitationRequest { response, .. })) => response,
+        Ok(Ok(response)) => {
+            error!("MCP elicitation returned an unexpected response: {response:?}");
+            McpServerElicitationRequestResponse {
+                action: McpServerElicitationAction::Decline,
+                content: None,
+                meta: None,
+            }
+        }
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => {
             McpServerElicitationRequestResponse {
                 action: McpServerElicitationAction::Cancel,
@@ -1809,8 +1783,16 @@ fn request_permissions_response_from_client_result(
     response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
     cwd: &std::path::Path,
 ) -> Option<CoreRequestPermissionsResponse> {
-    let value = match response {
-        Ok(Ok(value)) => value,
+    let response = match response {
+        Ok(Ok(ServerResponse::PermissionsRequestApproval { response, .. })) => response,
+        Ok(Ok(response)) => {
+            error!("permissions request returned an unexpected response: {response:?}");
+            PermissionsRequestApprovalResponse {
+                permissions: V2GrantedPermissionProfile::default(),
+                scope: codex_app_server_protocol::PermissionGrantScope::Turn,
+                strict_auto_review: None,
+            }
+        }
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return None,
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
@@ -1830,15 +1812,6 @@ fn request_permissions_response_from_client_result(
         }
     };
 
-    let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(value)
-        .unwrap_or_else(|err| {
-            error!("failed to deserialize PermissionsRequestApprovalResponse: {err}");
-            PermissionsRequestApprovalResponse {
-                permissions: V2GrantedPermissionProfile::default(),
-                scope: codex_app_server_protocol::PermissionGrantScope::Turn,
-                strict_auto_review: None,
-            }
-        });
     let strict_auto_review = response.strict_auto_review.unwrap_or(false);
     if strict_auto_review
         && matches!(
@@ -1910,16 +1883,12 @@ async fn on_file_change_request_approval_response(
     resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(permission_guard);
     let decision = match response {
-        Ok(Ok(value)) => {
-            let response = serde_json::from_value::<FileChangeRequestApprovalResponse>(value)
-                .unwrap_or_else(|err| {
-                    error!("failed to deserialize FileChangeRequestApprovalResponse: {err}");
-                    FileChangeRequestApprovalResponse {
-                        decision: FileChangeApprovalDecision::Decline,
-                    }
-                });
-
+        Ok(Ok(ServerResponse::FileChangeRequestApproval { response, .. })) => {
             map_file_change_approval_decision(response.decision)
+        }
+        Ok(Ok(response)) => {
+            error!("file change approval returned an unexpected response: {response:?}");
+            ReviewDecision::Denied
         }
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
@@ -1961,15 +1930,7 @@ async fn on_command_execution_request_approval_response(
     resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(permission_guard);
     let (decision, completion_status) = match response {
-        Ok(Ok(value)) => {
-            let response = serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value)
-                .unwrap_or_else(|err| {
-                    error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
-                    CommandExecutionRequestApprovalResponse {
-                        decision: CommandExecutionApprovalDecision::Decline,
-                    }
-                });
-
+        Ok(Ok(ServerResponse::CommandExecutionRequestApproval { response, .. })) => {
             let decision = response.decision;
 
             let (decision, completion_status) = match decision {
@@ -2009,6 +1970,10 @@ async fn on_command_execution_request_approval_response(
                 ),
             };
             (decision, completion_status)
+        }
+        Ok(Ok(response)) => {
+            error!("command approval returned an unexpected response: {response:?}");
+            (ReviewDecision::Denied, Some(CommandExecutionStatus::Failed))
         }
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
@@ -2087,9 +2052,13 @@ mod tests {
     use anyhow::anyhow;
     use anyhow::bail;
     use chrono::Utc;
+    use codex_app_server_protocol::AdditionalFileSystemPermissions;
+    use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AutoReviewDecisionSource;
+    use codex_app_server_protocol::GrantedPermissionProfile;
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
-    use codex_app_server_protocol::JSONRPCErrorError;
+    use codex_app_server_protocol::PermissionGrantScope;
+    use codex_app_server_protocol::RpcError;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_login::CodexAuth;
     use codex_protocol::items::HookPromptFragment;
@@ -2130,6 +2099,21 @@ mod tests {
 
     fn new_thread_state() -> Arc<Mutex<ThreadState>> {
         Arc::new(Mutex::new(ThreadState::default()))
+    }
+
+    fn permissions_client_response(
+        permissions: GrantedPermissionProfile,
+        scope: PermissionGrantScope,
+        strict_auto_review: Option<bool>,
+    ) -> ClientRequestResult {
+        Ok(ServerResponse::PermissionsRequestApproval {
+            request_id: RequestId::Integer(1),
+            response: PermissionsRequestApprovalResponse {
+                permissions,
+                scope,
+                strict_auto_review,
+            },
+        })
     }
 
     const TEST_TURN_COMPLETED_AT: i64 = 1_716_000_456;
@@ -2834,7 +2818,7 @@ mod tests {
 
     #[test]
     fn mcp_server_elicitation_turn_transition_error_maps_to_cancel() {
-        let error = JSONRPCErrorError {
+        let error = RpcError {
             code: -1,
             message: "client request resolved because the turn state was changed".to_string(),
             data: Some(serde_json::json!({ "reason": "turnTransition" })),
@@ -2854,7 +2838,7 @@ mod tests {
 
     #[test]
     fn request_permissions_turn_transition_error_is_ignored() {
-        let error = JSONRPCErrorError {
+        let error = RpcError {
             code: -1,
             message: "client request resolved because the turn state was changed".to_string(),
             data: Some(serde_json::json!({ "reason": "turnTransition" })),
@@ -2900,15 +2884,16 @@ mod tests {
         };
         let cases = vec![
             (
-                serde_json::json!({}),
+                GrantedPermissionProfile::default(),
                 CoreRequestPermissionProfile::default(),
             ),
             (
-                serde_json::json!({
-                    "network": {
-                        "enabled": true,
-                    },
-                }),
+                GrantedPermissionProfile {
+                    network: Some(AdditionalNetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    ..Default::default()
+                },
                 CoreRequestPermissionProfile {
                     network: Some(CoreNetworkPermissions {
                         enabled: Some(true),
@@ -2917,11 +2902,15 @@ mod tests {
                 },
             ),
             (
-                serde_json::json!({
-                    "fileSystem": {
-                        "write": [output_path],
-                    },
-                }),
+                GrantedPermissionProfile {
+                    file_system: Some(AdditionalFileSystemPermissions {
+                        read: None,
+                        write: Some(vec![absolute_path(output_path)]),
+                        glob_scan_max_depth: None,
+                        entries: None,
+                    }),
+                    ..Default::default()
+                },
                 CoreRequestPermissionProfile {
                     file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
                         /*read*/ None,
@@ -2931,15 +2920,18 @@ mod tests {
                 },
             ),
             (
-                serde_json::json!({
-                    "fileSystem": {
-                        "read": [input_path],
-                        "write": [output_path, ignored_path],
-                    },
-                    "macos": {
-                        "calendar": true,
-                    },
-                }),
+                GrantedPermissionProfile {
+                    file_system: Some(AdditionalFileSystemPermissions {
+                        read: Some(vec![absolute_path(input_path)]),
+                        write: Some(vec![
+                            absolute_path(output_path),
+                            absolute_path(ignored_path),
+                        ]),
+                        glob_scan_max_depth: None,
+                        entries: None,
+                    }),
+                    ..Default::default()
+                },
                 CoreRequestPermissionProfile {
                     file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
                         Some(vec![absolute_path(input_path)]),
@@ -2954,9 +2946,11 @@ mod tests {
         for (granted_permissions, expected_permissions) in cases {
             let response = request_permissions_response_from_client_result(
                 requested_permissions.clone(),
-                Ok(Ok(serde_json::json!({
-                    "permissions": granted_permissions,
-                }))),
+                Ok(permissions_client_response(
+                    granted_permissions,
+                    PermissionGrantScope::Turn,
+                    None,
+                )),
                 cwd.as_path(),
             )
             .expect("response should be accepted");
@@ -2976,10 +2970,11 @@ mod tests {
     fn request_permissions_response_preserves_session_scope() {
         let response = request_permissions_response_from_client_result(
             CoreRequestPermissionProfile::default(),
-            Ok(Ok(serde_json::json!({
-                "scope": "session",
-                "permissions": {},
-            }))),
+            Ok(permissions_client_response(
+                GrantedPermissionProfile::default(),
+                PermissionGrantScope::Session,
+                None,
+            )),
             std::env::current_dir().expect("current dir").as_path(),
         )
         .expect("response should be accepted");
@@ -2998,15 +2993,16 @@ mod tests {
     fn request_permissions_response_rejects_session_scoped_strict_auto_review() {
         let response = request_permissions_response_from_client_result(
             CoreRequestPermissionProfile::default(),
-            Ok(Ok(serde_json::json!({
-                "scope": "session",
-                "strictAutoReview": true,
-                "permissions": {
-                    "network": {
-                        "enabled": true,
-                    },
+            Ok(permissions_client_response(
+                GrantedPermissionProfile {
+                    network: Some(AdditionalNetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    ..Default::default()
                 },
-            }))),
+                PermissionGrantScope::Session,
+                Some(true),
+            )),
             std::env::current_dir().expect("current dir").as_path(),
         )
         .expect("response should be accepted");
@@ -3030,14 +3026,16 @@ mod tests {
                 }),
                 ..Default::default()
             },
-            Ok(Ok(serde_json::json!({
-                "strictAutoReview": true,
-                "permissions": {
-                    "network": {
-                        "enabled": true,
-                    },
+            Ok(permissions_client_response(
+                GrantedPermissionProfile {
+                    network: Some(AdditionalNetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    ..Default::default()
                 },
-            }))),
+                PermissionGrantScope::Turn,
+                Some(true),
+            )),
             std::env::current_dir().expect("current dir").as_path(),
         )
         .expect("response should be accepted");
@@ -3066,13 +3064,19 @@ mod tests {
 
         let response = request_permissions_response_from_client_result(
             requested_permissions,
-            Ok(Ok(serde_json::json!({
-                "permissions": {
-                    "fileSystem": {
-                        "write": [child],
-                    },
+            Ok(permissions_client_response(
+                GrantedPermissionProfile {
+                    file_system: Some(AdditionalFileSystemPermissions {
+                        read: None,
+                        write: Some(vec![child.clone()]),
+                        glob_scan_max_depth: None,
+                        entries: None,
+                    }),
+                    ..Default::default()
                 },
-            }))),
+                PermissionGrantScope::Turn,
+                None,
+            )),
             cwd.as_path(),
         )
         .expect("response should be accepted");
@@ -3112,13 +3116,19 @@ mod tests {
 
         let response = request_permissions_response_from_client_result(
             requested_permissions,
-            Ok(Ok(serde_json::json!({
-                "permissions": {
-                    "fileSystem": {
-                        "write": [later_child],
-                    },
+            Ok(permissions_client_response(
+                GrantedPermissionProfile {
+                    file_system: Some(AdditionalFileSystemPermissions {
+                        read: None,
+                        write: Some(vec![later_child]),
+                        glob_scan_max_depth: None,
+                        entries: None,
+                    }),
+                    ..Default::default()
                 },
-            }))),
+                PermissionGrantScope::Turn,
+                None,
+            )),
             request_cwd.as_path(),
         )
         .expect("response should be accepted");
@@ -3144,22 +3154,27 @@ mod tests {
 
         let response = request_permissions_response_from_client_result(
             requested_permissions,
-            Ok(Ok(serde_json::json!({
-                "permissions": {
-                    "fileSystem": {
-                        "entries": [{
-                            "path": {
-                                "type": "special",
-                                "value": {
-                                    "kind": "project_roots",
-                                    "subpath": null
-                                }
-                            },
-                            "access": "write"
-                        }],
-                    },
+            Ok(permissions_client_response(
+                GrantedPermissionProfile {
+                    file_system: Some(
+                        CoreFileSystemPermissions {
+                            entries: vec![FileSystemSandboxEntry {
+                                path: FileSystemPath::Special {
+                                    value: FileSystemSpecialPath::project_roots(
+                                        /*subpath*/ None,
+                                    ),
+                                },
+                                access: FileSystemAccessMode::Write,
+                            }],
+                            glob_scan_max_depth: None,
+                        }
+                        .into(),
+                    ),
+                    ..Default::default()
                 },
-            }))),
+                PermissionGrantScope::Turn,
+                None,
+            )),
             cwd.as_path(),
         )
         .expect("response should be accepted");

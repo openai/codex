@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::mcp::ReadResourceResult;
 
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
@@ -28,7 +29,7 @@ impl McpRequestProcessor {
     pub(crate) async fn mcp_server_oauth_login(
         &self,
         params: McpServerOauthLoginParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.mcp_server_oauth_login_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -37,7 +38,7 @@ impl McpRequestProcessor {
     pub(crate) async fn mcp_server_refresh(
         &self,
         params: Option<()>,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.mcp_server_refresh_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -47,7 +48,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.list_mcp_server_status(request_id, params)
             .await
             .map(|()| None)
@@ -57,7 +58,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpResourceReadParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.read_mcp_resource(request_id, params)
             .await
             .map(|()| None)
@@ -67,7 +68,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpServerToolCallParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.call_mcp_server_tool(request_id, params)
             .await
             .map(|()| None)
@@ -76,27 +77,21 @@ impl McpRequestProcessor {
     async fn mcp_server_refresh_response(
         &self,
         _params: Option<()>,
-    ) -> Result<McpServerRefreshResponse, JSONRPCErrorError> {
+    ) -> Result<McpServerRefreshResponse, RpcError> {
         crate::mcp_refresh::queue_strict_refresh(&self.thread_manager, &self.config_manager)
             .await
             .map_err(|err| internal_error(format!("failed to refresh MCP servers: {err}")))?;
         Ok(McpServerRefreshResponse {})
     }
 
-    async fn load_latest_config(
-        &self,
-        fallback_cwd: Option<PathBuf>,
-    ) -> Result<Config, JSONRPCErrorError> {
+    async fn load_latest_config(&self, fallback_cwd: Option<PathBuf>) -> Result<Config, RpcError> {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
             .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
-    async fn load_thread(
-        &self,
-        thread_id: &str,
-    ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
+    async fn load_thread(&self, thread_id: &str) -> Result<(ThreadId, Arc<CodexThread>), RpcError> {
         let thread_id = ThreadId::from_string(thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
@@ -112,7 +107,7 @@ impl McpRequestProcessor {
     async fn mcp_server_oauth_login_response(
         &self,
         params: McpServerOauthLoginParams,
-    ) -> Result<McpServerOauthLoginResponse, JSONRPCErrorError> {
+    ) -> Result<McpServerOauthLoginResponse, RpcError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let McpServerOauthLoginParams {
             name,
@@ -195,7 +190,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
@@ -260,7 +255,7 @@ impl McpRequestProcessor {
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
-    ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
+    ) -> Result<ListMcpServerStatusResponse, RpcError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
             McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
@@ -341,7 +336,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpResourceReadParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let outgoing = Arc::clone(&self.outgoing);
         let McpResourceReadParams {
             thread_id,
@@ -381,8 +376,7 @@ impl McpRequestProcessor {
                 &server,
                 &uri,
             )
-            .await
-            .and_then(|result| serde_json::to_value(result).map_err(anyhow::Error::from));
+            .await;
             Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
         });
         Ok(())
@@ -391,17 +385,11 @@ impl McpRequestProcessor {
     async fn send_mcp_resource_read_response(
         outgoing: Arc<OutgoingMessageSender>,
         request_id: ConnectionRequestId,
-        result: anyhow::Result<serde_json::Value>,
+        result: anyhow::Result<ReadResourceResult>,
     ) {
         let result = result
-            .map_err(|error| internal_error(format!("{error:#}")))
-            .and_then(|result| {
-                serde_json::from_value::<McpResourceReadResponse>(result).map_err(|error| {
-                    internal_error(format!(
-                        "failed to deserialize MCP resource read response: {error}"
-                    ))
-                })
-            });
+            .map(mcp_resource_read_response)
+            .map_err(|error| internal_error(format!("{error:#}")));
         outgoing.send_result(request_id, result).await;
     }
 
@@ -409,7 +397,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpServerToolCallParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         let outgoing = Arc::clone(&self.outgoing);
         let thread_id = params.thread_id.clone();
         let (_, thread) = self.load_thread(&thread_id).await?;
@@ -425,6 +413,12 @@ impl McpRequestProcessor {
             outgoing.send_result(request_id, result).await;
         });
         Ok(())
+    }
+}
+
+fn mcp_resource_read_response(result: ReadResourceResult) -> McpResourceReadResponse {
+    McpResourceReadResponse {
+        contents: result.contents,
     }
 }
 

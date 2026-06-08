@@ -5,7 +5,7 @@ use crate::events::TrackEventRequest;
 use crate::events::TrackEventsRequest;
 use crate::events::current_runtime_metadata;
 use crate::facts::AnalyticsFact;
-use crate::facts::AnalyticsJsonRpcError;
+use crate::facts::AnalyticsRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
@@ -25,8 +25,8 @@ use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RpcError;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
@@ -332,8 +332,8 @@ impl AnalyticsEventsClient {
         &self,
         connection_id: u64,
         request_id: RequestId,
-        error: JSONRPCErrorError,
-        error_type: Option<AnalyticsJsonRpcError>,
+        error: RpcError,
+        error_type: Option<AnalyticsRpcError>,
     ) {
         self.record_fact(AnalyticsFact::ErrorResponse {
             connection_id,

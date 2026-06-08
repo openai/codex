@@ -7,7 +7,7 @@ import type { McpElicitationPrimitiveSchema } from "./McpElicitationPrimitiveSch
 /**
  * Typed form schema for MCP `elicitation/create` requests.
  *
- * This matches the `requestedSchema` shape from the MCP 2025-11-25
- * `ElicitRequestFormParams` schema.
+ * This is the Codex-owned representation shared by core protocol events and
+ * the app-server API.
  */
 export type McpElicitationSchema = { $schema?: string, type: McpElicitationObjectType, properties: { [key in string]?: McpElicitationPrimitiveSchema }, required?: Array<string>, };

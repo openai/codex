@@ -2,6 +2,7 @@ use super::ApprovalsReviewer;
 use super::AskForApproval;
 use super::SandboxMode;
 use super::WindowsSandboxSetupMode;
+#[cfg(any(test, feature = "serde-compat"))]
 use super::shared::default_enabled;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
@@ -13,7 +14,9 @@ use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -21,13 +24,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ConfigLayerSource {
     /// Managed preferences layer delivered by MDM (macOS only).
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     Mdm {
         domain: String,
@@ -35,7 +42,7 @@ pub enum ConfigLayerSource {
     },
 
     /// Managed config layer from a file (usually `managed_config.toml`).
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     System {
         /// This is the path to the system config.toml file, though it is not
@@ -44,7 +51,7 @@ pub enum ConfigLayerSource {
     },
 
     /// Enterprise-managed config layer delivered by the cloud config bundle.
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     EnterpriseManaged {
         /// Stable identifier for the delivered layer.
@@ -60,7 +67,7 @@ pub enum ConfigLayerSource {
     /// in that it is expected to be:
     /// - writable by the user
     /// - generally outside the workspace directory
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     User {
         /// This is the path to the user's config.toml file, though it is not
@@ -74,7 +81,7 @@ pub enum ConfigLayerSource {
 
     /// Path to a .codex/ folder within a project. There could be multiple of
     /// these between `cwd` and the project/repo root.
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     Project {
         dot_codex_folder: AbsolutePathBuf,
@@ -87,7 +94,7 @@ pub enum ConfigLayerSource {
     /// as the last layer on top of everything else. This scheme did not quite
     /// work out as intended, but we keep this variant as a "best effort" while
     /// we phase out `managed_config.toml` in favor of `requirements.toml`.
-    #[serde(rename_all = "camelCase")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
     #[ts(rename_all = "camelCase")]
     LegacyManagedConfigTomlFromFile {
         file: AbsolutePathBuf,
@@ -127,38 +134,42 @@ impl PartialOrd for ConfigLayerSource {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub struct SandboxWorkspaceWrite {
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub writable_roots: Vec<PathBuf>,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub network_access: bool,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub exclude_tmpdir_env_var: bool,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub exclude_slash_tmp: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
     pub web_search: Option<WebSearchToolConfig>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub struct AnalyticsConfig {
     pub enabled: Option<bool>,
-    #[serde(default, flatten)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default, flatten))]
     pub additional: HashMap<String, JsonValue>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub enum AppToolApproval {
     Auto,
@@ -166,39 +177,55 @@ pub enum AppToolApproval {
     Approve,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub struct AppsDefaultConfig {
-    #[serde(default = "default_enabled")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default = "default_enabled")
+    )]
     pub enabled: bool,
-    #[serde(default = "default_enabled")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default = "default_enabled")
+    )]
     pub destructive_enabled: bool,
-    #[serde(default = "default_enabled")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default = "default_enabled")
+    )]
     pub open_world_enabled: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub struct AppToolConfig {
     pub enabled: Option<bool>,
     pub approval_mode: Option<AppToolApproval>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub struct AppToolsConfig {
-    #[serde(default, flatten)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default, flatten))]
     pub tools: HashMap<String, AppToolConfig>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub struct AppConfig {
-    #[serde(default = "default_enabled")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default = "default_enabled")
+    )]
     pub enabled: bool,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub destructive_enabled: Option<bool>,
@@ -208,19 +235,24 @@ pub struct AppConfig {
     pub tools: Option<AppToolsConfig>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub struct AppsConfig {
-    #[serde(default, rename = "_default")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, rename = "_default")
+    )]
     pub default: Option<AppsDefaultConfig>,
-    #[serde(default, flatten)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default, flatten))]
     pub apps: HashMap<String, AppConfig>,
 }
 
 /// Backward-compatible API shape for ChatGPT workspace login restrictions.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(untagged))]
 #[ts(export_to = "v2/")]
 pub enum ForcedChatgptWorkspaceIds {
     Single(String),
@@ -236,8 +268,9 @@ impl ForcedChatgptWorkspaceIds {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(export_to = "v2/")]
 pub struct Config {
     pub model: Option<String>,
@@ -267,50 +300,58 @@ pub struct Config {
     pub service_tier: Option<String>,
     pub analytics: Option<AnalyticsConfig>,
     #[experimental("config/read.apps")]
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub apps: Option<AppsConfig>,
     pub desktop: Option<HashMap<String, JsonValue>>,
-    #[serde(default, flatten)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default, flatten))]
     pub additional: HashMap<String, JsonValue>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigLayerMetadata {
     pub name: ConfigLayerSource,
     pub version: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigLayer {
     pub name: ConfigLayerSource,
     pub version: String,
     pub config: JsonValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(skip_serializing_if = "Option::is_none")
+    )]
     pub disabled_reason: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum MergeStrategy {
     Replace,
     Upsert,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum WriteStatus {
     Ok,
     OkOverridden,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct OverriddenMetadata {
     pub message: String,
@@ -318,8 +359,9 @@ pub struct OverriddenMetadata {
     pub effective_value: JsonValue,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigWriteResponse {
     pub status: WriteStatus,
@@ -329,8 +371,9 @@ pub struct ConfigWriteResponse {
     pub overridden_metadata: Option<OverriddenMetadata>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum ConfigWriteErrorCode {
     ConfigLayerReadonly,
@@ -341,11 +384,15 @@ pub enum ConfigWriteErrorCode {
     UserLayerNotFound,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigReadParams {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub include_layers: bool,
     /// Optional working directory to resolve project config layers. If specified,
     /// return the effective config as seen from that directory (i.e., including any
@@ -354,19 +401,24 @@ pub struct ConfigReadParams {
     pub cwd: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigReadResponse {
     #[experimental(nested)]
     pub config: Config,
     pub origins: HashMap<String, ConfigLayerMetadata>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(skip_serializing_if = "Option::is_none")
+    )]
     pub layers: Option<Vec<ConfigLayer>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigRequirements {
     #[experimental(nested)]
@@ -388,88 +440,99 @@ pub struct ConfigRequirements {
     pub network: Option<NetworkRequirements>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ComputerUseRequirements {
     pub allow_locked_computer_use: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ManagedHooksRequirements {
     pub managed_dir: Option<PathBuf>,
     pub windows_managed_dir: Option<PathBuf>,
-    #[serde(rename = "PreToolUse")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "PreToolUse"))]
     #[ts(rename = "PreToolUse")]
     pub pre_tool_use: Vec<ConfiguredHookMatcherGroup>,
-    #[serde(rename = "PermissionRequest")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "PermissionRequest")
+    )]
     #[ts(rename = "PermissionRequest")]
     pub permission_request: Vec<ConfiguredHookMatcherGroup>,
-    #[serde(rename = "PostToolUse")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "PostToolUse"))]
     #[ts(rename = "PostToolUse")]
     pub post_tool_use: Vec<ConfiguredHookMatcherGroup>,
-    #[serde(rename = "PreCompact")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "PreCompact"))]
     #[ts(rename = "PreCompact")]
     pub pre_compact: Vec<ConfiguredHookMatcherGroup>,
-    #[serde(rename = "PostCompact")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "PostCompact"))]
     #[ts(rename = "PostCompact")]
     pub post_compact: Vec<ConfiguredHookMatcherGroup>,
-    #[serde(rename = "SessionStart")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "SessionStart"))]
     #[ts(rename = "SessionStart")]
     pub session_start: Vec<ConfiguredHookMatcherGroup>,
-    #[serde(rename = "UserPromptSubmit")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "UserPromptSubmit")
+    )]
     #[ts(rename = "UserPromptSubmit")]
     pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,
-    #[serde(rename = "SubagentStart")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "SubagentStart"))]
     #[ts(rename = "SubagentStart")]
     pub subagent_start: Vec<ConfiguredHookMatcherGroup>,
-    #[serde(rename = "SubagentStop")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "SubagentStop"))]
     #[ts(rename = "SubagentStop")]
     pub subagent_stop: Vec<ConfiguredHookMatcherGroup>,
-    #[serde(rename = "Stop")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "Stop"))]
     #[ts(rename = "Stop")]
     pub stop: Vec<ConfiguredHookMatcherGroup>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfiguredHookMatcherGroup {
     pub matcher: Option<String>,
     pub hooks: Vec<ConfiguredHookHandler>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(tag = "type"))]
 #[ts(tag = "type", export_to = "v2/")]
 pub enum ConfiguredHookHandler {
-    #[serde(rename = "command")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "command"))]
     #[ts(rename = "command")]
     Command {
         command: String,
-        #[serde(rename = "commandWindows")]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "commandWindows"))]
         #[ts(rename = "commandWindows")]
         command_windows: Option<String>,
-        #[serde(rename = "timeoutSec")]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "timeoutSec"))]
         #[ts(rename = "timeoutSec")]
         timeout_sec: Option<u64>,
         r#async: bool,
-        #[serde(rename = "statusMessage")]
+        #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "statusMessage"))]
         #[ts(rename = "statusMessage")]
         status_message: Option<String>,
     },
-    #[serde(rename = "prompt")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "prompt"))]
     #[ts(rename = "prompt")]
     Prompt {},
-    #[serde(rename = "agent")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "agent"))]
     #[ts(rename = "agent")]
     Agent {},
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct NetworkRequirements {
     pub enabled: Option<bool>,
@@ -494,31 +557,35 @@ pub struct NetworkRequirements {
     pub allow_local_binding: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "lowercase"))]
 #[ts(export_to = "v2/")]
 pub enum NetworkDomainPermission {
     Allow,
     Deny,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "lowercase"))]
 #[ts(export_to = "v2/")]
 pub enum NetworkUnixSocketPermission {
     Allow,
     Deny,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum ResidencyRequirement {
     Us,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigRequirementsReadResponse {
     /// Null if no requirements are configured (e.g. no requirements.toml/MDM entries).
@@ -526,52 +593,58 @@ pub struct ConfigRequirementsReadResponse {
     pub requirements: Option<ConfigRequirements>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
 #[ts(export_to = "v2/")]
 pub enum ExternalAgentConfigMigrationItemType {
-    #[serde(rename = "AGENTS_MD")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "AGENTS_MD"))]
     #[ts(rename = "AGENTS_MD")]
     AgentsMd,
-    #[serde(rename = "CONFIG")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "CONFIG"))]
     #[ts(rename = "CONFIG")]
     Config,
-    #[serde(rename = "SKILLS")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "SKILLS"))]
     #[ts(rename = "SKILLS")]
     Skills,
-    #[serde(rename = "PLUGINS")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "PLUGINS"))]
     #[ts(rename = "PLUGINS")]
     Plugins,
-    #[serde(rename = "MCP_SERVER_CONFIG")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(rename = "MCP_SERVER_CONFIG")
+    )]
     #[ts(rename = "MCP_SERVER_CONFIG")]
     McpServerConfig,
-    #[serde(rename = "SUBAGENTS")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "SUBAGENTS"))]
     #[ts(rename = "SUBAGENTS")]
     Subagents,
-    #[serde(rename = "HOOKS")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "HOOKS"))]
     #[ts(rename = "HOOKS")]
     Hooks,
-    #[serde(rename = "COMMANDS")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "COMMANDS"))]
     #[ts(rename = "COMMANDS")]
     Commands,
-    #[serde(rename = "SESSIONS")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "SESSIONS"))]
     #[ts(rename = "SESSIONS")]
     Sessions,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct PluginsMigration {
-    #[serde(rename = "marketplaceName")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "marketplaceName"))]
     #[ts(rename = "marketplaceName")]
     pub marketplace_name: String,
-    #[serde(rename = "pluginNames")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "pluginNames"))]
     #[ts(rename = "pluginNames")]
     pub plugin_names: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct SessionMigration {
     pub path: PathBuf,
@@ -579,54 +652,60 @@ pub struct SessionMigration {
     pub title: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct McpServerMigration {
     pub name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct HookMigration {
     pub name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct SubagentMigration {
     pub name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct CommandMigration {
     pub name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct MigrationDetails {
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub plugins: Vec<PluginsMigration>,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub sessions: Vec<SessionMigration>,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub mcp_servers: Vec<McpServerMigration>,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub hooks: Vec<HookMigration>,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub subagents: Vec<SubagentMigration>,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub commands: Vec<CommandMigration>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigMigrationItem {
     pub item_type: ExternalAgentConfigMigrationItemType,
@@ -636,44 +715,53 @@ pub struct ExternalAgentConfigMigrationItem {
     pub details: Option<MigrationDetails>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigDetectResponse {
     pub items: Vec<ExternalAgentConfigMigrationItem>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigDetectParams {
     /// If true, include detection under the user's home (~/.claude, ~/.codex, etc.).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub include_home: bool,
     /// Zero or more working directories to include for repo-scoped detection.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<PathBuf>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportParams {
     pub migration_items: Vec<ExternalAgentConfigMigrationItem>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportCompletedNotification {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigValueWriteParams {
     pub key_path: String,
@@ -686,8 +774,9 @@ pub struct ConfigValueWriteParams {
     pub expected_version: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigBatchWriteParams {
     pub edits: Vec<ConfigEdit>,
@@ -697,12 +786,16 @@ pub struct ConfigBatchWriteParams {
     #[ts(optional = nullable)]
     pub expected_version: Option<String>,
     /// When true, hot-reload the updated user config into all loaded threads after writing.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub reload_user_config: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigEdit {
     pub key_path: String,
@@ -710,8 +803,9 @@ pub struct ConfigEdit {
     pub merge_strategy: MergeStrategy,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct TextPosition {
     /// 1-based line number.
@@ -720,16 +814,18 @@ pub struct TextPosition {
     pub column: usize,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct TextRange {
     pub start: TextPosition,
     pub end: TextPosition,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ConfigWarningNotification {
     /// Concise summary of the warning.
@@ -737,11 +833,17 @@ pub struct ConfigWarningNotification {
     /// Optional extra guidance or error details.
     pub details: Option<String>,
     /// Optional path to the config file that triggered the warning.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional)]
     pub path: Option<String>,
     /// Optional range for the error location inside the config file.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     #[ts(optional)]
     pub range: Option<TextRange>,
 }

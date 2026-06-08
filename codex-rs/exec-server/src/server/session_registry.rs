@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RpcError;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -59,7 +59,7 @@ impl SessionRegistry {
         self: &Arc<Self>,
         resume_session_id: Option<String>,
         notifications: RpcNotificationSender,
-    ) -> Result<SessionHandle, JSONRPCErrorError> {
+    ) -> Result<SessionHandle, RpcError> {
         enum AttachOutcome {
             Attached(Arc<SessionEntry>),
             Expired {

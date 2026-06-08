@@ -408,6 +408,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "codex-app-server-protocol",
+ "codex-app-server-transport",
  "codex-config",
  "codex-core",
  "codex-features",
@@ -420,6 +421,8 @@ dependencies = [
  "serde_json",
  "shlex",
  "tokio",
+ "tokio-stream",
+ "tonic",
  "uuid",
  "wiremock",
 ]
@@ -1957,6 +1960,7 @@ dependencies = [
  "flate2",
  "futures",
  "hmac 0.12.1",
+ "http 1.4.0",
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",
@@ -1972,10 +1976,11 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tokio",
- "tokio-tungstenite",
+ "tokio-stream",
  "tokio-util",
  "toml 0.9.11+spec-1.1.0",
  "toml_edit 0.24.0+spec-1.1.0",
+ "tonic",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -1996,40 +2001,11 @@ dependencies = [
  "codex-exec-server",
  "codex-feedback",
  "codex-protocol",
- "codex-uds",
- "codex-utils-absolute-path",
- "codex-utils-rustls-provider",
- "futures",
  "pretty_assertions",
- "serde",
- "serde_json",
  "tempfile",
  "tokio",
- "tokio-tungstenite",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
- "url",
-]
-
-[[package]]
-name = "codex-app-server-daemon"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-app-server-protocol",
- "codex-app-server-transport",
- "codex-uds",
- "codex-utils-home-dir",
- "futures",
- "libc",
- "pretty_assertions",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
 ]
 
 [[package]]
@@ -2060,63 +2036,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-app-server-test-client"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "codex-app-server-protocol",
- "codex-core",
- "codex-otel",
- "codex-protocol",
- "codex-utils-cli",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "tungstenite",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "codex-app-server-transport"
 version = "0.0.0"
 dependencies = [
- "anyhow",
- "axum",
- "base64 0.22.1",
- "chrono",
- "clap",
- "codex-api",
  "codex-app-server-protocol",
- "codex-config",
- "codex-core",
- "codex-login",
- "codex-model-provider",
- "codex-state",
- "codex-uds",
- "codex-utils-absolute-path",
- "codex-utils-rustls-provider",
- "constant_time_eq 0.3.1",
+ "codex-protocol",
  "futures",
- "gethostname",
- "hmac 0.12.1",
- "jsonwebtoken",
- "owo-colors",
  "pretty_assertions",
- "serde",
+ "prost 0.14.3",
  "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "time",
  "tokio",
- "tokio-tungstenite",
+ "tokio-stream",
  "tokio-util",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "tracing",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -2251,9 +2186,7 @@ dependencies = [
  "clap_complete",
  "codex-api",
  "codex-app-server",
- "codex-app-server-daemon",
  "codex-app-server-protocol",
- "codex-app-server-test-client",
  "codex-arg0",
  "codex-chatgpt",
  "codex-cloud-tasks",
@@ -3869,7 +3802,6 @@ dependencies = [
  "codex-app-server-client",
  "codex-app-server-protocol",
  "codex-arg0",
- "codex-cli",
  "codex-cloud-config",
  "codex-config",
  "codex-connectors",

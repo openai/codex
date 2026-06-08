@@ -19,27 +19,31 @@
 
 ## Protocol
 
-Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports bidirectional communication using JSON-RPC 2.0 messages (with the `"jsonrpc":"2.0"` header omitted on the wire).
+`codex app-server` exposes the native protobuf
+`codex.app_server.v2.CodexAppServer/Session` bidirectional gRPC RPC. The old stdio, WebSocket, and
+Unix-socket JSON-RPC listen URLs are no longer accepted. Each protobuf request, response,
+notification, and server-initiated request has an explicit generated `oneof` variant; JSON is not
+carried inside a generic protobuf envelope. Concrete protobuf messages cover the full stable,
+experimental, and legacy app-server method surface. `DynamicValue` is limited to fields whose API
+contract is intentionally open JSON, including config values, JSON schemas, dynamic tool
+arguments, MCP metadata/content, raw response items, and RPC error data.
 
-Supported transports:
+Each `Session` stream is one app-server connection and must perform the normal `initialize` /
+`initialized` handshake. The protobuf source is
+`app-server-transport/src/transport/proto/codex.app_server.v2.proto`. Start it with:
 
-- stdio (`--stdio` or `--listen stdio://`, default): newline-delimited JSON (JSONL)
-- websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
-- unix socket (`--listen unix://` or `--listen unix://PATH`): websocket connections over `$CODEX_HOME/app-server-control/app-server-control.sock` or a custom socket path, using the standard HTTP Upgrade handshake
-- off (`--listen off`): do not expose a local transport
+```
+codex app-server --listen grpc://127.0.0.1:50051
+```
 
-When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
+The default is `grpc://127.0.0.1:0`, which selects an ephemeral loopback port and prints the selected
+address to stderr. `--listen off` starts the app-server without a local RPC listener. Non-loopback
+addresses are rejected, making the local host boundary the authentication boundary for this
+experiment.
 
-- `GET /readyz` returns `200 OK` once the listener is accepting new connections.
-- `GET /healthz` returns `200 OK` when no `Origin` header is present.
-- Any request carrying an `Origin` header is rejected with `403 Forbidden`.
-
-Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
-
-The unix socket transport is intended for local app-server control-plane clients. `codex app-server proxy`
-opens exactly one raw stream connection to `$CODEX_HOME/app-server-control/app-server-control.sock`
-by default, or to `--sock PATH` when provided, and proxies bytes between that socket and stdin/stdout.
-The proxied stream carries the websocket HTTP Upgrade handshake followed by websocket frames.
+The service also exposes `Health`. Request and response messages are limited to 16 MiB, transport
+queues are bounded, HTTP/2 and TCP keepalives are enabled, and abandoned response streams cancel
+their app-server connection.
 
 Tracing/log output:
 
@@ -49,12 +53,15 @@ Tracing/log output:
 Backpressure behavior:
 
 - The server uses bounded queues between transport ingress, request processing, and outbound writes.
-- When request ingress is saturated, new requests are rejected with a JSON-RPC error code `-32001` and message `"Server overloaded; retry later."`.
+- When request ingress is saturated, new requests receive a protobuf `RpcErrorResponse` with code `-32001` and message `"Server overloaded; retry later."`.
 - Clients should treat this as retryable and use exponential backoff with jitter.
 
 ## Message Schema
 
-Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
+The authoritative transport schema is
+`app-server-transport/src/transport/proto/codex.app_server.v2.proto`. TypeScript and JSON Schema
+generation remains available for the app-server data model and the intentionally open JSON fields
+represented by protobuf `DynamicValue`.
 
 ```
 codex app-server generate-ts --out DIR
@@ -77,7 +84,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 - Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history. Like `thread/start`, `thread/fork` also accepts `ephemeral: true` for an in-memory temporary thread.
   The returned `thread.ephemeral` flag tells you whether the session is intentionally in-memory only; when it is `true`, `thread.path` is `null`.
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy or experimental `permissions` profile selection, approval policy, approvals reviewer, etc. This immediately returns the new turn object. The app-server emits `turn/started` when that turn actually begins running.
-- Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
+- Stream events: After `turn/start`, keep reading `ServerNotification` messages from the gRPC session. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
 
 ## Initialization
@@ -138,7 +145,7 @@ Example with notification opt-out:
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/turns/list` — experimental; page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `itemsView`, `nextCursor`, and `backwardsCursor`.
-- `thread/turns/items/list` — experimental; reserved for paging full items for one turn. The API shape is present, but app-server currently returns an unsupported-method JSON-RPC error.
+- `thread/turns/items/list` — experimental; reserved for paging full items for one turn. The API shape is present, but app-server currently returns an unsupported-method RPC error.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/settings/update` — experimental; queue a partial update to a loaded thread’s next-turn settings without starting a turn or adding transcript items. Omitted fields leave settings unchanged; `serviceTier: null` clears the tier; `sandboxPolicy` and `permissions` cannot be combined. Returns `{}` when the update is accepted and emits `thread/settings/updated` with the full effective settings only if they actually change. `turn/start` settings overrides emit the same notification when they change the stored settings.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
@@ -474,7 +481,7 @@ Every returned `Turn` includes `itemsView`, which tells clients whether the `ite
 } }
 ```
 
-This method currently returns JSON-RPC `-32601` with message `thread/turns/items/list is not supported yet`.
+This method currently returns RPC error code `-32601` with message `thread/turns/items/list is not supported yet`.
 
 ### Example: Update stored thread metadata
 
@@ -1236,7 +1243,7 @@ Because audio is intentionally separate from `ThreadItem`, clients can opt out o
 
 ### Turn events
 
-The app-server streams JSON-RPC notifications while a turn is running. Each turn emits `turn/started` when it begins running and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
+The app-server streams typed gRPC notifications while a turn is running. Each turn emits `turn/started` when it begins running and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
 
 - `turn/started` — `{ turn }` with the turn id, empty `items`, and `status: "inProgress"`.
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo?, additionalDetails? } }`.
@@ -1325,7 +1332,7 @@ When an upstream HTTP status is available (for example, from the Responses API o
 
 ## Approvals
 
-Certain actions (shell commands or modifying files) may require explicit user approval depending on the user's config. When `turn/start` is used, the app-server drives an approval flow by sending a server-initiated JSON-RPC request to the client. The client must respond to tell Codex whether to proceed. UIs should present these requests inline with the active turn so users can review the proposed command or diff before choosing.
+Certain actions (shell commands or modifying files) may require explicit user approval depending on the user's config. When `turn/start` is used, the app-server drives an approval flow by sending a typed server request over the gRPC session. The client must respond to tell Codex whether to proceed. UIs should present these requests inline with the active turn so users can review the proposed command or diff before choosing.
 
 - Requests include `threadId` and `turnId`—use them to scope UI state to the active conversation.
 - Respond with a single `{ "decision": ... }` payload. Command approvals support `accept`, `acceptForSession`, `acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`, `decline`, or `cancel`. The server resumes or declines the work and ends the item with `item/completed`.
@@ -1381,7 +1388,7 @@ the client can offer session-scoped and/or persistent approval choices.
 
 ### Permission requests
 
-The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the command-execution `additionalPermissions` shape: it can request network access and additional filesystem access. The `environmentId` and `cwd` fields identify the environment and directory used to resolve project-root permissions and relative deny globs.
+The built-in `request_permissions` tool sends an `item/permissions/requestApproval` server request to the client with the requested permission profile. This v2 payload mirrors the command-execution `additionalPermissions` shape: it can request network access and additional filesystem access. The `environmentId` and `cwd` fields identify the environment and directory used to resolve project-root permissions and relative deny globs.
 
 ```json
 {
@@ -1437,7 +1444,7 @@ Dynamic tool identifiers follow the same constraints as Responses function tools
 
 Each dynamic tool may set `deferLoading`. When omitted, it defaults to `false`. Set it to `true` to keep the tool registered and callable by runtime features such as `code_mode`, while excluding it from the model-facing tool list sent on ordinary turns. When `tool_search` is available, deferred dynamic tools are searchable and can be exposed by a matching search result.
 
-When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
+When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` server request to the client:
 
 ```json
 {
@@ -1760,7 +1767,7 @@ $demo-app Pull the latest updates from the team.
 
 ## Auth endpoints
 
-The JSON-RPC auth/account surface exposes request/response methods plus server-initiated notifications (no `id`). Use these to determine auth state, start or cancel logins, logout, and inspect ChatGPT rate limits.
+The native gRPC auth/account surface exposes request/response methods plus server-initiated notifications. Use these to determine auth state, start or cancel logins, logout, and inspect ChatGPT rate limits.
 
 ### Authentication modes
 
@@ -1944,7 +1951,7 @@ Notes:
 
 ### What happens without opt-in
 
-If a request uses an experimental method or sets an experimental field without opting in, app-server rejects it with a JSON-RPC error. The message is:
+If a request uses an experimental method or sets an experimental field without opting in, app-server rejects it with an RPC error. The message is:
 
 `<descriptor> requires experimentalApi capability`
 

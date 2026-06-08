@@ -4,14 +4,17 @@ use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
 /// EXPERIMENTAL - thread realtime audio chunk.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeAudioChunk {
     pub data: String,
@@ -60,19 +63,23 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 }
 
 /// EXPERIMENTAL - start a thread-scoped realtime session.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
     pub thread_id: String,
     /// Selects text or audio output for the realtime session. Transport and voice stay
     /// independent so clients can choose how they connect separately from what the model emits.
     pub output_modality: RealtimeOutputModality,
-    #[serde(
-        default,
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
+    #[cfg_attr(
+        any(test, feature = "serde-compat"),
+        serde(
+            default,
+            deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+            serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     #[ts(optional = nullable)]
     pub prompt: Option<Option<String>>,
@@ -85,8 +92,12 @@ pub struct ThreadRealtimeStartParams {
 }
 
 /// EXPERIMENTAL - transport used by thread realtime.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(test, feature = "serde-compat"),
+    serde(tag = "type", rename_all = "camelCase")
+)]
 #[ts(export_to = "v2/", tag = "type")]
 pub enum ThreadRealtimeStartTransport {
     Websocket,
@@ -98,14 +109,16 @@ pub enum ThreadRealtimeStartTransport {
 }
 
 /// EXPERIMENTAL - response for starting thread realtime.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartResponse {}
 
 /// EXPERIMENTAL - append audio input to thread realtime.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeAppendAudioParams {
     pub thread_id: String,
@@ -113,14 +126,16 @@ pub struct ThreadRealtimeAppendAudioParams {
 }
 
 /// EXPERIMENTAL - response for appending realtime audio input.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeAppendAudioResponse {}
 
 /// EXPERIMENTAL - append text input to thread realtime.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeAppendTextParams {
     pub thread_id: String,
@@ -128,42 +143,48 @@ pub struct ThreadRealtimeAppendTextParams {
 }
 
 /// EXPERIMENTAL - response for appending realtime text input.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeAppendTextResponse {}
 
 /// EXPERIMENTAL - stop thread realtime.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStopParams {
     pub thread_id: String,
 }
 
 /// EXPERIMENTAL - response for stopping thread realtime.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStopResponse {}
 
 /// EXPERIMENTAL - list voices supported by thread realtime.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeListVoicesParams {}
 
 /// EXPERIMENTAL - response for listing supported realtime voices.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeListVoicesResponse {
     pub voices: RealtimeVoicesList,
 }
 
 /// EXPERIMENTAL - emitted when thread realtime startup is accepted.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartedNotification {
     pub thread_id: String,
@@ -172,8 +193,9 @@ pub struct ThreadRealtimeStartedNotification {
 }
 
 /// EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeItemAddedNotification {
     pub thread_id: String,
@@ -182,8 +204,9 @@ pub struct ThreadRealtimeItemAddedNotification {
 
 /// EXPERIMENTAL - flat transcript delta emitted whenever realtime
 /// transcript text changes.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeTranscriptDeltaNotification {
     pub thread_id: String,
@@ -194,8 +217,9 @@ pub struct ThreadRealtimeTranscriptDeltaNotification {
 
 /// EXPERIMENTAL - final transcript text emitted when realtime completes
 /// a transcript part.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeTranscriptDoneNotification {
     pub thread_id: String,
@@ -205,8 +229,9 @@ pub struct ThreadRealtimeTranscriptDoneNotification {
 }
 
 /// EXPERIMENTAL - streamed output audio emitted by thread realtime.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeOutputAudioDeltaNotification {
     pub thread_id: String,
@@ -214,8 +239,9 @@ pub struct ThreadRealtimeOutputAudioDeltaNotification {
 }
 
 /// EXPERIMENTAL - emitted with the remote SDP for a WebRTC realtime session.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeSdpNotification {
     pub thread_id: String,
@@ -223,8 +249,9 @@ pub struct ThreadRealtimeSdpNotification {
 }
 
 /// EXPERIMENTAL - emitted when thread realtime encounters an error.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeErrorNotification {
     pub thread_id: String,
@@ -232,8 +259,9 @@ pub struct ThreadRealtimeErrorNotification {
 }
 
 /// EXPERIMENTAL - emitted when thread realtime transport closes.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeClosedNotification {
     pub thread_id: String,

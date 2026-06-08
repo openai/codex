@@ -9,6 +9,10 @@ name = "codex_app_server_protocol"
 path = "src/lib.rs"
 doctest = false
 
+[features]
+default = []
+serde-compat = []
+
 [lints]
 workspace = true
 

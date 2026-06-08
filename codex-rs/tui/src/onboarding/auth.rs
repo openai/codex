@@ -1047,8 +1047,7 @@ mod tests {
                 codex_app_server_client::EnvironmentManager::default_for_tests(),
             ),
             config_warnings: Vec::new(),
-            session_source: serde_json::from_value(serde_json::json!("cli"))
-                .expect("cli session source should deserialize"),
+            session_source: codex_protocol::protocol::SessionSource::Cli,
             enable_codex_api_key_env: false,
             client_name: "test".to_string(),
             client_version: "test".to_string(),

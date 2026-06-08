@@ -31,7 +31,7 @@ impl ThreadGoalRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadGoalSetParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_goal_set_inner(request_id, params)
             .await
             .map(|()| None)
@@ -40,7 +40,7 @@ impl ThreadGoalRequestProcessor {
     pub(crate) async fn thread_goal_get(
         &self,
         params: ThreadGoalGetParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_goal_get_inner(params)
             .await
             .map(|response| Some(response.into()))
@@ -50,7 +50,7 @@ impl ThreadGoalRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadGoalClearParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, RpcError> {
         self.thread_goal_clear_inner(request_id, params)
             .await
             .map(|()| None)
@@ -93,7 +93,7 @@ impl ThreadGoalRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadGoalSetParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         if !self.config.features.enabled(Feature::Goals) {
             return Err(invalid_request("goals feature is disabled"));
         }
@@ -251,7 +251,7 @@ impl ThreadGoalRequestProcessor {
     async fn thread_goal_get_inner(
         &self,
         params: ThreadGoalGetParams,
-    ) -> Result<ThreadGoalGetResponse, JSONRPCErrorError> {
+    ) -> Result<ThreadGoalGetResponse, RpcError> {
         if !self.config.features.enabled(Feature::Goals) {
             return Err(invalid_request("goals feature is disabled"));
         }
@@ -271,7 +271,7 @@ impl ThreadGoalRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadGoalClearParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(), RpcError> {
         if !self.config.features.enabled(Feature::Goals) {
             return Err(invalid_request("goals feature is disabled"));
         }
@@ -339,7 +339,7 @@ impl ThreadGoalRequestProcessor {
     async fn state_db_for_materialized_thread(
         &self,
         thread_id: ThreadId,
-    ) -> Result<StateDbHandle, JSONRPCErrorError> {
+    ) -> Result<StateDbHandle, RpcError> {
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             if thread.rollout_path().is_none() {
                 return Err(invalid_request(format!(
@@ -493,7 +493,7 @@ pub(super) fn api_thread_goal_from_state(goal: codex_state::ThreadGoal) -> Threa
     }
 }
 
-fn parse_thread_id_for_request(thread_id: &str) -> Result<ThreadId, JSONRPCErrorError> {
+fn parse_thread_id_for_request(thread_id: &str) -> Result<ThreadId, RpcError> {
     ThreadId::from_string(thread_id)
         .map_err(|err| invalid_request(format!("invalid thread id: {err}")))
 }

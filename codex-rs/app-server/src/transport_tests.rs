@@ -6,7 +6,6 @@ use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
@@ -282,8 +281,12 @@ async fn command_execution_request_approval_strips_additional_permissions_withou
         .recv()
         .await
         .expect("request should be delivered to the connection");
-    let json = serde_json::to_value(message.message).expect("request should serialize");
-    assert_eq!(json["params"].get("additionalPermissions"), None);
+    let OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval { params, .. }) =
+        message.message
+    else {
+        panic!("expected command execution approval request");
+    };
+    assert_eq!(params.additional_permissions, None);
 }
 
 #[tokio::test]
@@ -347,16 +350,21 @@ async fn command_execution_request_approval_keeps_additional_permissions_with_ca
         .recv()
         .await
         .expect("request should be delivered to the connection");
-    let json = serde_json::to_value(message.message).expect("request should serialize");
-    let allowed_path = absolute_path("/tmp/allowed").to_string_lossy().into_owned();
+    let OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval { params, .. }) =
+        message.message
+    else {
+        panic!("expected command execution approval request");
+    };
     assert_eq!(
-        json["params"]["additionalPermissions"],
-        json!({
-            "network": null,
-            "fileSystem": {
-                "read": [allowed_path],
-            "write": null,
-            },
+        params.additional_permissions,
+        Some(codex_app_server_protocol::AdditionalPermissionProfile {
+            network: None,
+            file_system: Some(codex_app_server_protocol::AdditionalFileSystemPermissions {
+                read: Some(vec![absolute_path("/tmp/allowed")]),
+                write: None,
+                glob_scan_max_depth: None,
+                entries: None,
+            }),
         })
     );
 }

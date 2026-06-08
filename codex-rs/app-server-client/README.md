@@ -34,13 +34,13 @@ The in-process path uses typed channels:
   - `ServerNotification`
   - `LegacyNotification`
 
-JSON serialization is still used at external transport boundaries
-(stdio/websocket), but the in-process hot path is typed.
+This crate has no remote transport. The obsolete WebSocket/JSON-RPC client was
+removed when the app server became gRPC-only; callers here embed the app server
+and communicate over typed in-process channels.
 
-Typed requests still receive app-server responses through the JSON-RPC
-result envelope internally. That is intentional: the in-process path is
-meant to preserve app-server semantics while removing the process
-boundary, not to introduce a second response contract.
+Requests and server-request resolutions use the native `ClientResponse` and
+`ServerResponse` enums. `request_typed` extracts method-specific response
+payloads through `FromClientResponse` without serializing through JSON.
 
 ## Bootstrap behavior
 

@@ -34,7 +34,7 @@ async fn run_main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let request: FsHelperRequest = serde_json::from_slice(&input)?;
     let response = match run_direct_request(request).await {
         Ok(payload) => FsHelperResponse::Ok(payload),
-        Err(error) => FsHelperResponse::Error(error),
+        Err(error) => FsHelperResponse::Error(error.into()),
     };
     let mut stdout = io::stdout();
     stdout

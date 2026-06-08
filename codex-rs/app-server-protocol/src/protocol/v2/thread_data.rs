@@ -7,19 +7,22 @@ use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::ThreadSource as CoreThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Deserialize;
+#[cfg(any(test, feature = "serde-compat"))]
 use serde::Serialize;
 use std::path::PathBuf;
 use thiserror::Error;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 #[derive(Default)]
 pub enum SessionSource {
     Cli,
-    #[serde(rename = "vscode")]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(rename = "vscode"))]
     #[ts(rename = "vscode")]
     #[default]
     VsCode,
@@ -27,7 +30,7 @@ pub enum SessionSource {
     AppServer,
     Custom(String),
     SubAgent(CoreSubAgentSource),
-    #[serde(other)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(other))]
     Unknown,
 }
 
@@ -61,8 +64,9 @@ impl From<SessionSource> for CoreSessionSource {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "snake_case"))]
 #[ts(rename_all = "snake_case", export_to = "v2/")]
 pub enum ThreadSource {
     User,
@@ -90,8 +94,9 @@ impl From<ThreadSource> for CoreThreadSource {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct GitInfo {
     pub sha: Option<String>,
@@ -99,8 +104,9 @@ pub struct GitInfo {
     pub origin_url: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct Thread {
     pub id: String,
@@ -149,15 +155,16 @@ pub struct Thread {
     pub turns: Vec<Turn>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub struct Turn {
     pub id: String,
     /// Thread items currently included in this turn payload.
     pub items: Vec<ThreadItem>,
     /// Describes how much of `items` has been loaded for this turn.
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub items_view: TurnItemsView,
     pub status: TurnStatus,
     /// Only populated when the Turn's status is failed.
@@ -173,8 +180,9 @@ pub struct Turn {
     pub duration_ms: Option<i64>,
 }
 
-#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 pub enum TurnItemsView {
     /// `items` was not loaded for this turn. The field is intentionally empty.
@@ -186,13 +194,14 @@ pub enum TurnItemsView {
     Full,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Error)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS, Error)]
+#[cfg_attr(any(test, feature = "serde-compat"), derive(Serialize, Deserialize))]
+#[cfg_attr(any(test, feature = "serde-compat"), serde(rename_all = "camelCase"))]
 #[ts(export_to = "v2/")]
 #[error("{message}")]
 pub struct TurnError {
     pub message: String,
     pub codex_error_info: Option<CodexErrorInfo>,
-    #[serde(default)]
+    #[cfg_attr(any(test, feature = "serde-compat"), serde(default))]
     pub additional_details: Option<String>,
 }
