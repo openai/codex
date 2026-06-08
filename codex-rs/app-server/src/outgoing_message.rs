@@ -66,20 +66,11 @@ impl RequestContext {
         span: Span,
         parent_trace: Option<W3cTraceContext>,
     ) -> Self {
-        Self::new_at(request_id, span, parent_trace, Instant::now())
-    }
-
-    fn new_at(
-        request_id: ConnectionRequestId,
-        span: Span,
-        parent_trace: Option<W3cTraceContext>,
-        request_started_at: Instant,
-    ) -> Self {
         Self {
             request_id,
             span,
             parent_trace,
-            request_started_at,
+            request_started_at: Instant::now(),
             thread_initialization: None,
         }
     }
@@ -105,21 +96,10 @@ impl RequestContext {
     }
 
     fn complete_thread_initialization(&self) -> Option<CompletedThreadInitialization> {
-        self.complete_thread_initialization_at(Instant::now())
-    }
-
-    fn complete_thread_initialization_at(
-        &self,
-        completed_at: Instant,
-    ) -> Option<CompletedThreadInitialization> {
         let initialization = self.thread_initialization?;
         let mut profile = initialization.profile;
-        profile.duration_ms = u64::try_from(
-            completed_at
-                .saturating_duration_since(self.request_started_at)
-                .as_millis(),
-        )
-        .unwrap_or(u64::MAX);
+        profile.duration_ms =
+            u64::try_from(self.request_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         profile.app_server_duration_ms =
             profile.duration_ms.saturating_sub(profile.core_duration_ms);
         Some(CompletedThreadInitialization {
@@ -836,16 +816,16 @@ mod tests {
 
     #[test]
     fn request_context_combines_core_initialization_segments() {
-        let request_started_at = Instant::now();
-        let mut request_context = RequestContext::new_at(
-            ConnectionRequestId {
+        let mut request_context = RequestContext {
+            request_id: ConnectionRequestId {
                 connection_id: ConnectionId(42),
                 request_id: RequestId::Integer(7),
             },
-            tracing::info_span!("app_server.request", rpc.method = "thread/resume"),
-            /*parent_trace*/ None,
-            request_started_at,
-        );
+            span: tracing::info_span!("app_server.request", rpc.method = "thread/resume"),
+            parent_trace: None,
+            request_started_at: Instant::now(),
+            thread_initialization: None,
+        };
         request_context.record_thread_initialization(CompletedCoreThreadInitialization {
             initialization_mode: ThreadInitializationMode::Resumed,
             profile: ThreadInitializationProfile {
@@ -869,14 +849,10 @@ mod tests {
         });
 
         assert_eq!(
-            request_context.complete_thread_initialization_at(
-                request_started_at + Duration::from_millis(275),
-            ),
-            Some(CompletedThreadInitialization {
+            request_context.thread_initialization,
+            Some(CompletedCoreThreadInitialization {
                 initialization_mode: ThreadInitializationMode::Resumed,
                 profile: ThreadInitializationProfile {
-                    duration_ms: 275,
-                    app_server_duration_ms: 45,
                     core_duration_ms: 230,
                     existing_thread_lookup_ms: 17,
                     configuration_resolution_ms: 13,
@@ -885,6 +861,7 @@ mod tests {
                     mcp_startup_ms: 40,
                     session_activation_ms: 50,
                     thread_registration_ms: 60,
+                    ..Default::default()
                 },
             })
         );
