@@ -550,6 +550,12 @@ struct RemotePluginInstalledResponse {
 struct RemotePluginMutationResponse {
     id: String,
     enabled: bool,
+    app_ids_needing_auth: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePluginInstallResult {
+    pub app_ids_needing_auth: Option<Vec<String>>,
 }
 
 pub async fn fetch_remote_marketplaces(
@@ -1071,7 +1077,7 @@ pub async fn install_remote_plugin(
     auth: Option<&CodexAuth>,
     _marketplace_name: &str,
     plugin_id: &str,
-) -> Result<(), RemotePluginCatalogError> {
+) -> Result<RemotePluginInstallResult, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     // Remote plugin IDs uniquely identify remote plugins, so the caller-provided
     // marketplace name is not validated before sending the install mutation.
@@ -1079,7 +1085,12 @@ pub async fn install_remote_plugin(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}/install");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.post(&url), auth)?;
+    let request = authenticated_request(
+        client
+            .post(&url)
+            .query(&[("includeAppsNeedingAuth", "true")]),
+        auth,
+    )?;
     let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
     if response.id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
@@ -1095,7 +1106,9 @@ pub async fn install_remote_plugin(
         });
     }
 
-    Ok(())
+    Ok(RemotePluginInstallResult {
+        app_ids_needing_auth: response.app_ids_needing_auth,
+    })
 }
 
 pub async fn uninstall_remote_plugin(
