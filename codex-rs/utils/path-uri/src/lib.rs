@@ -164,7 +164,7 @@ impl TryFrom<Url> for PathUri {
             ));
         }
         validate_file_url(&url)?;
-        let url = canonical_file_url(url)?;
+        let url = without_localhost_authority(url);
         Ok(Self(url))
     }
 }
@@ -183,12 +183,29 @@ impl<'de> Deserialize<'de> for PathUri {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        if looks_like_uri(&value) {
-            return Self::parse(&value).map_err(serde::de::Error::custom);
-        }
+        let unsupported_scheme = match Url::parse(&value) {
+            Ok(url) => match Self::try_from(url) {
+                Ok(uri) => return Ok(uri),
+                // `Url` parses a Windows drive prefix such as `C:\` as the
+                // scheme `c`. Give any unsupported URI one chance to satisfy
+                // the native absolute-path invariant before reporting it.
+                Err(error @ PathUriParseError::UnsupportedScheme(_)) => Some(error),
+                Err(error) => return Err(serde::de::Error::custom(error)),
+            },
+            Err(url::ParseError::RelativeUrlWithoutBase) => None,
+            Err(error) => {
+                return Err(serde::de::Error::custom(PathUriParseError::InvalidUri(
+                    error,
+                )));
+            }
+        };
 
-        let path =
-            AbsolutePathBuf::from_absolute_path_checked(value).map_err(serde::de::Error::custom)?;
+        let path = AbsolutePathBuf::from_absolute_path_checked(value).map_err(|path_error| {
+            serde::de::Error::custom(
+                unsupported_scheme
+                    .map_or_else(|| path_error.to_string(), |error| error.to_string()),
+            )
+        })?;
         Self::from_file_path(&path).map_err(serde::de::Error::custom)
     }
 }
@@ -226,38 +243,14 @@ impl JsonSchema for PathUri {
     }
 }
 
-/// Serde adapter for fields that still use the legacy native file-path wire format.
-///
-/// Deserialization accepts either an absolute legacy native path or a [`PathUri`].
-/// Serialization emits the current host's native path spelling. New URI-native
-/// fields should use [`PathUri`]'s own serde implementation instead.
-pub mod legacy_file_path_serde {
-    use super::*;
-
-    pub fn serialize<S>(uri: &PathUri, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        uri.to_native_path()
-            .map_err(serde::ser::Error::custom)?
-            .serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<PathUri, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        PathUri::deserialize(deserializer)
-    }
-}
-
 /// Removes the local `localhost` alias while retaining non-local UNC authority.
-fn canonical_file_url(mut url: Url) -> Result<Url, PathUriParseError> {
+fn without_localhost_authority(mut url: Url) -> Url {
     if url.host_str() == Some("localhost") {
-        url.set_host(None)
-            .map_err(|_| PathUriParseError::InvalidFileUriPath)?;
+        let Ok(()) = url.set_host(None) else {
+            unreachable!("validated file URLs can remove a localhost authority");
+        };
     }
-    Ok(url)
+    url
 }
 
 /// Percent-decodes a URI path when it is valid UTF-8.
@@ -269,33 +262,6 @@ fn decode_uri_path(path: &str) -> String {
     urlencoding::decode(path)
         .map(std::borrow::Cow::into_owned)
         .unwrap_or_else(|_| path.to_string())
-}
-
-/// Detects encoded `/` bytes that would conceal a path-segment boundary.
-fn contains_percent_encoded_slash(path: &str) -> bool {
-    path.as_bytes()
-        .windows(3)
-        .any(|bytes| bytes[0] == b'%' && bytes[1] == b'2' && matches!(bytes[2], b'f' | b'F'))
-}
-
-/// Detects a percent sign that is not followed by two hexadecimal digits.
-fn has_invalid_percent_encoding(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            index += 1;
-            continue;
-        }
-        if bytes
-            .get(index + 1..index + 3)
-            .is_none_or(|digits| !digits.iter().all(u8::is_ascii_hexdigit))
-        {
-            return true;
-        }
-        index += 3;
-    }
-    false
 }
 
 /// Rejects URI metadata that has no defined meaning for `file:` URIs.
@@ -315,40 +281,12 @@ fn validate_common_known_uri(url: &Url) -> Result<(), PathUriParseError> {
 /// Applies the common URI checks plus `file:` path-byte restrictions.
 fn validate_file_url(url: &Url) -> Result<(), PathUriParseError> {
     validate_common_known_uri(url)?;
-    if has_invalid_percent_encoding(url.path()) || contains_percent_encoded_slash(url.path()) {
-        return Err(PathUriParseError::InvalidFileUriPath);
-    }
+    // `Url` accepts `%00`, but native path APIs use null as a terminator and
+    // `Url::to_file_path` cannot represent a decoded null byte.
     if urlencoding::decode_binary(url.path().as_bytes()).contains(&0) {
         return Err(PathUriParseError::InvalidFileUriPath);
     }
     Ok(())
-}
-
-/// Returns a syntactically valid URI scheme prefix without parsing the URI.
-fn uri_scheme(uri: &str) -> Option<&str> {
-    let (scheme, _) = uri.split_once(':')?;
-    (!scheme.is_empty()
-        && scheme.bytes().enumerate().all(|(index, byte)| {
-            byte.is_ascii_alphabetic()
-                || (index > 0 && (byte.is_ascii_digit() || matches!(byte, b'+' | b'-' | b'.')))
-        }))
-    .then_some(scheme)
-}
-
-/// Distinguishes URI strings from legacy native paths at the serde boundary.
-///
-/// A Windows drive prefix resembles a one-letter URI scheme, so an immediately
-/// following slash or backslash keeps it in the native-path branch.
-fn looks_like_uri(value: &str) -> bool {
-    let Some(scheme) = uri_scheme(value) else {
-        return false;
-    };
-    !(scheme.len() == 1
-        && scheme.as_bytes()[0].is_ascii_alphabetic()
-        && value
-            .as_bytes()
-            .get(2)
-            .is_some_and(|separator| matches!(separator, b'/' | b'\\')))
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

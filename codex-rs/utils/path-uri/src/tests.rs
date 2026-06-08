@@ -6,12 +6,6 @@ use std::os::unix::ffi::OsStringExt;
 #[cfg(unix)]
 use std::path::PathBuf;
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct LegacyFilePathField {
-    #[serde(with = "legacy_file_path_serde")]
-    path: PathUri,
-}
-
 #[test]
 fn file_uri_round_trips_an_absolute_path() {
     let path = AbsolutePathBuf::current_dir()
@@ -187,21 +181,6 @@ fn path_uri_rejects_legacy_relative_paths_with_absolute_path_guard() {
 }
 
 #[test]
-fn legacy_file_path_serde_preserves_the_existing_wire_format() {
-    let base = AbsolutePathBuf::current_dir().expect("current directory");
-    let uri = PathUri::from_file_path(&base.join("src/lib.rs")).expect("file URI");
-    let field = LegacyFilePathField { path: uri };
-
-    let json = serde_json::to_string(&field).expect("legacy field should serialize");
-    let _guard = AbsolutePathBufGuard::new(base.as_path());
-    let reparsed: LegacyFilePathField =
-        serde_json::from_str(&json).expect("legacy field should deserialize");
-
-    assert_eq!(reparsed, field);
-    assert!(!json.contains("file:"));
-}
-
-#[test]
 fn unsupported_scheme_is_rejected_during_deserialization() {
     let error = serde_json::from_str::<PathUri>(r#""artifact://store/object-1""#)
         .expect_err("unsupported scheme should fail deserialization");
@@ -228,17 +207,8 @@ fn known_path_uris_reject_queries_and_fragments() {
 }
 
 #[test]
-fn path_uris_reject_percent_encoded_path_separators() {
-    for input in ["file:///tmp/a%2Fb", "file:///tmp/a%2fb"] {
-        assert!(PathUri::parse(input).is_err(), "accepting {input}");
-    }
-}
-
-#[test]
-fn path_uris_reject_non_utf8_percent_encoding() {
-    for input in ["file:///tmp/%00", "file:///tmp/%ZZ", "file:///tmp/%"] {
-        assert!(PathUri::parse(input).is_err(), "accepting {input}");
-    }
+fn path_uris_reject_encoded_null_bytes() {
+    assert!(PathUri::parse("file:///tmp/%00").is_err());
 }
 
 #[test]
