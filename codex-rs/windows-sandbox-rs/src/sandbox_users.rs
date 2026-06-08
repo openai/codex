@@ -12,6 +12,8 @@ use std::ffi::c_void;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
@@ -50,6 +52,8 @@ const SID_USERS: &str = "S-1-5-32-545";
 const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
 const SID_EVERYONE: &str = "S-1-1-0";
 const SID_SYSTEM: &str = "S-1-5-18";
+const SID_RESOLUTION_RETRY_ATTEMPTS: usize = 8;
+const SID_RESOLUTION_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 pub fn ensure_sandbox_users_group(log: &mut File) -> Result<()> {
     ensure_local_group(SANDBOX_USERS_GROUP, SANDBOX_USERS_GROUP_COMMENT, log)
@@ -76,6 +80,10 @@ pub fn provision_sandbox_users(
     let online_password = random_password();
     ensure_sandbox_user(offline_username, &offline_password, log)?;
     ensure_sandbox_user(online_username, &online_password, log)?;
+    wait_for_principals_to_resolve(
+        &[SANDBOX_USERS_GROUP, offline_username, online_username],
+        log,
+    )?;
     write_secrets(
         codex_home,
         offline_username,
@@ -86,6 +94,70 @@ pub fn provision_sandbox_users(
         allow_local_binding,
     )?;
     Ok(())
+}
+
+fn wait_for_principals_to_resolve(principals: &[&str], log: &mut File) -> Result<()> {
+    for principal in principals {
+        wait_for_principal_to_resolve(principal, log)?;
+    }
+    Ok(())
+}
+
+fn wait_for_principal_to_resolve(name: &str, log: &mut File) -> Result<Vec<u8>> {
+    retry_principal_resolution_with(
+        name,
+        log,
+        SID_RESOLUTION_RETRY_ATTEMPTS,
+        resolve_sid,
+        || thread::sleep(SID_RESOLUTION_RETRY_DELAY),
+    )
+}
+
+fn retry_principal_resolution_with<F, S>(
+    name: &str,
+    log: &mut File,
+    attempts: usize,
+    mut resolver: F,
+    mut sleeper: S,
+) -> Result<Vec<u8>>
+where
+    F: FnMut(&str) -> Result<Vec<u8>>,
+    S: FnMut(),
+{
+    let attempts = attempts.max(1);
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=attempts {
+        match resolver(name) {
+            Ok(sid) => {
+                if attempt > 1 {
+                    super::log_line(
+                        log,
+                        &format!("SID resolution recovered for {name} on attempt {attempt}"),
+                    )?;
+                }
+                return Ok(sid);
+            }
+            Err(err) => {
+                last_err = Some(err);
+                if attempt == attempts {
+                    break;
+                }
+                super::log_line(
+                    log,
+                    &format!(
+                        "SID resolution not ready for {name} (attempt {attempt}/{attempts}); retrying"
+                    ),
+                )?;
+                sleeper();
+            }
+        }
+    }
+
+    let err = last_err.expect("retry loop should capture the last SID resolution error");
+    Err(anyhow::Error::new(SetupFailure::new(
+        SetupErrorCode::HelperSidResolveFailed,
+        format!("failed to resolve SID for {name} after retries: {err}"),
+    )))
 }
 
 pub fn ensure_sandbox_user(username: &str, password: &str, log: &mut File) -> Result<()> {
@@ -493,4 +565,66 @@ fn write_secrets(
         ))
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_principal_resolution_with;
+    use anyhow::anyhow;
+    use codex_windows_sandbox::SetupErrorCode;
+    use codex_windows_sandbox::extract_failure;
+    use std::cell::Cell;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn sid_resolution_retries_until_success() {
+        let mut log = NamedTempFile::new().expect("temp log");
+        let attempts = Cell::new(0usize);
+        let sleeps = Cell::new(0usize);
+
+        let sid = retry_principal_resolution_with(
+            "CodexSandboxOffline",
+            log.as_file_mut(),
+            4,
+            |_| {
+                let next = attempts.get() + 1;
+                attempts.set(next);
+                if next < 3 {
+                    Err(anyhow!("LookupAccountNameW failed for CodexSandboxOffline: 1332"))
+                } else {
+                    Ok(vec![1, 2, 3, 4])
+                }
+            },
+            || sleeps.set(sleeps.get() + 1),
+        )
+        .expect("retry should recover");
+
+        assert_eq!(sid, vec![1, 2, 3, 4]);
+        assert_eq!(attempts.get(), 3);
+        assert_eq!(sleeps.get(), 2);
+    }
+
+    #[test]
+    fn sid_resolution_reports_helper_failure_after_retries() {
+        let mut log = NamedTempFile::new().expect("temp log");
+        let sleeps = Cell::new(0usize);
+
+        let err = retry_principal_resolution_with(
+            "CodexSandboxOffline",
+            log.as_file_mut(),
+            3,
+            |_| Err(anyhow!("LookupAccountNameW failed for CodexSandboxOffline: 1332")),
+            || sleeps.set(sleeps.get() + 1),
+        )
+        .expect_err("retry should fail");
+
+        let failure = extract_failure(&err).expect("structured setup failure");
+        assert_eq!(failure.code, SetupErrorCode::HelperSidResolveFailed);
+        assert!(
+            failure
+                .message
+                .contains("failed to resolve SID for CodexSandboxOffline after retries")
+        );
+        assert_eq!(sleeps.get(), 2);
+    }
 }
