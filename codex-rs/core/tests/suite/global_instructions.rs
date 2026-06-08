@@ -857,9 +857,10 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     Ok(())
 }
 
-// TODO(anp): Preserve the persisted model-visible instruction item across later full-context
-// rebuilds. Reloading file contents into historical context rewrites model-visible history and
-// invalidates the cached prefix; future behavior should keep the original item stable.
+// Follow-up: confirm the desired behavior for persisted model-visible instruction items across
+// later full-context rebuilds. Reloading file contents into historical context currently rewrites
+// model-visible history and invalidates the cached prefix; decide whether the original item should
+// remain stable instead.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cold_resume_then_full_context_rebuild_uses_current_instructions() -> Result<()> {
     // Set up an initial turn, a cold-resumed turn, manual compaction, and the later full-context
