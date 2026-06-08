@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::client::CompactConversationRequestSettings;
 use crate::compact::CompactionAnalyticsAttempt;
+use crate::compact::CompactionAnalyticsDetails;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
@@ -100,7 +101,10 @@ async fn run_remote_compact_task_inner(
         CompactionImplementation::ResponsesCompact,
         phase,
     );
-    let mut active_context_tokens_before = sess.get_total_token_usage().await;
+    let mut analytics_details = CompactionAnalyticsDetails {
+        active_context_tokens_before: Some(sess.get_total_token_usage().await),
+        ..Default::default()
+    };
     let attempt = CompactionAnalyticsAttempt::begin(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -120,7 +124,7 @@ async fn run_remote_compact_task_inner(
                     sess.as_ref(),
                     codex_analytics::CompactionStatus::Interrupted,
                     Some(error),
-                    Some(active_context_tokens_before),
+                    analytics_details,
                 )
                 .await;
             return Err(CodexErr::TurnAborted);
@@ -131,7 +135,7 @@ async fn run_remote_compact_task_inner(
         turn_context,
         initial_context_injection,
         compaction_metadata,
-        &mut active_context_tokens_before,
+        &mut analytics_details,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -140,23 +144,13 @@ async fn run_remote_compact_task_inner(
         let post_compact_outcome = run_post_compact_hooks(sess, turn_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
             attempt
-                .track(
-                    sess.as_ref(),
-                    status,
-                    error,
-                    Some(active_context_tokens_before),
-                )
+                .track(sess.as_ref(), status, error, analytics_details)
                 .await;
             return Err(CodexErr::TurnAborted);
         }
     }
     attempt
-        .track(
-            sess.as_ref(),
-            status,
-            error.clone(),
-            Some(active_context_tokens_before),
-        )
+        .track(sess.as_ref(), status, error.clone(), analytics_details)
         .await;
     if let Err(err) = result {
         sess.track_turn_codex_error(turn_context, &err);
@@ -174,7 +168,7 @@ async fn run_remote_compact_task_inner_impl(
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
-    active_context_tokens_before: &mut i64,
+    analytics_details: &mut CompactionAnalyticsDetails,
 ) -> CodexResult<()> {
     let context_compaction_item = ContextCompactionItem::new();
     // Use the UI compaction item ID as the trace compaction ID so protocol lifecycle events,
@@ -208,8 +202,12 @@ async fn run_remote_compact_task_inner_impl(
             .get_total_token_usage_breakdown()
             .await
             .estimated_tokens_of_items_added_since_last_successful_api_response;
-        *active_context_tokens_before = (*active_context_tokens_before)
-            .saturating_sub(estimated_deleted_tokens.min(max_local_deleted_tokens));
+        analytics_details.active_context_tokens_before = analytics_details
+            .active_context_tokens_before
+            .map(|active_context_tokens_before| {
+                active_context_tokens_before
+                    .saturating_sub(estimated_deleted_tokens.min(max_local_deleted_tokens))
+            });
     }
     // This is the history selected for remote compaction, after any output rewriting required to
     // fit the compact endpoint. The checkpoint below records it separately from the next sampling
