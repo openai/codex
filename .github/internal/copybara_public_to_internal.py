@@ -312,7 +312,7 @@ def migrate_change(
     message_file: Path,
     internal_cargo_lockfile: Path | None,
 ) -> None:
-    run(
+    migration = run_copybara_migrate(
         [
             "java",
             "-jar",
@@ -326,6 +326,9 @@ def migrate_change(
             "--git-destination-non-fast-forward",
         ]
     )
+    if copybara_empty_change(migration):
+        create_empty_import_marker_commit(change, message_file)
+        return
 
     if not fetch_sync_branch(check=False):
         create_empty_import_marker_commit(change, message_file)
@@ -356,6 +359,32 @@ def migrate_change(
             "origin",
             f"HEAD:refs/heads/{SYNC_BRANCH}",
         ]
+    )
+
+
+def run_copybara_migrate(args: list[str]) -> subprocess.CompletedProcess[str]:
+    print(f"+ {shlex.join(args)}", flush=True)
+    completed = subprocess.run(
+        args,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if completed.stdout:
+        print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n")
+    if completed.returncode != 0 and not copybara_empty_change(completed):
+        raise RuntimeError(
+            f"Command failed with exit code {completed.returncode}: {shlex.join(args)}"
+        )
+    return completed
+
+
+def copybara_empty_change(completed: subprocess.CompletedProcess[str]) -> bool:
+    output_text = completed.stdout or ""
+    return completed.returncode == 4 and (
+        "resulted in an empty change in the destination" in output_text
+        or "produced no changes in the destination" in output_text
     )
 
 
