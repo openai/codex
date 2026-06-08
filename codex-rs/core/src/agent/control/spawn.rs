@@ -532,7 +532,7 @@ impl AgentControl {
         )
         .await?;
         let state = self.upgrade()?;
-        if config.features.enabled(Feature::MultiAgentV2)
+        if config.multi_agent_version_from_features() == MultiAgentVersion::V2
             || resumed_multi_agent_version == MultiAgentVersion::V2
         {
             return Ok(resumed_thread_id);
