@@ -1448,7 +1448,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             Some(connectors) => Some(connectors),
             None => connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
                 turn_context.config.as_ref(),
-                false,
+                /*force_refetch*/ false,
                 turn_context.mcp_client_capabilities.clone(),
             )
             .await

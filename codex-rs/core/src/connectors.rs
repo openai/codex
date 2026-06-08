@@ -92,7 +92,9 @@ pub async fn list_accessible_connectors_from_mcp_tools(
 ) -> anyhow::Result<Vec<AppInfo>> {
     Ok(
         list_accessible_connectors_from_mcp_tools_with_options_and_status(
-            config, /*force_refetch*/ false, None,
+            config,
+            /*force_refetch*/ false,
+            /*mcp_client_capabilities*/ None,
         )
         .await?
         .connectors,
@@ -196,7 +198,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
         list_accessible_connectors_from_mcp_tools_with_options_and_status(
             config,
             force_refetch,
-            None,
+            /*mcp_client_capabilities*/ None,
         )
         .await?
         .connectors,
