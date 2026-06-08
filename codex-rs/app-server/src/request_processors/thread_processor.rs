@@ -3581,10 +3581,11 @@ impl ThreadRequestProcessor {
                     Some(providers)
                 }
             }
+            None if parent_thread_id.is_some() => None,
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
         let (allowed_sources_vec, source_kind_filter) =
-            if parent_thread_id.is_some() && source_kinds.as_ref().is_none_or(Vec::is_empty) {
+            if parent_thread_id.is_some() && source_kinds.is_none() {
                 (Vec::new(), None)
             } else {
                 compute_source_filters(source_kinds)

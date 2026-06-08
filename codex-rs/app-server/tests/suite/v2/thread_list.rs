@@ -112,6 +112,8 @@ async fn list_threads_for_parent(
     parent_thread_id: ThreadId,
     cursor: Option<String>,
     limit: u32,
+    model_providers: Option<Vec<String>>,
+    source_kinds: Option<Vec<ThreadSourceKind>>,
 ) -> Result<ThreadListResponse> {
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
@@ -119,8 +121,8 @@ async fn list_threads_for_parent(
             limit: Some(limit),
             sort_key: None,
             sort_direction: None,
-            model_providers: Some(Vec::new()),
-            source_kinds: None,
+            model_providers,
+            source_kinds,
             archived: None,
             cwd: None,
             use_state_db_only: false,
@@ -991,21 +993,24 @@ async fn thread_list_parent_filter_reads_direct_children_from_state_db() -> Resu
         "mock_provider".to_string(),
     )
     .await?;
-    for (thread_id, created_at, source) in [
+    for (thread_id, created_at, source, model_provider) in [
         (
             older_child_id,
             "2025-02-01T10:00:00Z",
             CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-1".to_string())),
+            "other_provider",
         ),
         (
             newer_child_id,
             "2025-02-01T11:00:00Z",
             CoreSessionSource::Cli,
+            "mock_provider",
         ),
         (
             grandchild_id,
             "2025-02-01T12:00:00Z",
             CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-2".to_string())),
+            "mock_provider",
         ),
     ] {
         let created_at = DateTime::parse_from_rfc3339(created_at)?.with_timezone(&Utc);
@@ -1015,10 +1020,10 @@ async fn thread_list_parent_filter_reads_direct_children_from_state_db() -> Resu
             created_at,
             source,
         );
-        builder.model_provider = Some("mock_provider".to_string());
+        builder.model_provider = Some(model_provider.to_string());
         builder.cwd = codex_home.path().to_path_buf();
         builder.cli_version = Some("0.0.0".to_string());
-        let mut metadata = builder.build("mock_provider");
+        let mut metadata = builder.build(model_provider);
         metadata.preview = Some("child thread".to_string());
         metadata.first_user_message = metadata.preview.clone();
         state_db.upsert_thread(&metadata).await?;
@@ -1041,13 +1046,18 @@ async fn thread_list_parent_filter_reads_direct_children_from_state_db() -> Resu
         .await?;
     let mut mcp = init_mcp(codex_home.path()).await?;
 
-    let first_page =
-        list_threads_for_parent(&mut mcp, parent_id, /*cursor*/ None, /*limit*/ 1).await?;
+    let first_page = list_threads_for_parent(
+        &mut mcp, parent_id, /*cursor*/ None, /*limit*/ 1, /*model_providers*/ None,
+        /*source_kinds*/ None,
+    )
+    .await?;
     let second_page = list_threads_for_parent(
         &mut mcp,
         parent_id,
         first_page.next_cursor.clone(),
         /*limit*/ 1,
+        /*model_providers*/ None,
+        /*source_kinds*/ None,
     )
     .await?;
 
@@ -1075,6 +1085,23 @@ async fn thread_list_parent_filter_reads_direct_children_from_state_db() -> Resu
             .iter()
             .chain(&second_page.data)
             .all(|thread| thread.parent_thread_id.as_deref() == Some(expected_parent_id.as_str()))
+    );
+    let interactive_only = list_threads_for_parent(
+        &mut mcp,
+        parent_id,
+        /*cursor*/ None,
+        /*limit*/ 10,
+        /*model_providers*/ None,
+        /*source_kinds*/ Some(Vec::new()),
+    )
+    .await?;
+    assert_eq!(
+        interactive_only
+            .data
+            .iter()
+            .map(|thread| thread.id.clone())
+            .collect::<Vec<_>>(),
+        vec![newer_child_id.to_string()]
     );
     Ok(())
 }

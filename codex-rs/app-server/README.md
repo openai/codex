@@ -389,7 +389,7 @@ When `nextCursor` is `null`, you’ve reached the final page.
 
 ### Example: List direct child threads
 
-Enable `capabilities.experimentalApi` during initialization, then use `thread/list` with `parentThreadId` to page through a thread's direct children. Results do not recursively include grandchildren. When `sourceKinds` is omitted, parent-filtered requests include every source kind.
+Enable `capabilities.experimentalApi` during initialization, then use `thread/list` with `parentThreadId` to page through a thread's direct children. Results do not recursively include grandchildren. When `modelProviders` or `sourceKinds` is omitted, parent-filtered requests include every provider or source kind, respectively. Explicit filters retain the ordinary `thread/list` behavior, including the interactive-only default for an empty `sourceKinds` list.
 
 ```json
 { "method": "thread/list", "id": 21, "params": {
