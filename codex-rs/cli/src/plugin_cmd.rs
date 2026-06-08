@@ -437,12 +437,12 @@ impl JsonPluginSource {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct JsonMarketplaceSource {
+pub(crate) struct JsonMarketplaceSource {
     source_type: String,
     source: String,
 }
 
-fn configured_marketplace_sources(
+pub(crate) fn configured_marketplace_sources(
     plugins_input: &PluginsConfigInput,
 ) -> HashMap<String, JsonMarketplaceSource> {
     let Some(user_config) = plugins_input.config_layer_stack.effective_user_config() else {
