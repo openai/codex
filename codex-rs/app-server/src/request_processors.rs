@@ -461,6 +461,7 @@ mod command_exec_processor;
 mod config_processor;
 mod environment_processor;
 mod external_agent_config_processor;
+mod external_agent_session_import;
 mod feedback_doctor_report;
 mod feedback_processor;
 mod fs_processor;
