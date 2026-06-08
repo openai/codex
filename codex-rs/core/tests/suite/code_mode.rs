@@ -6,9 +6,11 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -17,6 +19,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use codex_web_search_extension::install as install_web_search_extension;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::AppsTestToolLoading;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_APP_ONLY_TOOL;
@@ -45,9 +48,14 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.custom_tool_call_output(call_id).get("output") {
@@ -189,6 +197,108 @@ async fn run_code_mode_turn_with_config(
 
     test.submit_turn(prompt).await?;
     Ok((test, second_mock))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_call_standalone_web_search() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/alpha/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "output": "Search result",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call(
+                "call-1",
+                "exec",
+                r#"
+const result = await tools.web__run({
+  search_query: [{ q: "standalone web search" }],
+});
+text(result);
+"#,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let follow_up_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let auth = CodexAuth::from_api_key("dummy");
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
+    let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
+    install_web_search_extension(&mut extension_builder, auth_manager);
+    let mut builder = test_codex()
+        .with_auth(auth)
+        .with_extensions(Arc::new(extension_builder.build()))
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("code mode should be enabled");
+            config
+                .features
+                .enable(Feature::StandaloneWebSearch)
+                .expect("standalone web search should be enabled");
+            config
+                .web_search_mode
+                .set(WebSearchMode::Live)
+                .expect("web search mode should be accepted");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("Search the web from code mode").await?;
+
+    let search_request = server
+        .received_requests()
+        .await
+        .expect("received requests should be available")
+        .into_iter()
+        .find(|request| request.url.path() == "/v1/alpha/search")
+        .expect("standalone search request should be sent");
+    let search_body = search_request
+        .body_json::<Value>()
+        .expect("search request body should be JSON");
+    assert_eq!(
+        search_body["model"],
+        serde_json::json!("test-gpt-5.1-codex")
+    );
+    assert_eq!(
+        search_body["commands"],
+        serde_json::json!({
+            "search_query": [{"q": "standalone web search"}],
+        })
+    );
+    assert_eq!(
+        search_body["settings"],
+        serde_json::json!({
+            "allowed_callers": ["direct"],
+            "external_web_access": true,
+        })
+    );
+    assert_eq!(
+        custom_tool_output_last_non_empty_text(&follow_up_mock.single_request(), "call-1"),
+        Some("Search result".to_string())
+    );
+
+    Ok(())
 }
 
 async fn run_code_mode_turn_with_rmcp(
