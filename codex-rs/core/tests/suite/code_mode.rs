@@ -41,6 +41,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -3159,8 +3160,8 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     test.session_configured = new_thread.session_configured;
 
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "codex_app_hidden_dynamic_tool");
-const out = await tools.codex_app_hidden_dynamic_tool({ city: "Paris" });
+const tool = ALL_TOOLS.find(({ name }) => name === "codex_app__hidden_dynamic_tool");
+const out = await tools.codex_app__hidden_dynamic_tool({ city: "Paris" });
 text(
   JSON.stringify({
     name: tool?.name ?? null,
@@ -3228,11 +3229,15 @@ text(
         _ => None,
     })
     .await;
-    let request = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::DynamicToolCallRequest(request) => Some(request.clone()),
-        _ => None,
-    })
+    let request_event = wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::DynamicToolCallRequest(_)),
+        Duration::from_secs(/*secs*/ 30),
+    )
     .await;
+    let EventMsg::DynamicToolCallRequest(request) = request_event else {
+        unreachable!("dynamic tool request predicate should match the returned event");
+    };
     assert_eq!(request.namespace.as_deref(), Some("codex_app"));
     assert_eq!(request.tool, "hidden_dynamic_tool");
     assert_eq!(request.arguments, serde_json::json!({ "city": "Paris" }));
@@ -3267,7 +3272,7 @@ text(
     )?;
     assert_eq!(
         parsed.get("name"),
-        Some(&Value::String("codex_app_hidden_dynamic_tool".to_string()))
+        Some(&Value::String("codex_app__hidden_dynamic_tool".to_string()))
     );
     assert_eq!(
         parsed.get("out"),
@@ -3280,7 +3285,7 @@ text(
             .is_some_and(|description| {
                 description.contains("A hidden dynamic tool.")
                     && description.contains("declare const tools:")
-                    && description.contains("codex_app_hidden_dynamic_tool(args:")
+                    && description.contains("codex_app__hidden_dynamic_tool(args:")
             })
     );
 
