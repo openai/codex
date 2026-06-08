@@ -2069,6 +2069,9 @@ fn guardian_review_result(
         GuardianApprovalReviewStatus::TimedOut => {
             Some((ReviewStatus::TimedOut, ReviewResolution::None))
         }
+        GuardianApprovalReviewStatus::Failed => {
+            Some((ReviewStatus::Failed, ReviewResolution::None))
+        }
         GuardianApprovalReviewStatus::Aborted => {
             Some((ReviewStatus::Aborted, ReviewResolution::None))
         }
@@ -2171,6 +2174,7 @@ fn final_approval_outcome(
     match (reviewer, status, resolution) {
         (Reviewer::Guardian, ReviewStatus::Approved, _) => FinalApprovalOutcome::GuardianApproved,
         (Reviewer::Guardian, ReviewStatus::Denied, _) => FinalApprovalOutcome::GuardianDenied,
+        (Reviewer::Guardian, ReviewStatus::Failed, _) => FinalApprovalOutcome::GuardianFailed,
         (Reviewer::Guardian, _, _) => FinalApprovalOutcome::GuardianAborted,
         (Reviewer::User, ReviewStatus::Approved, ReviewResolution::SessionApproval) => {
             FinalApprovalOutcome::UserApprovedForSession
@@ -2648,6 +2652,18 @@ mod tests {
         assert!(matches!(
             guardian_review_result(GuardianApprovalReviewStatus::TimedOut),
             Some((ReviewStatus::TimedOut, ReviewResolution::None))
+        ));
+        assert!(matches!(
+            guardian_review_result(GuardianApprovalReviewStatus::Failed),
+            Some((ReviewStatus::Failed, ReviewResolution::None))
+        ));
+        assert!(matches!(
+            final_approval_outcome(
+                Reviewer::Guardian,
+                ReviewStatus::Failed,
+                ReviewResolution::None
+            ),
+            FinalApprovalOutcome::GuardianFailed
         ));
     }
 }

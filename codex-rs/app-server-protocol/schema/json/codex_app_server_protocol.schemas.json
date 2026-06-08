@@ -3968,6 +3968,13 @@
           "type": "string"
         },
         {
+          "description": "Automatic approval review failed before reaching a decision.",
+          "enum": [
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
           "description": "User has denied this command and the agent should not do anything until the user's next command.",
           "enum": [
             "abort"
@@ -10004,6 +10011,7 @@
           "approved",
           "denied",
           "timedOut",
+          "failed",
           "aborted"
         ],
         "type": "string"

@@ -1972,7 +1972,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> anyhow::Result<()> {
+async fn guardian_review_surfaces_responses_api_errors_as_failed() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -2029,17 +2029,17 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Denied);
+    assert_eq!(decision, ReviewDecision::Failed);
 
     let mut warnings = Vec::new();
-    let mut denial_rationales = Vec::new();
+    let mut failed_assessments = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event.msg {
             EventMsg::GuardianWarning(event) => warnings.push(event.message),
             EventMsg::GuardianAssessment(event)
-                if event.status == GuardianAssessmentStatus::Denied =>
+                if event.status == GuardianAssessmentStatus::Failed =>
             {
-                denial_rationales.push(event.rationale)
+                failed_assessments.push(event)
             }
             _ => {}
         }
@@ -2052,29 +2052,133 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         "warning should include the underlying responses api error"
     );
     assert!(
-        denial_rationales
+        failed_assessments
             .iter()
-            .flatten()
+            .filter_map(|event| event.rationale.as_deref())
             .any(|message| message.contains(error_message)),
-        "denial rationale should include the underlying responses api error"
+        "failure rationale should include the underlying responses api error"
     );
     assert!(
-        denial_rationales.iter().flatten().all(|message| {
-            !message.contains("guardian review completed without an assessment payload")
+        failed_assessments.iter().all(|event| {
+            event.risk_level.is_none()
+                && event.user_authorization.is_none()
+                && event.rationale.as_deref().is_some_and(|message| {
+                    !message.contains("guardian review completed without an assessment payload")
+                })
         }),
-        "denial rationale should not fall back to the generic missing payload error"
+        "failure should not fabricate risk metadata or use the generic missing payload error"
     );
     {
         let rationales = session.services.guardian_rejections.lock().await;
-        assert!(rationales.contains_key("review-shell-guardian-error"));
+        assert!(!rationales.contains_key("review-shell-guardian-error"));
         assert!(!rationales.contains_key("shell-guardian-error"));
     }
-    let rejection_message =
-        guardian_rejection_message(session.as_ref(), "review-shell-guardian-error").await;
     assert!(
-        rejection_message.contains("Reason: Automatic approval review failed:")
-            && rejection_message.contains(error_message),
-        "rejection message should include guardian rationale: {rejection_message}"
+        guardian_failure_message().contains("failed before reaching a policy decision")
+            && !guardian_failure_message().contains("unacceptable risk"),
+        "failure message should clearly distinguish review failure from policy denial"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_surfaces_invalid_assessment_as_failed() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message("msg-guardian", "not a guardian assessment"),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-shell-guardian-parse-error".to_string(),
+        GuardianApprovalRequest::Shell {
+            id: "shell-guardian-parse-error".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the reviewed docs fix.".to_string()),
+        },
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Failed);
+    assert_eq!(request_log.requests().len(), 1);
+    assert!(
+        !session
+            .services
+            .guardian_rejections
+            .lock()
+            .await
+            .contains_key("review-shell-guardian-parse-error")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_preserves_genuine_denial() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message(
+                "msg-guardian",
+                r#"{"outcome":"deny","risk_level":"high","user_authorization":"low","rationale":"The requested push is not justified."}"#,
+            ),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-shell-guardian-denied".to_string(),
+        GuardianApprovalRequest::Shell {
+            id: "shell-guardian-denied".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the reviewed docs fix.".to_string()),
+        },
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Denied);
+    assert_eq!(request_log.requests().len(), 1);
+    assert_eq!(
+        session
+            .services
+            .guardian_rejections
+            .lock()
+            .await
+            .get("review-shell-guardian-denied")
+            .cloned(),
+        Some(GuardianRejection {
+            rationale: "The requested push is not justified.".to_string(),
+            source: GuardianAssessmentDecisionSource::Agent,
+        })
     );
 
     Ok(())

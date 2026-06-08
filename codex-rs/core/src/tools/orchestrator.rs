@@ -6,6 +6,7 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
+use crate::guardian::guardian_failure_message;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
@@ -561,6 +562,7 @@ impl ToolOrchestrator {
                 Err(ToolError::Rejected(reason))
             }
             ReviewDecision::TimedOut => Err(ToolError::Rejected(guardian_timeout_message())),
+            ReviewDecision::Failed => Err(ToolError::Rejected(guardian_failure_message())),
             ReviewDecision::Approved
             | ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::ApprovedForSession => Ok(()),

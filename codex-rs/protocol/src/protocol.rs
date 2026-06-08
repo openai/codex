@@ -3686,6 +3686,9 @@ pub enum ReviewDecision {
     /// Automatic approval review timed out before reaching a decision.
     TimedOut,
 
+    /// Automatic approval review failed before reaching a decision.
+    Failed,
+
     /// User has denied this command and the agent should not do anything until
     /// the user's next command.
     Abort,
@@ -3707,6 +3710,7 @@ impl ReviewDecision {
             },
             ReviewDecision::Denied => "denied",
             ReviewDecision::TimedOut => "timed_out",
+            ReviewDecision::Failed => "failed",
             ReviewDecision::Abort => "abort",
         }
     }

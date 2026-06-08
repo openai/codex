@@ -1,5 +1,6 @@
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianNetworkAccessTrigger;
+use crate::guardian::guardian_failure_message;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
@@ -155,6 +156,7 @@ enum PendingApprovalDecision {
 enum NetworkApprovalOutcome {
     DeniedByUser,
     DeniedByPolicy(String),
+    ReviewFailed(String),
 }
 
 fn network_approval_outcome_to_result(
@@ -164,7 +166,10 @@ fn network_approval_outcome_to_result(
         Some(NetworkApprovalOutcome::DeniedByUser) => {
             Err(ToolError::Rejected("rejected by user".to_string()))
         }
-        Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => Err(ToolError::Rejected(message)),
+        Some(
+            NetworkApprovalOutcome::DeniedByPolicy(message)
+            | NetworkApprovalOutcome::ReviewFailed(message),
+        ) => Err(ToolError::Rejected(message)),
         None => Ok(()),
     }
 }
@@ -638,6 +643,16 @@ impl NetworkApprovalService {
                     self.record_call_outcome(
                         &owner_call.registration_id,
                         NetworkApprovalOutcome::DeniedByPolicy(guardian_timeout_message()),
+                    )
+                    .await;
+                }
+                PendingApprovalDecision::Deny
+            }
+            ReviewDecision::Failed => {
+                if let Some(owner_call) = owner_call.as_ref() {
+                    self.record_call_outcome(
+                        &owner_call.registration_id,
+                        NetworkApprovalOutcome::ReviewFailed(guardian_failure_message()),
                     )
                     .await;
                 }

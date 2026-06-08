@@ -4,6 +4,7 @@ use crate::exec::ExecExpiration;
 use crate::exec::cancel_when_either;
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::guardian_failure_message;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
@@ -569,6 +570,9 @@ impl CoreShellActionProvider {
                         }
                         ReviewDecision::TimedOut => {
                             EscalationDecision::deny(Some(guardian_timeout_message()))
+                        }
+                        ReviewDecision::Failed => {
+                            EscalationDecision::deny(Some(guardian_failure_message()))
                         }
                         ReviewDecision::Abort => {
                             EscalationDecision::deny(Some("User cancelled execution".to_string()))

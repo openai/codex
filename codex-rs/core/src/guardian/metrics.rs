@@ -138,6 +138,7 @@ fn decision_tag(decision: GuardianReviewDecision) -> &'static str {
     match decision {
         GuardianReviewDecision::Approved => "approved",
         GuardianReviewDecision::Denied => "denied",
+        GuardianReviewDecision::Failed => "failed",
         GuardianReviewDecision::Aborted => "aborted",
     }
 }

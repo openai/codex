@@ -178,6 +178,7 @@ pub(crate) struct GuardianReviewEventRequest {
 pub enum GuardianReviewDecision {
     Approved,
     Denied,
+    Failed,
     Aborted,
 }
 
@@ -440,6 +441,7 @@ pub(crate) enum FinalApprovalOutcome {
     PolicyForbidden,
     GuardianApproved,
     GuardianDenied,
+    GuardianFailed,
     GuardianAborted,
     UserApproved,
     UserApprovedForSession,
@@ -532,6 +534,7 @@ pub(crate) enum ReviewTrigger {
 pub(crate) enum ReviewStatus {
     Approved,
     Denied,
+    Failed,
     Aborted,
     TimedOut,
 }

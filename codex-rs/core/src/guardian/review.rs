@@ -58,6 +58,13 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
     "You may retry once, or ask the user for guidance or explicit approval.",
 );
 
+const GUARDIAN_FAILURE_INSTRUCTIONS: &str = concat!(
+    "The automatic permission approval review failed before reaching a policy decision. ",
+    "The action was not approved and was not executed. ",
+    "Do not interpret this failure as evidence that the action is unsafe or was denied by policy. ",
+    "Ask the user for guidance or explicit approval.",
+);
+
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -85,6 +92,10 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
 
 pub(crate) fn guardian_timeout_message() -> String {
     GUARDIAN_TIMEOUT_INSTRUCTIONS.to_string()
+}
+
+pub(crate) fn guardian_failure_message() -> String {
+    GUARDIAN_FAILURE_INSTRUCTIONS.to_string()
 }
 
 #[derive(Debug)]
@@ -470,29 +481,50 @@ async fn run_guardian_review(
                         "guardian review failed"
                     }
                 };
-                let rationale = format!("Automatic approval review failed: {message}");
+                let rationale = format!(
+                    "Automatic approval review failed before reaching a decision: {message}"
+                );
                 track_guardian_review(
                     session.as_ref(),
                     &review_tracking,
                     approval_request_source,
                     &reviewed_action,
                     GuardianReviewAnalyticsResult {
-                        decision: GuardianReviewDecision::Denied,
+                        decision: GuardianReviewDecision::Failed,
                         terminal_status: GuardianReviewTerminalStatus::FailedClosed,
                         failure_reason: Some(error.failure_reason()),
                         ..analytics_result
                     },
                     completed_at_ms.try_into().unwrap_or_default(),
                 );
-                (
-                    GuardianAssessment {
-                        risk_level: GuardianRiskLevel::High,
-                        user_authorization: GuardianUserAuthorization::Unknown,
-                        outcome: GuardianAssessmentOutcome::Deny,
-                        rationale,
-                    },
-                    false,
-                )
+                session
+                    .send_event(
+                        turn.as_ref(),
+                        EventMsg::GuardianWarning(WarningEvent {
+                            message: rationale.clone(),
+                        }),
+                    )
+                    .await;
+                session
+                    .send_event(
+                        turn.as_ref(),
+                        EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                            id: review_id,
+                            target_item_id,
+                            turn_id: assessment_turn_id.clone(),
+                            started_at_ms,
+                            completed_at_ms: Some(completed_at_ms),
+                            status: GuardianAssessmentStatus::Failed,
+                            risk_level: None,
+                            user_authorization: None,
+                            rationale: Some(rationale),
+                            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+                            action: terminal_action,
+                        }),
+                    )
+                    .await;
+                record_guardian_non_denial(&session, &assessment_turn_id).await;
+                return ReviewDecision::Failed;
             }
         },
     };

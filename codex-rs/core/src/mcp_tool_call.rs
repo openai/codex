@@ -1410,6 +1410,9 @@ async fn mcp_tool_approval_decision_from_guardian(
         ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
             message: Some(guardian_timeout_message()),
         },
+        ReviewDecision::Failed => McpToolApprovalDecision::Decline {
+            message: Some(crate::guardian::guardian_failure_message()),
+        },
         ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
     }
 }

@@ -33,6 +33,7 @@ pub(crate) enum ReviewDecision {
     },
     Denied,
     TimedOut,
+    Failed,
     Abort,
 }
 
@@ -226,6 +227,34 @@ pub fn new_approval_decision_cell(
                 ],
             ),
         },
+        Failed => match subject {
+            ApprovalDecisionSubject::Command(command) => {
+                let summary = if let Some(snippet) = non_empty_exec_snippet(&command) {
+                    vec![
+                        "Review ".into(),
+                        "failed".bold(),
+                        " before codex could run ".into(),
+                        Span::from(snippet).dim(),
+                    ]
+                } else {
+                    vec![
+                        "Review ".into(),
+                        "failed".bold(),
+                        " before this request could be approved".into(),
+                    ]
+                };
+                ("✗ ".red(), summary)
+            }
+            ApprovalDecisionSubject::NetworkAccess { target } => (
+                "✗ ".red(),
+                vec![
+                    "Review ".into(),
+                    "failed".bold(),
+                    " before codex could access ".into(),
+                    Span::from(target).dim(),
+                ],
+            ),
+        },
         Abort => match subject {
             ApprovalDecisionSubject::Command(command) => {
                 let summary = if let Some(snippet) = non_empty_exec_snippet(&command) {
@@ -346,6 +375,38 @@ pub fn new_guardian_timed_out_action_request(summary: String) -> Box<dyn History
     let line = Line::from(vec![
         "Review ".into(),
         "timed out".bold(),
+        " before ".into(),
+        Span::from(summary).dim(),
+    ]);
+    Box::new(PrefixedWrappedHistoryCell::new(line, "✗ ".red(), "  "))
+}
+
+pub fn new_guardian_failed_patch_request(files: Vec<String>) -> Box<dyn HistoryCell> {
+    let mut summary = vec![
+        "Review ".into(),
+        "failed".bold(),
+        " before codex could apply ".into(),
+    ];
+    if files.len() == 1 {
+        summary.push("a patch touching ".into());
+        summary.push(Span::from(files[0].clone()).dim());
+    } else {
+        summary.push("a patch touching ".into());
+        summary.push(Span::from(files.len().to_string()).dim());
+        summary.push(" files".into());
+    }
+
+    Box::new(PrefixedWrappedHistoryCell::new(
+        Line::from(summary),
+        "✗ ".red(),
+        "  ",
+    ))
+}
+
+pub fn new_guardian_failed_action_request(summary: String) -> Box<dyn HistoryCell> {
+    let line = Line::from(vec![
+        "Review ".into(),
+        "failed".bold(),
         " before ".into(),
         Span::from(summary).dim(),
     ]);

@@ -81,6 +81,7 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
             CoreReviewDecision::Abort => Self::Cancel,
             CoreReviewDecision::Denied => Self::Decline,
             CoreReviewDecision::TimedOut => Self::Decline,
+            CoreReviewDecision::Failed => Self::Decline,
         }
     }
 }
@@ -406,6 +407,7 @@ pub enum GuardianApprovalReviewStatus {
     Approved,
     Denied,
     TimedOut,
+    Failed,
     Aborted,
 }
 

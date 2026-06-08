@@ -6457,6 +6457,7 @@
         "approved",
         "denied",
         "timedOut",
+        "failed",
         "aborted"
       ],
       "type": "string"

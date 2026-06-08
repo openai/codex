@@ -432,7 +432,9 @@ impl ThreadHistoryBuilder {
             GuardianAssessmentStatus::Denied | GuardianAssessmentStatus::Aborted => {
                 CommandExecutionStatus::Declined
             }
-            GuardianAssessmentStatus::TimedOut => CommandExecutionStatus::Failed,
+            GuardianAssessmentStatus::TimedOut | GuardianAssessmentStatus::Failed => {
+                CommandExecutionStatus::Failed
+            }
             GuardianAssessmentStatus::Approved => return,
         };
         let Some(item) = build_item_from_guardian_event(payload, status) else {
@@ -2374,6 +2376,75 @@ mod tests {
                 status: CommandExecutionStatus::Declined,
                 command_actions: vec![CommandAction::Unknown {
                     command: "rm -rf /tmp/guardian".into(),
+                }],
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_failed_guardian_command_item() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".into(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
+                message: "review this command".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+                ..Default::default()
+            }),
+            EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                id: "review-guardian-exec".into(),
+                target_item_id: Some("guardian-exec".into()),
+                turn_id: "turn-1".into(),
+                started_at_ms: 1_000,
+                completed_at_ms: Some(1_042),
+                status: GuardianAssessmentStatus::Failed,
+                risk_level: None,
+                user_authorization: None,
+                rationale: Some(
+                    "Automatic approval review failed before reaching a decision.".into(),
+                ),
+                decision_source: Some(
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                ),
+                action: serde_json::from_value(serde_json::json!({
+                    "type": "command",
+                    "source": "shell",
+                    "command": "git push",
+                    "cwd": test_path_buf("/tmp"),
+                }))
+                .expect("guardian action"),
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 2);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::CommandExecution {
+                id: "guardian-exec".into(),
+                command: "git push".into(),
+                cwd: test_path_buf("/tmp").abs(),
+                process_id: None,
+                source: CommandExecutionSource::Agent,
+                status: CommandExecutionStatus::Failed,
+                command_actions: vec![CommandAction::Unknown {
+                    command: "git push".into(),
                 }],
                 aggregated_output: None,
                 exit_code: None,
