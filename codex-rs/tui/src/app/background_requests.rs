@@ -824,9 +824,10 @@ fn plugin_remote_section_error_next_step(label: &str, err: &str) -> &'static str
     } else if err.contains("service unavailable")
         || err.contains("temporarily unavailable")
         || err.contains("status 503")
+        || err.contains("failed to send")
+        || err.contains("request")
+        || err.contains("status")
     {
-        "Try again later; local plugin functionality is still available."
-    } else if err.contains("failed to send") || err.contains("request") || err.contains("status") {
         "Try again later; local plugin functionality is still available."
     } else if err.contains("disabled by admin") || err.contains("admin disabled") {
         "Ask a workspace admin to confirm plugin access."
@@ -857,7 +858,8 @@ pub(super) async fn request_plugin_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
 ) -> Result<PluginListResponse> {
-    request_plugin_list_with_marketplace_kinds(request_handle, cwd, None).await
+    request_plugin_list_with_marketplace_kinds(request_handle, cwd, /*marketplace_kinds*/ None)
+        .await
 }
 
 pub(super) async fn request_plugin_list_for_kinds(
