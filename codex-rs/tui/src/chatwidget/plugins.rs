@@ -222,6 +222,10 @@ impl ChatWidget {
                 .bottom_pane
                 .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
                 .is_some()
+                || self
+                    .bottom_pane
+                    .selected_index_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+                    .is_some()
                 || !matches!(
                     self.plugins_cache_for_current_cwd(),
                     PluginsCacheState::Ready(_)
@@ -247,7 +251,7 @@ impl ChatWidget {
                     .as_deref()
                     .and_then(|tab_id| {
                         marketplace_tab_id_matching_saved_id(tab_id, &response.marketplaces)
-                });
+                    });
                 self.plugins_active_tab_id = active_tab_id;
                 self.plugins_cache = PluginsCacheState::Ready(response.clone());
                 if should_refresh_plugins_popup {
@@ -354,36 +358,6 @@ impl ChatWidget {
                 self.plugins_active_tab_id.clone(),
                 /*initial_selected_idx*/ None,
             ));
-    }
-
-    pub(crate) fn open_plugins_list(&mut self, cwd: PathBuf, response: PluginListResponse) {
-        if self.config.cwd.as_path() != cwd.as_path() {
-            return;
-        }
-
-        let response = match self.plugins_cache_for_current_cwd() {
-            PluginsCacheState::Ready(current_response) => current_response,
-            PluginsCacheState::Uninitialized
-            | PluginsCacheState::Loading
-            | PluginsCacheState::Failed(_) => response,
-        };
-        self.plugins_fetch_state.cache_cwd = Some(cwd);
-        self.plugins_cache = PluginsCacheState::Ready(response.clone());
-        let active_tab_id = self
-            .bottom_pane
-            .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
-            .map(str::to_string)
-            .or_else(|| self.plugins_active_tab_id.clone())
-            .or_else(|| Some(ALL_PLUGINS_TAB_ID.to_string()));
-        self.plugins_active_tab_id = active_tab_id.clone();
-        let params =
-            self.plugins_popup_params(&response, active_tab_id, /*initial_selected_idx*/ None);
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(PLUGINS_SELECTION_VIEW_ID, params)
-        {
-            self.open_plugins_popup(&response);
-        }
     }
 
     pub(crate) fn open_marketplace_add_prompt(&mut self) {
@@ -2099,7 +2073,7 @@ fn marketplace_tab_id_matching_saved_id(
             .as_ref()
             .is_some_and(|path| path.as_path().starts_with(root))
             .then(|| marketplace_tab_id(marketplace))
-        })
+    })
 }
 
 fn merge_remote_marketplaces(
