@@ -74,7 +74,7 @@ def main() -> int:
             message_file,
             internal_cargo_lockfile,
         )
-        pr_number = open_or_update_pr(change, body_file)
+        pr_number = open_or_update_pr(change, body_file, message_file)
         merge_pr(pr_number, change, body_file)
         wait_for_imported_rev(change.rev)
         imported_count += 1
@@ -327,7 +327,10 @@ def migrate_change(
         ]
     )
 
-    fetch_sync_branch()
+    if not fetch_sync_branch(check=False):
+        create_empty_import_marker_commit(change, message_file)
+        return
+
     run(["git", "checkout", "--detach", f"origin/{SYNC_BRANCH}"])
     resolve_cargo_lockfile(internal_cargo_lockfile)
     run(
@@ -376,13 +379,17 @@ def resolve_cargo_lockfile(internal_cargo_lockfile: Path | None) -> None:
     run(["git", "add", CARGO_LOCKFILE.as_posix()])
 
 
-def open_or_update_pr(change: PublicChange, body_file: Path) -> str:
+def open_or_update_pr(change: PublicChange, body_file: Path, message_file: Path) -> str:
     run(["git", "fetch", "origin", "refs/heads/main:refs/remotes/origin/main"])
     fetch_sync_branch()
 
     ahead_count = int(output(["git", "rev-list", "--count", f"origin/main..origin/{SYNC_BRANCH}"]))
     if ahead_count == 0:
-        raise RuntimeError(f"Copybara produced no commits on {SYNC_BRANCH}.")
+        create_empty_import_marker_commit_if_unchanged(change, message_file)
+        fetch_sync_branch()
+        ahead_count = int(output(["git", "rev-list", "--count", f"origin/main..origin/{SYNC_BRANCH}"]))
+        if ahead_count == 0:
+            raise RuntimeError(f"Copybara produced no commits on {SYNC_BRANCH}.")
 
     pr_number = find_open_pr()
     if pr_number is None:
@@ -419,6 +426,58 @@ def open_or_update_pr(change: PublicChange, body_file: Path) -> str:
     if pr_number is None:
         raise RuntimeError("Unable to determine sync PR number.")
     return pr_number
+
+
+def create_empty_import_marker_commit_if_unchanged(
+    change: PublicChange, message_file: Path
+) -> None:
+    if not trees_match("origin/main", f"origin/{SYNC_BRANCH}"):
+        raise RuntimeError(
+            f"Copybara produced no commits on {SYNC_BRANCH}, but the sync branch "
+            "differs from origin/main."
+        )
+
+    create_empty_import_marker_commit(change, message_file)
+
+
+def create_empty_import_marker_commit(change: PublicChange, message_file: Path) -> None:
+    print(
+        f"Copybara produced no content changes for {change.rev}; creating an empty "
+        f"{TRAILER} marker commit."
+    )
+    run(["git", "checkout", "--detach", "origin/main"])
+    run(
+        [
+            "git",
+            "commit",
+            "--allow-empty",
+            "--no-verify",
+            "--author",
+            f"{change.author.name} <{change.author.email}>",
+            "--date",
+            change.author.date,
+            "--file",
+            str(message_file),
+        ]
+    )
+    run(
+        [
+            "git",
+            "push",
+            "--force-with-lease",
+            "origin",
+            f"HEAD:refs/heads/{SYNC_BRANCH}",
+        ]
+    )
+
+
+def trees_match(left: str, right: str) -> bool:
+    diff = run(["git", "diff", "--quiet", left, right], check=False)
+    if diff.returncode == 0:
+        return True
+    if diff.returncode == 1:
+        return False
+    raise RuntimeError(f"Unable to compare trees for {left} and {right}.")
 
 
 def find_open_pr() -> str | None:
@@ -487,15 +546,17 @@ def wait_for_imported_rev(public_change_rev: str) -> None:
     raise RuntimeError(f"openai/codex-internal main did not advance to {public_change_rev}.")
 
 
-def fetch_sync_branch() -> None:
-    run(
+def fetch_sync_branch(*, check: bool = True) -> bool:
+    result = run(
         [
             "git",
             "fetch",
             "origin",
             f"+refs/heads/{SYNC_BRANCH}:refs/remotes/origin/{SYNC_BRANCH}",
-        ]
+        ],
+        check=check,
     )
+    return result.returncode == 0
 
 
 def output(args: list[str]) -> str:
