@@ -60,16 +60,11 @@ impl PathUri {
         Self::try_from(url)
     }
 
-    /// Returns `file`.
-    pub fn scheme(&self) -> &str {
-        self.0.scheme()
-    }
-
     /// Returns the percent-encoded URI path.
     ///
     /// The URL authority is not included. For example,
     /// `file://server/share/file.rs` has the path `/share/file.rs`.
-    pub fn path(&self) -> &str {
+    pub fn encoded_path(&self) -> &str {
         self.0.path()
     }
 
@@ -86,16 +81,15 @@ impl PathUri {
 
     /// Returns the parent URI, or `None` for the URI root.
     pub fn parent(&self) -> Option<Self> {
-        if self.path() == "/" {
+        if self.encoded_path() == "/" {
             return None;
         }
 
         let mut url = self.0.clone();
-        let Ok(mut segments) = url.path_segments_mut() else {
-            unreachable!("validated file URLs support hierarchical path segments");
-        };
-        segments.pop_if_empty().pop();
-        drop(segments);
+        url.path_segments_mut()
+            .expect("validated file URLs support hierarchical path segments")
+            .pop_if_empty()
+            .pop();
         Some(Self(url))
     }
 
@@ -103,7 +97,8 @@ impl PathUri {
     ///
     /// Empty and `.` segments are ignored, while `..` removes one segment
     /// without escaping the URI root. Literal `%`, `?`, and `#` characters are
-    /// percent-encoded as filename text.
+    /// percent-encoded as filename text. Paths containing a null character are
+    /// rejected because they cannot be safely converted to native paths.
     pub fn join(&self, path: &str) -> Result<Self, PathUriParseError> {
         if path.starts_with('/') {
             return Err(PathUriParseError::JoinPathMustBeRelative(path.to_string()));
@@ -116,22 +111,23 @@ impl PathUri {
         }
 
         let mut url = self.0.clone();
-        let Ok(mut segments) = url.path_segments_mut() else {
-            unreachable!("validated file URLs support hierarchical path segments");
-        };
-        segments.pop_if_empty();
-        for component in path.split('/') {
-            match component {
-                "" | "." => {}
-                ".." => {
-                    segments.pop();
-                }
-                component => {
-                    segments.push(component);
+        {
+            let Ok(mut segments) = url.path_segments_mut() else {
+                unreachable!("validated file URLs support hierarchical path segments");
+            };
+            segments.pop_if_empty();
+            for component in path.split('/') {
+                match component {
+                    "" | "." => {}
+                    ".." => {
+                        segments.pop();
+                    }
+                    component => {
+                        segments.push(component);
+                    }
                 }
             }
         }
-        drop(segments);
         Self::try_from(url)
     }
 

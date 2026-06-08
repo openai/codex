@@ -39,7 +39,7 @@ fn file_uri_parses_a_windows_path_on_any_host() {
     let uri = PathUri::parse("file:///C:/Users/Alice%20Smith/src/main.rs")
         .expect("Windows file URI should parse on every host");
 
-    assert_eq!(uri.path(), "/C:/Users/Alice%20Smith/src/main.rs");
+    assert_eq!(uri.encoded_path(), "/C:/Users/Alice%20Smith/src/main.rs");
     assert_eq!(uri.basename(), Some("main.rs".to_string()));
     assert_eq!(
         uri.to_string(),
@@ -52,7 +52,7 @@ fn file_uri_parses_a_posix_path_on_any_host() {
     let uri = PathUri::parse("file:///home/alice/src/main.rs")
         .expect("POSIX file URI should parse on every host");
 
-    assert_eq!(uri.path(), "/home/alice/src/main.rs");
+    assert_eq!(uri.encoded_path(), "/home/alice/src/main.rs");
     assert_eq!(uri.basename(), Some("main.rs".to_string()));
     assert_eq!(uri.to_string(), "file:///home/alice/src/main.rs");
 }
@@ -62,7 +62,7 @@ fn file_uri_preserves_paths_that_resemble_windows_paths() {
     for (input, expected_path) in [("file:///C:/Project", "/C:/Project"), ("file:///C:", "/C:")] {
         let uri = PathUri::parse(input).expect("file URI should parse");
         let reparsed = PathUri::parse(&uri.to_string()).expect("file URI should reparse");
-        assert_eq!(uri.path(), expected_path);
+        assert_eq!(uri.encoded_path(), expected_path);
         assert_eq!(reparsed, uri);
     }
 }
@@ -90,7 +90,7 @@ fn file_uri_round_trips_literal_percent_characters() {
     let uri = PathUri::parse("file:///tmp/100%25/file").expect("file URI should parse");
 
     assert_eq!(uri.to_string(), "file:///tmp/100%25/file");
-    assert_eq!(uri.path(), "/tmp/100%25/file");
+    assert_eq!(uri.encoded_path(), "/tmp/100%25/file");
     assert_eq!(uri.basename(), Some("file".to_string()));
 }
 
@@ -101,7 +101,7 @@ fn file_uri_round_trips_windows_unc_paths() {
         .expect("absolute UNC path");
     let uri = PathUri::from_file_path(&path).expect("UNC path should convert to a file URI");
 
-    assert_eq!(uri.path(), "/share/src/main.rs");
+    assert_eq!(uri.encoded_path(), "/share/src/main.rs");
     assert_eq!(uri.to_native_path().expect("UNC URI should convert"), path);
 }
 
@@ -109,7 +109,7 @@ fn file_uri_round_trips_windows_unc_paths() {
 fn file_uri_retains_unc_authority() {
     let uri = PathUri::parse("file://server/share/src/main.rs").expect("valid file URI");
 
-    assert_eq!(uri.path(), "/share/src/main.rs");
+    assert_eq!(uri.encoded_path(), "/share/src/main.rs");
     assert_eq!(uri.to_string(), "file://server/share/src/main.rs");
 }
 
@@ -247,7 +247,7 @@ fn encoded_filename_characters_round_trip_without_becoming_uri_metadata() {
         .expect("encoded filename characters should parse");
 
     assert_eq!(uri.to_string(), "file:///tmp/a%3Fb%23c%25d");
-    assert_eq!(uri.path(), "/tmp/a%3Fb%23c%25d");
+    assert_eq!(uri.encoded_path(), "/tmp/a%3Fb%23c%25d");
     assert_eq!(uri.basename(), Some("a?b#c%d".to_string()));
 }
 
@@ -257,7 +257,7 @@ fn double_encoded_separator_remains_filename_text() {
         .expect("double-encoded separator should parse as filename text");
 
     assert_eq!(uri.to_string(), "file:///tmp/a%252Fb");
-    assert_eq!(uri.path(), "/tmp/a%252Fb");
+    assert_eq!(uri.encoded_path(), "/tmp/a%252Fb");
     assert_eq!(uri.basename(), Some("a%2Fb".to_string()));
 }
 
