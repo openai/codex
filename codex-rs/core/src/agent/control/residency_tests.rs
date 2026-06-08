@@ -1,5 +1,6 @@
 use crate::ThreadManager;
 use crate::agent::AgentControl;
+use crate::agent::registry::AgentMetadata;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::test_config;
@@ -65,7 +66,7 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
 }
 
 #[tokio::test]
-async fn residency_slot_reservation_unloads_oldest_interrupted_v2_agent() {
+async fn interrupted_v2_agent_reloads_after_residency_eviction() {
     let mut config = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     config.multi_agent_v2.max_concurrent_threads_per_session = 2;
@@ -92,6 +93,14 @@ async fn residency_slot_reservation_unloads_oldest_interrupted_v2_agent() {
     let first =
         spawn_v2_subagent(&control, &state, config.clone(), root.thread_id, "worker-1").await;
     first_slot.commit(first.thread_id);
+    control
+        .state
+        .reserve_spawn_slot(/*max_threads*/ None)
+        .expect("reserve logical agent slot")
+        .commit(AgentMetadata {
+            agent_id: Some(first.thread_id),
+            ..Default::default()
+        });
     mark_thread_interrupted(first.thread.as_ref()).await;
 
     let second_slot = control
@@ -103,11 +112,23 @@ async fn residency_slot_reservation_unloads_oldest_interrupted_v2_agent() {
         Err(err) => panic!("expected evicted thread to be missing, got {err:?}"),
         Ok(_) => panic!("expected evicted thread to be missing"),
     }
-    let second = spawn_v2_subagent(&control, &state, config, root.thread_id, "worker-2").await;
+    let second =
+        spawn_v2_subagent(&control, &state, config.clone(), root.thread_id, "worker-2").await;
     second_slot.commit(second.thread_id);
+    mark_thread_completed(second.thread.as_ref()).await;
+
+    control
+        .ensure_v2_agent_loaded(config, first.thread_id)
+        .await
+        .expect("evicted interrupted agent should reload");
 
     assert!(manager.get_thread(root.thread_id).await.is_ok());
-    assert!(manager.get_thread(second.thread_id).await.is_ok());
+    assert!(manager.get_thread(first.thread_id).await.is_ok());
+    match manager.get_thread(second.thread_id).await {
+        Err(CodexErr::ThreadNotFound(thread_id)) => assert_eq!(thread_id, second.thread_id),
+        Err(err) => panic!("expected evicted thread to be missing, got {err:?}"),
+        Ok(_) => panic!("expected evicted thread to be missing"),
+    }
 }
 
 async fn spawn_v2_subagent(
