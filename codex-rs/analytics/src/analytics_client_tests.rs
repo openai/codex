@@ -1375,7 +1375,6 @@ fn thread_initialized_event_serializes_expected_shape() {
             parent_thread_id: None,
             forked_from_thread_id: None,
             created_at: 1,
-            profile: None,
         },
     });
 

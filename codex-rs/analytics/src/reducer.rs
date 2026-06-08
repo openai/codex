@@ -62,7 +62,6 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
-use crate::facts::CompletedThreadInitialization;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginState;
@@ -71,8 +70,6 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
-use crate::facts::ThreadInitializationProfile;
-use crate::facts::ThreadInitializationResponseFact;
 use crate::facts::TurnCodexError;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfile;
@@ -88,7 +85,6 @@ use crate::serialize_enum_as_string;
 use crate::usize_to_u64;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
-use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
@@ -143,30 +139,6 @@ pub(crate) struct AnalyticsReducer {
     tool_items_started_at_ms: HashMap<ToolItemKey, u64>,
     pending_reviews: HashMap<RequestId, PendingReviewState>,
     item_review_summaries: HashMap<ToolItemKey, ItemReviewSummary>,
-}
-
-#[derive(Clone, Copy)]
-struct ThreadInitializationEventDetails {
-    mode: ThreadInitializationMode,
-    profile: Option<ThreadInitializationProfile>,
-}
-
-impl ThreadInitializationEventDetails {
-    fn without_profile(mode: ThreadInitializationMode) -> Self {
-        Self {
-            mode,
-            profile: None,
-        }
-    }
-}
-
-impl From<CompletedThreadInitialization> for ThreadInitializationEventDetails {
-    fn from(initialization: CompletedThreadInitialization) -> Self {
-        Self {
-            mode: initialization.initialization_mode,
-            profile: Some(initialization.profile),
-        }
-    }
 }
 
 struct ConnectionState {
@@ -438,9 +410,6 @@ impl AnalyticsReducer {
                 if let Some(response) = response.into_client_response(request_id) {
                     self.ingest_response(connection_id, response, out).await;
                 }
-            }
-            AnalyticsFact::ThreadInitializationResponse(input) => {
-                self.ingest_thread_initialization_response(*input, out);
             }
             AnalyticsFact::ErrorResponse {
                 connection_id,
@@ -799,9 +768,7 @@ impl AnalyticsReducer {
                     connection_id,
                     response.thread,
                     response.model,
-                    ThreadInitializationEventDetails::without_profile(
-                        ThreadInitializationMode::New,
-                    ),
+                    ThreadInitializationMode::New,
                     out,
                 );
             }
@@ -810,9 +777,7 @@ impl AnalyticsReducer {
                     connection_id,
                     response.thread,
                     response.model,
-                    ThreadInitializationEventDetails::without_profile(
-                        ThreadInitializationMode::Resumed,
-                    ),
+                    ThreadInitializationMode::Resumed,
                     out,
                 );
             }
@@ -821,9 +786,7 @@ impl AnalyticsReducer {
                     connection_id,
                     response.thread,
                     response.model,
-                    ThreadInitializationEventDetails::without_profile(
-                        ThreadInitializationMode::Forked,
-                    ),
+                    ThreadInitializationMode::Forked,
                     out,
                 );
             }
@@ -849,38 +812,6 @@ impl AnalyticsReducer {
             } => {
                 self.ingest_turn_steer_response(connection_id, request_id, response, out);
             }
-            _ => {}
-        }
-    }
-
-    fn ingest_thread_initialization_response(
-        &mut self,
-        input: ThreadInitializationResponseFact,
-        out: &mut Vec<TrackEventRequest>,
-    ) {
-        let initialization = input.initialization.into();
-        match input.response {
-            ClientResponsePayload::ThreadStart(response) => self.emit_thread_initialized(
-                input.connection_id,
-                response.thread,
-                response.model,
-                initialization,
-                out,
-            ),
-            ClientResponsePayload::ThreadResume(response) => self.emit_thread_initialized(
-                input.connection_id,
-                response.thread,
-                response.model,
-                initialization,
-                out,
-            ),
-            ClientResponsePayload::ThreadFork(response) => self.emit_thread_initialized(
-                input.connection_id,
-                response.thread,
-                response.model,
-                initialization,
-                out,
-            ),
             _ => {}
         }
     }
@@ -1258,7 +1189,7 @@ impl AnalyticsReducer {
         connection_id: u64,
         thread: codex_app_server_protocol::Thread,
         model: String,
-        initialization: ThreadInitializationEventDetails,
+        initialization_mode: ThreadInitializationMode,
         out: &mut Vec<TrackEventRequest>,
     ) {
         let session_source: SessionSource = thread.source.into();
@@ -1274,7 +1205,7 @@ impl AnalyticsReducer {
             &session_source,
             thread.thread_source.map(Into::into),
             parent_thread_id,
-            initialization.mode,
+            initialization_mode,
         );
         self.threads.insert(
             thread_id.clone(),
@@ -1294,12 +1225,11 @@ impl AnalyticsReducer {
                     model,
                     ephemeral: thread.ephemeral,
                     thread_source: thread_metadata.thread_source,
-                    initialization_mode: initialization.mode,
+                    initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
                     forked_from_thread_id,
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
-                    profile: initialization.profile,
                 },
             },
         ));

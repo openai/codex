@@ -50,7 +50,6 @@ use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::thread_initialization_timing::ThreadInitializationTiming;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
@@ -80,7 +79,6 @@ pub(crate) async fn run_codex_thread_interactive(
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);
     let forked_from_thread_id = conversation_history.forked_from_id();
-    let thread_initialization_timing = ThreadInitializationTiming::begin(&conversation_history);
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
         installation_id: parent_session.installation_id.clone(),
@@ -109,7 +107,6 @@ pub(crate) async fn run_codex_thread_interactive(
         thread_store: Arc::clone(&parent_session.services.thread_store),
         attestation_provider: parent_session.services.attestation_provider.clone(),
         inherited_multi_agent_version: Some(MultiAgentVersion::Disabled),
-        thread_initialization_timing,
     }))
     .or_cancel(&cancel_token)
     .await??;

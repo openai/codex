@@ -702,7 +702,6 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         codex_thread_store::LocalThreadStoreConfig::from_config(&config),
         /*state_db*/ None,
     ));
-    let thread_initialization_timing = ThreadInitializationTiming::begin(&InitialHistory::New);
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
@@ -736,7 +735,6 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         thread_store,
         attestation_provider: None,
         inherited_multi_agent_version: None,
-        thread_initialization_timing,
     })
     .await
     .expect("spawn guardian subagent");

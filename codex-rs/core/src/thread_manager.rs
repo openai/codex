@@ -16,9 +16,7 @@ use crate::session::resolve_multi_agent_version;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
-use crate::thread_initialization_timing::ThreadInitializationTiming;
 use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::CompletedCoreThreadInitialization;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_core_plugins::PluginsManager;
@@ -75,11 +73,15 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
+const THREAD_INITIALIZATION_EXISTING_THREAD_LOOKUP_PHASE: &str =
+    "thread_initialization_existing_thread_lookup";
+const THREAD_INITIALIZATION_THREAD_SPAWN_PHASE: &str = "thread_initialization_thread_spawn";
 /// Test-only override for enabling thread-manager behaviors used by integration
 /// tests.
 ///
@@ -114,13 +116,6 @@ pub struct NewThread {
     pub thread_id: ThreadId,
     pub thread: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
-    pub thread_initialization: CompletedCoreThreadInitialization,
-}
-
-struct RegisteredThread {
-    thread_id: ThreadId,
-    thread: Arc<CodexThread>,
-    session_configured: SessionConfiguredEvent,
 }
 
 // TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
@@ -593,21 +588,14 @@ impl ThreadManager {
         &self,
         options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
-        let thread_initialization_timing =
-            ThreadInitializationTiming::begin(&options.initial_history);
-        self.start_thread_with_options_and_fork_source(
-            options,
-            /*forked_from_thread_id*/ None,
-            thread_initialization_timing,
-        )
-        .await
+        self.start_thread_with_options_and_fork_source(options, /*forked_from_thread_id*/ None)
+            .await
     }
 
     async fn start_thread_with_options_and_fork_source(
         &self,
         options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
-        thread_initialization_timing: ThreadInitializationTiming,
     ) -> CodexResult<NewThread> {
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history
@@ -631,7 +619,6 @@ impl ThreadManager {
             options.parent_trace,
             options.environments,
             /*user_shell_override*/ None,
-            thread_initialization_timing,
         ))
         .await
     }
@@ -643,7 +630,6 @@ impl ThreadManager {
         forked_from_thread_id: ThreadId,
         mut options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
-        let thread_initialization_timing = ThreadInitializationTiming::begin_forked();
         let fork_source = self.get_thread(forked_from_thread_id).await?;
         // Persist queued rollout updates before reading the fork snapshot.
         fork_source.ensure_rollout_materialized().await;
@@ -670,12 +656,8 @@ impl ThreadManager {
                 inherited_multi_agent_version,
             ),
         );
-        self.start_thread_with_options_and_fork_source(
-            options,
-            Some(forked_from_thread_id),
-            thread_initialization_timing,
-        )
-        .await
+        self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
+            .await
     }
 
     pub async fn resume_thread_from_rollout(
@@ -685,14 +667,12 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        let thread_initialization_timing = ThreadInitializationTiming::begin_resumed_lookup();
         let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
-        Box::pin(self.resume_thread_with_history_and_timing(
+        Box::pin(self.resume_thread_with_history(
             config,
             initial_history,
             auth_manager,
             parent_trace,
-            thread_initialization_timing,
         ))
         .await
     }
@@ -703,25 +683,6 @@ impl ThreadManager {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
-    ) -> CodexResult<NewThread> {
-        let thread_initialization_timing = ThreadInitializationTiming::begin(&initial_history);
-        self.resume_thread_with_history_and_timing(
-            config,
-            initial_history,
-            auth_manager,
-            parent_trace,
-            thread_initialization_timing,
-        )
-        .await
-    }
-
-    async fn resume_thread_with_history_and_timing(
-        &self,
-        config: Config,
-        initial_history: InitialHistory,
-        auth_manager: Arc<AuthManager>,
-        parent_trace: Option<W3cTraceContext>,
-        thread_initialization_timing: ThreadInitializationTiming,
     ) -> CodexResult<NewThread> {
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -746,7 +707,6 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
-            thread_initialization_timing,
         ))
         .await
     }
@@ -773,7 +733,6 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
-            ThreadInitializationTiming::begin(&InitialHistory::New),
         ))
         .await
     }
@@ -785,7 +744,6 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
-        let thread_initialization_timing = ThreadInitializationTiming::begin_resumed_lookup();
         let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -810,7 +768,6 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
-            thread_initialization_timing,
         ))
         .await
     }
@@ -888,18 +845,10 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
-        let thread_initialization_timing = ThreadInitializationTiming::begin_forked();
         let snapshot = snapshot.into();
         let history = self.initial_history_from_rollout_path(path).await?;
-        self.fork_thread_with_initial_history(
-            snapshot,
-            config,
-            history,
-            thread_source,
-            parent_trace,
-            thread_initialization_timing,
-        )
-        .await
+        self.fork_thread_from_history(snapshot, config, history, thread_source, parent_trace)
+            .await
     }
 
     async fn initial_history_from_rollout_path(
@@ -932,14 +881,12 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
-        let thread_initialization_timing = ThreadInitializationTiming::begin_forked();
         self.fork_thread_with_initial_history(
             snapshot.into(),
             config,
             history,
             thread_source,
             parent_trace,
-            thread_initialization_timing,
         )
         .await
     }
@@ -951,7 +898,6 @@ impl ThreadManager {
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
-        thread_initialization_timing: ThreadInitializationTiming,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
@@ -990,7 +936,6 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
-            thread_initialization_timing,
         ))
         .await
     }
@@ -1177,14 +1122,12 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
-        let initial_history = InitialHistory::New;
-        let thread_initialization_timing = ThreadInitializationTiming::begin(&initial_history);
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
         });
         Box::pin(self.spawn_thread_with_source(
             config,
-            initial_history,
+            InitialHistory::New,
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
@@ -1198,7 +1141,6 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
-            thread_initialization_timing,
         ))
         .await
     }
@@ -1216,7 +1158,6 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
         } = options;
-        let thread_initialization_timing = ThreadInitializationTiming::begin(&initial_history);
         let environments =
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
         let thread_source = initial_history.get_resumed_thread_source();
@@ -1236,7 +1177,6 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
-            thread_initialization_timing,
         ))
         .await
     }
@@ -1255,7 +1195,6 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
-        let thread_initialization_timing = ThreadInitializationTiming::begin(&initial_history);
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
         });
@@ -1275,7 +1214,6 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
-            thread_initialization_timing,
         ))
         .await
     }
@@ -1296,7 +1234,6 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
-        thread_initialization_timing: ThreadInitializationTiming,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -1314,7 +1251,6 @@ impl ThreadManagerState {
             parent_trace,
             environments,
             user_shell_override,
-            thread_initialization_timing,
         ))
         .await
     }
@@ -1337,11 +1273,12 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
-        mut thread_initialization_timing: ThreadInitializationTiming,
     ) -> CodexResult<NewThread> {
+        let thread_spawn_started_at = Instant::now();
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
+        let mut existing_thread_lookup_duration = None;
         if let InitialHistory::Resumed(resumed) = &initial_history {
-            thread_initialization_timing.existing_thread_lookup_started();
+            let existing_thread_lookup_started_at = Instant::now();
             let mut threads = self.threads.write().await;
             if let Some(thread) = threads.get(&resumed.conversation_id).cloned() {
                 if thread.is_running() {
@@ -1353,18 +1290,33 @@ impl ThreadManagerState {
                             resumed.conversation_id
                         )));
                     }
-                    let new_thread = NewThread {
+                    let session_configured = thread.session_configured();
+                    drop(threads);
+                    let existing_thread_lookup_duration =
+                        existing_thread_lookup_started_at.elapsed();
+                    let thread_spawn_duration = thread_spawn_started_at.elapsed();
+                    let session_telemetry = thread.session_telemetry();
+                    session_telemetry.record_startup_phase(
+                        THREAD_INITIALIZATION_EXISTING_THREAD_LOOKUP_PHASE,
+                        existing_thread_lookup_duration,
+                        Some("loaded"),
+                    );
+                    session_telemetry.record_startup_phase(
+                        THREAD_INITIALIZATION_THREAD_SPAWN_PHASE,
+                        thread_spawn_duration,
+                        Some("ready"),
+                    );
+                    return Ok(NewThread {
                         thread_id: resumed.conversation_id,
-                        session_configured: thread.session_configured(),
+                        session_configured,
                         thread,
-                        thread_initialization: thread_initialization_timing.complete(),
-                    };
-                    return Ok(new_thread);
+                    });
                 }
                 threads.remove(&resumed.conversation_id);
             }
+            existing_thread_lookup_duration = Some(existing_thread_lookup_started_at.elapsed());
         }
-        thread_initialization_timing.configuration_resolution_started();
+        let thread_preparation_started_at = Instant::now();
         let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
         let parent_rollout_thread_trace = self
@@ -1379,10 +1331,9 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
+        let thread_preparation_duration = thread_preparation_started_at.elapsed();
         let CodexSpawnOk {
-            codex,
-            thread_id,
-            thread_initialization_timing,
+            codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
             config,
             installation_id: self.installation_id.clone(),
@@ -1411,24 +1362,41 @@ impl ThreadManagerState {
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
-            thread_initialization_timing,
         }))
         .await?;
-        let registered_thread = self
+        let registration_started_at = Instant::now();
+        let new_thread = self
             .finalize_thread_spawn(codex, thread_id, tracked_session_source)
             .await?;
         if is_resumed_thread {
-            registered_thread
-                .thread
-                .emit_thread_resume_lifecycle()
-                .await;
+            new_thread.thread.emit_thread_resume_lifecycle().await;
         }
-        Ok(NewThread {
-            thread_id: registered_thread.thread_id,
-            thread: registered_thread.thread,
-            session_configured: registered_thread.session_configured,
-            thread_initialization: thread_initialization_timing.complete(),
-        })
+        let registration_duration = registration_started_at.elapsed();
+        let thread_spawn_duration = thread_spawn_started_at.elapsed();
+        let session_telemetry = new_thread.thread.session_telemetry();
+        if let Some(existing_thread_lookup_duration) = existing_thread_lookup_duration {
+            session_telemetry.record_startup_phase(
+                THREAD_INITIALIZATION_EXISTING_THREAD_LOOKUP_PHASE,
+                existing_thread_lookup_duration,
+                Some("cold"),
+            );
+        }
+        session_telemetry.record_startup_phase(
+            "thread_initialization_thread_preparation",
+            thread_preparation_duration,
+            Some("ready"),
+        );
+        session_telemetry.record_startup_phase(
+            "thread_initialization_thread_registration",
+            registration_duration,
+            Some("ready"),
+        );
+        session_telemetry.record_startup_phase(
+            THREAD_INITIALIZATION_THREAD_SPAWN_PHASE,
+            thread_spawn_duration,
+            Some("ready"),
+        );
+        Ok(new_thread)
     }
 
     async fn finalize_thread_spawn(
@@ -1436,7 +1404,7 @@ impl ThreadManagerState {
         codex: Codex,
         thread_id: ThreadId,
         session_source: SessionSource,
-    ) -> CodexResult<RegisteredThread> {
+    ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
             Event {
@@ -1458,7 +1426,7 @@ impl ThreadManagerState {
                     session_source,
                 ));
                 e.insert(thread.clone());
-                return Ok(RegisteredThread {
+                return Ok(NewThread {
                     thread_id,
                     thread,
                     session_configured,

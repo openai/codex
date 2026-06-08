@@ -2,15 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::CompletedCoreThreadInitialization;
-use codex_analytics::CompletedThreadInitialization;
-use codex_analytics::ThreadInitializationProfile;
-use codex_analytics::ThreadInitializationResponseFact;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
@@ -50,14 +45,13 @@ pub(crate) struct ConnectionRequestId {
     pub(crate) request_id: RequestId,
 }
 
-/// Request-scoped state kept until the final response or error is sent.
+/// Trace data we keep for an incoming request until we send its final
+/// response or error.
 #[derive(Clone)]
 pub(crate) struct RequestContext {
     request_id: ConnectionRequestId,
     span: Span,
     parent_trace: Option<W3cTraceContext>,
-    request_started_at: Instant,
-    thread_initialization: Option<CompletedCoreThreadInitialization>,
 }
 
 impl RequestContext {
@@ -70,8 +64,6 @@ impl RequestContext {
             request_id,
             span,
             parent_trace,
-            request_started_at: Instant::now(),
-            thread_initialization: None,
         }
     }
 
@@ -83,64 +75,9 @@ impl RequestContext {
         self.span.clone()
     }
 
-    fn record_thread_initialization(&mut self, initialization: CompletedCoreThreadInitialization) {
-        let Some(current) = self.thread_initialization.as_mut() else {
-            self.thread_initialization = Some(initialization);
-            return;
-        };
-        if current.initialization_mode != initialization.initialization_mode {
-            warn!("ignored mismatched thread initialization timing segment");
-            return;
-        }
-        merge_core_thread_initialization_profiles(&mut current.profile, initialization.profile);
-    }
-
-    fn complete_thread_initialization(&self) -> Option<CompletedThreadInitialization> {
-        let initialization = self.thread_initialization?;
-        let mut profile = initialization.profile;
-        profile.duration_ms =
-            u64::try_from(self.request_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-        profile.app_server_duration_ms =
-            profile.duration_ms.saturating_sub(profile.core_duration_ms);
-        Some(CompletedThreadInitialization {
-            initialization_mode: initialization.initialization_mode,
-            profile,
-        })
-    }
-
     fn record_turn_id(&self, turn_id: &str) {
         self.span.record("turn.id", turn_id);
     }
-}
-
-fn merge_core_thread_initialization_profiles(
-    profile: &mut ThreadInitializationProfile,
-    segment: ThreadInitializationProfile,
-) {
-    profile.core_duration_ms = profile
-        .core_duration_ms
-        .saturating_add(segment.core_duration_ms);
-    profile.existing_thread_lookup_ms = profile
-        .existing_thread_lookup_ms
-        .saturating_add(segment.existing_thread_lookup_ms);
-    profile.configuration_resolution_ms = profile
-        .configuration_resolution_ms
-        .saturating_add(segment.configuration_resolution_ms);
-    profile.session_dependency_loading_ms = profile
-        .session_dependency_loading_ms
-        .saturating_add(segment.session_dependency_loading_ms);
-    profile.session_construction_ms = profile
-        .session_construction_ms
-        .saturating_add(segment.session_construction_ms);
-    profile.mcp_startup_ms = profile
-        .mcp_startup_ms
-        .saturating_add(segment.mcp_startup_ms);
-    profile.session_activation_ms = profile
-        .session_activation_ms
-        .saturating_add(segment.session_activation_ms);
-    profile.thread_registration_ms = profile
-        .thread_registration_ms
-        .saturating_add(segment.thread_registration_ms);
 }
 
 #[derive(Debug)]
@@ -316,17 +253,6 @@ impl OutgoingMessageSender {
         let request_contexts = self.request_contexts.lock().await;
         if let Some(request_context) = request_contexts.get(request_id) {
             request_context.record_turn_id(turn_id);
-        }
-    }
-
-    pub(crate) async fn record_thread_initialization(
-        &self,
-        request_id: &ConnectionRequestId,
-        initialization: CompletedCoreThreadInitialization,
-    ) {
-        let mut request_contexts = self.request_contexts.lock().await;
-        if let Some(request_context) = request_contexts.get_mut(request_id) {
-            request_context.record_thread_initialization(initialization);
         }
     }
 
@@ -588,33 +514,19 @@ impl OutgoingMessageSender {
     ) {
         let connection_id = request_id.connection_id;
         let request_id_for_analytics = request_id.request_id.clone();
-        let request_context = self.take_request_context(&request_id).await;
         let serialized_response = response
             .into_jsonrpc_parts_and_payload(request_id.request_id.clone())
             .map(|(id, result, response)| {
                 if let Some(response) = response {
-                    if let Some(initialization) = request_context
-                        .as_ref()
-                        .and_then(RequestContext::complete_thread_initialization)
-                    {
-                        self.analytics_events_client
-                            .track_thread_initialization_response(
-                                ThreadInitializationResponseFact {
-                                    connection_id: connection_id.0,
-                                    response,
-                                    initialization,
-                                },
-                            );
-                    } else {
-                        self.analytics_events_client.track_response(
-                            connection_id.0,
-                            request_id_for_analytics,
-                            response,
-                        );
-                    }
+                    self.analytics_events_client.track_response(
+                        connection_id.0,
+                        request_id_for_analytics,
+                        response,
+                    );
                 }
                 (id, result)
             });
+        let request_context = self.take_request_context(&request_id).await;
 
         match serialized_response {
             Ok((id, result)) => {
@@ -784,7 +696,6 @@ fn now_unix_timestamp_ms() -> u64 {
 mod tests {
     use std::time::Duration;
 
-    use codex_analytics::ThreadInitializationMode;
     use codex_app_server_protocol::AccountLoginCompletedNotification;
     use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
     use codex_app_server_protocol::AccountUpdatedNotification;
@@ -813,59 +724,6 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-
-    #[test]
-    fn request_context_combines_core_initialization_segments() {
-        let mut request_context = RequestContext {
-            request_id: ConnectionRequestId {
-                connection_id: ConnectionId(42),
-                request_id: RequestId::Integer(7),
-            },
-            span: tracing::info_span!("app_server.request", rpc.method = "thread/resume"),
-            parent_trace: None,
-            request_started_at: Instant::now(),
-            thread_initialization: None,
-        };
-        request_context.record_thread_initialization(CompletedCoreThreadInitialization {
-            initialization_mode: ThreadInitializationMode::Resumed,
-            profile: ThreadInitializationProfile {
-                core_duration_ms: 17,
-                existing_thread_lookup_ms: 17,
-                ..Default::default()
-            },
-        });
-        request_context.record_thread_initialization(CompletedCoreThreadInitialization {
-            initialization_mode: ThreadInitializationMode::Resumed,
-            profile: ThreadInitializationProfile {
-                core_duration_ms: 213,
-                configuration_resolution_ms: 13,
-                session_dependency_loading_ms: 20,
-                session_construction_ms: 30,
-                mcp_startup_ms: 40,
-                session_activation_ms: 50,
-                thread_registration_ms: 60,
-                ..Default::default()
-            },
-        });
-
-        assert_eq!(
-            request_context.thread_initialization,
-            Some(CompletedCoreThreadInitialization {
-                initialization_mode: ThreadInitializationMode::Resumed,
-                profile: ThreadInitializationProfile {
-                    core_duration_ms: 230,
-                    existing_thread_lookup_ms: 17,
-                    configuration_resolution_ms: 13,
-                    session_dependency_loading_ms: 20,
-                    session_construction_ms: 30,
-                    mcp_startup_ms: 40,
-                    session_activation_ms: 50,
-                    thread_registration_ms: 60,
-                    ..Default::default()
-                },
-            })
-        );
-    }
 
     #[test]
     fn verify_server_notification_serialization() {

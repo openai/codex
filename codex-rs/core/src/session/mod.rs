@@ -6,6 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -303,7 +304,6 @@ use crate::stream_events_utils::HandleOutputCtx;
 #[cfg(test)]
 use crate::stream_events_utils::handle_output_item_done;
 use crate::tasks::ReviewTask;
-use crate::thread_initialization_timing::ThreadInitializationTiming;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;
@@ -388,7 +388,6 @@ pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub thread_id: ThreadId,
-    pub(crate) thread_initialization_timing: ThreadInitializationTiming,
 }
 
 pub(crate) struct CodexSpawnArgs {
@@ -423,7 +422,6 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
-    pub(crate) thread_initialization_timing: ThreadInitializationTiming,
 }
 
 pub(crate) fn resolve_multi_agent_version(
@@ -476,6 +474,7 @@ impl Codex {
     }
 
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
+        let configuration_resolution_started_at = Instant::now();
         let CodexSpawnArgs {
             mut config,
             installation_id,
@@ -504,7 +503,6 @@ impl Codex {
             thread_store,
             attestation_provider,
             inherited_multi_agent_version,
-            mut thread_initialization_timing,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -627,6 +625,7 @@ impl Codex {
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let configuration_resolution_duration = configuration_resolution_started_at.elapsed();
 
         let session = Box::pin(Session::new(
             session_configuration,
@@ -650,7 +649,6 @@ impl Codex {
             parent_rollout_thread_trace,
             attestation_provider,
             multi_agent_version,
-            &mut thread_initialization_timing,
         ))
         .await
         .map_err(|e| {
@@ -658,6 +656,11 @@ impl Codex {
             map_session_init_error(&e, &config.codex_home)
         })?;
         let thread_id = session.thread_id;
+        session.services.session_telemetry.record_startup_phase(
+            "thread_initialization_configuration_resolution",
+            configuration_resolution_duration,
+            Some("ready"),
+        );
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
@@ -674,11 +677,7 @@ impl Codex {
             session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
         };
 
-        Ok(CodexSpawnOk {
-            codex,
-            thread_id,
-            thread_initialization_timing,
-        })
+        Ok(CodexSpawnOk { codex, thread_id })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.

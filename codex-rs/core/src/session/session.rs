@@ -4,7 +4,6 @@ use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
-use crate::thread_initialization_timing::ThreadInitializationTiming;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
@@ -14,6 +13,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use std::sync::OnceLock;
+use std::time::Instant;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -491,7 +491,6 @@ impl Session {
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
-        thread_initialization_timing: &mut ThreadInitializationTiming,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -531,7 +530,7 @@ impl Session {
         // - initialize thread persistence with new or resumed session info
         // - perform default shell discovery
         // - load history metadata (skipped for subagents)
-        thread_initialization_timing.session_dependency_loading_started();
+        let dependency_loading_started_at = Instant::now();
         let thread_persistence_fut = async {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>(None)
@@ -656,7 +655,8 @@ impl Session {
             auth_and_mcp_fut,
             plugin_and_skill_warmup_fut
         );
-        thread_initialization_timing.session_construction_started();
+        let dependency_loading_duration = dependency_loading_started_at.elapsed();
+        let session_construction_started_at = Instant::now();
 
         for err in &plugin_skill_errors {
             error!(
@@ -1111,7 +1111,8 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            thread_initialization_timing.mcp_startup_started();
+            let session_construction_duration = session_construction_started_at.elapsed();
+            let mcp_startup_started_at = Instant::now();
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
                 .filter(|(_, server)| server.enabled() && server.required())
@@ -1218,7 +1219,9 @@ impl Session {
                     anyhow::bail!("required MCP servers failed to initialize: {details}");
                 }
             }
-            thread_initialization_timing.session_activation_started();
+            let mcp_startup_duration = mcp_startup_started_at.elapsed();
+
+            let session_activation_started_at = Instant::now();
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {
@@ -1235,6 +1238,28 @@ impl Session {
                 let mut state = sess.state.lock().await;
                 state.queue_pending_session_start_source(session_start_source);
             }
+            let session_activation_duration = session_activation_started_at.elapsed();
+            for (phase, duration) in [
+                (
+                    "thread_initialization_session_dependency_loading",
+                    dependency_loading_duration,
+                ),
+                (
+                    "thread_initialization_session_construction",
+                    session_construction_duration,
+                ),
+                ("thread_initialization_mcp_startup", mcp_startup_duration),
+                (
+                    "thread_initialization_session_activation",
+                    session_activation_duration,
+                ),
+            ] {
+                sess.services.session_telemetry.record_startup_phase(
+                    phase,
+                    duration,
+                    Some("ready"),
+                );
+            }
 
             Ok(sess)
         }
@@ -1242,7 +1267,6 @@ impl Session {
         match session_result {
             Ok(sess) => {
                 live_thread_init.commit();
-                thread_initialization_timing.thread_registration_started();
                 Ok(sess)
             }
             Err(err) => {

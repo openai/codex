@@ -17,7 +17,6 @@ use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
-use crate::facts::ThreadInitializationResponseFact;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfileFact;
@@ -334,10 +333,6 @@ impl AnalyticsEventsClient {
             request_id,
             response: Box::new(response),
         });
-    }
-
-    pub fn track_thread_initialization_response(&self, fact: ThreadInitializationResponseFact) {
-        self.record_fact(AnalyticsFact::ThreadInitializationResponse(Box::new(fact)));
     }
 
     pub fn track_error_response(

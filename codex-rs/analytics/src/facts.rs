@@ -27,7 +27,6 @@ use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
-use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -90,46 +89,12 @@ pub struct TurnResolvedConfigFact {
     pub is_first_turn: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadInitializationMode {
     New,
-    Cleared,
     Forked,
     Resumed,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
-pub struct ThreadInitializationProfile {
-    pub duration_ms: u64,
-    pub app_server_duration_ms: u64,
-    pub core_duration_ms: u64,
-    pub existing_thread_lookup_ms: u64,
-    pub configuration_resolution_ms: u64,
-    pub session_dependency_loading_ms: u64,
-    pub session_construction_ms: u64,
-    pub mcp_startup_ms: u64,
-    pub session_activation_ms: u64,
-    pub thread_registration_ms: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CompletedCoreThreadInitialization {
-    pub initialization_mode: ThreadInitializationMode,
-    pub profile: ThreadInitializationProfile,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CompletedThreadInitialization {
-    pub initialization_mode: ThreadInitializationMode,
-    pub profile: ThreadInitializationProfile,
-}
-
-#[derive(Clone)]
-pub struct ThreadInitializationResponseFact {
-    pub connection_id: u64,
-    pub response: ClientResponsePayload,
-    pub initialization: CompletedThreadInitialization,
 }
 
 #[derive(Clone)]
@@ -493,7 +458,6 @@ pub(crate) enum AnalyticsFact {
         request_id: RequestId,
         response: Box<ClientResponsePayload>,
     },
-    ThreadInitializationResponse(Box<ThreadInitializationResponseFact>),
     ErrorResponse {
         connection_id: u64,
         request_id: RequestId,

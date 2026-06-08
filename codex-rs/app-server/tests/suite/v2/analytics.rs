@@ -2,7 +2,6 @@ use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::write_chatgpt_auth;
-use codex_analytics::ThreadInitializationProfile;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::OtelHttpProtocol;
@@ -207,73 +206,4 @@ pub(crate) fn assert_basic_thread_initialized_event(
         initialization_mode
     );
     assert!(event["event_params"]["created_at"].as_u64().is_some());
-    assert_thread_initialization_profile(event);
-}
-
-pub(crate) fn assert_thread_initialization_profile(event: &Value) {
-    let profile = thread_initialization_profile(event);
-    assert_eq!(
-        (profile.duration_ms, profile.core_duration_ms),
-        (
-            profile
-                .app_server_duration_ms
-                .saturating_add(profile.core_duration_ms),
-            profile
-                .existing_thread_lookup_ms
-                .saturating_add(profile.configuration_resolution_ms)
-                .saturating_add(profile.session_dependency_loading_ms)
-                .saturating_add(profile.session_construction_ms)
-                .saturating_add(profile.mcp_startup_ms)
-                .saturating_add(profile.session_activation_ms)
-                .saturating_add(profile.thread_registration_ms),
-        )
-    );
-}
-
-pub(crate) fn assert_loaded_resume_thread_initialization_profile(event: &Value) {
-    let profile = thread_initialization_profile(event);
-    assert_eq!(
-        profile,
-        ThreadInitializationProfile {
-            duration_ms: profile.duration_ms,
-            app_server_duration_ms: profile.app_server_duration_ms,
-            core_duration_ms: profile.existing_thread_lookup_ms,
-            existing_thread_lookup_ms: profile.existing_thread_lookup_ms,
-            ..Default::default()
-        }
-    );
-}
-
-fn thread_initialization_profile(event: &Value) -> ThreadInitializationProfile {
-    serde_json::from_value(event["event_params"].clone())
-        .expect("thread initialization event should include the complete profile")
-}
-
-pub(crate) async fn wait_for_thread_initialized_events(
-    server: &MockServer,
-    read_timeout: Duration,
-    expected_count: usize,
-) -> Result<Vec<Value>> {
-    timeout(read_timeout, async {
-        loop {
-            let events = server
-                .received_requests()
-                .await
-                .unwrap_or_default()
-                .iter()
-                .filter(|request| {
-                    request.method == "POST"
-                        && request.url.path() == "/codex/analytics-events/events"
-                })
-                .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
-                .flat_map(|payload| payload["events"].as_array().cloned().unwrap_or_default())
-                .filter(|event| event["event_type"] == "codex_thread_initialized")
-                .collect::<Vec<_>>();
-            if events.len() >= expected_count {
-                return Ok::<Vec<Value>, anyhow::Error>(events);
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await?
 }

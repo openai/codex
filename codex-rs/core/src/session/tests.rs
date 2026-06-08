@@ -4648,7 +4648,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
-    let mut thread_initialization_timing = ThreadInitializationTiming::begin(&InitialHistory::New);
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
@@ -4674,7 +4673,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         Some(config.multi_agent_version_from_features()),
-        &mut thread_initialization_timing,
     )
     .await;
 
@@ -4997,7 +4995,6 @@ async fn make_session_with_config_and_rx(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
-    let mut thread_initialization_timing = ThreadInitializationTiming::begin(&InitialHistory::New);
 
     let session = Session::new(
         session_configuration,
@@ -5024,7 +5021,6 @@ async fn make_session_with_config_and_rx(
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         Some(config.multi_agent_version_from_features()),
-        &mut thread_initialization_timing,
     )
     .await?;
 
@@ -5104,7 +5100,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
-    let mut thread_initialization_timing = ThreadInitializationTiming::begin(&initial_history);
 
     let session = Session::new(
         session_configuration,
@@ -5138,7 +5133,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         Some(config.multi_agent_version_from_features()),
-        &mut thread_initialization_timing,
     )
     .await?;
 
