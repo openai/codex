@@ -203,10 +203,22 @@ print(json.dumps(outputs[name]))
     })
     .await
     .expect("async control hooks complete");
-    let delivered = queue
-        .pending_batch()
-        .expect("informational async outputs")
-        .into_text();
+    let delivered = timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(batch) = queue.pending_batch() {
+                let delivered = batch.into_text();
+                if ["pre block context", "pre rewrite context", "post context"]
+                    .iter()
+                    .all(|context| delivered.contains(context))
+                {
+                    break delivered;
+                }
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("informational async outputs");
     assert!(delivered.contains("pre block context"));
     assert!(delivered.contains("pre rewrite context"));
     assert!(delivered.contains("post context"));
