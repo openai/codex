@@ -1364,16 +1364,7 @@ impl ThreadManagerState {
             inherited_multi_agent_version: multi_agent_version,
         }))
         .await?;
-        let registration_started_at = Instant::now();
-        let new_thread = self
-            .finalize_thread_spawn(codex, thread_id, tracked_session_source)
-            .await?;
-        if is_resumed_thread {
-            new_thread.thread.emit_thread_resume_lifecycle().await;
-        }
-        let registration_duration = registration_started_at.elapsed();
-        let thread_spawn_duration = thread_spawn_started_at.elapsed();
-        let session_telemetry = new_thread.thread.session_telemetry();
+        let session_telemetry = codex.session.services.session_telemetry.clone();
         if let Some(existing_thread_lookup_duration) = existing_thread_lookup_duration {
             session_telemetry.record_startup_phase(
                 THREAD_INITIALIZATION_EXISTING_THREAD_LOOKUP_PHASE,
@@ -1386,6 +1377,16 @@ impl ThreadManagerState {
             thread_preparation_duration,
             Some("ready"),
         );
+
+        let registration_started_at = Instant::now();
+        let new_thread = self
+            .finalize_thread_spawn(codex, thread_id, tracked_session_source)
+            .await?;
+        if is_resumed_thread {
+            new_thread.thread.emit_thread_resume_lifecycle().await;
+        }
+        let registration_duration = registration_started_at.elapsed();
+        let thread_spawn_duration = thread_spawn_started_at.elapsed();
         session_telemetry.record_startup_phase(
             "thread_initialization_thread_registration",
             registration_duration,

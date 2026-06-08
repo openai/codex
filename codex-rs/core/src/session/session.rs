@@ -657,7 +657,33 @@ impl Session {
         );
         let dependency_loading_duration = dependency_loading_started_at.elapsed();
         let session_construction_started_at = Instant::now();
-
+        let auth = auth.as_ref();
+        let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
+        let account_id = auth.and_then(CodexAuth::get_account_id);
+        let account_email = auth.and_then(CodexAuth::get_account_email);
+        let originator = originator().value;
+        let terminal_type = user_agent();
+        let session_model = session_configuration.collaboration_mode.model().to_string();
+        let auth_env_telemetry = collect_auth_env_telemetry(
+            &session_configuration.provider,
+            auth_manager.codex_api_key_env_enabled(),
+        );
+        let mut session_telemetry = SessionTelemetry::new(
+            thread_id,
+            session_model.as_str(),
+            session_model.as_str(),
+            account_id.clone(),
+            account_email.clone(),
+            auth_mode,
+            originator.clone(),
+            config.otel.log_user_prompt,
+            terminal_type.clone(),
+            session_configuration.session_source.clone(),
+        )
+        .with_auth_env(auth_env_telemetry.to_otel_metadata());
+        if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
+            session_telemetry = session_telemetry.with_metrics_service_name(service_name);
+        }
         for err in &plugin_skill_errors {
             error!(
                 "failed to load skill {}: {}",
@@ -671,6 +697,11 @@ impl Session {
                 error!("failed to initialize thread persistence: {e:#}");
                 e
             })?);
+        session_telemetry.record_startup_phase(
+            "thread_initialization_session_dependency_loading",
+            dependency_loading_duration,
+            Some("ready"),
+        );
         let session_result: anyhow::Result<Arc<Self>> = async {
             let rollout_path = if let Some(live_thread) = live_thread_init.as_ref() {
                 live_thread.local_rollout_path().await?
@@ -750,33 +781,6 @@ impl Session {
                 });
             }
 
-            let auth = auth.as_ref();
-            let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
-            let account_id = auth.and_then(CodexAuth::get_account_id);
-            let account_email = auth.and_then(CodexAuth::get_account_email);
-            let originator = originator().value;
-            let terminal_type = user_agent();
-            let session_model = session_configuration.collaboration_mode.model().to_string();
-            let auth_env_telemetry = collect_auth_env_telemetry(
-                &session_configuration.provider,
-                auth_manager.codex_api_key_env_enabled(),
-            );
-            let mut session_telemetry = SessionTelemetry::new(
-                thread_id,
-                session_model.as_str(),
-                session_model.as_str(),
-                account_id.clone(),
-                account_email.clone(),
-                auth_mode,
-                originator.clone(),
-                config.otel.log_user_prompt,
-                terminal_type.clone(),
-                session_configuration.session_source.clone(),
-            )
-            .with_auth_env(auth_env_telemetry.to_otel_metadata());
-            if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
-                session_telemetry = session_telemetry.with_metrics_service_name(service_name);
-            }
             let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
                 conversation_id: Some(thread_id.to_string()),
                 app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -1111,7 +1115,11 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            let session_construction_duration = session_construction_started_at.elapsed();
+            sess.services.session_telemetry.record_startup_phase(
+                "thread_initialization_session_construction",
+                session_construction_started_at.elapsed(),
+                Some("ready"),
+            );
             let mcp_startup_started_at = Instant::now();
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
@@ -1219,7 +1227,11 @@ impl Session {
                     anyhow::bail!("required MCP servers failed to initialize: {details}");
                 }
             }
-            let mcp_startup_duration = mcp_startup_started_at.elapsed();
+            sess.services.session_telemetry.record_startup_phase(
+                "thread_initialization_mcp_startup",
+                mcp_startup_started_at.elapsed(),
+                Some("ready"),
+            );
 
             let session_activation_started_at = Instant::now();
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
@@ -1238,28 +1250,11 @@ impl Session {
                 let mut state = sess.state.lock().await;
                 state.queue_pending_session_start_source(session_start_source);
             }
-            let session_activation_duration = session_activation_started_at.elapsed();
-            for (phase, duration) in [
-                (
-                    "thread_initialization_session_dependency_loading",
-                    dependency_loading_duration,
-                ),
-                (
-                    "thread_initialization_session_construction",
-                    session_construction_duration,
-                ),
-                ("thread_initialization_mcp_startup", mcp_startup_duration),
-                (
-                    "thread_initialization_session_activation",
-                    session_activation_duration,
-                ),
-            ] {
-                sess.services.session_telemetry.record_startup_phase(
-                    phase,
-                    duration,
-                    Some("ready"),
-                );
-            }
+            sess.services.session_telemetry.record_startup_phase(
+                "thread_initialization_session_activation",
+                session_activation_started_at.elapsed(),
+                Some("ready"),
+            );
 
             Ok(sess)
         }
