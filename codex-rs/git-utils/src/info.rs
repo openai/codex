@@ -12,8 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::process::Command;
 use tokio::time::Duration as TokioDuration;
-use tokio::time::Instant as TokioInstant;
-use tokio::time::timeout_at;
+use tokio::time::timeout;
 use ts_rs::TS;
 
 use crate::GitSha;
@@ -280,7 +279,10 @@ fn trim_git_suffix(value: &str) -> &str {
 }
 
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
-    let output = run_git_command_with_timeout(&["status", "--porcelain"], cwd).await?;
+    let git = Path::new("git");
+    let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
+    let output =
+        run_git_command_with_timeout_from(git, &["status", "--porcelain"], cwd, fsmonitor).await?;
     if !output.status.success() {
         return None;
     }
@@ -391,86 +393,55 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
-    run_git_command_with_timeout_from(Path::new("git"), args, cwd).await
+    // These callers only inspect repository metadata. Worktree workflows probe
+    // once and pass their override directly to the lower-level runner.
+    run_git_command_with_timeout_from(
+        Path::new("git"),
+        args,
+        cwd,
+        crate::FsmonitorOverride::Disabled,
+    )
+    .await
+}
+
+struct LocalFsmonitorProbeRunner<'a> {
+    git: &'a Path,
+    cwd: &'a Path,
+}
+
+impl crate::FsmonitorProbeRunner for LocalFsmonitorProbeRunner<'_> {
+    async fn run_probe(&mut self, args: &[&str]) -> Option<Vec<u8>> {
+        let mut command = Command::new(self.git);
+        command.args(args).current_dir(self.cwd).kill_on_drop(true);
+        match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
+            Ok(Ok(output)) if output.status.success() => Some(output.stdout),
+            _ => None,
+        }
+    }
+}
+
+async fn detect_local_fsmonitor_override(git: &Path, cwd: &Path) -> crate::FsmonitorOverride {
+    let mut runner = LocalFsmonitorProbeRunner { git, cwd };
+    crate::detect_fsmonitor_override(&mut runner).await
 }
 
 async fn run_git_command_with_timeout_from(
     git: &Path,
     args: &[&str],
     cwd: &Path,
+    fsmonitor: crate::FsmonitorOverride,
 ) -> Option<std::process::Output> {
-    // Only commands that inspect the worktree can recover the cost of probing.
-    // Built-in fsmonitor avoids worktree and untracked-file scans:
-    // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/Documentation/git-fsmonitor--daemon.adoc#L49-L57
-    // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/Documentation/git-update-index.adoc#L545-L550
-    let benefits_from_fsmonitor = matches!(args.first(), Some(&"status"))
-        || matches!(args.first(), Some(&"ls-files"))
-        || (matches!(args.first(), Some(&"diff")) && !args.contains(&"--no-index"));
-    let deadline = TokioInstant::now() + GIT_COMMAND_TIMEOUT;
-    let fsmonitor_configured = benefits_from_fsmonitor && {
-        // Do not cache this decision. Effective Git config is layered, can use
-        // conditional includes, and can change while Codex is running.
-        // https://git-scm.com/docs/git-config#SCOPES
-        // https://git-scm.com/docs/git-config#_conditional_includes
-        let mut probe = Command::new(git);
-        probe
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("LC_ALL", "C")
-            // A typed query formats shadowed values before selecting the
-            // effective one, so validate only the raw final value below.
-            // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L482-L514
-            // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L611-L614
-            .args(["config", "--null", "--get", "core.fsmonitor"])
-            .current_dir(cwd)
-            .kill_on_drop(true);
-        let configured = match timeout_at(deadline, probe.output()).await {
-            Ok(Ok(output)) => Some(output),
-            _ => None,
-        };
-        match configured {
-            None => false,
-            Some(output) => match (output.status.code(), output.stdout.as_slice()) {
-                // `git config --get` returns 1 when the key is absent.
-                // https://git-scm.com/docs/git-config#Documentation/git-config.txt-get
-                (Some(0), value) if crate::is_canonical_fsmonitor_true(value) => true,
-                // Keep false, unset values, helpers, malformed values, and
-                // unreadable configuration disabled.
-                _ => false,
-            },
-        }
-    };
-    let fsmonitor_enabled = fsmonitor_configured && {
-        // Git 2.35.1 and older interpret "true" as a hook pathname. Before
-        // Git 2.26, an empty successful hook response can hide tracked changes.
-        // Require the feature line Git added specifically for capability tests.
-        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/Documentation/config/core.adoc#L90-L99
-        // https://github.com/git/git/commit/dd77cf61a1a2fbf52c94d0cd986d555ad2ba8a4b
-        let mut probe = Command::new(git);
-        probe
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("LC_ALL", "C")
-            .args(["version", "--build-options"])
-            .current_dir(cwd)
-            .kill_on_drop(true);
-        match timeout_at(deadline, probe.output()).await {
-            Ok(Ok(output)) if output.status.success() => {
-                crate::supports_builtin_fsmonitor(&output.stdout)
-            }
-            _ => false,
-        }
-    };
-
     let mut command = Command::new(git);
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         // Keep internal Git commands independent of repository-selected hooks
         // and fsmonitor helpers while preserving built-in fsmonitor acceleration.
         .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
-        .args(["-c", &format!("core.fsmonitor={fsmonitor_enabled}")])
+        .args(["-c", fsmonitor.git_config_arg()])
         .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
-    let result = timeout_at(deadline, command.output()).await;
+    let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
 
     match result {
         Ok(Ok(output)) => Some(output),
@@ -755,9 +726,15 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 }
 
 async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
-    let output =
-        run_git_command_with_timeout(&["diff", "--no-textconv", "--no-ext-diff", &sha.0], cwd)
-            .await?;
+    let git = Path::new("git");
+    let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
+    let output = run_git_command_with_timeout_from(
+        git,
+        &["diff", "--no-textconv", "--no-ext-diff", &sha.0],
+        cwd,
+        fsmonitor,
+    )
+    .await?;
     // 0 is success and no diff.
     // 1 is success but there is a diff.
     let exit_ok = output.status.code().is_some_and(|c| c == 0 || c == 1);
@@ -766,8 +743,13 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     }
     let mut diff = String::from_utf8(output.stdout).ok()?;
 
-    if let Some(untracked_output) =
-        run_git_command_with_timeout(&["ls-files", "--others", "--exclude-standard"], cwd).await
+    if let Some(untracked_output) = run_git_command_with_timeout_from(
+        git,
+        &["ls-files", "--others", "--exclude-standard"],
+        cwd,
+        fsmonitor,
+    )
+    .await
         && untracked_output.status.success()
     {
         let untracked: Vec<String> = String::from_utf8(untracked_output.stdout)
@@ -793,7 +775,7 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
                     null_device,
                     &file_owned,
                 ];
-                run_git_command_with_timeout(&args_vec, cwd).await
+                run_git_command_with_timeout_from(git, &args_vec, cwd, fsmonitor).await
             });
             let results = join_all(futures_iter).await;
             for extra in results.into_iter().flatten() {
@@ -961,23 +943,18 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn write_fake_git(temp_dir: &tempfile::TempDir) -> std::path::PathBuf {
+    #[tokio::test]
+    async fn fsmonitor_override_rejects_configured_helper() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
         let git = temp_dir.path().join("git");
+        let log = temp_dir.path().join("git.log");
         std::fs::write(
             &git,
             "#!/bin/sh\n\
              printf '%s\\n' \"$*\" >>\"$0.log\"\n\
              case \"$1\" in\n\
-             config)\n\
-               cat \"$0.config.stdout\"\n\
-               cat \"$0.config.stderr\" >&2\n\
-               exit \"$(cat \"$0.config.status\")\"\n\
-               ;;\n\
-             version) cat \"$0.build-options\" ;;\n\
-             *)\n\
-               printf 'worktree output\\n'\n\
-               printf 'worktree diagnostics\\n' >&2\n\
-               ;;\n\
+             config) printf '/tmp/fsmonitor-helper\\000' ;;\n\
+             *) printf 'worktree output\\n' ;;\n\
              esac\n",
         )
         .expect("write fake Git");
@@ -987,54 +964,34 @@ mod tests {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&git, permissions).expect("mark fake Git executable");
 
-        git
-    }
+        // The config response mirrors:
+        // git -c core.fsmonitor=/tmp/fsmonitor-helper \
+        //   config --null --get core.fsmonitor
+        let fsmonitor = detect_local_fsmonitor_override(&git, temp_dir.path()).await;
+        let output = run_git_command_with_timeout_from(
+            &git,
+            &["status", "--porcelain"],
+            temp_dir.path(),
+            fsmonitor,
+        )
+        .await
+        .expect("run fake Git");
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn fsmonitor_override_rejects_configured_helper() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let git = write_fake_git(&temp_dir);
-        let config_stdout = temp_dir.path().join("git.config.stdout");
-        let config_stderr = temp_dir.path().join("git.config.stderr");
-        let config_status = temp_dir.path().join("git.config.status");
-        let log = temp_dir.path().join("git.log");
-
-        // Regenerate these reduced fixtures with:
-        //
-        //   git -c core.fsmonitor=/tmp/fsmonitor-helper \
-        //     config --null --get core.fsmonitor \
-        //     >git.config.stdout 2>git.config.stderr
-        //   printf '%s\n' "$?" >git.config.status
-        //
-        std::fs::write(&config_stdout, b"/tmp/fsmonitor-helper\0")
-            .expect("write helper config stdout");
-        std::fs::write(&config_stderr, "").expect("write helper config stderr");
-        std::fs::write(&config_status, "0\n").expect("write helper config status");
-
-        let helper_output =
-            run_git_command_with_timeout_from(&git, &["status", "--porcelain"], temp_dir.path())
-                .await
-                .expect("run fake Git with helper config");
         assert_eq!(
-            (
-                helper_output.status.code(),
-                helper_output.stdout,
-                helper_output.stderr,
-            ),
-            (
-                Some(0),
-                b"worktree output\n".to_vec(),
-                b"worktree diagnostics\n".to_vec(),
-            )
+            (output.status.code(), output.stdout),
+            (Some(0), b"worktree output\n".to_vec())
         );
-
-        let actual = std::fs::read_to_string(log).expect("read fake Git log");
         let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
         assert_eq!(
-            actual.lines().map(str::to_string).collect::<Vec<_>>(),
+            std::fs::read_to_string(log)
+                .expect("read fake Git log")
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
             vec![
                 "config --null --get core.fsmonitor".to_string(),
+                "config --null --type=bool --fixed-value --get core.fsmonitor /tmp/fsmonitor-helper"
+                    .to_string(),
                 format!("-c {disabled_hooks} -c core.fsmonitor=false status --porcelain"),
             ]
         );
@@ -1101,15 +1058,15 @@ mod tests {
             "write local built-in fsmonitor config"
         );
 
-        // A typed query formats every matching value before `--get` selects
-        // the last one, so the shadowed helper would make it fail. Query the
-        // raw effective value and validate that value instead.
-        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L482-L514
-        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L611-L614
-        let output =
-            run_git_command_with_timeout_from(&git, &["status", "--porcelain"], repo.as_path())
-                .await
-                .expect("run Git with layered config");
+        let fsmonitor = detect_local_fsmonitor_override(&git, repo.as_path()).await;
+        let output = run_git_command_with_timeout_from(
+            &git,
+            &["status", "--porcelain"],
+            repo.as_path(),
+            fsmonitor,
+        )
+        .await
+        .expect("run Git with layered config");
         assert_eq!(
             (output.status.code(), output.stdout),
             (Some(0), b"worktree output\n".to_vec())
@@ -1120,86 +1077,6 @@ mod tests {
         assert_eq!(
             actual.lines().map(str::to_string).collect::<Vec<_>>(),
             vec![
-                "config --null --get core.fsmonitor".to_string(),
-                "version --build-options".to_string(),
-                format!("-c {disabled_hooks} -c core.fsmonitor=true status --porcelain"),
-            ]
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn fsmonitor_override_requires_builtin_daemon_support() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let git = write_fake_git(&temp_dir);
-        let config_stdout = temp_dir.path().join("git.config.stdout");
-        let config_stderr = temp_dir.path().join("git.config.stderr");
-        let config_status = temp_dir.path().join("git.config.status");
-        let build_options = temp_dir.path().join("git.build-options");
-        let log = temp_dir.path().join("git.log");
-
-        // Regenerate these reduced fixtures with:
-        //
-        //   git -c core.fsmonitor=true \
-        //     config --null --get core.fsmonitor \
-        //     >git.config.stdout 2>git.config.stderr
-        //   printf '%s\n' "$?" >git.config.status
-        //   /path/to/git-without-fsmonitor-daemon version --build-options |
-        //     sed -n '/^feature: fsmonitor--daemon$/p' >git.build-options
-        //   /path/to/git-with-fsmonitor-daemon version --build-options |
-        //     sed -n '/^feature: fsmonitor--daemon$/p' >git.build-options
-        //
-        // Git added the feature line specifically for capability tests:
-        // https://github.com/git/git/commit/dd77cf61a1a2fbf52c94d0cd986d555ad2ba8a4b
-        std::fs::write(&config_stdout, b"true\0").expect("write true config stdout");
-        std::fs::write(&config_stderr, "").expect("write empty config stderr");
-        std::fs::write(&config_status, "0\n").expect("write successful config status");
-        std::fs::write(&build_options, "").expect("write unsupported build options");
-
-        let unsupported_output =
-            run_git_command_with_timeout_from(&git, &["status", "--porcelain"], temp_dir.path())
-                .await
-                .expect("run unsupported fake Git");
-        assert_eq!(
-            (
-                unsupported_output.status.code(),
-                unsupported_output.stdout,
-                unsupported_output.stderr,
-            ),
-            (
-                Some(0),
-                b"worktree output\n".to_vec(),
-                b"worktree diagnostics\n".to_vec(),
-            )
-        );
-
-        std::fs::write(&build_options, "feature: fsmonitor--daemon\n")
-            .expect("write supported build options");
-        let supported_output =
-            run_git_command_with_timeout_from(&git, &["status", "--porcelain"], temp_dir.path())
-                .await
-                .expect("run supported fake Git");
-        assert_eq!(
-            (
-                supported_output.status.code(),
-                supported_output.stdout,
-                supported_output.stderr,
-            ),
-            (
-                Some(0),
-                b"worktree output\n".to_vec(),
-                b"worktree diagnostics\n".to_vec(),
-            )
-        );
-
-        let actual = std::fs::read_to_string(log).expect("read fake Git log");
-        let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
-        assert_eq!(
-            actual.lines().map(str::to_string).collect::<Vec<_>>(),
-            vec![
-                "config --null --get core.fsmonitor".to_string(),
-                "version --build-options".to_string(),
-                format!("-c {disabled_hooks} -c core.fsmonitor=false status --porcelain"),
                 "config --null --get core.fsmonitor".to_string(),
                 "version --build-options".to_string(),
                 format!("-c {disabled_hooks} -c core.fsmonitor=true status --porcelain"),
