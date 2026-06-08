@@ -12,22 +12,22 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 #[derive(Default)]
-pub(super) struct V2ExecutionSlots {
+pub(super) struct AgentExecutionLimiter {
     active: AtomicUsize,
 }
 
 pub(crate) struct AgentExecutionPermit {
-    slots: Arc<V2ExecutionSlots>,
+    limiter: Arc<AgentExecutionLimiter>,
 }
 
 impl Drop for AgentExecutionPermit {
     fn drop(&mut self) {
-        self.slots.active.fetch_sub(1, Ordering::AcqRel);
+        self.limiter.active.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
 impl AgentControl {
-    pub(super) async fn ensure_v2_execution_capacity_for_op(
+    pub(super) async fn ensure_execution_capacity_for_op(
         &self,
         thread_id: ThreadId,
         op: &Op,
@@ -44,47 +44,28 @@ impl AgentControl {
         let multi_agent_version = thread
             .multi_agent_version()
             .unwrap_or_else(|| config.multi_agent_version_from_features());
-        self.ensure_v2_execution_capacity(
-            config.as_ref(),
-            multi_agent_version,
-            &thread.session_source,
-        )
+        let Some(max_threads) =
+            execution_limit(config.as_ref(), multi_agent_version, &thread.session_source)
+        else {
+            return Ok(());
+        };
+        Arc::clone(&self.agent_execution_limiter)
+            .try_acquire(max_threads)
+            .map(drop)
     }
 
-    pub(crate) fn reserve_v2_execution_slot(
+    pub(crate) fn try_acquire_execution_permit(
         &self,
         config: &Config,
         multi_agent_version: MultiAgentVersion,
         session_source: &SessionSource,
     ) -> CodexResult<Option<AgentExecutionPermit>> {
-        if !uses_v2_execution_slot(multi_agent_version, session_source) {
+        let Some(max_threads) = execution_limit(config, multi_agent_version, session_source) else {
             return Ok(None);
-        }
-        let max_threads = config
-            .effective_agent_max_threads(MultiAgentVersion::V2)
-            .unwrap_or(usize::MAX);
-        Arc::clone(&self.v2_execution_slots)
-            .reserve(max_threads)
+        };
+        Arc::clone(&self.agent_execution_limiter)
+            .try_acquire(max_threads)
             .map(Some)
-    }
-
-    pub(super) fn ensure_v2_execution_capacity(
-        &self,
-        config: &Config,
-        multi_agent_version: MultiAgentVersion,
-        session_source: &SessionSource,
-    ) -> CodexResult<()> {
-        if !uses_v2_execution_slot(multi_agent_version, session_source) {
-            return Ok(());
-        }
-        let max_threads = config
-            .effective_agent_max_threads(MultiAgentVersion::V2)
-            .unwrap_or(usize::MAX);
-        if self.v2_execution_slots.has_capacity(max_threads) {
-            Ok(())
-        } else {
-            Err(CodexErr::AgentLimitReached { max_threads })
-        }
     }
 
     pub(crate) fn maybe_start_v2_pending_work(&self) -> BoxFuture<'_, ()> {
@@ -101,14 +82,13 @@ impl AgentControl {
                 let Ok(thread) = state.get_thread(thread_id).await else {
                     continue;
                 };
-                let multi_agent_version = match thread.multi_agent_version() {
-                    Some(multi_agent_version) => multi_agent_version,
-                    None => {
-                        let config = thread.codex.session.get_config().await;
-                        config.multi_agent_version_from_features()
-                    }
-                };
-                if !uses_v2_execution_slot(multi_agent_version, &thread.session_source) {
+                let config = thread.codex.session.get_config().await;
+                let multi_agent_version = thread
+                    .multi_agent_version()
+                    .unwrap_or_else(|| config.multi_agent_version_from_features());
+                if execution_limit(config.as_ref(), multi_agent_version, &thread.session_source)
+                    .is_none()
+                {
                     continue;
                 }
                 if !thread
@@ -130,8 +110,8 @@ impl AgentControl {
     }
 }
 
-impl V2ExecutionSlots {
-    fn reserve(self: Arc<Self>, max_threads: usize) -> CodexResult<AgentExecutionPermit> {
+impl AgentExecutionLimiter {
+    fn try_acquire(self: Arc<Self>, max_threads: usize) -> CodexResult<AgentExecutionPermit> {
         let mut current = self.active.load(Ordering::Acquire);
         loop {
             if current >= max_threads {
@@ -143,14 +123,10 @@ impl V2ExecutionSlots {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return Ok(AgentExecutionPermit { slots: self }),
+                Ok(_) => return Ok(AgentExecutionPermit { limiter: self }),
                 Err(updated) => current = updated,
             }
         }
-    }
-
-    fn has_capacity(&self, max_threads: usize) -> bool {
-        self.active.load(Ordering::Acquire) < max_threads
     }
 }
 
@@ -159,12 +135,21 @@ fn op_starts_turn(op: &Op) -> bool {
         || matches!(op, Op::InterAgentCommunication { communication } if communication.trigger_turn)
 }
 
-fn uses_v2_execution_slot(
+fn execution_limit(
+    config: &Config,
     multi_agent_version: MultiAgentVersion,
     session_source: &SessionSource,
-) -> bool {
-    multi_agent_version == MultiAgentVersion::V2
-        && matches!(session_source, SessionSource::SubAgent(_))
+) -> Option<usize> {
+    if multi_agent_version != MultiAgentVersion::V2
+        || !matches!(session_source, SessionSource::SubAgent(_))
+    {
+        return None;
+    }
+    Some(
+        config
+            .effective_agent_max_threads(MultiAgentVersion::V2)
+            .unwrap_or(usize::MAX),
+    )
 }
 
 #[cfg(test)]

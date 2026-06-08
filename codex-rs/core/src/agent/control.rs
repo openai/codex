@@ -42,8 +42,8 @@ use std::sync::Weak;
 use tokio::sync::watch;
 use tracing::warn;
 
+use self::execution::AgentExecutionLimiter;
 pub(crate) use self::execution::AgentExecutionPermit;
-use self::execution::V2ExecutionSlots;
 use self::residency::V2Residency;
 
 const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
@@ -98,7 +98,7 @@ pub(crate) struct AgentControl {
     manager: Weak<ThreadManagerState>,
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,
-    v2_execution_slots: Arc<V2ExecutionSlots>,
+    agent_execution_limiter: Arc<AgentExecutionLimiter>,
 }
 
 impl AgentControl {
@@ -132,7 +132,7 @@ impl AgentControl {
             _ => non_empty_task_message(render_input_preview(&initial_operation)),
         };
         let state = self.upgrade()?;
-        self.ensure_v2_execution_capacity_for_op(agent_id, &initial_operation)
+        self.ensure_execution_capacity_for_op(agent_id, &initial_operation)
             .await?;
         let result = self
             .handle_thread_request_result(
@@ -160,8 +160,7 @@ impl AgentControl {
         let last_task_message = last_task_message_from_communication(&communication);
         let state = self.upgrade()?;
         let op = Op::InterAgentCommunication { communication };
-        self.ensure_v2_execution_capacity_for_op(agent_id, &op)
-            .await?;
+        self.ensure_execution_capacity_for_op(agent_id, &op).await?;
         let result = self
             .handle_thread_request_result(agent_id, &state, state.send_op(agent_id, op).await)
             .await;

@@ -7,7 +7,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 
 #[tokio::test]
-async fn v2_execution_slots_count_active_subagent_turns() {
+async fn execution_permits_count_active_v2_subagent_turns() {
     let control = AgentControl::default();
     let mut config = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
@@ -15,10 +15,10 @@ async fn v2_execution_slots_count_active_subagent_turns() {
     let source = SessionSource::SubAgent(SubAgentSource::Other("worker".to_string()));
 
     let first = control
-        .reserve_v2_execution_slot(&config, MultiAgentVersion::V2, &source)
+        .try_acquire_execution_permit(&config, MultiAgentVersion::V2, &source)
         .expect("first active turn should fit")
-        .expect("v2 subagent should reserve a slot");
-    let Err(err) = control.reserve_v2_execution_slot(&config, MultiAgentVersion::V2, &source)
+        .expect("v2 subagent should acquire a permit");
+    let Err(err) = control.try_acquire_execution_permit(&config, MultiAgentVersion::V2, &source)
     else {
         panic!("second active turn should exceed the derived non-root cap");
     };
@@ -29,13 +29,13 @@ async fn v2_execution_slots_count_active_subagent_turns() {
 
     drop(first);
     control
-        .reserve_v2_execution_slot(&config, MultiAgentVersion::V2, &source)
-        .expect("slot should be released when the running task drops")
-        .expect("v2 subagent should reserve a slot");
+        .try_acquire_execution_permit(&config, MultiAgentVersion::V2, &source)
+        .expect("permit should be released when the running task drops")
+        .expect("v2 subagent should acquire a permit");
 }
 
 #[tokio::test]
-async fn v2_execution_slots_ignore_root_and_v1_turns() {
+async fn execution_permits_ignore_root_and_v1_turns() {
     let control = AgentControl::default();
     let mut config = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
@@ -43,13 +43,13 @@ async fn v2_execution_slots_ignore_root_and_v1_turns() {
 
     assert!(
         control
-            .reserve_v2_execution_slot(&config, MultiAgentVersion::V2, &SessionSource::Cli)
+            .try_acquire_execution_permit(&config, MultiAgentVersion::V2, &SessionSource::Cli)
             .expect("root should not count")
             .is_none()
     );
     assert!(
         control
-            .reserve_v2_execution_slot(
+            .try_acquire_execution_permit(
                 &config,
                 MultiAgentVersion::V1,
                 &SessionSource::SubAgent(SubAgentSource::Other("worker".to_string())),

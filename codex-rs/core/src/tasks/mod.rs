@@ -334,7 +334,7 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) -> CodexResult<()> {
-        let agent_execution_permit = self.services.agent_control.reserve_v2_execution_slot(
+        let agent_execution_permit = self.services.agent_control.try_acquire_execution_permit(
             turn_context.config.as_ref(),
             turn_context.multi_agent_version,
             &turn_context.session_source,
@@ -504,26 +504,13 @@ impl Session {
         if let Err(err) = self
             .start_task(Arc::clone(&turn_context), Vec::new(), RegularTask::new())
             .await
+            && self.clear_reserved_idle_turn(&turn_state).await
         {
-            let cleared_active_turn = {
-                let mut active = self.active_turn.lock().await;
-                if let Some(active_turn) = active.as_ref()
-                    && active_turn.task.is_none()
-                    && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
-                {
-                    *active = None;
-                    true
-                } else {
-                    false
-                }
-            };
-            if cleared_active_turn {
-                self.send_event(
-                    turn_context.as_ref(),
-                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
-                )
-                .await;
-            }
+            self.send_event(
+                turn_context.as_ref(),
+                EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+            )
+            .await;
         }
     }
 
