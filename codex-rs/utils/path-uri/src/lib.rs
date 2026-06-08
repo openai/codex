@@ -270,8 +270,11 @@ fn decode_uri_path(path: &str) -> String {
 
 /// Rejects URI metadata that has no defined meaning for `file:` URIs.
 fn validate_common_known_uri(url: &Url) -> Result<(), PathUriParseError> {
-    if !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
-        return Err(PathUriParseError::CredentialsOrPortNotAllowed);
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(PathUriParseError::CredentialsNotAllowed);
+    }
+    if url.port().is_some() {
+        return Err(PathUriParseError::PortNotAllowed);
     }
     if url.query().is_some() {
         return Err(PathUriParseError::QueryNotAllowed);
@@ -301,8 +304,10 @@ pub enum PathUriParseError {
     UnsupportedScheme(String),
     #[error("file URI contains an invalid absolute path")]
     InvalidFileUriPath,
-    #[error("credentials and ports are not allowed in path URIs")]
-    CredentialsOrPortNotAllowed,
+    #[error("credentials are not allowed in path URIs")]
+    CredentialsNotAllowed,
+    #[error("ports are not allowed in path URIs")]
+    PortNotAllowed,
     #[error("query parameters are not allowed in path URIs")]
     QueryNotAllowed,
     #[error("fragments are not allowed in path URIs")]
