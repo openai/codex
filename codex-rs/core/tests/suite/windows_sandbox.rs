@@ -1,4 +1,6 @@
 use anyhow::Context;
+use codex_config::CONFIG_TOML_FILE;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
@@ -13,13 +15,27 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::PathExt;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
+use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use serial_test::serial;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 struct EnvVarGuard {
@@ -317,6 +333,137 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
     assert!(
         sandbox_setup_is_complete(codex_home.path()),
         "setup should remain ready after the tamper attempt"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(codex_home)]
+async fn windows_elevated_enforces_managed_deny_read_for_shell_subprocess() -> anyhow::Result<()> {
+    stage_windows_sandbox_helpers()?;
+    let codex_home = Arc::new(TempDir::new()?);
+    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[windows]
+sandbox = "elevated"
+"#,
+    )?;
+
+    let protected_dir = TempDir::new()?;
+    let denied_path = protected_dir.path().join("secret.env");
+    let allowed_path = protected_dir.path().join("public.txt");
+    std::fs::write(&denied_path, "managed secret\n")?;
+    std::fs::write(&allowed_path, "public ok\n")?;
+    let denied_path = dunce::canonicalize(denied_path)?.abs();
+    let allowed_path = dunce::canonicalize(allowed_path)?.abs();
+    let denied_path_toml = toml::Value::String(denied_path.to_string_lossy().into()).to_string();
+    let requirements = format!(
+        r#"[permissions.filesystem]
+deny_read = [{denied_path_toml}]
+
+[windows]
+allowed_sandbox_implementations = ["elevated"]
+"#
+    );
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+        )
+        .with_windows_cmd_shell()
+        .with_config(|config| {
+            config.permissions.windows_sandbox_private_desktop = false;
+        });
+    let fixture = builder.build(&server).await?;
+
+    assert_eq!(
+        fixture.config.permissions.windows_sandbox_mode,
+        Some(codex_config::types::WindowsSandboxModeToml::Elevated)
+    );
+    assert!(
+        fixture
+            .session_configured
+            .permission_profile
+            .file_system_sandbox_policy()
+            .entries
+            .iter()
+            .any(|entry| {
+                entry.access == FileSystemAccessMode::Deny
+                    && matches!(
+                        &entry.path,
+                        FileSystemPath::Path { path } if path == &denied_path
+                    )
+            }),
+        "managed deny-read path should reach the configured session"
+    );
+
+    let call_id = "managed-deny-read";
+    let command = format!(
+        "(type \"{}\" 1>NUL 2>NUL && echo SECRET-READ || echo SECRET-DENIED) & type \"{}\"",
+        denied_path.display(),
+        allowed_path.display()
+    );
+    let args = json!({
+        "command": command,
+        "login": false,
+        "timeout_ms": 10_000,
+    });
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    fixture
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "read the fixture files".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&fixture.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output = request_log
+        .function_call_output_text(call_id)
+        .context("shell output present")?;
+    assert!(
+        output.contains("SECRET-DENIED"),
+        "managed deny-read should block the subprocess read: {output}"
+    );
+    assert!(
+        !output.contains("SECRET-READ"),
+        "managed deny-read must not allow the subprocess read: {output}"
+    );
+    assert!(
+        output.contains("public ok"),
+        "allowed reads should still work: {output}"
+    );
+    assert!(
+        !output.contains("managed secret"),
+        "denied file contents leaked into shell output: {output}"
     );
     Ok(())
 }
