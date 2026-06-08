@@ -104,6 +104,10 @@ struct AgentControlHarness {
 impl AgentControlHarness {
     async fn new() -> Self {
         let (home, config) = test_config().await;
+        Self::new_with_config(home, config).await
+    }
+
+    async fn new_with_config(home: TempDir, config: Config) -> Self {
         let state_db = init_state_db(&config).await;
         let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
             CodexAuth::from_api_key("dummy"),
@@ -247,6 +251,14 @@ async fn wait_for_live_thread_spawn_children(
     })
     .await
     .expect("expected persisted child tree");
+}
+
+async fn assert_thread_not_loaded(manager: &ThreadManager, thread_id: ThreadId) {
+    match manager.get_thread(thread_id).await {
+        Err(CodexErr::ThreadNotFound(id)) => assert_eq!(id, thread_id),
+        Err(err) => panic!("expected ThreadNotFound, got {err:?}"),
+        Ok(_) => panic!("expected thread not to be loaded"),
+    }
 }
 
 #[tokio::test]
@@ -532,22 +544,7 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     let (home, mut config) = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     let _ = config.features.enable(Feature::Sqlite);
-    let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        state_db.clone(),
-    );
-    let control = manager.agent_control();
-    let harness = AgentControlHarness {
-        _home: home,
-        config,
-        state_db,
-        manager,
-        control,
-    };
+    let harness = AgentControlHarness::new_with_config(home, config).await;
     let (parent_thread_id, _parent_thread) = harness.start_thread().await;
     let agent_path = AgentPath::try_from("/root/worker").expect("agent path");
     let spawned_agent = harness
@@ -632,6 +629,130 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         .into_iter()
         .find(|entry| *entry == expected);
     assert_eq!(captured, Some(expected));
+}
+
+#[tokio::test]
+async fn resume_agent_from_rollout_registers_v2_descendants_without_reopening_them() {
+    let (home, mut config) = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let _ = config.features.enable(Feature::Sqlite);
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let worker_path = AgentPath::root().join("worker").expect("worker path");
+    let worker_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello worker"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(worker_path.clone()),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let reviewer_path = worker_path.join("reviewer").expect("reviewer path");
+    let reviewer_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello reviewer"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker_thread_id,
+                depth: 2,
+                agent_path: Some(reviewer_path.clone()),
+                agent_nickname: None,
+                agent_role: Some("reviewer".to_string()),
+            })),
+        )
+        .await
+        .expect("reviewer spawn should succeed");
+
+    let worker_thread = harness
+        .manager
+        .get_thread(worker_thread_id)
+        .await
+        .expect("worker thread should exist");
+    let reviewer_thread = harness
+        .manager
+        .get_thread(reviewer_thread_id)
+        .await
+        .expect("reviewer thread should exist");
+    persist_thread_for_tree_resume(&parent_thread, "parent persisted").await;
+    persist_thread_for_tree_resume(&worker_thread, "worker persisted").await;
+    persist_thread_for_tree_resume(&reviewer_thread, "reviewer persisted").await;
+    wait_for_live_thread_spawn_children(&harness.control, parent_thread_id, &[worker_thread_id])
+        .await;
+    wait_for_live_thread_spawn_children(&harness.control, worker_thread_id, &[reviewer_thread_id])
+        .await;
+
+    let report = harness
+        .manager
+        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .await;
+    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
+    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
+
+    let resumed_manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        harness.config.model_provider.clone(),
+        harness.config.codex_home.to_path_buf(),
+        std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        harness.state_db.clone(),
+    );
+    let resumed_control = resumed_manager.agent_control();
+    let resumed_parent_thread_id = resumed_control
+        .resume_agent_from_rollout(
+            harness.config.clone(),
+            parent_thread_id,
+            SessionSource::Exec,
+        )
+        .await
+        .expect("v2 root resume should succeed");
+    assert_eq!(resumed_parent_thread_id, parent_thread_id);
+    assert_ne!(
+        resumed_control.get_status(parent_thread_id).await,
+        AgentStatus::NotFound
+    );
+    assert_thread_not_loaded(&resumed_manager, worker_thread_id).await;
+    assert_thread_not_loaded(&resumed_manager, reviewer_thread_id).await;
+
+    assert_eq!(
+        resumed_control
+            .resolve_agent_reference(parent_thread_id, &SessionSource::Exec, "worker")
+            .await
+            .expect("worker path should resolve after resume"),
+        worker_thread_id
+    );
+    assert_eq!(
+        resumed_control
+            .resolve_agent_reference(parent_thread_id, &SessionSource::Exec, "worker/reviewer")
+            .await
+            .expect("reviewer path should resolve after resume"),
+        reviewer_thread_id
+    );
+
+    resumed_control
+        .ensure_v2_agent_loaded(harness.config.clone(), worker_thread_id)
+        .await
+        .expect("restored worker should lazy reload");
+    let _ = resumed_manager
+        .get_thread(worker_thread_id)
+        .await
+        .expect("worker thread should be loaded on demand");
+    assert_thread_not_loaded(&resumed_manager, reviewer_thread_id).await;
+
+    resumed_control
+        .ensure_v2_agent_loaded(harness.config.clone(), reviewer_thread_id)
+        .await
+        .expect("restored reviewer should lazy reload");
+    let _ = resumed_manager
+        .get_thread(reviewer_thread_id)
+        .await
+        .expect("reviewer thread should be loaded on demand");
 }
 
 #[tokio::test]

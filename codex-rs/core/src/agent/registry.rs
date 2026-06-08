@@ -118,6 +118,43 @@ impl AgentRegistry {
         }
     }
 
+    pub(crate) fn register_restored_thread(&self, agent_metadata: AgentMetadata) {
+        let Some(thread_id) = agent_metadata.agent_id else {
+            return;
+        };
+        let counts_agent = !agent_metadata
+            .agent_path
+            .as_ref()
+            .is_some_and(AgentPath::is_root);
+        let key = agent_metadata
+            .agent_path
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("thread:{thread_id}"));
+        let inserted_counted_agent = {
+            let mut active_agents = self
+                .active_agents
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let previous_counted_agent =
+                active_agents
+                    .agent_tree
+                    .get(key.as_str())
+                    .is_some_and(|metadata| {
+                        metadata.agent_id.is_some()
+                            && !metadata.agent_path.as_ref().is_some_and(AgentPath::is_root)
+                    });
+            if let Some(agent_nickname) = agent_metadata.agent_nickname.clone() {
+                active_agents.used_agent_nicknames.insert(agent_nickname);
+            }
+            active_agents.agent_tree.insert(key, agent_metadata);
+            counts_agent && !previous_counted_agent
+        };
+        if inserted_counted_agent {
+            self.total_count.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
     pub(crate) fn register_root_thread(&self, thread_id: ThreadId) {
         let mut active_agents = self
             .active_agents

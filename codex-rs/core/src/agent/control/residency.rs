@@ -225,7 +225,7 @@ pub(super) fn is_v2_resident_session_source(session_source: &SessionSource) -> b
 async fn is_unloadable(thread: &CodexThread) -> bool {
     matches!(
         thread.agent_status().await,
-        AgentStatus::Completed(_) | AgentStatus::Errored(_)
+        AgentStatus::Completed(_) | AgentStatus::Errored(_) | AgentStatus::Interrupted
     ) && thread.codex.session.active_turn.lock().await.is_none()
         && !thread
             .codex
