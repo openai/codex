@@ -207,6 +207,9 @@ impl AgentControl {
                 &config,
             )
             .await;
+        if let Some(session_source) = session_source.as_ref() {
+            self.ensure_execution_capacity(multi_agent_version, session_source)?;
+        }
         let agent_max_threads = config.effective_agent_max_threads(multi_agent_version);
         let spawn_uses_v2_residency = multi_agent_version == MultiAgentVersion::V2
             && session_source
@@ -349,7 +352,7 @@ impl AgentControl {
         )
         .await;
 
-        self.send_input(new_thread.thread_id, initial_operation)
+        self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_operation)
             .await?;
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
@@ -524,13 +527,16 @@ impl AgentControl {
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
         let root_depth = thread_spawn_depth(&session_source).unwrap_or(0);
-        let resumed_thread_id = Box::pin(self.resume_single_agent_from_rollout(
-            config.clone(),
-            thread_id,
-            session_source,
-        ))
+        let (resumed_thread_id, resumed_multi_agent_version) = Box::pin(
+            self.resume_single_agent_from_rollout(config.clone(), thread_id, session_source),
+        )
         .await?;
         let state = self.upgrade()?;
+        if config.multi_agent_version_from_features() == MultiAgentVersion::V2
+            || resumed_multi_agent_version == MultiAgentVersion::V2
+        {
+            return Ok(resumed_thread_id);
+        }
         let Ok(resumed_thread) = state.get_thread(resumed_thread_id).await else {
             return Ok(resumed_thread_id);
         };
@@ -576,7 +582,7 @@ impl AgentControl {
                     ))
                     .await
                     {
-                        Ok(_) => true,
+                        Ok((_, _)) => true,
                         Err(err) => {
                             warn!("failed to resume descendant thread {child_thread_id}: {err}");
                             false
@@ -597,7 +603,7 @@ impl AgentControl {
         config: Config,
         thread_id: ThreadId,
         session_source: SessionSource,
-    ) -> CodexResult<ThreadId> {
+    ) -> CodexResult<(ThreadId, MultiAgentVersion)> {
         let state = self.upgrade()?;
         let state_db_ctx = state.state_db();
         let stored_thread = state
@@ -702,6 +708,6 @@ impl AgentControl {
         )
         .await;
 
-        Ok(resumed_thread.thread_id)
+        Ok((resumed_thread.thread_id, multi_agent_version))
     }
 }

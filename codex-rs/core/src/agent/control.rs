@@ -42,10 +42,13 @@ use std::sync::Weak;
 use tokio::sync::watch;
 use tracing::warn;
 
+pub(crate) use self::execution::AgentExecutionGuard;
+use self::execution::AgentExecutionLimiter;
 use self::residency::V2Residency;
 
 const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
 
+mod execution;
 mod legacy;
 mod residency;
 mod spawn;
@@ -95,6 +98,7 @@ pub(crate) struct AgentControl {
     manager: Weak<ThreadManagerState>,
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,
+    agent_execution_limiter: Arc<AgentExecutionLimiter>,
 }
 
 impl AgentControl {
@@ -106,8 +110,9 @@ impl AgentControl {
         }
     }
 
-    pub(crate) fn with_session_id(mut self, session_id: SessionId) -> Self {
+    pub(crate) fn with_session_id(mut self, session_id: SessionId, max_threads: usize) -> Self {
         self.session_id = session_id;
+        self.agent_execution_limiter.initialize(max_threads);
         self
     }
 
@@ -121,17 +126,29 @@ impl AgentControl {
         agent_id: ThreadId,
         initial_operation: Op,
     ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        self.ensure_execution_capacity_for_op(agent_id, &initial_operation)
+            .await?;
+        self.send_input_after_capacity_check(agent_id, &state, initial_operation)
+            .await
+    }
+
+    async fn send_input_after_capacity_check(
+        &self,
+        agent_id: ThreadId,
+        state: &Arc<ThreadManagerState>,
+        initial_operation: Op,
+    ) -> CodexResult<String> {
         let last_task_message = match &initial_operation {
             Op::InterAgentCommunication { communication } => {
                 last_task_message_from_communication(communication)
             }
             _ => non_empty_task_message(render_input_preview(&initial_operation)),
         };
-        let state = self.upgrade()?;
         let result = self
             .handle_thread_request_result(
                 agent_id,
-                &state,
+                state,
                 state.send_op(agent_id, initial_operation).await,
             )
             .await;
@@ -153,14 +170,10 @@ impl AgentControl {
     ) -> CodexResult<String> {
         let last_task_message = last_task_message_from_communication(&communication);
         let state = self.upgrade()?;
+        let op = Op::InterAgentCommunication { communication };
+        self.ensure_execution_capacity_for_op(agent_id, &op).await?;
         let result = self
-            .handle_thread_request_result(
-                agent_id,
-                &state,
-                state
-                    .send_op(agent_id, Op::InterAgentCommunication { communication })
-                    .await,
-            )
+            .handle_thread_request_result(agent_id, &state, state.send_op(agent_id, op).await)
             .await;
         if result.is_ok() {
             match last_task_message {
@@ -176,7 +189,12 @@ impl AgentControl {
     /// Interrupt the current task for an existing agent thread.
     pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
-        state.send_op(agent_id, Op::Interrupt).await
+        self.handle_thread_request_result(
+            agent_id,
+            &state,
+            state.send_op(agent_id, Op::Interrupt).await,
+        )
+        .await
     }
 
     async fn handle_thread_request_result(
@@ -217,6 +235,12 @@ impl AgentControl {
 
     pub(crate) fn get_agent_metadata(&self, agent_id: ThreadId) -> Option<AgentMetadata> {
         self.state.agent_metadata_for_thread(agent_id)
+    }
+
+    pub(crate) fn ensure_agent_known(&self, agent_id: ThreadId) -> CodexResult<AgentMetadata> {
+        self.state
+            .agent_metadata_for_thread(agent_id)
+            .ok_or(CodexErr::ThreadNotFound(agent_id))
     }
 
     pub(crate) async fn list_live_agent_subtree_thread_ids(
