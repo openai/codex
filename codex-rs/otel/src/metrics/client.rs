@@ -43,8 +43,16 @@ use tracing::debug;
 
 const ENV_ATTRIBUTE: &str = "env";
 const METER_NAME: &str = "codex";
-const DURATION_UNIT: &str = "ms";
-const DURATION_DESCRIPTION: &str = "Duration in milliseconds.";
+const MILLISECOND_DURATION_UNIT: &str = "ms";
+const MILLISECOND_DURATION_DESCRIPTION: &str = "Duration in milliseconds.";
+const MILLISECOND_DURATION_BOUNDARIES: &[f64] = &[
+    0.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 2500.0, 5000.0, 7500.0,
+    10000.0,
+];
+const SECOND_DURATION_UNIT: &str = "s";
+const SECOND_DURATION_BOUNDARIES: &[f64] = &[
+    0.0, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+];
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 struct InstrumentKey {
@@ -86,13 +94,20 @@ impl MetricReader for SharedManualReader {
 }
 
 #[derive(Debug)]
+struct CachedDurationHistogram {
+    unit: &'static str,
+    description: String,
+    histogram: Histogram<f64>,
+}
+
+#[derive(Debug)]
 struct MetricsClientInner {
     meter_provider: SdkMeterProvider,
     meter: Meter,
     counters: Mutex<HashMap<InstrumentKey, Counter<u64>>>,
     gauges: Mutex<HashMap<InstrumentKey, Gauge<i64>>>,
     histograms: Mutex<HashMap<String, Histogram<f64>>>,
-    duration_histograms: Mutex<HashMap<String, Histogram<f64>>>,
+    duration_histograms: Mutex<HashMap<String, CachedDurationHistogram>>,
     runtime_reader: Option<Arc<ManualReader>>,
     default_tags: BTreeMap<String, String>,
 }
@@ -177,7 +192,15 @@ impl MetricsClientInner {
         Ok(())
     }
 
-    fn duration_histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> Result<()> {
+    fn duration_histogram(
+        &self,
+        name: &str,
+        value: f64,
+        unit: &'static str,
+        description: &str,
+        boundaries: &'static [f64],
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
         validate_metric_name(name)?;
         let attributes = self.attributes(tags)?;
 
@@ -185,14 +208,37 @@ impl MetricsClientInner {
             .duration_histograms
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let histogram = histograms.entry(name.to_string()).or_insert_with(|| {
-            self.meter
-                .f64_histogram(name.to_string())
-                .with_unit(DURATION_UNIT)
-                .with_description(DURATION_DESCRIPTION)
-                .build()
-        });
-        histogram.record(value as f64, &attributes);
+        let histogram = match histograms.entry(name.to_string()) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                let cached = entry.into_mut();
+                if cached.unit != unit || cached.description != description {
+                    return Err(MetricsError::ConflictingDurationHistogram {
+                        name: name.to_string(),
+                        existing_unit: cached.unit.to_string(),
+                        existing_description: cached.description.clone(),
+                        requested_unit: unit.to_string(),
+                        requested_description: description.to_string(),
+                    });
+                }
+                &cached.histogram
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                &entry
+                    .insert(CachedDurationHistogram {
+                        unit,
+                        description: description.to_string(),
+                        histogram: self
+                            .meter
+                            .f64_histogram(name.to_string())
+                            .with_unit(unit)
+                            .with_description(description.to_string())
+                            .with_boundaries(boundaries.to_vec())
+                            .build(),
+                    })
+                    .histogram
+            }
+        };
+        histogram.record(value, &attributes);
         Ok(())
     }
 
@@ -338,7 +384,28 @@ impl MetricsClient {
     ) -> Result<()> {
         self.0.duration_histogram(
             name,
-            duration.as_millis().min(i64::MAX as u128) as i64,
+            duration.as_millis().min(i64::MAX as u128) as f64,
+            MILLISECOND_DURATION_UNIT,
+            MILLISECOND_DURATION_DESCRIPTION,
+            MILLISECOND_DURATION_BOUNDARIES,
+            tags,
+        )
+    }
+
+    /// Record a duration in seconds using a histogram with an instrument description.
+    pub fn record_duration_seconds_with_description(
+        &self,
+        name: &str,
+        description: &str,
+        duration: Duration,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
+        self.0.duration_histogram(
+            name,
+            duration.as_secs_f64(),
+            SECOND_DURATION_UNIT,
+            description,
+            SECOND_DURATION_BOUNDARIES,
             tags,
         )
     }
