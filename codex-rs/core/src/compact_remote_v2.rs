@@ -26,6 +26,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_analytics::LocalResponsesApiCallCapture;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -344,6 +345,7 @@ async fn run_remote_compaction_request_v2(
                 turn_context.config.service_tier.clone(),
                 turn_metadata_header,
                 &InferenceTraceContext::disabled(),
+                &LocalResponsesApiCallCapture::disabled(),
             )
             .await
         {

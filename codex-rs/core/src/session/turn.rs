@@ -1771,6 +1771,14 @@ async fn try_run_sampling_request(
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
+    let local_responses_api_call_capture = sess
+        .services
+        .analytics_events_client
+        .local_responses_api_call_capture(
+            sess.session_id().to_string(),
+            sess.thread_id().to_string(),
+            turn_context.sub_id.clone(),
+        );
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let mut stream = client_session
         .stream(
@@ -1782,6 +1790,7 @@ async fn try_run_sampling_request(
             turn_context.config.service_tier.clone(),
             turn_metadata_header,
             &inference_trace,
+            &local_responses_api_call_capture,
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)

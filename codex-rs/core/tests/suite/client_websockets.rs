@@ -449,6 +449,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
             &inference_trace,
+            &codex_analytics::LocalResponsesApiCallCapture::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -620,6 +621,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
+            &codex_analytics::LocalResponsesApiCallCapture::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -671,6 +673,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
+            &codex_analytics::LocalResponsesApiCallCapture::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -1074,6 +1077,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
+            &codex_analytics::LocalResponsesApiCallCapture::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -1148,6 +1152,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
+            &codex_analytics::LocalResponsesApiCallCapture::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -1804,6 +1809,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
+            &codex_analytics::LocalResponsesApiCallCapture::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -1892,6 +1898,7 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
+            &codex_analytics::LocalResponsesApiCallCapture::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -2126,6 +2133,7 @@ async fn stream_until_complete_with_model_info(
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
+            &codex_analytics::LocalResponsesApiCallCapture::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -2193,6 +2201,7 @@ async fn stream_until_complete_with_request_metadata(
             service_tier.map(|service_tier| service_tier.request_value().to_string()),
             turn_metadata_header,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
+            &codex_analytics::LocalResponsesApiCallCapture::disabled(),
         )
         .await
         .expect("websocket stream failed");

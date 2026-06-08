@@ -1,3 +1,4 @@
+use codex_analytics::LocalResponsesApiCallCapture;
 use codex_core::CodexThread;
 use codex_core::ModelClient;
 use codex_core::NewThread;
@@ -199,6 +200,7 @@ impl MemoryStartupContext {
                 context.service_tier.clone(),
                 context.turn_metadata_header.as_deref(),
                 &InferenceTraceContext::disabled(),
+                &LocalResponsesApiCallCapture::disabled(),
             )
             .await?;
 

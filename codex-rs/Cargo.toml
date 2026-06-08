@@ -2,6 +2,7 @@
 members = [
     "aws-auth",
     "analytics",
+    "analytics-materializer",
     "agent-graph-store",
     "agent-identity",
     "backend-client",
@@ -285,6 +286,7 @@ dirs = "6"
 divan = "0.1.21"
 dns-lookup = "3.0.1"
 dotenvy = "0.15.7"
+duckdb = { version = "1.10503.1", default-features = false, features = ["bundled", "json"] }
 dunce = "1.0.4"
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
 encoding_rs = "0.8.35"

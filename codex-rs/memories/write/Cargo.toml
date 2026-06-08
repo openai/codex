@@ -16,6 +16,7 @@ workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true }
 codex-backend-client = { workspace = true }
+codex-analytics = { workspace = true }
 codex-core = { workspace = true }
 codex-config = { workspace = true }
 codex-features = { workspace = true }

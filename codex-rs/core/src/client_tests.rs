@@ -359,7 +359,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
         /*upstream_request_id*/ None,
         api_stream,
         test_session_telemetry(),
-        attempt,
+        super::ResponseStreamAttempts::with_disabled_local_capture(attempt),
     );
 
     let observed = stream
@@ -408,7 +408,9 @@ async fn response_stream_records_last_model_feedback_ids() {
         Some("req-123".to_string()),
         api_stream,
         test_session_telemetry(),
-        InferenceTraceAttempt::disabled(),
+        super::ResponseStreamAttempts::with_disabled_local_capture(
+            InferenceTraceAttempt::disabled(),
+        ),
     );
 
     while stream.next().await.is_some() {}
@@ -449,7 +451,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         /*upstream_request_id*/ None,
         api_stream,
         test_session_telemetry(),
-        attempt,
+        super::ResponseStreamAttempts::with_disabled_local_capture(attempt),
     );
 
     // Fill the mapper channel with non-terminal events, then yield one output

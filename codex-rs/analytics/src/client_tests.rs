@@ -1,6 +1,10 @@
 use super::AnalyticsEventsClient;
 use super::AnalyticsEventsQueue;
 use super::track_event_request_batches;
+use crate::LocalAnalyticsRecord;
+use crate::LocalAnalyticsRecordType;
+use crate::LocalResponsesApiTransport;
+use crate::events::AppServerRpcTransport;
 use crate::events::CodexAcceptedLineFingerprintsEventParams;
 use crate::events::CodexAcceptedLineFingerprintsEventRequest;
 use crate::events::SkillInvocationEventParams;
@@ -8,10 +12,14 @@ use crate::events::SkillInvocationEventRequest;
 use crate::events::TrackEventRequest;
 use crate::facts::AnalyticsFact;
 use crate::facts::InvocationType;
+use crate::local_responses::AnalyticsQueueInput;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
+use codex_app_server_protocol::InitializeCapabilities;
+use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
@@ -28,13 +36,22 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use serde_json::json;
 use std::collections::HashSet;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
+
+static NEXT_TEST_PATH_ID: AtomicU64 = AtomicU64::new(0);
 
 fn sample_accepted_line_fingerprint_event(thread_id: &str) -> TrackEventRequest {
     TrackEventRequest::AcceptedLineFingerprints(Box::new(
@@ -74,10 +91,11 @@ fn sample_regular_track_event(thread_id: &str) -> TrackEventRequest {
     })
 }
 
-fn client_with_receiver() -> (AnalyticsEventsClient, mpsc::Receiver<AnalyticsFact>) {
+fn client_with_receiver() -> (AnalyticsEventsClient, mpsc::Receiver<AnalyticsQueueInput>) {
     let (sender, receiver) = mpsc::channel(8);
     let queue = AnalyticsEventsQueue {
         sender,
+        local_sink: None,
         app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
         plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
     };
@@ -217,6 +235,74 @@ fn sample_turn_steer_response() -> ClientResponsePayload {
     })
 }
 
+#[tokio::test]
+async fn local_sink_reduces_events_when_backend_analytics_are_disabled() {
+    let path = test_sink_path("backend-disabled");
+    let client = AnalyticsEventsClient::new_with_local_sink_path(
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test")),
+        "https://example.invalid".to_string(),
+        /*analytics_enabled*/ Some(false),
+        Some(path.clone()),
+    );
+
+    assert!(client.queue.is_some());
+    client.track_initialize(
+        /*connection_id*/ 7,
+        InitializeParams {
+            client_info: ClientInfo {
+                name: "codex-tui".to_string(),
+                title: None,
+                version: "1.0.0".to_string(),
+            },
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: false,
+                request_attestation: false,
+                opt_out_notification_methods: None,
+            }),
+        },
+        "codex".to_string(),
+        AppServerRpcTransport::Stdio,
+    );
+    client.track_response(
+        /*connection_id*/ 7,
+        RequestId::Integer(1),
+        sample_thread_start_response(),
+    );
+
+    let records = wait_for_local_records(&path, 1).await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].payload["event_type"], "codex_thread_initialized");
+    assert_eq!(records[0].thread_id.as_deref(), Some("thread-1"));
+}
+
+#[tokio::test]
+async fn local_responses_capture_writes_reduced_terminal_record() {
+    let path = test_sink_path("local-responses");
+    let client = AnalyticsEventsClient::new_with_local_sink_path(
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test")),
+        "https://example.invalid".to_string(),
+        Some(false),
+        Some(path.clone()),
+    );
+    let capture = client.local_responses_api_call_capture(
+        "session-1".to_string(),
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+    );
+    let attempt = capture.start_attempt(LocalResponsesApiTransport::Http, &json!({"model": "gpt"}));
+    attempt.record_completed("response-1", Some("request-1"), &None, &[]);
+
+    let records = wait_for_local_records(&path, 1).await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].record_type,
+        LocalAnalyticsRecordType::ResponsesApiCall
+    );
+    assert_eq!(records[0].session_id.as_deref(), Some("session-1"));
+    assert_eq!(records[0].payload["status"], "completed");
+    assert_eq!(records[0].payload["request_json"], json!({"model": "gpt"}));
+}
+
 #[test]
 fn track_request_only_enqueues_analytics_relevant_requests() {
     let (client, mut receiver) = client_with_receiver();
@@ -228,7 +314,9 @@ fn track_request_only_enqueues_analytics_relevant_requests() {
         client.track_request(/*connection_id*/ 7, request_id, &request);
         assert!(matches!(
             receiver.try_recv(),
-            Ok(AnalyticsFact::ClientRequest { .. })
+            Ok(AnalyticsQueueInput::AnalyticsFact(
+                AnalyticsFact::ClientRequest { .. }
+            ))
         ));
     }
 
@@ -255,7 +343,9 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         client.track_response(/*connection_id*/ 7, request_id, response);
         assert!(matches!(
             receiver.try_recv(),
-            Ok(AnalyticsFact::ClientResponse { .. })
+            Ok(AnalyticsQueueInput::AnalyticsFact(
+                AnalyticsFact::ClientResponse { .. }
+            ))
         ));
     }
 
@@ -285,4 +375,30 @@ fn track_event_request_batches_only_isolates_accepted_line_fingerprint_events() 
     assert_eq!(batches[3].len(), 2);
     assert!(batches[1][0].should_send_in_isolated_request());
     assert!(batches[2][0].should_send_in_isolated_request());
+}
+
+async fn wait_for_local_records(path: &PathBuf, min_records: usize) -> Vec<LocalAnalyticsRecord> {
+    for _ in 0..100 {
+        if let Ok(contents) = fs::read_to_string(path) {
+            let records = contents
+                .lines()
+                .map(|line| serde_json::from_str::<LocalAnalyticsRecord>(line).expect("record"))
+                .collect::<Vec<_>>();
+            if records.len() >= min_records {
+                return records;
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+
+    panic!("timed out waiting for {min_records} local analytics records");
+}
+
+fn test_sink_path(label: &str) -> PathBuf {
+    let id = NEXT_TEST_PATH_ID.fetch_add(1, Ordering::Relaxed);
+    let process_id = std::process::id();
+    let dir =
+        std::env::temp_dir().join(format!("codex-analytics-client-{process_id}-{label}-{id}"));
+    fs::create_dir_all(&dir).expect("create temp dir");
+    dir.join("events.jsonl")
 }

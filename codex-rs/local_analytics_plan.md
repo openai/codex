@@ -18,10 +18,10 @@ The helper reduces the JSONL sink into a DuckDB artifact containing the first se
 - `viewer_threads_v1`
 - `viewer_turns_v1`
 - `viewer_turn_events_v1`
-- `viewer_responses_calls_v1` as an empty schema-only stub until the Responses follow-up lands
+- `viewer_responses_calls_v1`
 - `viewer_context_windows_v1` as an empty schema-only stub
 
-Responses API call capture remains part of the intended design, but it is a follow-up slice after the reduced analytics JSONL sink and standalone DuckDB materializer work end to end. This pass does not change the React/FastAPI session viewer, does not upload artifacts to blob store, does not synthesize `chat.Conversation` snapshots, and does not add DuckDB to the main `codex` binary.
+This pass also captures local-only Responses API attempt summaries needed to populate `viewer_responses_calls_v1`. It does not change the React/FastAPI session viewer, upload artifacts to blob store, synthesize `chat.Conversation` snapshots, or add DuckDB to the main `codex` binary.
 
 ## Motivation
 
@@ -31,7 +31,7 @@ This proposal adds a local-only analytics sink that mirrors the intended product
 
 We intentionally use `codex-analytics` as the entry point because it already owns the normalized Codex thread, turn, tool, compaction, steering, app, plugin, hook, and review events needed for the first viewer tables. We are not building on `codex-rollout-trace`, whose rollout-scoped semantic graph is useful for a different debugging problem but does not match the intended long-lived session/thread/turn warehouse model.
 
-This pass is intentionally narrow: generate believable local tables from Codex analytics events first, then add local Responses API call records in a follow-up. React integration, blob-backed sharing, production ingestion, and canonical `chat.Conversation` / context-window materialization are deferred.
+This pass is intentionally narrow: generate believable local tables from Codex analytics events plus local Responses API attempt summaries. React integration, blob-backed sharing, production ingestion, and canonical `chat.Conversation` / context-window materialization are deferred.
 
 ## Goals
 
@@ -39,6 +39,7 @@ This pass is intentionally narrow: generate believable local tables from Codex a
 - Keep the sink process-global, not session-scoped: one JSONL file may contain events for many sessions, threads, and turns handled by one Codex process.
 - Preserve existing analytics behavior; the local sink is an additional best-effort side effect.
 - Capture enough reduced analytics events locally to materialize believable thread, turn, and turn-event rows.
+- Capture local-only Responses API attempt summaries without routing raw payloads through backend analytics.
 - Materialize a local DuckDB file manually from the JSONL sink for later viewer/UI work.
 
 ## Delivery Strategy
@@ -47,13 +48,13 @@ Land the smallest useful vertical slice first:
 
 1. Add the reduced analytics JSONL sink in `codex-analytics`.
 2. Add the standalone `codex-analytics-materializer` helper binary that reads that JSONL file and writes DuckDB.
-3. Follow up with local-only Responses API call capture and populate `viewer_responses_calls_v1`.
+3. Add local-only Responses API call capture and populate `viewer_responses_calls_v1`.
 
 Keep these boundaries explicit:
 
 - Local JSONL capture is independent from backend analytics POSTing. If `analytics.enabled = false` but `CODEX_ANALYTICS_LOCAL_SINK_PATH` is set, Codex should still reduce analytics facts and append local JSONL records without POSTing them.
 - The sink is process-global. Multiple `AnalyticsEventsClient` instances in one Codex process should resolve the same optional local sink handle instead of each opening their own unrelated writer.
-- Local-only Responses API payloads must not be modeled as normal backend analytics facts. When that follow-up lands, use a private queue input variant for local-only Responses facts so raw request/response payloads cannot accidentally reach `send_track_events`.
+- Local-only Responses API payloads must not be modeled as normal backend analytics facts. Use a private queue input variant for local-only Responses facts so raw request/response payloads cannot accidentally reach `send_track_events`.
 - DuckDB stays out of the main `codex` binary build graph. Do not add `codex-analytics-materializer` as a dependency of `codex-cli` in v0.
 
 ## Out Of Scope
@@ -64,8 +65,6 @@ Keep these boundaries explicit:
 - No blob-store upload/download path.
 - No `chat.Conversation` synthesis.
 - No populated `viewer_context_windows_v1`.
-- No populated `viewer_responses_calls_v1` in the first JSONL -> DuckDB milestone.
-- No Responses API call capture in the first JSONL -> DuckDB milestone.
 - No `codex debug process-local-analytics` wiring in the main `codex` binary.
 - No `--analytics-local-sink` CLI flag in v0; the env var is enough for the first slice.
 - No rollout-trace-style semantic graph, interaction edges, code cells, or terminal-session modeling.
@@ -89,7 +88,7 @@ Behavior:
 - When set, Codex appends one JSON object per line to the configured file.
 - The file may contain all sessions launched by one Codex process with that setting.
 - Pointing multiple Codex processes at the same sink path is unsupported in v0.
-- The sink is local-only and may contain sensitive tool metadata, paths, errors, and later Responses API payloads.
+- The sink is local-only and may contain sensitive tool metadata, paths, errors, and Responses API payloads.
 - Sink initialization and writes are best-effort; failures log a warning and must not fail the Codex session.
 
 ### Manual Materialization
@@ -125,18 +124,16 @@ Codex runtime facts
      -> existing POST to codex-backend when backend analytics are enabled
      -> optional append to local JSONL sink
 
-Later:
-  codex-analytics-materializer helper binary
-    -> codex-analytics-materializer reads JSONL
-    -> reduce/group by session/thread/turn
-    -> write materialized.duckdb
+Responses API call lifecycle
+  -> local-only Responses API start/terminal facts
+  -> AnalyticsEventsQueue worker
+  -> codex-analytics local reducer
+  -> one optional responses_api_call JSONL record
 
-Follow-up:
-  Responses API call lifecycle
-    -> local-only Responses API start/terminal facts
-    -> AnalyticsEventsQueue worker
-    -> codex-analytics local reducer
-    -> one optional responses_api_call JSONL record
+codex-analytics-materializer helper binary
+  -> codex-analytics-materializer reads JSONL
+  -> reduce/group by session/thread/turn/call
+  -> write materialized.duckdb
 ```
 
 `codex-analytics` is the right sink entry point because it already owns the thread, turn, resolved-config, compaction, tool, app, plugin, hook, steering, review, and subagent analytics semantics that the initial viewer tables depend on. `codex-analytics-materializer` owns only the local DuckDB reduction path and depends on the generic local JSONL envelope exported by `codex-analytics`.
@@ -158,7 +155,7 @@ It owns:
 
 The existing `AnalyticsEventsQueue` worker still owns analytics reduction and is the only caller that emits analytics-derived JSONL records. The optional sink itself is process-global and shared by every `AnalyticsEventsClient` instance in one Codex process, so final file writes are serialized by one shared local sink handle instead of depending on one session-scoped queue existing.
 
-`AnalyticsEventsClient` should create a queue whenever either backend analytics are enabled or the local sink is enabled. The worker should tee reduced `TrackEventRequest` values to the local sink when present, then preserve existing network analytics sending only when backend analytics are enabled. Later, when Responses API capture lands, the queue should accept a private local-only Responses input variant alongside normal `AnalyticsFact` values; those local-only payloads must never enter the backend analytics send path.
+`AnalyticsEventsClient` should create a queue whenever either backend analytics are enabled or the local sink is enabled. The worker should tee reduced `TrackEventRequest` values to the local sink when present, then preserve existing network analytics sending only when backend analytics are enabled. The queue also accepts a private local-only Responses input variant alongside normal `AnalyticsFact` values; those local-only payloads must never enter the backend analytics send path.
 
 `codex-analytics` exports only the generic local sink envelope needed by downstream readers:
 
@@ -216,7 +213,7 @@ Common fields:
 Record type contract:
 
 - `codex_analytics_event`
-- `responses_api_call` after the Responses follow-up lands
+- `responses_api_call`
 
 Do not add a separate manifest record in v0. The reducer can infer covered sessions from the event stream.
 
@@ -251,15 +248,13 @@ Preserve current network send behavior:
 - local sink write failure: warn and continue existing POST behavior
 - analytics POST failure: existing behavior unchanged
 
-## Follow-Up: Responses API Call Capture
-
-This section is intentionally deferred from the first JSONL -> DuckDB milestone. The first milestone should not block on `core/src/client.rs` plumbing; it should ship once reduced analytics events can be captured locally and materialized by the standalone helper.
+## Responses API Call Capture
 
 ### Why It Lives Here
 
 Responses API calls are not Codex analytics events today, and raw request/response payloads must not be sent as normal analytics telemetry. But they are required for the local viewer-table prototype, so add local-only Responses API facts and reduce them into one local sink event inside `codex-analytics`.
 
-Suggested local-only facts:
+Local-only facts:
 
 ```rust
 struct LocalResponsesApiCallStartedFact { ... }
@@ -271,7 +266,7 @@ enum LocalResponsesApiCallTerminalFact {
 }
 ```
 
-Suggested no-op-capable capture API, parallel to rollout trace's context/attempt shape:
+No-op-capable capture API, parallel to rollout trace's context/attempt shape:
 
 ```rust
 pub struct LocalResponsesApiCallCapture { ... }
@@ -321,7 +316,7 @@ Started fact:
 Terminal fact:
 
 - `responses_call_id`
-- `terminal_at_epoch_millis`
+- `completed_at_epoch_millis`
 - `status`: `completed`, `failed`, or `cancelled`
 - completed: `response_id`, `upstream_request_id`, `token_usage_json`, `output_items`
 - failed/cancelled: `upstream_request_id`, `error` or `reason`, `output_items`
@@ -495,7 +490,7 @@ responses_api_calls_total_latency_ms
 
 `turn_ordinal` is derived per thread by start time, then `turn_id` as a stable tie-breaker.
 
-Before the Responses follow-up lands, the `responses_api_calls_*` aggregates should materialize as zero values.
+Turns with no reduced Responses records should materialize `responses_api_calls_*` aggregates as zero values.
 
 #### `viewer_turn_events_v1`
 
@@ -522,12 +517,12 @@ Rules:
 - `event_seq` is per `(session_id, thread_id, turn_id)` ordered by input line number.
 - `event_kind` is `codex_analytics` or `responses_api`.
 - Codex analytics rows store the original reduced analytics event in `analytics_event_json`.
-- Responses rows store lifecycle summaries in `event_summary_json` after the Responses follow-up lands.
+- Responses rows store lifecycle summaries in `event_summary_json`.
 - Keep this table append-only and paginated-friendly.
 
 #### `viewer_responses_calls_v1`
 
-Create this table in the first materializer milestone but leave it empty. Populate it after the Responses follow-up from reduced local `responses_api_call` sink records.
+Populate this table from reduced local `responses_api_call` sink records.
 
 Columns:
 
@@ -615,11 +610,11 @@ Behavior:
 ### Phase 2: Standalone DuckDB Materializer
 
 5. Add `codex-analytics-materializer` with DuckDB schema creation and its own helper binary.
-6. Implement reductions for threads, turns, and turn events; create empty `viewer_responses_calls_v1` and `viewer_context_windows_v1` tables.
+6. Implement reductions for threads, turns, and turn events; create `viewer_responses_calls_v1` and empty `viewer_context_windows_v1` tables.
 7. Add helper-binary argument parsing, default output behavior, and clear errors.
 8. Add tests and run scoped formatting/tests.
 
-### Phase 3: Responses API Follow-Up
+### Phase 3: Responses API Capture
 
 9. Add a private analytics queue input variant for local-only Responses API facts plus local reducer state in `codex-analytics`.
 10. Build `LocalResponsesApiCallCapture` at the sampling callsite, pass it into `ModelClientSession::stream(...)`, and wire HTTP and WebSocket Responses hook points in core to start and finish `LocalResponsesApiCallAttempt` values.
@@ -661,8 +656,7 @@ Behavior:
 - `viewer_threads_v1` contains root and child thread metadata
 - `viewer_turns_v1` contains expected resolved turn row
 - `viewer_turn_events_v1` preserves per-turn line order
-- `viewer_responses_calls_v1` exists and is empty before the Responses follow-up
-- `viewer_responses_calls_v1` materializes reduced `responses_api_call` sink records after the Responses follow-up
+- `viewer_responses_calls_v1` materializes reduced `responses_api_call` sink records
 - `viewer_context_windows_v1` exists and is empty
 - malformed JSONL reports line number
 - unsupported `schema_version` fails clearly
@@ -684,7 +678,6 @@ Behavior:
 
 ## Future Follow-Ups
 
-- Populate `viewer_responses_calls_v1` from local Responses API capture once the first JSONL -> DuckDB milestone is working.
 - Populate `viewer_context_windows_v1` from canonical Responses API `chat.Conversation` Kafka payloads.
 - Add synthetic local `chat.Conversation` generation only if needed before upstream Kafka support lands.
 - Add session viewer local DuckDB drag-and-drop mode.

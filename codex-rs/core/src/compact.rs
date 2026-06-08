@@ -22,6 +22,7 @@ use codex_analytics::CompactionReason;
 use codex_analytics::CompactionStatus;
 use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
+use codex_analytics::LocalResponsesApiCallCapture;
 use codex_analytics::now_unix_seconds;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -580,6 +581,7 @@ async fn drain_to_completed(
             // Rollout tracing currently models remote compaction only; local compaction streams
             // are left untraced until the reducer has a first-class local compaction lifecycle.
             &InferenceTraceContext::disabled(),
+            &LocalResponsesApiCallCapture::disabled(),
         )
         .await?;
     loop {

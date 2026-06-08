@@ -1,0 +1,27 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-analytics-materializer"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_analytics_materializer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-analytics-materializer"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-analytics = { workspace = true }
+duckdb = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
