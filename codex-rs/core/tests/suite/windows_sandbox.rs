@@ -334,7 +334,9 @@ async fn windows_elevated_enforces_managed_deny_read_for_shell_subprocess() -> a
     let config_home = TempDir::new()?;
     std::fs::write(
         config_home.path().join(CONFIG_TOML_FILE),
-        r#"[windows]
+        r#"sandbox_mode = "workspace-write"
+
+[windows]
 sandbox = "elevated"
 "#,
     )?;
@@ -355,11 +357,12 @@ allowed_sandbox_implementations = ["elevated"]
 "#
     );
 
-    let config = load_default_config_for_test_with_cloud_config_bundle(
+    let mut config = load_default_config_for_test_with_cloud_config_bundle(
         &config_home,
         CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
     )
     .await;
+    config.permissions.set_workspace_roots(vec![cwd.clone()]);
     assert_eq!(
         config.permissions.windows_sandbox_mode,
         Some(codex_config::types::WindowsSandboxModeToml::Elevated)
