@@ -576,6 +576,25 @@ pub async fn fetch_remote_marketplaces(
         match source {
             RemoteMarketplaceSource::Global => {
                 let scope = RemotePluginScope::Global;
+                if let Some(codex_home) = global_catalog_cache_path
+                    && let Some(directory_plugins) =
+                        catalog_cache::load_cached_global_directory_plugins(
+                            codex_home, config, auth,
+                        )
+                {
+                    let installed_plugins =
+                        fetch_installed_plugins_for_scope(config, auth, scope).await?;
+                    if let Some(marketplace) = build_remote_marketplace(
+                        scope.marketplace_name(),
+                        scope.marketplace_display_name(),
+                        directory_plugins,
+                        installed_plugins,
+                        /*include_installed_only*/ true,
+                    )? {
+                        marketplaces.push(marketplace);
+                    }
+                    continue;
+                }
                 let (directory_plugins, installed_plugins) = tokio::try_join!(
                     fetch_directory_plugins_for_scope(config, auth, scope),
                     fetch_installed_plugins_for_scope(config, auth, scope),
@@ -690,6 +709,17 @@ pub async fn fetch_and_cache_global_remote_plugin_catalog(
         fetch_directory_plugins_for_scope(config, auth, RemotePluginScope::Global).await?;
     catalog_cache::write_cached_global_directory_plugins(codex_home, config, auth, &plugins);
     Ok(())
+}
+
+pub fn has_cached_global_remote_plugin_catalog(
+    codex_home: &Path,
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+) -> bool {
+    let Ok(auth) = ensure_chatgpt_auth(auth) else {
+        return false;
+    };
+    catalog_cache::load_cached_global_directory_plugins(codex_home, config, auth).is_some()
 }
 
 pub fn cached_global_remote_discoverable_plugins(
