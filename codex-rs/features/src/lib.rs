@@ -1261,7 +1261,13 @@ pub fn unstable_features_warning_event(
     let mut under_development_feature_keys = Vec::new();
     if let Some(table) = effective_features {
         for (key, value) in table {
-            if value.as_bool() != Some(true) {
+            let is_enabled = value.as_bool() == Some(true)
+                || value
+                    .as_table()
+                    .and_then(|table| table.get("enabled"))
+                    .and_then(toml::Value::as_bool)
+                    == Some(true);
+            if !is_enabled {
                 continue;
             }
             let Some(spec) = FEATURES.iter().find(|spec| spec.key == key.as_str()) else {

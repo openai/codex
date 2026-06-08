@@ -698,3 +698,32 @@ fn unstable_warning_event_only_mentions_enabled_under_development_features() {
     assert!(!message.contains("personality"));
     assert!(message.contains("/tmp/config.toml"));
 }
+
+#[test]
+fn unstable_warning_event_mentions_enabled_structured_under_development_feature() {
+    let configured_features: Table = toml::from_str(
+        r#"
+multi_agent_v2 = { enabled = true, tool_namespace = "agents" }
+code_mode = { excluded_tool_namespaces = ["mcp"] }
+"#,
+    )
+    .expect("features table should deserialize");
+
+    let mut features = Features::with_defaults();
+    features.enable(Feature::MultiAgentV2);
+    features.enable(Feature::CodeMode);
+
+    let warning = unstable_features_warning_event(
+        Some(&configured_features),
+        /*suppress_unstable_features_warning*/ false,
+        &features,
+        "/tmp/config.toml",
+    )
+    .expect("warning event");
+
+    let EventMsg::Warning(WarningEvent { message }) = warning.msg else {
+        panic!("expected warning event");
+    };
+    assert!(message.contains("multi_agent_v2"));
+    assert!(!message.contains("code_mode"));
+}
