@@ -15,7 +15,6 @@ use starlark::environment::Module;
 use starlark::eval::Evaluator;
 use starlark::syntax::AstModule;
 use starlark::syntax::Dialect;
-use starlark::values::Heap;
 use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
 use std::cell::RefCell;
@@ -41,31 +40,28 @@ impl PolicyParser {
         let globals = GlobalsBuilder::extended_by(&[LibraryExtension::Typing])
             .with(policy_builtins)
             .build();
-        let module = Module::new();
-
-        let heap = Heap::new();
-
-        module.set("ARG_OPAQUE_VALUE", heap.alloc(ArgMatcher::OpaqueNonFile));
-        module.set("ARG_RFILE", heap.alloc(ArgMatcher::ReadableFile));
-        module.set("ARG_WFILE", heap.alloc(ArgMatcher::WriteableFile));
-        module.set("ARG_RFILES", heap.alloc(ArgMatcher::ReadableFiles));
-        module.set(
-            "ARG_RFILES_OR_CWD",
-            heap.alloc(ArgMatcher::ReadableFilesOrCwd),
-        );
-        module.set("ARG_POS_INT", heap.alloc(ArgMatcher::PositiveInteger));
-        module.set("ARG_SED_COMMAND", heap.alloc(ArgMatcher::SedCommand));
-        module.set(
-            "ARG_UNVERIFIED_VARARGS",
-            heap.alloc(ArgMatcher::UnverifiedVarargs),
-        );
-
         let policy_builder = PolicyBuilder::new();
-        {
+        Module::with_temp_heap(|module| {
+            let heap = module.heap();
+            module.set("ARG_OPAQUE_VALUE", heap.alloc(ArgMatcher::OpaqueNonFile));
+            module.set("ARG_RFILE", heap.alloc(ArgMatcher::ReadableFile));
+            module.set("ARG_WFILE", heap.alloc(ArgMatcher::WriteableFile));
+            module.set("ARG_RFILES", heap.alloc(ArgMatcher::ReadableFiles));
+            module.set(
+                "ARG_RFILES_OR_CWD",
+                heap.alloc(ArgMatcher::ReadableFilesOrCwd),
+            );
+            module.set("ARG_POS_INT", heap.alloc(ArgMatcher::PositiveInteger));
+            module.set("ARG_SED_COMMAND", heap.alloc(ArgMatcher::SedCommand));
+            module.set(
+                "ARG_UNVERIFIED_VARARGS",
+                heap.alloc(ArgMatcher::UnverifiedVarargs),
+            );
+
             let mut eval = Evaluator::new(&module);
             eval.extra = Some(&policy_builder);
-            eval.eval_module(ast, &globals)?;
-        }
+            eval.eval_module(ast, &globals).map(|_| ())
+        })?;
         let policy = policy_builder.build();
         policy.map_err(|e| starlark::Error::new_kind(starlark::ErrorKind::Other(e.into())))
     }
