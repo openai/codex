@@ -841,6 +841,7 @@ class TurnHandle:
                 self._goal,
                 lambda: self._client.next_goal_notification(self._goal),
                 lambda: self._client.unregister_goal_operation(self._goal),
+                lambda: self._client.stop_failed_goal(self._goal),
             )
 
         def ordinary_stream() -> Iterator[Notification]:
@@ -963,6 +964,7 @@ class AsyncTurnHandle:
                 self._goal,
                 next_goal_notification,
                 lambda: self._codex._client.unregister_goal_operation(self._goal),
+                lambda: self._codex._client.stop_failed_goal(self._goal),
             )
 
         async def ordinary_stream() -> AsyncIterator[Notification]:

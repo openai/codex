@@ -247,7 +247,7 @@ class AppServerHarness:
         """Write config.toml that routes model calls to the mock server."""
         config_toml = self.codex_home / "config.toml"
         requires_openai_auth = "requires_openai_auth = true\n" if self.requires_openai_auth else ""
-        goals = "[features]\ngoals = true\n\n" if self.enable_goals else ""
+        goals = f"[features]\ngoals = {str(self.enable_goals).lower()}\n\n"
         config_toml.write_text(
             f"""
 model = "mock-model"

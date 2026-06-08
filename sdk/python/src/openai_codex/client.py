@@ -501,6 +501,30 @@ class CodexClient:
         """Pause the active goal used by a logical goal turn."""
         return self.thread_goal_set(thread_id, status=ThreadGoalStatus.paused)
 
+    def stop_failed_goal(self, state: _GoalOperationState) -> None:
+        """Best-effort cleanup after a physical goal turn fails."""
+        try:
+            self.pause_goal(state.thread_id)
+        except Exception:
+            pass
+        turn_id = state.current_turn()
+        if turn_id is None:
+            return
+        try:
+            self.turn_interrupt(state.thread_id, turn_id)
+        except InvalidRequestError as exc:
+            if not exc.message.startswith("expected active turn id"):
+                return
+            next_turn_id = state.current_turn()
+            if next_turn_id is None or next_turn_id == turn_id:
+                return
+            try:
+                self.turn_interrupt(state.thread_id, next_turn_id)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def start_goal_operation(
         self,
         thread_id: str,
