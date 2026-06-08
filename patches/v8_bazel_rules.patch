@@ -3,11 +3,11 @@
 # Scope: Bazel BUILD/defs/BUILD.icu integration only, including dependency
 # wiring, generated sources, and visibility; no standalone V8 source patching.
 
-diff --git a/orig/v8-14.6.202.11/bazel/defs.bzl b/mod/v8-14.6.202.11/bazel/defs.bzl
-index 9648e4a..88efd41 100644
---- a/orig/v8-14.6.202.11/bazel/defs.bzl
-+++ b/mod/v8-14.6.202.11/bazel/defs.bzl
-@@ -33,9 +33,21 @@
+diff --git a/orig/v8-14.9.207.2/bazel/defs.bzl b/mod/v8-14.9.207.2/bazel/defs.bzl
+index bbe1495..6673518 100644
+--- a/orig/v8-14.9.207.2/bazel/defs.bzl
++++ b/mod/v8-14.9.207.2/bazel/defs.bzl
+@@ -33,9 +33,21 @@ _create_option_int = rule(
  )
  
  def v8_flag(name, default = False):
@@ -32,7 +32,7 @@ index 9648e4a..88efd41 100644
  
  def v8_string(name, default = ""):
      _create_option_string(name = name, build_setting_default = default)
-@@ -97,7 +109,13 @@
+@@ -97,7 +109,13 @@ v8_config = rule(
  
  def _default_args():
      return struct(
@@ -47,7 +47,7 @@ index 9648e4a..88efd41 100644
          defines = select({
              "@v8//bazel/config:is_windows": [
                  "UNICODE",
-@@ -127,12 +145,15 @@
+@@ -127,12 +145,15 @@ def _default_args():
              ],
              "//conditions:default": [],
          }) + select({
@@ -56,20 +56,19 @@ index 9648e4a..88efd41 100644
 -                "-Wno-deprecated-this-capture",
 -                "-Wno-deprecated-declarations",
 -                "-std=c++20",
--            ],
 +            "@v8//:is_v8_use_rusty_v8_custom_libcxx": [
 +                "-nostdinc++",
 +                "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
 +                "-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
 +                "-D_LIBCPP_INSTRUMENTED_WITH_ASAN=0",
 +                "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
-+            ],
+             ],
 +            "//conditions:default": [],
 +        }) + select({
              "@v8//bazel/config:is_gcc": [
                  "-Wno-extra",
                  "-Wno-array-bounds",
-@@ -152,9 +173,17 @@
+@@ -152,9 +173,17 @@ def _default_args():
                  "-std=gnu++2a",
              ],
              "@v8//bazel/config:is_windows": [
@@ -78,18 +77,18 @@ index 9648e4a..88efd41 100644
 +                "-Wno-deprecated-this-capture",
 +                "-Wno-deprecated-declarations",
 +                "-std=c++20",
-             ],
--            "//conditions:default": [],
++            ],
 +            "//conditions:default": [
 +                "-Wno-invalid-offsetof",
 +                "-Wno-deprecated-this-capture",
 +                "-Wno-deprecated-declarations",
 +                "-std=c++20",
-+            ],
+             ],
+-            "//conditions:default": [],
          }) + select({
              "@v8//bazel/config:is_gcc_fastbuild": [
                  # Non-debug builds without optimizations fail because
-@@ -178,12 +207,12 @@
+@@ -178,12 +207,12 @@ def _default_args():
          includes = ["include"],
          linkopts = select({
              "@v8//bazel/config:is_windows": [
@@ -118,7 +117,7 @@ index 9648e4a..88efd41 100644
      outs = [
          ctx.actions.declare_file(prefix + "/snapshot" + suffix + ".cc"),
          ctx.actions.declare_file(prefix + "/embedded" + suffix + ".S"),
-@@ -476,7 +510,7 @@
+@@ -477,6 +511,6 @@
              outs[1].path,
          ] + ctx.attr.args,
 -        executable = ctx.executable.tool,
@@ -155,10 +154,10 @@ index 9648e4a..88efd41 100644
          suffix = suffix,
          target_os = select({
              "@v8//bazel/config:is_macos": "mac",
-diff --git a/orig/v8-14.6.202.11/BUILD.bazel b/mod/v8-14.6.202.11/BUILD.bazel
-index 421ebcd..52283ea 100644
---- a/orig/v8-14.6.202.11/BUILD.bazel
-+++ b/mod/v8-14.6.202.11/BUILD.bazel
+diff --git a/orig/v8-14.9.207.2/BUILD.bazel b/mod/v8-14.9.207.2/BUILD.bazel
+index b432f86..28c567b 100644
+--- a/orig/v8-14.9.207.2/BUILD.bazel
++++ b/mod/v8-14.9.207.2/BUILD.bazel
 @@ -148,6 +148,10 @@ v8_flag(name = "v8_enable_trace_maps")
  
  v8_flag(name = "v8_enable_v8_checks")
@@ -187,7 +186,7 @@ index 421ebcd..52283ea 100644
          "v8_enable_trace_maps": "V8_TRACE_MAPS",
          "v8_enable_turbofan": "V8_ENABLE_TURBOFAN",
          "v8_enable_v8_checks": "V8_ENABLE_CHECKS",
-@@ -4098,28 +4103,14 @@ filegroup(
+@@ -4125,28 +4130,14 @@ filegroup(
      }),
  )
  
@@ -222,7 +221,7 @@ index 421ebcd..52283ea 100644
  )
  
  filegroup(
-@@ -4422,6 +4413,20 @@ genrule(
+@@ -4441,6 +4432,20 @@ genrule(
      srcs = [
          "include/js_protocol.pdl",
          "src/inspector/inspector_protocol_config.json",
@@ -243,7 +242,7 @@ index 421ebcd..52283ea 100644
      ],
      outs = [
          "include/inspector/Debugger.h",
-@@ -4443,15 +4448,19 @@ genrule(
+@@ -4462,15 +4467,19 @@ genrule(
          "src/inspector/protocol/Schema.cpp",
          "src/inspector/protocol/Schema.h",
      ],
@@ -267,7 +266,7 @@ index 421ebcd..52283ea 100644
      ],
  )
  
-@@ -4465,6 +4474,35 @@ filegroup(
+@@ -4484,6 +4493,35 @@ filegroup(
      ],
  )
  
@@ -303,7 +302,7 @@ index 421ebcd..52283ea 100644
  filegroup(
      name = "d8_files",
      srcs = [
-@@ -4584,16 +4602,9 @@ cc_library(
+@@ -4603,16 +4641,9 @@ cc_library(
      ],
  )
  
@@ -323,7 +322,7 @@ index 421ebcd..52283ea 100644
  )
  
  v8_library(
-@@ -4610,7 +4621,7 @@ v8_library(
+@@ -4629,7 +4660,7 @@ v8_library(
      copts = ["-Wno-implicit-fallthrough"],
      icu_deps = [
          ":icu/generated_torque_definitions_headers",
@@ -332,7 +331,7 @@ index 421ebcd..52283ea 100644
      ],
      icu_srcs = [
          ":generated_regexp_special_case",
-@@ -4625,7 +4636,7 @@ v8_library(
+@@ -4644,7 +4675,7 @@ v8_library(
      ],
      deps = [
          ":lib_dragonbox",
@@ -341,7 +340,7 @@ index 421ebcd..52283ea 100644
          ":lib_fp16",
          ":simdutf",
          ":v8_libbase",
-@@ -4681,6 +4692,7 @@ alias(
+@@ -4700,6 +4731,7 @@ alias(
  alias(
      name = "core_lib_icu",
      actual = "icu/v8",
@@ -349,7 +348,7 @@ index 421ebcd..52283ea 100644
  )
  
  v8_library(
-@@ -4732,7 +4744,7 @@ v8_binary(
+@@ -4751,7 +4783,7 @@ v8_binary(
      ],
      deps = [
          ":v8_libbase",
@@ -358,7 +357,7 @@ index 421ebcd..52283ea 100644
      ],
  )
  
-@@ -4772,9 +4784,20 @@ v8_binary(
+@@ -4791,9 +4823,20 @@ v8_binary(
          ":icu/generated_torque_initializers",
          ":icu/v8_initializers_files",
      ],
@@ -380,10 +379,10 @@ index 421ebcd..52283ea 100644
      }),
      noicu_deps = [":v8_libshared_noicu"],
      noicu_srcs = [
-diff --git a/orig/v8-14.6.202.11/bazel/BUILD.icu b/mod/v8-14.6.202.11/bazel/BUILD.icu
-index 5fda2f4..9729451 100644
---- a/orig/v8-14.6.202.11/bazel/BUILD.icu
-+++ b/mod/v8-14.6.202.11/bazel/BUILD.icu
+diff --git a/orig/v8-14.9.207.2/bazel/BUILD.icu b/mod/v8-14.9.207.2/bazel/BUILD.icu
+index 5fda2f4..8c3c372 100644
+--- a/orig/v8-14.9.207.2/bazel/BUILD.icu
++++ b/mod/v8-14.9.207.2/bazel/BUILD.icu
 @@ -1,3 +1,24 @@
 +load("@rules_cc//cc:defs.bzl", "cc_library")
 +
@@ -409,7 +408,7 @@ index 5fda2f4..9729451 100644
  # Copyright 2021 the V8 project authors. All rights reserved.
  # Use of this source code is governed by a BSD-style license that can be
  # found in the LICENSE file.
-@@ -16,15 +37,12 @@
+@@ -16,15 +37,12 @@ cc_library(
      ]),
      copts = select({
          "@platforms//os:windows": [
@@ -427,7 +426,7 @@ index 5fda2f4..9729451 100644
      data = [":icudata"],
      defines = [
          "HAVE_DLOPEN=0",
-@@ -54,6 +72,7 @@
+@@ -54,6 +72,7 @@ cc_library(
          "U_ICUDATAENTRY_IN_COMMON",
      ],
      tags = ["requires-rtti"],
@@ -435,7 +434,7 @@ index 5fda2f4..9729451 100644
      alwayslink = 1,
  )
  
-@@ -65,19 +84,16 @@
+@@ -65,19 +84,16 @@ cc_library(
      ]),
      copts = select({
          "@platforms//os:windows": [
@@ -458,7 +457,7 @@ index 5fda2f4..9729451 100644
      alwayslink = 1,
  )
  
-@@ -93,13 +109,10 @@
+@@ -93,13 +109,10 @@ cc_library(
      ]),
      copts = select({
          "@platforms//os:windows": [
@@ -474,7 +473,7 @@ index 5fda2f4..9729451 100644
      include_prefix = "third_party/icu",
      local_defines = [
          "U_COMMON_IMPLEMENTATION",
-@@ -108,6 +121,6 @@
+@@ -108,6 +121,6 @@ cc_library(
      deps = [
          ":icui18n",
          ":icuuc",

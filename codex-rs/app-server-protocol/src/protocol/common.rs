@@ -36,6 +36,21 @@ pub enum AuthMode {
     #[ts(rename = "agentIdentity")]
     #[strum(serialize = "agentIdentity")]
     AgentIdentity,
+    /// Programmatic Codex auth backed by a personal access token.
+    #[serde(rename = "personalAccessToken")]
+    #[ts(rename = "personalAccessToken")]
+    #[strum(serialize = "personalAccessToken")]
+    PersonalAccessToken,
+}
+
+impl AuthMode {
+    /// Returns whether this mode represents an authenticated human ChatGPT account.
+    pub fn has_chatgpt_account(self) -> bool {
+        match self {
+            Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
+            Self::ApiKey | Self::AgentIdentity => false,
+        }
+    }
 }
 
 macro_rules! experimental_reason_expr {

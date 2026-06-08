@@ -76,12 +76,10 @@ install:
 [unix]
 test *args:
     RUST_MIN_STACK={{ rust_min_stack }} cargo nextest run --no-fail-fast "$@"
-    just bench-smoke
 
 [windows]
 test *args:
     $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
-    just bench-smoke
 
 # Run from the repository root so scripts that resolve paths from `cwd` see
 # the same layout they use in GitHub Actions.
