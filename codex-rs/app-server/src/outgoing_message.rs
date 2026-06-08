@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -6,6 +7,8 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::CompletedThreadInitialization;
+use codex_analytics::ThreadInitializationResponseFact;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
@@ -46,8 +49,7 @@ pub(crate) struct ConnectionRequestId {
     pub(crate) request_id: RequestId,
 }
 
-/// Trace data we keep for an incoming request until we send its final
-/// response or error.
+/// Request-scoped state kept until the final response or error is sent.
 #[derive(Clone)]
 pub(crate) struct RequestContext {
     request_id: ConnectionRequestId,
@@ -78,8 +80,19 @@ impl RequestContext {
         self.span.clone()
     }
 
-    pub(crate) fn thread_initialization_timing(&self) -> ThreadInitializationTiming {
-        self.thread_initialization_timing.clone()
+    pub(crate) fn scope_thread_initialization<F>(
+        &self,
+        future: F,
+    ) -> impl Future<Output = F::Output> + Send + 'static
+    where
+        F: Future + Send + 'static,
+    {
+        let timing = self.thread_initialization_timing.clone();
+        async move { timing.scope(future).await }
+    }
+
+    fn complete_thread_initialization(&self) -> Option<CompletedThreadInitialization> {
+        self.thread_initialization_timing.complete_request()
     }
 
     fn record_turn_id(&self, turn_id: &str) {
@@ -526,15 +539,25 @@ impl OutgoingMessageSender {
             .into_jsonrpc_parts_and_payload(request_id.request_id.clone())
             .map(|(id, result, response)| {
                 if let Some(response) = response {
-                    let thread_initialization = request_context.as_ref().and_then(|context| {
-                        context.thread_initialization_timing.complete_request()
-                    });
-                    self.analytics_events_client.track_response(
-                        connection_id.0,
-                        request_id_for_analytics,
-                        response,
-                        thread_initialization,
-                    );
+                    if let Some(initialization) = request_context
+                        .as_ref()
+                        .and_then(RequestContext::complete_thread_initialization)
+                    {
+                        self.analytics_events_client
+                            .track_thread_initialization_response(
+                                ThreadInitializationResponseFact {
+                                    connection_id: connection_id.0,
+                                    response,
+                                    initialization,
+                                },
+                            );
+                    } else {
+                        self.analytics_events_client.track_response(
+                            connection_id.0,
+                            request_id_for_analytics,
+                            response,
+                        );
+                    }
                 }
                 (id, result)
             });

@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::write_chatgpt_auth;
+use codex_analytics::ThreadInitializationProfile;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::OtelHttpProtocol;
@@ -210,52 +211,42 @@ pub(crate) fn assert_basic_thread_initialized_event(
 }
 
 pub(crate) fn assert_thread_initialization_profile(event: &Value) {
-    let profile = &event["event_params"];
-    let value = |name: &str| {
-        profile[name]
-            .as_u64()
-            .unwrap_or_else(|| panic!("thread initialization profile should include {name}"))
-    };
+    let profile = thread_initialization_profile(event);
     assert_eq!(
-        (value("duration_ms"), value("core_duration_ms")),
+        (profile.duration_ms, profile.core_duration_ms),
         (
-            value("app_server_duration_ms").saturating_add(value("core_duration_ms")),
-            value("existing_thread_lookup_ms")
-                .saturating_add(value("configuration_resolution_ms"))
-                .saturating_add(value("session_dependency_loading_ms"))
-                .saturating_add(value("session_construction_ms"))
-                .saturating_add(value("mcp_startup_ms"))
-                .saturating_add(value("session_activation_ms"))
-                .saturating_add(value("thread_registration_ms")),
+            profile
+                .app_server_duration_ms
+                .saturating_add(profile.core_duration_ms),
+            profile
+                .existing_thread_lookup_ms
+                .saturating_add(profile.configuration_resolution_ms)
+                .saturating_add(profile.session_dependency_loading_ms)
+                .saturating_add(profile.session_construction_ms)
+                .saturating_add(profile.mcp_startup_ms)
+                .saturating_add(profile.session_activation_ms)
+                .saturating_add(profile.thread_registration_ms),
         )
     );
 }
 
 pub(crate) fn assert_loaded_resume_thread_initialization_profile(event: &Value) {
-    let profile = &event["event_params"];
-    let lookup_ms = profile["existing_thread_lookup_ms"]
-        .as_u64()
-        .expect("loaded resume should include existing thread lookup timing");
+    let profile = thread_initialization_profile(event);
     assert_eq!(
-        (
-            profile["core_duration_ms"].as_u64(),
-            profile["configuration_resolution_ms"].as_u64(),
-            profile["session_dependency_loading_ms"].as_u64(),
-            profile["session_construction_ms"].as_u64(),
-            profile["mcp_startup_ms"].as_u64(),
-            profile["session_activation_ms"].as_u64(),
-            profile["thread_registration_ms"].as_u64(),
-        ),
-        (
-            Some(lookup_ms),
-            Some(0),
-            Some(0),
-            Some(0),
-            Some(0),
-            Some(0),
-            Some(0)
-        )
+        profile,
+        ThreadInitializationProfile {
+            duration_ms: profile.duration_ms,
+            app_server_duration_ms: profile.app_server_duration_ms,
+            core_duration_ms: profile.existing_thread_lookup_ms,
+            existing_thread_lookup_ms: profile.existing_thread_lookup_ms,
+            ..Default::default()
+        }
     );
+}
+
+fn thread_initialization_profile(event: &Value) -> ThreadInitializationProfile {
+    serde_json::from_value(event["event_params"].clone())
+        .expect("thread initialization event should include the complete profile")
 }
 
 pub(crate) async fn wait_for_thread_initialized_events(

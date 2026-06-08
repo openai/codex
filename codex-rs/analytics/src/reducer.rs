@@ -62,6 +62,7 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CompletedThreadInitialization;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginState;
@@ -69,9 +70,9 @@ use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
-use crate::facts::ThreadInitializationFact;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::ThreadInitializationProfile;
+use crate::facts::ThreadInitializationResponseFact;
 use crate::facts::TurnCodexError;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfile;
@@ -141,6 +142,30 @@ pub(crate) struct AnalyticsReducer {
     tool_items_started_at_ms: HashMap<ToolItemKey, u64>,
     pending_reviews: HashMap<RequestId, PendingReviewState>,
     item_review_summaries: HashMap<ToolItemKey, ItemReviewSummary>,
+}
+
+#[derive(Clone, Copy)]
+struct ThreadInitializationEventDetails {
+    mode: ThreadInitializationMode,
+    profile: Option<ThreadInitializationProfile>,
+}
+
+impl ThreadInitializationEventDetails {
+    fn without_profile(mode: ThreadInitializationMode) -> Self {
+        Self {
+            mode,
+            profile: None,
+        }
+    }
+}
+
+impl From<CompletedThreadInitialization> for ThreadInitializationEventDetails {
+    fn from(initialization: CompletedThreadInitialization) -> Self {
+        Self {
+            mode: initialization.initialization_mode,
+            profile: Some(initialization.profile),
+        }
+    }
 }
 
 struct ConnectionState {
@@ -408,12 +433,13 @@ impl AnalyticsReducer {
                 connection_id,
                 request_id,
                 response,
-                thread_initialization,
             } => {
                 if let Some(response) = response.into_client_response(request_id) {
-                    self.ingest_response(connection_id, response, thread_initialization, out)
-                        .await;
+                    self.ingest_response(connection_id, response, out).await;
                 }
+            }
+            AnalyticsFact::ThreadInitializationResponse(input) => {
+                self.ingest_thread_initialization_response(*input, out);
             }
             AnalyticsFact::ErrorResponse {
                 connection_id,
@@ -764,7 +790,6 @@ impl AnalyticsReducer {
         &mut self,
         connection_id: u64,
         response: ClientResponse,
-        thread_initialization: Option<ThreadInitializationFact>,
         out: &mut Vec<TrackEventRequest>,
     ) {
         match response {
@@ -773,10 +798,9 @@ impl AnalyticsReducer {
                     connection_id,
                     response.thread,
                     response.model,
-                    thread_initialization
-                        .map(|initialization| initialization.initialization_mode)
-                        .unwrap_or(ThreadInitializationMode::New),
-                    thread_initialization.map(|initialization| initialization.profile),
+                    ThreadInitializationEventDetails::without_profile(
+                        ThreadInitializationMode::New,
+                    ),
                     out,
                 );
             }
@@ -785,8 +809,9 @@ impl AnalyticsReducer {
                     connection_id,
                     response.thread,
                     response.model,
-                    ThreadInitializationMode::Resumed,
-                    thread_initialization.map(|initialization| initialization.profile),
+                    ThreadInitializationEventDetails::without_profile(
+                        ThreadInitializationMode::Resumed,
+                    ),
                     out,
                 );
             }
@@ -795,8 +820,9 @@ impl AnalyticsReducer {
                     connection_id,
                     response.thread,
                     response.model,
-                    ThreadInitializationMode::Forked,
-                    thread_initialization.map(|initialization| initialization.profile),
+                    ThreadInitializationEventDetails::without_profile(
+                        ThreadInitializationMode::Forked,
+                    ),
                     out,
                 );
             }
@@ -822,6 +848,38 @@ impl AnalyticsReducer {
             } => {
                 self.ingest_turn_steer_response(connection_id, request_id, response, out);
             }
+            _ => {}
+        }
+    }
+
+    fn ingest_thread_initialization_response(
+        &mut self,
+        input: ThreadInitializationResponseFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let initialization = input.initialization.into();
+        match input.response {
+            ClientResponsePayload::ThreadStart(response) => self.emit_thread_initialized(
+                input.connection_id,
+                response.thread,
+                response.model,
+                initialization,
+                out,
+            ),
+            ClientResponsePayload::ThreadResume(response) => self.emit_thread_initialized(
+                input.connection_id,
+                response.thread,
+                response.model,
+                initialization,
+                out,
+            ),
+            ClientResponsePayload::ThreadFork(response) => self.emit_thread_initialized(
+                input.connection_id,
+                response.thread,
+                response.model,
+                initialization,
+                out,
+            ),
             _ => {}
         }
     }
@@ -1199,8 +1257,7 @@ impl AnalyticsReducer {
         connection_id: u64,
         thread: codex_app_server_protocol::Thread,
         model: String,
-        initialization_mode: ThreadInitializationMode,
-        profile: Option<ThreadInitializationProfile>,
+        initialization: ThreadInitializationEventDetails,
         out: &mut Vec<TrackEventRequest>,
     ) {
         let session_source: SessionSource = thread.source.into();
@@ -1236,12 +1293,12 @@ impl AnalyticsReducer {
                     model,
                     ephemeral: thread.ephemeral,
                     thread_source: thread_metadata.thread_source,
-                    initialization_mode,
+                    initialization_mode: initialization.mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
                     forked_from_thread_id,
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
-                    profile,
+                    profile: initialization.profile,
                 },
             },
         ));

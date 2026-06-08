@@ -6,12 +6,12 @@ use std::sync::PoisonError;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_analytics::ThreadInitializationFact;
+use codex_analytics::CompletedThreadInitialization;
 use codex_analytics::ThreadInitializationMode;
 use codex_analytics::ThreadInitializationProfile;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ThreadInitializationPhase {
+enum ThreadInitializationPhase {
     ExistingThreadLookup,
     ConfigurationResolution,
     SessionDependencyLoading,
@@ -22,7 +22,7 @@ pub(crate) enum ThreadInitializationPhase {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SessionDependencyBranch {
+enum SessionDependencyBranch {
     ThreadPersistence,
     StateDbLoading,
     AuthAndMcpDiscovery,
@@ -68,41 +68,86 @@ impl ThreadInitializationTiming {
             .await
     }
 
-    pub fn start_loaded_resume() {
+    pub fn resume_lookup_started() {
         Self::start_current(
             ThreadInitializationMode::Resumed,
             ThreadInitializationPhase::ExistingThreadLookup,
         );
     }
 
-    pub fn start_cold_resume_configuration() {
-        Self::transition_to(ThreadInitializationPhase::ConfigurationResolution);
-    }
-
-    pub fn complete_core() {
+    pub fn core_completed() {
         Self::with_current(|timing| timing.complete_core_at(Instant::now()));
     }
 
-    pub fn complete_request(&self) -> Option<ThreadInitializationFact> {
+    pub fn complete_request(&self) -> Option<CompletedThreadInitialization> {
         self.complete_request_at(Instant::now())
     }
 
-    pub(crate) fn start_configuration_resolution(mode: ThreadInitializationMode) {
-        Self::start_current(mode, ThreadInitializationPhase::ConfigurationResolution);
+    pub(crate) fn new_thread_started() {
+        Self::start_configuration_resolution(ThreadInitializationMode::New);
     }
 
-    pub(crate) fn start_existing_thread_lookup() {
-        Self::start_current(
-            ThreadInitializationMode::Resumed,
-            ThreadInitializationPhase::ExistingThreadLookup,
-        );
+    pub(crate) fn cleared_thread_started() {
+        Self::start_configuration_resolution(ThreadInitializationMode::Cleared);
     }
 
-    pub(crate) fn transition_to(phase: ThreadInitializationPhase) {
+    pub(crate) fn forked_thread_started() {
+        Self::start_configuration_resolution(ThreadInitializationMode::Forked);
+    }
+
+    pub(crate) fn resumed_thread_started() {
+        Self::start_configuration_resolution(ThreadInitializationMode::Resumed);
+    }
+
+    pub(crate) fn configuration_resolution_started() {
+        Self::transition_to(ThreadInitializationPhase::ConfigurationResolution);
+    }
+
+    pub(crate) fn session_dependency_loading_started() {
+        Self::transition_to(ThreadInitializationPhase::SessionDependencyLoading);
+    }
+
+    pub(crate) fn session_construction_started() {
+        Self::transition_to(ThreadInitializationPhase::SessionConstruction);
+    }
+
+    pub(crate) fn mcp_startup_started() {
+        Self::transition_to(ThreadInitializationPhase::McpStartup);
+    }
+
+    pub(crate) fn session_activation_started() {
+        Self::transition_to(ThreadInitializationPhase::SessionActivation);
+    }
+
+    pub(crate) fn thread_registration_started() {
+        Self::transition_to(ThreadInitializationPhase::ThreadRegistration);
+    }
+
+    pub(crate) fn begin_thread_persistence() -> Option<SessionDependencyTimingGuard> {
+        Self::begin_session_dependency(SessionDependencyBranch::ThreadPersistence)
+    }
+
+    pub(crate) fn begin_state_db_loading() -> Option<SessionDependencyTimingGuard> {
+        Self::begin_session_dependency(SessionDependencyBranch::StateDbLoading)
+    }
+
+    pub(crate) fn begin_auth_and_mcp_discovery() -> Option<SessionDependencyTimingGuard> {
+        Self::begin_session_dependency(SessionDependencyBranch::AuthAndMcpDiscovery)
+    }
+
+    pub(crate) fn begin_plugin_and_skill_warmup() -> Option<SessionDependencyTimingGuard> {
+        Self::begin_session_dependency(SessionDependencyBranch::PluginAndSkillWarmup)
+    }
+
+    fn transition_to(phase: ThreadInitializationPhase) {
         Self::with_current(|timing| timing.transition_at(Instant::now(), phase));
     }
 
-    pub(crate) fn begin_session_dependency(
+    fn start_configuration_resolution(mode: ThreadInitializationMode) {
+        Self::start_current(mode, ThreadInitializationPhase::ConfigurationResolution);
+    }
+
+    fn begin_session_dependency(
         branch: SessionDependencyBranch,
     ) -> Option<SessionDependencyTimingGuard> {
         ACTIVE_THREAD_INITIALIZATION_TIMING
@@ -168,7 +213,7 @@ impl ThreadInitializationTiming {
         state.core_complete = true;
     }
 
-    fn complete_request_at(&self, now: Instant) -> Option<ThreadInitializationFact> {
+    fn complete_request_at(&self, now: Instant) -> Option<CompletedThreadInitialization> {
         let state = self.state();
         if !state.core_complete {
             return None;
@@ -178,7 +223,7 @@ impl ThreadInitializationTiming {
             duration_to_u64_ms(now.saturating_duration_since(state.request_started_at));
         profile.app_server_duration_ms =
             profile.duration_ms.saturating_sub(profile.core_duration_ms);
-        Some(ThreadInitializationFact {
+        Some(CompletedThreadInitialization {
             initialization_mode: state.initialization_mode?,
             profile,
         })

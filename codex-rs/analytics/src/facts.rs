@@ -27,6 +27,7 @@ use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -98,7 +99,7 @@ pub enum ThreadInitializationMode {
     Resumed,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ThreadInitializationProfile {
     pub duration_ms: u64,
     pub app_server_duration_ms: u64,
@@ -117,9 +118,16 @@ pub struct ThreadInitializationProfile {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ThreadInitializationFact {
+pub struct CompletedThreadInitialization {
     pub initialization_mode: ThreadInitializationMode,
     pub profile: ThreadInitializationProfile,
+}
+
+#[derive(Clone)]
+pub struct ThreadInitializationResponseFact {
+    pub connection_id: u64,
+    pub response: ClientResponsePayload,
+    pub initialization: CompletedThreadInitialization,
 }
 
 #[derive(Clone)]
@@ -482,8 +490,8 @@ pub(crate) enum AnalyticsFact {
         connection_id: u64,
         request_id: RequestId,
         response: Box<ClientResponsePayload>,
-        thread_initialization: Option<ThreadInitializationFact>,
     },
+    ThreadInitializationResponse(Box<ThreadInitializationResponseFact>),
     ErrorResponse {
         connection_id: u64,
         request_id: RequestId,

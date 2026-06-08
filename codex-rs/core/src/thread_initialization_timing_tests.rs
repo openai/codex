@@ -1,7 +1,7 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_analytics::ThreadInitializationFact;
+use codex_analytics::CompletedThreadInitialization;
 use codex_analytics::ThreadInitializationMode;
 use codex_analytics::ThreadInitializationProfile;
 use pretty_assertions::assert_eq;
@@ -21,54 +21,29 @@ fn thread_initialization_profile_breaks_down_request_and_core_time() {
         ThreadInitializationMode::Cleared,
         ThreadInitializationPhase::ConfigurationResolution,
     );
-    timing.transition_at(
-        core_started_at + Duration::from_millis(10),
-        ThreadInitializationPhase::ExistingThreadLookup,
-    );
-    timing.transition_at(
-        core_started_at + Duration::from_millis(15),
-        ThreadInitializationPhase::ConfigurationResolution,
-    );
-    timing.transition_at(
-        core_started_at + Duration::from_millis(30),
-        ThreadInitializationPhase::SessionDependencyLoading,
-    );
-    timing.record_dependency(
-        SessionDependencyBranch::ThreadPersistence,
-        Duration::from_millis(12),
-    );
-    timing.record_dependency(
-        SessionDependencyBranch::StateDbLoading,
-        Duration::from_millis(8),
-    );
-    timing.record_dependency(
-        SessionDependencyBranch::AuthAndMcpDiscovery,
-        Duration::from_millis(15),
-    );
-    timing.record_dependency(
-        SessionDependencyBranch::PluginAndSkillWarmup,
-        Duration::from_millis(18),
-    );
-    timing.transition_at(
-        core_started_at + Duration::from_millis(50),
-        ThreadInitializationPhase::SessionConstruction,
-    );
-    timing.transition_at(
-        core_started_at + Duration::from_millis(80),
-        ThreadInitializationPhase::McpStartup,
-    );
-    timing.transition_at(
-        core_started_at + Duration::from_millis(120),
-        ThreadInitializationPhase::SessionActivation,
-    );
-    timing.transition_at(
-        core_started_at + Duration::from_millis(170),
-        ThreadInitializationPhase::ThreadRegistration,
-    );
+    for (elapsed_ms, phase) in [
+        (10, ThreadInitializationPhase::ExistingThreadLookup),
+        (15, ThreadInitializationPhase::ConfigurationResolution),
+        (30, ThreadInitializationPhase::SessionDependencyLoading),
+        (50, ThreadInitializationPhase::SessionConstruction),
+        (80, ThreadInitializationPhase::McpStartup),
+        (120, ThreadInitializationPhase::SessionActivation),
+        (170, ThreadInitializationPhase::ThreadRegistration),
+    ] {
+        timing.transition_at(core_started_at + Duration::from_millis(elapsed_ms), phase);
+    }
+    for (branch, duration_ms) in [
+        (SessionDependencyBranch::ThreadPersistence, 12),
+        (SessionDependencyBranch::StateDbLoading, 8),
+        (SessionDependencyBranch::AuthAndMcpDiscovery, 15),
+        (SessionDependencyBranch::PluginAndSkillWarmup, 18),
+    ] {
+        timing.record_dependency(branch, Duration::from_millis(duration_ms));
+    }
     timing.complete_core_at(core_started_at + Duration::from_millis(230));
     assert_eq!(
         timing.complete_request_at(request_started_at + Duration::from_millis(275)),
-        Some(ThreadInitializationFact {
+        Some(CompletedThreadInitialization {
             initialization_mode: ThreadInitializationMode::Cleared,
             profile: ThreadInitializationProfile {
                 duration_ms: 275,
@@ -104,7 +79,7 @@ fn loaded_resume_records_only_existing_thread_lookup() {
 
     assert_eq!(
         timing.complete_request_at(request_started_at + Duration::from_millis(25)),
-        Some(ThreadInitializationFact {
+        Some(CompletedThreadInitialization {
             initialization_mode: ThreadInitializationMode::Resumed,
             profile: ThreadInitializationProfile {
                 duration_ms: 25,

@@ -655,10 +655,7 @@ impl MessageProcessor {
         outgoing
             .register_request_context(request_context.clone())
             .await;
-        request_context
-            .thread_initialization_timing()
-            .scope(request_fut.instrument(request_context.span()))
-            .await;
+        request_fut.instrument(request_context.span()).await;
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -831,24 +828,26 @@ impl MessageProcessor {
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
         let span = request_context.span();
+        let timing_context = request_context.clone();
         let request = QueuedInitializedRequest::new(
             rpc_gate,
-            async move {
-                let processor_for_request = Arc::clone(&processor);
-                let result = processor_for_request
-                    .handle_initialized_client_request(
-                        connection_request_id,
-                        codex_request,
-                        request_context,
-                        app_server_client_name,
-                        client_version,
-                    )
-                    .await;
-                if let Err(error) = result {
-                    processor.outgoing.send_error(error_request_id, error).await;
-                }
-            }
-            .instrument(span),
+            timing_context
+                .scope_thread_initialization(async move {
+                    let processor_for_request = Arc::clone(&processor);
+                    let result = processor_for_request
+                        .handle_initialized_client_request(
+                            connection_request_id,
+                            codex_request,
+                            request_context,
+                            app_server_client_name,
+                            client_version,
+                        )
+                        .await;
+                    if let Err(error) = result {
+                        processor.outgoing.send_error(error_request_id, error).await;
+                    }
+                })
+                .instrument(span),
         );
 
         if let Some(scope) = serialization_scope {

@@ -2428,7 +2428,7 @@ impl ThreadRequestProcessor {
             .await
         {
             Ok(true) => return Ok(()),
-            Ok(false) => ThreadInitializationTiming::start_cold_resume_configuration(),
+            Ok(false) => {}
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return Ok(());
@@ -2707,7 +2707,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<bool, JSONRPCErrorError> {
-        ThreadInitializationTiming::start_loaded_resume();
+        ThreadInitializationTiming::resume_lookup_started();
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
                 && self
@@ -2876,7 +2876,7 @@ impl ThreadRequestProcessor {
                     "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
                 )));
             }
-            ThreadInitializationTiming::complete_core();
+            ThreadInitializationTiming::core_completed();
             return Ok(true);
         }
         Ok(false)

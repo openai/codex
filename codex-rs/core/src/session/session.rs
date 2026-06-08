@@ -4,8 +4,6 @@ use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
-use crate::thread_initialization_timing::SessionDependencyBranch;
-use crate::thread_initialization_timing::ThreadInitializationPhase;
 use crate::thread_initialization_timing::ThreadInitializationTiming;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -532,13 +530,9 @@ impl Session {
         // - initialize thread persistence with new or resumed session info
         // - perform default shell discovery
         // - load history metadata (skipped for subagents)
-        ThreadInitializationTiming::transition_to(
-            ThreadInitializationPhase::SessionDependencyLoading,
-        );
+        ThreadInitializationTiming::session_dependency_loading_started();
         let thread_persistence_fut = async {
-            let _timing_guard = ThreadInitializationTiming::begin_session_dependency(
-                SessionDependencyBranch::ThreadPersistence,
-            );
+            let _timing_guard = ThreadInitializationTiming::begin_thread_persistence();
             if config.ephemeral {
                 Ok::<_, anyhow::Error>(None)
             } else {
@@ -601,9 +595,7 @@ impl Session {
             session_init.ephemeral = config.ephemeral,
         ));
         let state_db_fut = async {
-            let _timing_guard = ThreadInitializationTiming::begin_session_dependency(
-                SessionDependencyBranch::StateDbLoading,
-            );
+            let _timing_guard = ThreadInitializationTiming::begin_state_db_loading();
             if config.ephemeral {
                 None
             } else if let Some(local_store) =
@@ -624,9 +616,7 @@ impl Session {
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
-            let _timing_guard = ThreadInitializationTiming::begin_session_dependency(
-                SessionDependencyBranch::AuthAndMcpDiscovery,
-            );
+            let _timing_guard = ThreadInitializationTiming::begin_auth_and_mcp_discovery();
             let auth = auth_manager_clone.auth().await;
             let mcp_servers = mcp_manager_for_mcp
                 .effective_servers(&config_for_mcp, auth.as_ref())
@@ -645,9 +635,7 @@ impl Session {
         ));
 
         let plugin_and_skill_warmup_fut = async {
-            let _timing_guard = ThreadInitializationTiming::begin_session_dependency(
-                SessionDependencyBranch::PluginAndSkillWarmup,
-            );
+            let _timing_guard = ThreadInitializationTiming::begin_plugin_and_skill_warmup();
             warm_plugins_and_skills_for_session_init(
                 Arc::clone(&config),
                 Arc::clone(&environment_manager),
@@ -674,7 +662,7 @@ impl Session {
             auth_and_mcp_fut,
             plugin_and_skill_warmup_fut
         );
-        ThreadInitializationTiming::transition_to(ThreadInitializationPhase::SessionConstruction);
+        ThreadInitializationTiming::session_construction_started();
 
         for err in &plugin_skill_errors {
             error!(
@@ -1129,7 +1117,7 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            ThreadInitializationTiming::transition_to(ThreadInitializationPhase::McpStartup);
+            ThreadInitializationTiming::mcp_startup_started();
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
                 .filter(|(_, server)| server.enabled() && server.required())
@@ -1236,7 +1224,7 @@ impl Session {
                     anyhow::bail!("required MCP servers failed to initialize: {details}");
                 }
             }
-            ThreadInitializationTiming::transition_to(ThreadInitializationPhase::SessionActivation);
+            ThreadInitializationTiming::session_activation_started();
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {
@@ -1260,9 +1248,7 @@ impl Session {
         match session_result {
             Ok(sess) => {
                 live_thread_init.commit();
-                ThreadInitializationTiming::transition_to(
-                    ThreadInitializationPhase::ThreadRegistration,
-                );
+                ThreadInitializationTiming::thread_registration_started();
                 Ok(sess)
             }
             Err(err) => {
