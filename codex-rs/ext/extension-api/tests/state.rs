@@ -46,6 +46,8 @@ fn get_or_init_initializes_once_and_returns_shared_value() {
             callers_started.fetch_add(1, Ordering::SeqCst);
             data.get_or_init(|| {
                 initialization_count.fetch_add(1, Ordering::SeqCst);
+                // Keep the first initializer active until every worker has attempted
+                // get_or_init, forcing callers to overlap on the same missing entry.
                 while callers_started.load(Ordering::SeqCst) < 8 {
                     std::thread::yield_now();
                 }
