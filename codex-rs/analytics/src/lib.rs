@@ -25,6 +25,7 @@ pub use facts::AnalyticsJsonRpcError;
 pub use facts::AppInvocation;
 pub use facts::CodexCompactionEvent;
 pub use facts::CodexGoalEvent;
+pub use facts::CodexErrKind;
 pub use facts::CodexTurnSteerEvent;
 pub use facts::CompactionImplementation;
 pub use facts::CompactionPhase;
