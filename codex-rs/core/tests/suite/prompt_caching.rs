@@ -188,9 +188,6 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     };
     expected_tools_names.extend([
         "update_plan",
-        "get_goal",
-        "create_goal",
-        "update_goal",
         "request_user_input",
         "apply_patch",
         "view_image",
@@ -767,7 +764,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(new_cwd.path().to_path_buf()),
+                cwd: Some(new_cwd.abs()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -884,7 +881,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(default_cwd.to_path_buf()),
+                cwd: Some(default_cwd.clone()),
                 approval_policy: Some(default_approval_policy),
                 sandbox_policy: Some(default_sandbox_policy.clone()),
                 summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
@@ -913,7 +910,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(default_cwd.to_path_buf()),
+                cwd: Some(default_cwd.clone()),
                 approval_policy: Some(default_approval_policy),
                 sandbox_policy: Some(default_sandbox_policy.clone()),
                 summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
@@ -1027,7 +1024,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(default_cwd.to_path_buf()),
+                cwd: Some(default_cwd.clone()),
                 approval_policy: Some(default_approval_policy),
                 sandbox_policy: Some(default_sandbox_policy.clone()),
                 summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
@@ -1058,7 +1055,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(default_cwd.to_path_buf()),
+                cwd: Some(default_cwd.clone()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

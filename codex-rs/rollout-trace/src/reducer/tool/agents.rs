@@ -613,7 +613,12 @@ fn inter_agent_message_fields(item: &ConversationItem) -> Option<(String, String
         return None;
     };
     let communication = serde_json::from_str::<InterAgentCommunication>(text).ok()?;
-    Some((communication.recipient.to_string(), communication.content))
+    Some((
+        communication.recipient.to_string(),
+        communication
+            .encrypted_content
+            .unwrap_or(communication.content),
+    ))
 }
 
 #[cfg(test)]

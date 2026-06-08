@@ -19,6 +19,7 @@ use tempfile::tempdir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -123,6 +124,84 @@ async fn login_with_access_token_writes_only_token() {
     );
     assert!(auth.tokens.is_none(), "tokens should be cleared");
     assert!(auth.openai_api_key.is_none(), "API key should be cleared");
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn login_with_access_token_writes_only_personal_access_token() {
+    let dir = tempdir().unwrap();
+    let auth_path = dir.path().join("auth.json");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .and(header("authorization", "Bearer at-login-test"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    super::login_with_access_token(
+        dir.path(),
+        "at-login-test",
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("personal access token login should succeed");
+
+    let storage = FileAuthStorage::new(dir.path().to_path_buf());
+    let auth = storage
+        .try_read_auth_json(&auth_path)
+        .expect("auth.json should parse");
+    assert_eq!(
+        auth,
+        AuthDotJson {
+            auth_mode: None,
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+            personal_access_token: Some("at-login-test".to_string()),
+        }
+    );
+    assert_eq!(auth.resolved_mode(), AuthMode::PersonalAccessToken);
+    let persisted: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(auth_path).unwrap()).unwrap();
+    assert!(persisted.get("auth_mode").is_none());
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn login_with_access_token_rejects_invalid_personal_access_token() {
+    let dir = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+
+    let err = super::login_with_access_token(
+        dir.path(),
+        "at-invalid-login",
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect_err("invalid personal access token should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    assert!(
+        !get_auth_file(dir.path()).exists(),
+        "invalid personal access token should not write auth.json"
+    );
     server.verify().await;
 }
 
@@ -245,6 +324,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
             }),
             last_refresh: Some(last_refresh),
             agent_identity: None,
+            personal_access_token: None,
         },
         auth_dot_json
     );
@@ -286,6 +366,7 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
         tokens: None,
         last_refresh: None,
         agent_identity: None,
+        personal_access_token: None,
     };
     super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
     let auth_file = get_auth_file(dir.path());
@@ -764,6 +845,98 @@ async fn load_auth_reads_access_token_from_env() {
 
 #[tokio::test]
 #[serial(codex_auth_env)]
+async fn load_auth_reads_personal_access_token_from_env() {
+    let codex_home = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .and(header("authorization", "Bearer at-env-test"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, "at-env-test");
+
+    for auth_credentials_store_mode in [
+        AuthCredentialsStoreMode::File,
+        AuthCredentialsStoreMode::Ephemeral,
+    ] {
+        let auth = super::load_auth(
+            codex_home.path(),
+            /*enable_codex_api_key_env*/ false,
+            auth_credentials_store_mode,
+            /*chatgpt_base_url*/ None,
+        )
+        .await
+        .expect("env auth should load")
+        .expect("env auth should be present");
+
+        assert_eq!(auth.api_auth_mode(), AuthMode::PersonalAccessToken);
+        assert_eq!(
+            auth.get_token()
+                .expect("personal access token should be exposed"),
+            "at-env-test"
+        );
+        assert_eq!(auth.get_account_id().as_deref(), Some(WORKSPACE_ID_ALLOWED));
+        assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-123"));
+        assert_eq!(
+            auth.get_account_email().as_deref(),
+            Some("user@example.com")
+        );
+        assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Business));
+        assert!(auth.is_fedramp_account());
+    }
+    assert!(
+        !get_auth_file(codex_home.path()).exists(),
+        "env auth should not write auth.json"
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn personal_access_token_does_not_offer_unauthorized_recovery() {
+    let codex_home = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    let _access_token_guard =
+        EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, "at-no-unauthorized-recovery");
+    let manager = Arc::new(
+        AuthManager::new(
+            codex_home.path().to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
+        )
+        .await,
+    );
+
+    let recovery = manager.unauthorized_recovery();
+
+    assert!(!recovery.has_next());
+    assert_eq!(recovery.unavailable_reason(), "not_refreshable_auth");
+    manager
+        .refresh_token_from_authority()
+        .await
+        .expect("personal access tokens do not use OAuth refresh");
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
 async fn load_auth_keeps_codex_api_key_env_precedence() {
     let codex_home = tempdir().unwrap();
     let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
@@ -938,6 +1111,7 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
             tokens: None,
             last_refresh: None,
             agent_identity: Some(agent_identity),
+            personal_access_token: None,
         },
         AuthCredentialsStoreMode::File,
     )
@@ -1088,6 +1262,16 @@ fn test_jwks_body() -> serde_json::Value {
             "n": "1qQF2MqTrGAMDm7wXbjJP5sWqGA83tAGUs2ksy7iJXLJdhCg4AtwGm4SFl4f6kxhCSzlN1QdXuZjvRT2wZZiGUi9xUE28rf4WLrTxSnwqLuTy5knMP08yC0t_0YU_FGPZMcWb14hG05IvZr8UbmRaVagxSR8H4rSIymRoVwwmFSrqz068XrWGSYNIfLEASyo5GdAaqmk1JALINHgYGQJVxMxtwcvDxoVKmC7eltUNymMNBZhsv4E8sx9YNLpBoEibznfEpDU_DGzrM5eZCsQzaqbhBOlGd427ifud_Nnd9cPqzgCUc23-0FXSPfpbgksCXAwAmD0OFjQWrgqVdKL6Q",
             "e": "AQAB",
         }]
+    })
+}
+
+fn personal_access_token_whoami(account_id: &str) -> serde_json::Value {
+    json!({
+        "email": "user@example.com",
+        "chatgpt_user_id": "user-123",
+        "chatgpt_account_id": account_id,
+        "chatgpt_plan_type": "business",
+        "chatgpt_account_is_fedramp": true,
     })
 }
 

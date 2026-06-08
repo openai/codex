@@ -2,7 +2,6 @@ use super::input_queue::InputQueue;
 use super::*;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
-use crate::goals::GoalRuntimeState;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
@@ -37,7 +36,6 @@ pub(crate) struct Session {
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) input_queue: InputQueue,
-    pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) next_internal_sub_id: AtomicU64,
@@ -251,19 +249,7 @@ impl SessionConfiguration {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
         }
 
-        let absolute_cwd = updates
-            .cwd
-            .as_ref()
-            .map(|cwd| {
-                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
-                    cwd.as_path(),
-                ))
-                .unwrap_or_else(|e| {
-                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
-                    self.cwd.clone()
-                })
-            })
-            .unwrap_or_else(|| self.cwd.clone());
+        let absolute_cwd = updates.cwd.clone().unwrap_or_else(|| self.cwd.clone());
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
@@ -415,7 +401,7 @@ impl SessionConfiguration {
 
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
-    pub(crate) cwd: Option<PathBuf>,
+    pub(crate) cwd: Option<AbsolutePathBuf>,
     pub(crate) workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) approval_policy: Option<AskForApproval>,
@@ -962,7 +948,12 @@ impl Session {
             } else {
                 SessionId::from(thread_id)
             };
-            let agent_control = agent_control.with_session_id(session_id);
+            let agent_control = agent_control.with_session_id(
+                session_id,
+                config
+                    .effective_agent_max_threads(MultiAgentVersion::V2)
+                    .unwrap_or(usize::MAX),
+            );
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             let thread_extension_data =
@@ -1071,7 +1062,6 @@ impl Session {
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
                 input_queue: InputQueue::new(),
-                goal_runtime: GoalRuntimeState::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 next_internal_sub_id: AtomicU64::new(0),

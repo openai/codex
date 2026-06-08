@@ -151,9 +151,7 @@ impl ShellSnapshot {
         });
 
         // Make the new snapshot.
-        if let Err(err) =
-            write_shell_snapshot(shell.shell_type.clone(), &temp_path, session_cwd).await
-        {
+        if let Err(err) = write_shell_snapshot(shell.shell_type, &temp_path, session_cwd).await {
             tracing::warn!(
                 "Failed to create shell snapshot for {}: {err:?}",
                 shell.name()
@@ -203,7 +201,7 @@ async fn write_shell_snapshot(
     if shell_type == ShellType::PowerShell || shell_type == ShellType::Cmd {
         bail!("Shell snapshot not supported yet for {shell_type:?}");
     }
-    let shell = get_shell(shell_type.clone(), /*path*/ None)
+    let shell = get_shell(shell_type, /*path*/ None)
         .with_context(|| format!("No available shell for {shell_type:?}"))?;
 
     let raw_snapshot = capture_snapshot(&shell, cwd).await?;
@@ -225,7 +223,7 @@ async fn write_shell_snapshot(
 }
 
 async fn capture_snapshot(shell: &Shell, cwd: &AbsolutePathBuf) -> Result<String> {
-    let shell_type = shell.shell_type.clone();
+    let shell_type = shell.shell_type;
     match shell_type {
         ShellType::Zsh => run_shell_script(shell, &zsh_snapshot_script(), cwd).await,
         ShellType::Bash => run_shell_script(shell, &bash_snapshot_script(), cwd).await,

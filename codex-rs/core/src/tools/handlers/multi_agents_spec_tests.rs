@@ -81,6 +81,12 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     assert!(!description.contains("hidden-model"));
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
     assert!(properties.contains_key("fork_turns"));
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
@@ -141,6 +147,12 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        None
+    );
     assert_eq!(
         properties
             .get("model")
@@ -259,6 +271,12 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
         .expect("send_message should use object params");
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
     assert!(!properties.contains_key("interrupt"));
     assert!(!properties.contains_key("items"));
     assert_eq!(
@@ -278,6 +296,7 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
 fn followup_task_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
         name,
+        description,
         parameters,
         output_schema,
         ..
@@ -286,6 +305,10 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         panic!("followup_task should be a function tool");
     };
     assert_eq!(name, "followup_task");
+    assert_eq!(
+        description,
+        "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
+    );
     assert_eq!(
         parameters.schema_type,
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
@@ -296,6 +319,12 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         .expect("followup_task should use object params");
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
     assert!(!properties.contains_key("items"));
     assert_eq!(
         parameters.required.as_ref(),

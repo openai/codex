@@ -98,6 +98,9 @@ jobs:
     name: Argument comment lint - ${{ matrix.name }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
+    environment:
+      name: bazel
+      deployment: false
     strategy:
       fail-fast: false
       matrix:

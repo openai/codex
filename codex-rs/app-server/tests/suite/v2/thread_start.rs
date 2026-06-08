@@ -197,15 +197,15 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<()> {
+async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
     let cwd_tmp = TempDir::new()?;
     let cwd = cwd_tmp.path().to_path_buf();
-    let relative_root = PathBuf::from("extra-root");
-    std::fs::create_dir_all(cwd.join(&relative_root))?;
+    let extra_root = cwd.join("extra-root");
+    std::fs::create_dir_all(&extra_root)?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -213,7 +213,7 @@ async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<(
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(cwd.to_string_lossy().to_string()),
-            runtime_workspace_roots: Some(vec![relative_root.clone()]),
+            runtime_workspace_roots: Some(vec![extra_root.abs()]),
             ..Default::default()
         })
         .await?;
@@ -230,10 +230,7 @@ async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<(
     } = to_response::<ThreadStartResponse>(resp)?;
 
     assert_eq!(response_cwd, cwd.abs());
-    assert_eq!(
-        runtime_workspace_roots,
-        vec![cwd_tmp.path().join(relative_root).abs()]
-    );
+    assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
 
     Ok(())
 }
@@ -711,7 +708,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
         .send_thread_start_request(ThreadStartParams::default())
         .await?;
 
-    let _: ThreadStartResponse = to_response(
+    let start_response: ThreadStartResponse = to_response(
         timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
@@ -748,6 +745,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
     assert_eq!(
         starting,
         McpServerStatusUpdatedNotification {
+            thread_id: Some(start_response.thread.id.clone()),
             name: "optional_broken".to_string(),
             status: McpServerStartupState::Starting,
             error: None,
@@ -780,6 +778,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
     let ServerNotification::McpServerStatusUpdated(failed) = failed else {
         anyhow::bail!("unexpected notification variant");
     };
+    assert_eq!(failed.thread_id, Some(start_response.thread.id));
     assert_eq!(failed.name, "optional_broken");
     assert_eq!(failed.status, McpServerStartupState::Failed);
     assert!(

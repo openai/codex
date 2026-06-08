@@ -119,6 +119,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::config::permissions::BUILT_IN_READ_ONLY_PROFILE;
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
 use crate::config::permissions::apply_network_proxy_feature_config;
 use crate::config::permissions::builtin_permission_profile;
@@ -2245,9 +2246,9 @@ pub struct ConfigOverrides {
     pub bypass_hook_trust: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
-    /// Explicit runtime workspace roots for this session. When set, this is
-    /// the full runtime root list rather than an additive override.
-    pub workspace_roots: Option<Vec<PathBuf>>,
+    /// Explicit absolute runtime workspace roots for this session. When set,
+    /// this is the full runtime root list rather than an additive override.
+    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
 }
 
 fn dedupe_absolute_paths(paths: &mut Vec<AbsolutePathBuf>) {
@@ -2821,12 +2822,7 @@ impl Config {
             || !requested_additional_writable_roots.is_empty()
             || legacy_workspace_roots_explicit;
         let mut workspace_roots = match workspace_roots_override {
-            Some(workspace_roots) => workspace_roots
-                .into_iter()
-                .map(|path| {
-                    AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path())
-                })
-                .collect(),
+            Some(workspace_roots) => workspace_roots,
             None => {
                 let mut workspace_roots = vec![resolved_cwd.clone()];
                 workspace_roots.extend(requested_additional_writable_roots.clone());
@@ -3840,7 +3836,9 @@ fn resolve_effective_permission_selection<'a>(
     Ok(EffectivePermissionSelection {
         profiles,
         selected_profile_id,
-        requirements_force_profile_selection: requirements_toml.allowed_permissions.is_some(),
+        requirements_force_profile_selection: requirements_toml
+            .allowed_permission_profiles
+            .is_some(),
     })
 }
 
@@ -3850,28 +3848,36 @@ fn resolve_default_permissions<'a>(
     requirements_toml: &'a ConfigRequirementsToml,
     startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<Option<&'a str>> {
-    let allowed_permissions = requirements_toml.allowed_permissions.as_ref();
-    let mut default_permissions = default_permissions_override.or(configured_default_permissions);
-    if let (Some(selected_permissions), Some(allowed_permissions)) =
-        (default_permissions, allowed_permissions)
-        && !is_builtin_permission_profile_name(selected_permissions)
-        && !allowed_permissions
-            .iter()
-            .any(|allowed_permission| allowed_permission == selected_permissions)
-    {
-        let Some(fallback_permissions) = allowed_permissions.first().map(String::as_str) else {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "requirements.toml allowed_permissions must include at least one profile",
-            ));
-        };
-        startup_warnings.push(format!(
-            "Configured value for `permission_profile` is disallowed by requirements; falling back from `{selected_permissions}` to required value `{fallback_permissions}`."
+    let selected_permissions = default_permissions_override.or(configured_default_permissions);
+    let Some(allowed_permission_profiles) = requirements_toml.allowed_permission_profiles.as_ref()
+    else {
+        return Ok(selected_permissions);
+    };
+    let Some(fallback_permissions) = requirements_toml
+        .default_permissions
+        .as_deref()
+        .or_else(|| implicit_default_permissions(allowed_permission_profiles))
+    else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "requirements.toml default_permissions must be set unless allowed_permission_profiles allows both `:workspace` and `:read-only`",
         ));
-        default_permissions = Some(fallback_permissions);
-    }
+    };
 
-    Ok(default_permissions)
+    match selected_permissions {
+        None => Ok(Some(fallback_permissions)),
+        Some(selected_permissions)
+            if is_permission_allowed(allowed_permission_profiles, selected_permissions) =>
+        {
+            Ok(Some(selected_permissions))
+        }
+        Some(selected_permissions) => {
+            startup_warnings.push(format!(
+                "Configured value for `permission_profile` is disallowed by requirements; falling back from `{selected_permissions}` to required value `{fallback_permissions}`."
+            ));
+            Ok(Some(fallback_permissions))
+        }
+    }
 }
 
 fn validate_required_permission_profile_catalog(
@@ -3885,28 +3891,65 @@ fn validate_required_permission_profile_catalog(
                 .is_some_and(|permissions| permissions.entries.contains_key(profile_id))
     };
 
-    let Some(allowed_permissions) = requirements_toml.allowed_permissions.as_ref() else {
+    let Some(allowed_permission_profiles) = requirements_toml.allowed_permission_profiles.as_ref()
+    else {
+        if requirements_toml.default_permissions.is_some() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "requirements.toml default_permissions requires allowed_permission_profiles",
+            ));
+        }
         return Ok(());
     };
-    if allowed_permissions.is_empty() {
-        return Err(std::io::Error::new(
-            ErrorKind::InvalidInput,
-            "requirements.toml allowed_permissions must include at least one profile",
-        ));
-    }
-
-    for profile_id in allowed_permissions {
+    for profile_id in allowed_permission_profiles.keys() {
         if !is_known_profile(profile_id) {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
                 format!(
-                    "requirements.toml allowed_permissions refers to undefined profile `{profile_id}`"
+                    "requirements.toml allowed_permission_profiles refers to undefined profile `{profile_id}`"
                 ),
             ));
         }
     }
 
+    let Some(default_permissions) = requirements_toml
+        .default_permissions
+        .as_deref()
+        .or_else(|| implicit_default_permissions(allowed_permission_profiles))
+    else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "requirements.toml default_permissions must be set unless allowed_permission_profiles allows both `:workspace` and `:read-only`",
+        ));
+    };
+    if !is_permission_allowed(allowed_permission_profiles, default_permissions) {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "requirements.toml default_permissions `{default_permissions}` must be allowed by allowed_permission_profiles"
+            ),
+        ));
+    }
+
     Ok(())
+}
+
+fn implicit_default_permissions(
+    allowed_permission_profiles: &BTreeMap<String, bool>,
+) -> Option<&'static str> {
+    (is_permission_allowed(allowed_permission_profiles, BUILT_IN_WORKSPACE_PROFILE)
+        && is_permission_allowed(allowed_permission_profiles, BUILT_IN_READ_ONLY_PROFILE))
+    .then_some(BUILT_IN_WORKSPACE_PROFILE)
+}
+
+fn is_permission_allowed(
+    allowed_permission_profiles: &BTreeMap<String, bool>,
+    profile_id: &str,
+) -> bool {
+    allowed_permission_profiles
+        .get(profile_id)
+        .copied()
+        .unwrap_or(false)
 }
 
 fn normalize_guardian_policy_config(value: Option<&str>) -> Option<String> {

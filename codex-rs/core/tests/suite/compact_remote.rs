@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used)]
 
 use std::fs;
-use std::path::PathBuf;
 
 use anyhow::Result;
 use codex_core::compact::SUMMARY_PREFIX;
@@ -24,6 +23,7 @@ use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::configure_search_capable_model;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -36,6 +36,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_path_buf;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
@@ -3313,7 +3314,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
             core_test_support::submit_thread_settings(
                 &codex,
                 codex_protocol::protocol::ThreadSettingsOverrides {
-                    cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
+                    cwd: Some(test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs()),
                     ..Default::default()
                 },
             )

@@ -1799,7 +1799,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(config.cwd.to_path_buf()),
+                cwd: Some(config.cwd.clone()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
                 summary: Some(
@@ -1894,20 +1894,10 @@ async fn responses_lite_sets_all_turns_context_and_disables_parallel_tool_calls(
     )
     .await;
 
-    let mut model_catalog = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
-    let model = model_catalog
-        .models
-        .iter_mut()
-        .find(|model| model.slug == "gpt-5.4")
-        .expect("gpt-5.4 exists in bundled models.json");
-    model.use_responses_lite = true;
-    model.supports_parallel_tool_calls = true;
-
     let TestCodex { codex, .. } = test_codex()
-        .with_model("gpt-5.4")
-        .with_config(move |config| {
-            config.model_catalog = Some(model_catalog);
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+            model_info.supports_parallel_tool_calls = true;
         })
         .build(&server)
         .await?;
@@ -1987,7 +1977,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(config.cwd.to_path_buf()),
+                cwd: Some(config.cwd.clone()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
                 summary: Some(ReasoningSummary::Concise),

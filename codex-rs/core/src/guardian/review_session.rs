@@ -733,7 +733,7 @@ async fn run_review_on_session(
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 #[allow(deprecated)]
-                cwd: Some(params.parent_turn.cwd.to_path_buf()),
+                cwd: Some(params.parent_turn.cwd.clone()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: None,
                 permission_profile: Some(guardian_permission_profile),

@@ -4,6 +4,8 @@ use codex_app_server_protocol::PluginInstallPolicy;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
 use std::collections::HashSet;
+use std::path::Component;
+use std::path::Path;
 use tracing::warn;
 
 use crate::OPENAI_BUNDLED_MARKETPLACE_NAME;
@@ -52,6 +54,9 @@ const TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST: &[&str] = &[
     OPENAI_CURATED_MARKETPLACE_NAME,
     REMOTE_GLOBAL_MARKETPLACE_NAME,
 ];
+
+const OPENAI_CURATED_MARKETPLACE_PATH_SUFFIX: &str =
+    ".tmp/plugins/.agents/plugins/marketplace.json";
 
 #[derive(Debug, Clone)]
 pub struct ToolSuggestPluginDiscoveryInput {
@@ -108,6 +113,10 @@ impl PluginsManager {
             {
                 continue;
             }
+            let use_legacy_local_curated_filter = should_use_legacy_local_curated_discovery_filter(
+                &marketplace_name,
+                marketplace.path.as_path(),
+            );
             let is_allowlisted_marketplace = TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST
                 .contains(&marketplace_name.as_str());
 
@@ -120,6 +129,13 @@ impl PluginsManager {
                     || input.disabled_plugin_ids.contains(plugin.id.as_str())
                     || (!is_allowlisted_marketplace && !is_configured_plugin)
                 {
+                    continue;
+                }
+
+                // On Windows-backed WSL mounts, keep local curated discovery bounded to the
+                // legacy fallback/configured set instead of reading every plugin detail for app
+                // ids. Remote curated has cached app ids and still expands by installed apps.
+                if use_legacy_local_curated_filter && !is_configured_plugin && !is_fallback_plugin {
                     continue;
                 }
 
@@ -216,3 +232,30 @@ impl PluginsManager {
         Ok(discoverable_plugins)
     }
 }
+
+fn should_use_legacy_local_curated_discovery_filter(
+    marketplace_name: &str,
+    marketplace_path: &Path,
+) -> bool {
+    marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME
+        && is_wsl_windows_drive_path(marketplace_path)
+        && marketplace_path.ends_with(Path::new(OPENAI_CURATED_MARKETPLACE_PATH_SUFFIX))
+}
+
+fn is_wsl_windows_drive_path(path: &Path) -> bool {
+    let mut components = path.components();
+    if components.next() != Some(Component::RootDir) {
+        return false;
+    }
+    if components.next().and_then(|part| part.as_os_str().to_str()) != Some("mnt") {
+        return false;
+    }
+    let Some(drive) = components.next().and_then(|part| part.as_os_str().to_str()) else {
+        return false;
+    };
+    drive.len() == 1 && drive.as_bytes()[0].is_ascii_alphabetic()
+}
+
+#[cfg(test)]
+#[path = "discoverable_tests.rs"]
+mod tests;

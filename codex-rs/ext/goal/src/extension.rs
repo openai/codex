@@ -36,6 +36,7 @@ use crate::accounting::GoalAccountingState;
 use crate::api::GoalService;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
+use crate::runtime::ActiveGoalStopReason;
 use crate::runtime::GoalRuntimeConfig;
 use crate::runtime::GoalRuntimeHandle;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
@@ -278,18 +279,26 @@ where
     }
 
     async fn on_turn_error(&self, input: TurnErrorInput<'_>) {
-        if input.error != CodexErrorInfo::UsageLimitExceeded {
-            return;
-        }
         let Some(runtime) = goal_runtime_handle(input.thread_store) else {
             return;
         };
 
+        let reason = match input.error {
+            CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
+            // The turn has ended because the error was non-retryable or its
+            // retries were exhausted. Block the goal to prevent automatic
+            // continuation from looping and consuming tokens, as can happen
+            // with compaction errors.
+            _ => ActiveGoalStopReason::TurnError,
+        };
         if let Err(err) = runtime
-            .usage_limit_active_goal_for_turn(input.turn_id)
+            .stop_active_goal_for_turn(input.turn_id, reason)
             .await
         {
-            tracing::warn!("failed to usage-limit active goal after usage-limit error: {err}");
+            tracing::warn!(
+                error = ?input.error,
+                "failed to stop active goal after turn error: {err}"
+            );
         }
     }
 }
