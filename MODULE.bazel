@@ -95,6 +95,7 @@ single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
     patches = [
+        "//patches:rules_rs_build_script_deps_annotation.patch",
         "//patches:rules_rs_windows_gnullvm_exec.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
     ],
@@ -296,6 +297,11 @@ bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
 inject_repo(crate, "xz")
 
 crate.annotation(
+    # Build scripts compile in Bazel's exec configuration, so target-specific
+    # optional build deps are otherwise dropped for the musl release platforms.
+    build_script_deps = [
+        "@crates//:openssl-src-300.5.5+3.5.5",
+    ],
     build_script_data = [
         "@openssl//:gen_dir",
     ],

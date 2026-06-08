@@ -560,14 +560,26 @@ jobs:
             -- \
             "${bazel_targets[@]}"
 
-      - name: Analyze Bazel release bundle
+      - name: Verify Bazel release bundle dependencies
         if: runner.os == 'Linux'
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          # Keep the documented `just build-for-release` target's platform
-          # transitions covered without compiling every release artifact in CI.
+          # Exercise the musl-only OpenSSL build-script dependency without
+          # compiling every release artifact in CI.
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            -- \
+            build \
+            --platforms=//:release_linux_amd64_musl \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            --build_metadata=TAG_job=verify-release-openssl \
+            -- \
+            @crates//:openssl-sys
+
+          # Keep the documented `just build-for-release` target's remaining
+          # platform transitions covered by analysis.
           ./.github/scripts/run-bazel-ci.sh \
             --print-failed-action-summary \
             -- \
