@@ -447,7 +447,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::Elevated,
-            /* proxy_enforced */ false,
+            /*proxy_enforced*/ false,
         );
 
         assert_eq!(
@@ -474,7 +474,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::Elevated,
-            /* proxy_enforced */ false,
+            /*proxy_enforced*/ false,
         );
 
         assert_eq!(
@@ -502,7 +502,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::Elevated,
-            /* proxy_enforced */ false,
+            /*proxy_enforced*/ false,
         );
 
         assert_eq!(rewritten, command);
@@ -521,7 +521,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::RestrictedToken,
-            /* proxy_enforced */ true,
+            /*proxy_enforced*/ true,
         );
 
         assert_eq!(
@@ -548,7 +548,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::RestrictedToken,
-            /* proxy_enforced */ false,
+            /*proxy_enforced*/ false,
         );
 
         assert_eq!(rewritten, command);
@@ -567,7 +567,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::None,
             WindowsSandboxLevel::Elevated,
-            /* proxy_enforced */ false,
+            /*proxy_enforced*/ false,
         );
 
         assert_eq!(rewritten, command);
@@ -586,7 +586,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::Bash),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::Elevated,
-            /* proxy_enforced */ false,
+            /*proxy_enforced*/ false,
         );
 
         assert_eq!(rewritten, command);
