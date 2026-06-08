@@ -5293,8 +5293,25 @@ async fn legacy_history_refreshes_when_first_turn_requires_full_context() {
     .expect("legacy forked session should start");
 
     assert_eq!(contributor.calls.load(Ordering::SeqCst), 0);
-
     let turn_context = session.new_default_turn().await;
+    let mut warnings = Vec::new();
+    let mut expected = AgentsMdManager::new(turn_context.config.as_ref())
+        .user_instructions(
+            turn_context.environments.primary_environment().as_deref(),
+            LoadedAgentsMd::default(),
+            &mut warnings,
+        )
+        .await
+        .expect("project instructions should load");
+    assert_eq!(warnings, Vec::<String>::new());
+    expected.replace_global(GlobalInstructions {
+        instructions: vec![GlobalInstruction::new(
+            "refreshed instructions",
+            /*source*/ None,
+        )],
+        warnings: Vec::new(),
+    });
+
     session
         .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
@@ -5307,16 +5324,7 @@ async fn legacy_history_refreshes_when_first_turn_requires_full_context() {
             .as_ref()
             .map(LoadedAgentsMd::snapshot)
     };
-    assert_eq!(
-        snapshot,
-        Some(UserInstructionsSnapshot {
-            instructions: vec![InstructionSnapshot {
-                contents: "refreshed instructions".to_string(),
-                provenance: InstructionProvenance::Global,
-                source: None,
-            }],
-        })
-    );
+    assert_eq!(snapshot, Some(expected.snapshot()));
     assert_eq!(contributor.calls.load(Ordering::SeqCst), 1);
 }
 
