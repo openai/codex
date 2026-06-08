@@ -129,7 +129,10 @@ async fn try_init_with_roots_inner(
         backfill_gate_started.elapsed(),
         &backfill_gate_result,
     );
-    backfill_gate_result?;
+    if let Err(err) = backfill_gate_result {
+        runtime.close().await;
+        return Err(err);
+    }
     Ok(runtime)
 }
 

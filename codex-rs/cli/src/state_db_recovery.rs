@@ -21,6 +21,18 @@ pub(crate) fn is_corruption(detail: &str) -> bool {
     codex_state::sqlite_error_detail_is_corruption(detail)
 }
 
+pub(crate) fn is_auto_backup_recoverable(startup_error: &LocalStateDbStartupError) -> bool {
+    is_corruption(startup_error.detail()) || sqlite_home_is_blocking_file(startup_error)
+}
+
+fn sqlite_home_is_blocking_file(startup_error: &LocalStateDbStartupError) -> bool {
+    startup_error
+        .database_path()
+        .parent()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .is_some_and(|metadata| metadata.is_file())
+}
+
 pub(crate) fn print_auto_backup_start(startup_error: &LocalStateDbStartupError) {
     eprintln!("Codex couldn't start because its local database appears to be damaged.");
     eprintln!("Moving the damaged local database aside so Codex can rebuild it from saved data.");
@@ -30,11 +42,7 @@ pub(crate) fn print_auto_backup_start(startup_error: &LocalStateDbStartupError) 
 pub(crate) async fn backup_files_for_fresh_start(
     startup_error: &LocalStateDbStartupError,
 ) -> std::io::Result<Vec<RuntimeDbBackup>> {
-    let state_db_path = startup_error.state_db_path();
-    let sqlite_home = state_db_path.parent().ok_or_else(|| {
-        std::io::Error::other("state database path does not have a parent directory")
-    })?;
-    codex_state::backup_runtime_dbs_for_fresh_start(sqlite_home).await
+    codex_state::backup_runtime_db_for_fresh_start(startup_error.database_path()).await
 }
 
 pub(crate) fn confirm_fresh_start_rebuild(
@@ -45,7 +53,7 @@ pub(crate) fn confirm_fresh_start_rebuild(
     eprintln!(
         "Codex detected a damaged local database, moved it into a backup folder, and will continue startup with a fresh database."
     );
-    eprintln!("Database path: {}", startup_error.state_db_path().display());
+    eprintln!("Database path: {}", startup_error.database_path().display());
     if let Some(backup_folder) = backup_folder(backups) {
         eprintln!("Backup folder: {}", backup_folder.display());
     } else {
@@ -77,7 +85,7 @@ pub(crate) fn print_locked_guidance(startup_error: &LocalStateDbStartupError) {
 
 fn print_technical_details(startup_error: &LocalStateDbStartupError) {
     eprintln!("Technical details:");
-    eprintln!("  Location: {}", startup_error.state_db_path().display());
+    eprintln!("  Location: {}", startup_error.database_path().display());
     eprintln!("  Cause: {}", startup_error.detail());
 }
 
@@ -93,26 +101,35 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    async fn backup_backs_up_owned_database_files() -> std::io::Result<()> {
+    async fn backup_backs_up_only_failed_database_files() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let state_path = codex_state::state_db_path(temp_dir.path());
-        let logs_path = codex_state::logs_db_path(temp_dir.path());
-        let goals_path = codex_state::goals_db_path(temp_dir.path());
-        let state_wal_path = state_path.with_file_name("state_5.sqlite-wal");
-        tokio::fs::write(state_path.as_path(), b"state").await?;
-        tokio::fs::write(state_wal_path.as_path(), b"state-wal").await?;
-        tokio::fs::write(logs_path.as_path(), b"logs").await?;
-        tokio::fs::write(goals_path.as_path(), b"goals").await?;
+        let mut expected_paths = Vec::new();
+        for db_path in codex_state::runtime_db_paths(temp_dir.path())
+            .iter()
+            .map(|db| db.path.as_path())
+        {
+            for path in sqlite_paths(db_path) {
+                tokio::fs::write(path.as_path(), path.display().to_string()).await?;
+                expected_paths.push(path);
+            }
+        }
+        let failed_db_path = codex_state::logs_db_path(temp_dir.path());
+        let failed_paths = sqlite_paths(failed_db_path.as_path());
 
         let startup_error =
-            LocalStateDbStartupError::new(state_path.clone(), "corrupt".to_string());
+            LocalStateDbStartupError::new(failed_db_path.clone(), "corrupt".to_string());
         let backups = backup_files_for_fresh_start(&startup_error).await?;
 
-        assert_eq!(backups.len(), 4);
-        assert!(!tokio::fs::try_exists(state_path.as_path()).await?);
-        assert!(!tokio::fs::try_exists(state_wal_path.as_path()).await?);
-        assert!(!tokio::fs::try_exists(logs_path.as_path()).await?);
-        assert!(!tokio::fs::try_exists(goals_path.as_path()).await?);
+        assert_eq!(backups.len(), failed_paths.len());
+        for path in &failed_paths {
+            assert!(!tokio::fs::try_exists(path.as_path()).await?);
+        }
+        for path in expected_paths
+            .iter()
+            .filter(|path| !failed_paths.contains(path))
+        {
+            assert!(tokio::fs::try_exists(path.as_path()).await?);
+        }
         for backup in backups {
             assert!(tokio::fs::try_exists(backup.backup_path.as_path()).await?);
         }
@@ -147,6 +164,20 @@ mod tests {
     }
 
     #[test]
+    fn blocking_sqlite_home_file_is_auto_backup_recoverable() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let sqlite_home = temp_dir.path().join("sqlite-home");
+        std::fs::write(sqlite_home.as_path(), b"not-a-directory")?;
+        let startup_error = LocalStateDbStartupError::new(
+            codex_state::state_db_path(sqlite_home.as_path()),
+            "File exists".to_string(),
+        );
+
+        assert!(is_auto_backup_recoverable(&startup_error));
+        Ok(())
+    }
+
+    #[test]
     fn backup_folder_uses_parent_of_first_backup_path() {
         let backups = vec![RuntimeDbBackup {
             original_path: PathBuf::from("/tmp/state_5.sqlite"),
@@ -157,5 +188,17 @@ mod tests {
             backup_folder(&backups),
             Some(Path::new("/tmp/db-backups/sqlite-1-0"))
         );
+    }
+
+    fn sqlite_paths(db_path: &Path) -> Vec<PathBuf> {
+        let mut wal_path = db_path.as_os_str().to_os_string();
+        wal_path.push("-wal");
+        let mut shm_path = db_path.as_os_str().to_os_string();
+        shm_path.push("-shm");
+        vec![
+            db_path.to_path_buf(),
+            PathBuf::from(wal_path),
+            PathBuf::from(shm_path),
+        ]
     }
 }
