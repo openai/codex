@@ -527,19 +527,17 @@ impl AgentControl {
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
         let root_depth = thread_spawn_depth(&session_source).unwrap_or(0);
-        let resumed_thread_id = Box::pin(self.resume_single_agent_from_rollout(
-            config.clone(),
-            thread_id,
-            session_source,
-        ))
+        let (resumed_thread_id, resumed_multi_agent_version) = Box::pin(
+            self.resume_single_agent_from_rollout(config.clone(), thread_id, session_source),
+        )
         .await?;
         let state = self.upgrade()?;
+        if resumed_multi_agent_version == MultiAgentVersion::V2 {
+            return Ok(resumed_thread_id);
+        }
         let Ok(resumed_thread) = state.get_thread(resumed_thread_id).await else {
             return Ok(resumed_thread_id);
         };
-        if resumed_thread.multi_agent_version() == Some(MultiAgentVersion::V2) {
-            return Ok(resumed_thread_id);
-        }
         let Some(state_db_ctx) = resumed_thread.state_db() else {
             return Ok(resumed_thread_id);
         };
@@ -582,7 +580,7 @@ impl AgentControl {
                     ))
                     .await
                     {
-                        Ok(_) => true,
+                        Ok((_, _)) => true,
                         Err(err) => {
                             warn!("failed to resume descendant thread {child_thread_id}: {err}");
                             false
@@ -603,7 +601,7 @@ impl AgentControl {
         config: Config,
         thread_id: ThreadId,
         session_source: SessionSource,
-    ) -> CodexResult<ThreadId> {
+    ) -> CodexResult<(ThreadId, MultiAgentVersion)> {
         let state = self.upgrade()?;
         let state_db_ctx = state.state_db();
         let stored_thread = state
@@ -708,6 +706,6 @@ impl AgentControl {
         )
         .await;
 
-        Ok(resumed_thread.thread_id)
+        Ok((resumed_thread.thread_id, multi_agent_version))
     }
 }
