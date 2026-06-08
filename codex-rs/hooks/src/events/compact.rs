@@ -12,6 +12,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
+use crate::engine::async_output::AsyncHookOutputQueue;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -59,7 +60,7 @@ pub(crate) fn preview_pre(
     handlers: &[ConfiguredHandler],
     request: &PreCompactRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    dispatcher::select_sync_handlers(
         handlers,
         HookEventName::PreCompact,
         Some(request.trigger.as_str()),
@@ -72,6 +73,7 @@ pub(crate) fn preview_pre(
 pub(crate) async fn run_pre(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    async_output_queue: &AsyncHookOutputQueue,
     request: PreCompactRequest,
 ) -> PreCompactOutcome {
     let matched = dispatcher::select_handlers(
@@ -90,11 +92,17 @@ pub(crate) async fn run_pre(
     let input_json = match pre_command_input_json(&request) {
         Ok(input_json) => input_json,
         Err(error) => {
+            let error_message = format!("failed to serialize pre compact hook input: {error}");
+            let matched = dispatcher::synchronous_handlers_after_serialization_failure(
+                async_output_queue,
+                matched,
+                &error_message,
+            );
             return PreCompactOutcome {
                 hook_events: common::serialization_failure_hook_events(
                     matched,
                     Some(request.turn_id),
-                    format!("failed to serialize pre compact hook input: {error}"),
+                    error_message,
                 ),
                 should_stop: false,
                 stop_reason: None,
@@ -104,6 +112,7 @@ pub(crate) async fn run_pre(
 
     let results = dispatcher::execute_handlers(
         shell,
+        async_output_queue,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -141,7 +150,7 @@ pub(crate) fn preview_post(
     handlers: &[ConfiguredHandler],
     request: &PostCompactRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    dispatcher::select_sync_handlers(
         handlers,
         HookEventName::PostCompact,
         Some(request.trigger.as_str()),
@@ -154,6 +163,7 @@ pub(crate) fn preview_post(
 pub(crate) async fn run_post(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    async_output_queue: &AsyncHookOutputQueue,
     request: PostCompactRequest,
 ) -> StatelessHookOutcome {
     let matched = dispatcher::select_handlers(
@@ -172,11 +182,17 @@ pub(crate) async fn run_post(
     let input_json = match post_command_input_json(&request) {
         Ok(input_json) => input_json,
         Err(error) => {
+            let error_message = format!("failed to serialize post compact hook input: {error}");
+            let matched = dispatcher::synchronous_handlers_after_serialization_failure(
+                async_output_queue,
+                matched,
+                &error_message,
+            );
             return StatelessHookOutcome {
                 hook_events: common::serialization_failure_hook_events(
                     matched,
                     Some(request.turn_id),
-                    format!("failed to serialize post compact hook input: {error}"),
+                    error_message,
                 ),
                 should_stop: false,
                 stop_reason: None,
@@ -186,6 +202,7 @@ pub(crate) async fn run_post(
 
     let results = dispatcher::execute_handlers(
         shell,
+        async_output_queue,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -599,6 +616,7 @@ mod tests {
             matcher: None,
             command: "python3 compact_hook.py".to_string(),
             timeout_sec: 5,
+            r#async: false,
             status_message: Some("running compact hook".to_string()),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,

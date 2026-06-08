@@ -13,6 +13,7 @@ use serde_json::Value;
 use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
+use crate::engine::async_output::AsyncHookOutputQueue;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -57,7 +58,7 @@ pub(crate) fn preview(
     request: &PostToolUseRequest,
 ) -> Vec<HookRunSummary> {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
-    dispatcher::select_handlers_for_matcher_inputs(
+    dispatcher::select_sync_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PostToolUse,
         &matcher_inputs,
@@ -72,6 +73,7 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    async_output_queue: &AsyncHookOutputQueue,
     request: PostToolUseRequest,
 ) -> PostToolUseOutcome {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
@@ -93,10 +95,16 @@ pub(crate) async fn run(
     let input_json = match command_input_json(&request) {
         Ok(input_json) => input_json,
         Err(error) => {
+            let error_message = format!("failed to serialize post tool use hook input: {error}");
+            let matched = dispatcher::synchronous_handlers_after_serialization_failure(
+                async_output_queue,
+                matched,
+                &error_message,
+            );
             let hook_events = common::serialization_failure_hook_events_for_tool_use(
                 matched,
                 Some(request.turn_id.clone()),
-                format!("failed to serialize post tool use hook input: {error}"),
+                error_message,
                 &request.tool_use_id,
             );
             return serialization_failure_outcome(hook_events);
@@ -105,6 +113,7 @@ pub(crate) async fn run(
 
     let results = dispatcher::execute_handlers(
         shell,
+        async_output_queue,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -552,6 +561,7 @@ mod tests {
             matcher: Some("^Bash$".to_string()),
             command: "python3 post_tool_use_hook.py".to_string(),
             timeout_sec: 5,
+            r#async: false,
             status_message: Some("running post tool use hook".to_string()),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,

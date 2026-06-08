@@ -2,6 +2,7 @@ use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
 use tokio::process::Command;
 
+use crate::engine::AsyncHookOutputQueue;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
 use crate::engine::HookListEntry;
@@ -36,6 +37,7 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
+    pub async_output_queue: AsyncHookOutputQueue,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -64,7 +66,7 @@ impl Hooks {
             .map(crate::notify_hook)
             .into_iter()
             .collect();
-        let engine = ClaudeHooksEngine::new(
+        let engine = ClaudeHooksEngine::new_with_async_output_queue(
             config.feature_enabled,
             config.bypass_hook_trust,
             config.config_layer_stack.as_ref(),
@@ -74,6 +76,7 @@ impl Hooks {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
             },
+            config.async_output_queue,
         );
         Self {
             after_agent,

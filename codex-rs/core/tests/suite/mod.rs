@@ -37,6 +37,8 @@ mod agents_md;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
+#[cfg(not(target_os = "windows"))]
+mod async_hooks;
 mod auto_review;
 mod cli_stream;
 mod client;

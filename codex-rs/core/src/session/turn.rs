@@ -396,20 +396,34 @@ async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, Pat
     display_roots
 }
 
-async fn run_hooks_and_record_inputs(
+pub(crate) async fn run_hooks_and_record_inputs(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     input: &[TurnInput],
 ) -> bool {
     let mut blocked_input = false;
     let mut accepted_user_input = false;
+    let mut async_hook_output_batch = None;
+    let mut async_hook_output_batch_prepared = false;
     for input_item in input {
-        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
+        let is_real_user_input =
+            matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty());
+        if is_real_user_input && !async_hook_output_batch_prepared {
+            async_hook_output_batch = sess.services.async_hook_output_queue.pending_batch();
+            async_hook_output_batch_prepared = true;
+        }
+        let mut hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
         if hook_outcome.should_stop {
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
-            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
+            if is_real_user_input && let Some(batch) = async_hook_output_batch.take() {
+                sess.services.async_hook_output_queue.commit(&batch);
+                hook_outcome
+                    .additional_contexts
+                    .insert(0, batch.into_text());
+            }
+            if is_real_user_input {
                 accepted_user_input = true;
             }
             record_pending_input(

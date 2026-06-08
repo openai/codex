@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -13,6 +14,8 @@ use codex_protocol::protocol::HookScope;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
+use super::async_output::AsyncHookOutputQueue;
+use super::async_output::deliverable_output;
 use super::command_runner::CommandRunResult;
 use super::command_runner::run_command;
 use crate::events::common::matches_matcher;
@@ -31,6 +34,17 @@ pub(crate) fn select_handlers(
 ) -> Vec<ConfiguredHandler> {
     let matcher_inputs = matcher_input.into_iter().collect::<Vec<_>>();
     select_handlers_for_matcher_inputs(handlers, event_name, &matcher_inputs)
+}
+
+pub(crate) fn select_sync_handlers(
+    handlers: &[ConfiguredHandler],
+    event_name: HookEventName,
+    matcher_input: Option<&str>,
+) -> Vec<ConfiguredHandler> {
+    select_handlers(handlers, event_name, matcher_input)
+        .into_iter()
+        .filter(|handler| !handler.r#async)
+        .collect()
 }
 
 pub(crate) fn select_handlers_for_matcher_inputs(
@@ -67,6 +81,80 @@ pub(crate) fn select_handlers_for_matcher_inputs(
         .collect()
 }
 
+pub(crate) fn select_sync_handlers_for_matcher_inputs(
+    handlers: &[ConfiguredHandler],
+    event_name: HookEventName,
+    matcher_inputs: &[&str],
+) -> Vec<ConfiguredHandler> {
+    select_handlers_for_matcher_inputs(handlers, event_name, matcher_inputs)
+        .into_iter()
+        .filter(|handler| !handler.r#async)
+        .collect()
+}
+
+fn partition_handlers(
+    handlers: Vec<ConfiguredHandler>,
+) -> (Vec<ConfiguredHandler>, Vec<ConfiguredHandler>) {
+    handlers.into_iter().partition(|handler| !handler.r#async)
+}
+
+fn spawn_async_handlers(
+    shell: &CommandShell,
+    output_queue: &AsyncHookOutputQueue,
+    handlers: Vec<ConfiguredHandler>,
+    input_json: String,
+    cwd: &Path,
+) {
+    for handler in handlers {
+        let shell = shell.clone();
+        let output_queue = output_queue.clone();
+        let cancellation = output_queue.cancellation_token();
+        let input_json = input_json.clone();
+        let cwd = PathBuf::from(cwd);
+        output_queue.clone().spawn(async move {
+            tokio::select! {
+                _ = cancellation.cancelled() => {}
+                run_result = run_command(&shell, &handler, &input_json, &cwd) => {
+                    if let Some(output) = deliverable_output(handler.event_name, &run_result) {
+                        output_queue.push(handler.event_name, output);
+                    }
+                }
+            }
+        });
+    }
+}
+
+fn spawn_async_failures(
+    output_queue: &AsyncHookOutputQueue,
+    handlers: Vec<ConfiguredHandler>,
+    error: String,
+) {
+    for handler in handlers {
+        let output_queue = output_queue.clone();
+        let cancellation = output_queue.cancellation_token();
+        let error = error.clone();
+        output_queue.clone().spawn(async move {
+            if !cancellation.is_cancelled() {
+                output_queue.push(handler.event_name, error);
+            }
+        });
+    }
+}
+
+pub(crate) fn synchronous_handlers_after_serialization_failure(
+    output_queue: &AsyncHookOutputQueue,
+    handlers: Vec<ConfiguredHandler>,
+    error: &str,
+) -> Vec<ConfiguredHandler> {
+    let (synchronous, asynchronous) = partition_handlers(handlers);
+    spawn_async_failures(
+        output_queue,
+        asynchronous,
+        format!("Async hook input serialization failed: {error}"),
+    );
+    synchronous
+}
+
 pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
     HookRunSummary {
         id: handler.run_id(),
@@ -88,12 +176,16 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
 
 pub(crate) async fn execute_handlers<T>(
     shell: &CommandShell,
+    output_queue: &AsyncHookOutputQueue,
     handlers: Vec<ConfiguredHandler>,
     input_json: String,
     cwd: &Path,
     turn_id: Option<String>,
     parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
+    let (handlers, asynchronous) = partition_handlers(handlers);
+    spawn_async_handlers(shell, output_queue, asynchronous, input_json.clone(), cwd);
+
     let mut pending = FuturesUnordered::new();
     for (configured_order, handler) in handlers.into_iter().enumerate() {
         let input_json = input_json.clone();
@@ -175,6 +267,7 @@ mod tests {
             matcher: matcher.map(str::to_owned),
             command: command.to_string(),
             timeout_sec: 5,
+            r#async: false,
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: HookSource::User,
@@ -416,7 +509,7 @@ mod tests {
 
     #[test]
     fn select_handlers_preserves_declaration_order() {
-        let handlers = vec![
+        let mut handlers = vec![
             make_handler(
                 HookEventName::Stop,
                 /*matcher*/ None,
@@ -436,12 +529,35 @@ mod tests {
                 /*display_order*/ 2,
             ),
         ];
+        handlers[1].r#async = true;
 
         let selected = select_handlers(&handlers, HookEventName::Stop, /*matcher_input*/ None);
+        let synchronous = super::select_sync_handlers(
+            &handlers,
+            HookEventName::Stop,
+            /*matcher_input*/ None,
+        );
+        let (_, asynchronous) = super::partition_handlers(selected.clone());
 
         assert_eq!(selected.len(), 3);
         assert_eq!(selected[0].command, "first");
         assert_eq!(selected[1].command, "second");
         assert_eq!(selected[2].command, "third");
+        assert_eq!(
+            (
+                synchronous
+                    .into_iter()
+                    .map(|handler| handler.command)
+                    .collect::<Vec<_>>(),
+                asynchronous
+                    .into_iter()
+                    .map(|handler| handler.command)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                vec!["first".to_string(), "third".to_string()],
+                vec!["second".to_string()],
+            )
+        );
     }
 }

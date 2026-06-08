@@ -221,6 +221,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        async_output_queue: Default::default(),
     });
     assert!(listed.hooks[0].is_managed);
     let cwd = cwd();
@@ -1219,6 +1220,7 @@ print(json.dumps({
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        async_output_queue: Default::default(),
     });
     assert_eq!(
         listed.hooks[0].plugin_id.as_deref(),

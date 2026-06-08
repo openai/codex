@@ -465,13 +465,6 @@ fn append_matcher_groups(
                     } else {
                         command
                     };
-                    if r#async {
-                        warnings.push(format!(
-                            "skipping async hook in {}: async hooks are not supported yet",
-                            source.path.display()
-                        ));
-                        continue;
-                    }
                     if command.trim().is_empty() {
                         warnings.push(format!(
                             "skipping empty hook command in {}",
@@ -529,6 +522,7 @@ fn append_matcher_groups(
                             matcher: matcher.map(ToOwned::to_owned),
                             command,
                             timeout_sec,
+                            r#async,
                             status_message,
                             source_path: source.path.clone(),
                             source: source.source,
@@ -780,6 +774,7 @@ mod tests {
                 matcher: None,
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
+                r#async: false,
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
@@ -790,8 +785,9 @@ mod tests {
     }
 
     #[test]
-    fn pre_tool_use_keeps_valid_matcher_during_discovery() {
+    fn async_pre_tool_use_is_discovered_without_warning() {
         let mut handlers = Vec::new();
+        let mut hook_entries = Vec::new();
         let mut warnings = Vec::new();
         let mut display_order = 0;
         let source_path = source_path();
@@ -799,12 +795,21 @@ mod tests {
 
         append_matcher_groups(
             &mut handlers,
-            &mut Vec::new(),
+            &mut hook_entries,
             &mut warnings,
             &mut display_order,
             &hook_handler_source(&source_path, &hook_states),
             HookEventName::PreToolUse,
-            vec![command_group(Some("^Bash$"))],
+            vec![MatcherGroup {
+                matcher: Some("^Bash$".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command: "echo hello".to_string(),
+                    command_windows: None,
+                    timeout_sec: None,
+                    r#async: true,
+                    status_message: None,
+                }],
+            }],
         );
 
         assert_eq!(warnings, Vec::<String>::new());
@@ -815,6 +820,7 @@ mod tests {
                 matcher: Some("^Bash$".to_string()),
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
+                r#async: true,
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
@@ -822,6 +828,7 @@ mod tests {
                 env: std::collections::HashMap::new(),
             }]
         );
+        assert_eq!(hook_entries.len(), 1);
     }
 
     #[test]

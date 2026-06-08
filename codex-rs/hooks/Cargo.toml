@@ -25,7 +25,8 @@ regex = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["fs", "io-util", "process", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
