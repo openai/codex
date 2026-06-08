@@ -416,7 +416,11 @@ async fn run_git_command_with_timeout_from(
         probe
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("LC_ALL", "C")
-            .args(["config", "--type=bool", "--get", "core.fsmonitor"])
+            // A typed query formats shadowed values before selecting the
+            // effective one, so validate only the raw final value below.
+            // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L482-L514
+            // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L611-L614
+            .args(["config", "--null", "--get", "core.fsmonitor"])
             .current_dir(cwd)
             .kill_on_drop(true);
         let configured = match timeout_at(deadline, probe.output()).await {
@@ -425,13 +429,12 @@ async fn run_git_command_with_timeout_from(
         };
         match configured {
             None => false,
-            Some(output) => match (output.status.code(), output.stdout.as_slice().trim_ascii()) {
+            Some(output) => match (output.status.code(), output.stdout.as_slice()) {
                 // `git config --get` returns 1 when the key is absent.
                 // https://git-scm.com/docs/git-config#Documentation/git-config.txt-get
-                (Some(1), _) | (Some(0), b"false") => false,
-                (Some(0), b"true") => true,
-                // `--type=bool` rejects hook pathnames. Keep helpers and any
-                // malformed or unreadable configuration disabled.
+                (Some(0), value) if crate::is_canonical_fsmonitor_true(value) => true,
+                // Keep false, unset values, helpers, malformed values, and
+                // unreadable configuration disabled.
                 _ => false,
             },
         }
@@ -450,10 +453,9 @@ async fn run_git_command_with_timeout_from(
             .current_dir(cwd)
             .kill_on_drop(true);
         match timeout_at(deadline, probe.output()).await {
-            Ok(Ok(output)) if output.status.success() => output
-                .stdout
-                .split(|byte| *byte == b'\n')
-                .any(|line| line.trim_ascii() == b"feature: fsmonitor--daemon"),
+            Ok(Ok(output)) if output.status.success() => {
+                crate::supports_builtin_fsmonitor(&output.stdout)
+            }
             _ => false,
         }
     };
@@ -1001,20 +1003,14 @@ mod tests {
         // Regenerate these reduced fixtures with:
         //
         //   git -c core.fsmonitor=/tmp/fsmonitor-helper \
-        //     config --type=bool --get core.fsmonitor \
+        //     config --null --get core.fsmonitor \
         //     >git.config.stdout 2>git.config.stderr
         //   printf '%s\n' "$?" >git.config.status
         //
-        // `--type=bool` rejects values that name fsmonitor helpers:
-        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L264-L280
-        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/config.c#L1263-L1268
-        std::fs::write(&config_stdout, "").expect("write helper config stdout");
-        std::fs::write(
-            &config_stderr,
-            "fatal: bad boolean config value '/tmp/fsmonitor-helper' for 'core.fsmonitor'\n",
-        )
-        .expect("write helper config stderr");
-        std::fs::write(&config_status, "128\n").expect("write helper config status");
+        std::fs::write(&config_stdout, b"/tmp/fsmonitor-helper\0")
+            .expect("write helper config stdout");
+        std::fs::write(&config_stderr, "").expect("write helper config stderr");
+        std::fs::write(&config_status, "0\n").expect("write helper config status");
 
         let helper_output =
             run_git_command_with_timeout_from(&git, &["status", "--porcelain"], temp_dir.path())
@@ -1038,8 +1034,95 @@ mod tests {
         assert_eq!(
             actual.lines().map(str::to_string).collect::<Vec<_>>(),
             vec![
-                "config --type=bool --get core.fsmonitor".to_string(),
+                "config --null --get core.fsmonitor".to_string(),
                 format!("-c {disabled_hooks} -c core.fsmonitor=false status --porcelain"),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fsmonitor_override_uses_effective_layered_config_value() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo = temp_dir.path().join("repo");
+        std::fs::create_dir(&repo).expect("create repository directory");
+        let init_status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .expect("initialize test repository");
+        assert_eq!(init_status.code(), Some(0), "initialize test repository");
+
+        let git = temp_dir.path().join("git");
+        let global_config = temp_dir.path().join("git.global");
+        let log = temp_dir.path().join("git.log");
+        std::fs::write(
+            &git,
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$*\" >>\"$0.log\"\n\
+             case \"$1\" in\n\
+             config)\n\
+               GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=\"$0.global\" exec git \"$@\"\n\
+               ;;\n\
+             version) printf 'feature: fsmonitor--daemon\\n' ;;\n\
+             *) printf 'worktree output\\n' ;;\n\
+             esac\n",
+        )
+        .expect("write layered-config Git");
+        let mut permissions = std::fs::metadata(&git)
+            .expect("read layered-config Git metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&git, permissions).expect("mark layered-config Git executable");
+
+        let global_status = std::process::Command::new("git")
+            .args([
+                "config",
+                "--file",
+                global_config.to_str().expect("global config path"),
+                "core.fsmonitor",
+                "/tmp/fsmonitor-helper",
+            ])
+            .status()
+            .expect("write global fsmonitor helper");
+        assert_eq!(
+            global_status.code(),
+            Some(0),
+            "write global fsmonitor helper"
+        );
+        let local_status = std::process::Command::new("git")
+            .args(["config", "core.fsmonitor", "true"])
+            .current_dir(&repo)
+            .status()
+            .expect("write local built-in fsmonitor config");
+        assert_eq!(
+            local_status.code(),
+            Some(0),
+            "write local built-in fsmonitor config"
+        );
+
+        // A typed query formats every matching value before `--get` selects
+        // the last one, so the shadowed helper would make it fail. Query the
+        // raw effective value and validate that value instead.
+        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L482-L514
+        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L611-L614
+        let output =
+            run_git_command_with_timeout_from(&git, &["status", "--porcelain"], repo.as_path())
+                .await
+                .expect("run Git with layered config");
+        assert_eq!(
+            (output.status.code(), output.stdout),
+            (Some(0), b"worktree output\n".to_vec())
+        );
+
+        let actual = std::fs::read_to_string(log).expect("read layered-config Git log");
+        let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
+        assert_eq!(
+            actual.lines().map(str::to_string).collect::<Vec<_>>(),
+            vec![
+                "config --null --get core.fsmonitor".to_string(),
+                "version --build-options".to_string(),
+                format!("-c {disabled_hooks} -c core.fsmonitor=true status --porcelain"),
             ]
         );
     }
@@ -1058,7 +1141,7 @@ mod tests {
         // Regenerate these reduced fixtures with:
         //
         //   git -c core.fsmonitor=true \
-        //     config --type=bool --get core.fsmonitor \
+        //     config --null --get core.fsmonitor \
         //     >git.config.stdout 2>git.config.stderr
         //   printf '%s\n' "$?" >git.config.status
         //   /path/to/git-without-fsmonitor-daemon version --build-options |
@@ -1068,7 +1151,7 @@ mod tests {
         //
         // Git added the feature line specifically for capability tests:
         // https://github.com/git/git/commit/dd77cf61a1a2fbf52c94d0cd986d555ad2ba8a4b
-        std::fs::write(&config_stdout, "true\n").expect("write true config stdout");
+        std::fs::write(&config_stdout, b"true\0").expect("write true config stdout");
         std::fs::write(&config_stderr, "").expect("write empty config stderr");
         std::fs::write(&config_status, "0\n").expect("write successful config status");
         std::fs::write(&build_options, "").expect("write unsupported build options");
@@ -1114,10 +1197,10 @@ mod tests {
         assert_eq!(
             actual.lines().map(str::to_string).collect::<Vec<_>>(),
             vec![
-                "config --type=bool --get core.fsmonitor".to_string(),
+                "config --null --get core.fsmonitor".to_string(),
                 "version --build-options".to_string(),
                 format!("-c {disabled_hooks} -c core.fsmonitor=false status --porcelain"),
-                "config --type=bool --get core.fsmonitor".to_string(),
+                "config --null --get core.fsmonitor".to_string(),
                 "version --build-options".to_string(),
                 format!("-c {disabled_hooks} -c core.fsmonitor=true status --porcelain"),
             ]
