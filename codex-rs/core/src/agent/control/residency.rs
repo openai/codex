@@ -136,9 +136,9 @@ impl V2Residency {
                 continue;
             }
             candidate_thread.ensure_rollout_materialized().await;
-            if let Err(err) = candidate_thread.flush_rollout().await {
+            if let Err(err) = candidate_thread.shutdown_and_wait().await {
                 warn!(
-                    "failed to flush v2 resident thread before unloading {candidate_thread_id}: {err}"
+                    "failed to shut down v2 resident thread before unloading {candidate_thread_id}: {err}"
                 );
                 self.touch(candidate_thread_id);
                 continue;
