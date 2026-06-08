@@ -1273,7 +1273,7 @@ impl AnalyticsReducer {
             &session_source,
             thread.thread_source.map(Into::into),
             parent_thread_id,
-            initialization_mode,
+            initialization.mode,
         );
         self.threads.insert(
             thread_id.clone(),

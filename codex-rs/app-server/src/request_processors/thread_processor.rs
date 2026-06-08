@@ -1055,7 +1055,7 @@ impl ThreadRequestProcessor {
             thread_id,
             thread,
             session_configured,
-            ..
+            thread_initialization,
         } = listener_task_context
             .thread_manager
             .start_thread_with_options(StartThreadOptions {
@@ -1174,6 +1174,10 @@ impl ThreadRequestProcessor {
             reasoning_effort: config_snapshot.reasoning_effort,
         };
         let notif = thread_started_notification(thread);
+        listener_task_context
+            .outgoing
+            .record_thread_initialization(&request_id, thread_initialization)
+            .await;
         listener_task_context
             .outgoing
             .send_response(request_id, response)
@@ -2526,7 +2530,7 @@ impl ThreadRequestProcessor {
                 thread_id,
                 thread: codex_thread,
                 session_configured,
-                ..
+                thread_initialization,
             }) => {
                 if let Err(err) = Self::set_app_server_client_info(
                     codex_thread.as_ref(),
@@ -2648,6 +2652,9 @@ impl ThreadRequestProcessor {
                 };
 
                 let connection_id = request_id.connection_id;
+                self.outgoing
+                    .record_thread_initialization(&request_id, thread_initialization)
+                    .await;
                 self.outgoing.send_response(request_id, response).await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
@@ -2707,7 +2714,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<bool, JSONRPCErrorError> {
-        ThreadInitializationTiming::resume_lookup_started();
+        let thread_initialization_timing = ThreadInitializationTiming::begin_resumed_lookup();
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
                 && self
@@ -2784,6 +2791,12 @@ impl ThreadRequestProcessor {
                         ThreadShutdownResult::Complete => {
                             self.thread_manager.remove_thread(&existing_thread_id).await;
                             self.finalize_thread_teardown(existing_thread_id).await;
+                            self.outgoing
+                                .record_thread_initialization(
+                                    request_id,
+                                    thread_initialization_timing.complete(),
+                                )
+                                .await;
                             return Ok(false);
                         }
                         ThreadShutdownResult::SubmitFailed => {
@@ -2876,9 +2889,14 @@ impl ThreadRequestProcessor {
                     "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
                 )));
             }
-            ThreadInitializationTiming::core_completed();
+            self.outgoing
+                .record_thread_initialization(request_id, thread_initialization_timing.complete())
+                .await;
             return Ok(true);
         }
+        self.outgoing
+            .record_thread_initialization(request_id, thread_initialization_timing.complete())
+            .await;
         Ok(false)
     }
 
@@ -3224,7 +3242,7 @@ impl ThreadRequestProcessor {
             thread_id,
             thread: forked_thread,
             session_configured,
-            ..
+            thread_initialization,
         } = self
             .thread_manager
             .fork_thread_from_history(
@@ -3360,6 +3378,9 @@ impl ThreadRequestProcessor {
         let notif = thread_started_notification(thread);
         let connection_id = request_id.connection_id;
         let token_usage_thread = include_turns.then(|| response.thread.clone());
+        self.outgoing
+            .record_thread_initialization(&request_id, thread_initialization)
+            .await;
         self.outgoing.send_response(request_id, response).await;
         // `excludeTurns` is the cheap fork path, so skip restored usage replay
         // instead of rebuilding history only to attribute a historical update.

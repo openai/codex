@@ -1,14 +1,11 @@
-use std::future::Future;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::MutexGuard;
-use std::sync::PoisonError;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_analytics::CompletedThreadInitialization;
+use codex_analytics::CompletedCoreThreadInitialization;
 use codex_analytics::ThreadInitializationMode;
 use codex_analytics::ThreadInitializationProfile;
+
+use codex_protocol::protocol::InitialHistory;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ThreadInitializationPhase {
@@ -21,185 +18,122 @@ enum ThreadInitializationPhase {
     ThreadRegistration,
 }
 
-tokio::task_local! {
-    static ACTIVE_THREAD_INITIALIZATION_TIMING: ThreadInitializationTiming;
-}
-
-/// Request-scoped monotonic timing for app-server thread initialization.
-#[derive(Clone, Debug)]
-pub struct ThreadInitializationTiming(Arc<Mutex<ThreadInitializationTimingState>>);
-
+/// Monotonic timing state owned by one thread initialization operation.
 #[derive(Debug)]
-struct ThreadInitializationTimingState {
-    request_started_at: Instant,
-    last_transition_at: Option<Instant>,
-    active_phase: Option<ThreadInitializationPhase>,
-    initialization_mode: Option<ThreadInitializationMode>,
+pub struct ThreadInitializationTiming {
+    last_transition_at: Instant,
+    active_phase: ThreadInitializationPhase,
+    initialization_mode: ThreadInitializationMode,
     profile: ThreadInitializationProfile,
-    core_complete: bool,
 }
 
 impl ThreadInitializationTiming {
-    pub fn begin_request() -> Self {
-        Self::new_at(Instant::now())
+    pub(crate) fn begin(initial_history: &InitialHistory) -> Self {
+        let (initialization_mode, phase) = match initial_history {
+            InitialHistory::New => (
+                ThreadInitializationMode::New,
+                ThreadInitializationPhase::ConfigurationResolution,
+            ),
+            InitialHistory::Cleared => (
+                ThreadInitializationMode::Cleared,
+                ThreadInitializationPhase::ConfigurationResolution,
+            ),
+            InitialHistory::Forked(_) => (
+                ThreadInitializationMode::Forked,
+                ThreadInitializationPhase::ConfigurationResolution,
+            ),
+            InitialHistory::Resumed(_) => (
+                ThreadInitializationMode::Resumed,
+                ThreadInitializationPhase::ExistingThreadLookup,
+            ),
+        };
+        Self::new_at(Instant::now(), initialization_mode, phase)
     }
 
-    pub async fn scope<F>(&self, future: F) -> F::Output
-    where
-        F: Future,
-    {
-        ACTIVE_THREAD_INITIALIZATION_TIMING
-            .scope(self.clone(), future)
-            .await
-    }
-
-    pub fn resume_lookup_started() {
-        Self::start_current(
+    pub fn begin_resumed_lookup() -> Self {
+        Self::new_at(
+            Instant::now(),
             ThreadInitializationMode::Resumed,
             ThreadInitializationPhase::ExistingThreadLookup,
-        );
+        )
     }
 
-    pub fn core_completed() {
-        Self::with_current(|timing| timing.complete_core_at(Instant::now()));
+    pub(crate) fn begin_forked() -> Self {
+        Self::new_at(
+            Instant::now(),
+            ThreadInitializationMode::Forked,
+            ThreadInitializationPhase::ConfigurationResolution,
+        )
     }
 
-    pub fn complete_request(&self) -> Option<CompletedThreadInitialization> {
-        self.complete_request_at(Instant::now())
+    pub(crate) fn existing_thread_lookup_started(&mut self) {
+        self.transition_to(ThreadInitializationPhase::ExistingThreadLookup);
     }
 
-    pub(crate) fn new_thread_started() {
-        Self::start_configuration_resolution(ThreadInitializationMode::New);
+    pub(crate) fn configuration_resolution_started(&mut self) {
+        self.transition_to(ThreadInitializationPhase::ConfigurationResolution);
     }
 
-    pub(crate) fn cleared_thread_started() {
-        Self::start_configuration_resolution(ThreadInitializationMode::Cleared);
+    pub(crate) fn session_dependency_loading_started(&mut self) {
+        self.transition_to(ThreadInitializationPhase::SessionDependencyLoading);
     }
 
-    pub(crate) fn forked_thread_started() {
-        Self::start_configuration_resolution(ThreadInitializationMode::Forked);
+    pub(crate) fn session_construction_started(&mut self) {
+        self.transition_to(ThreadInitializationPhase::SessionConstruction);
     }
 
-    pub(crate) fn resumed_thread_started() {
-        Self::start_configuration_resolution(ThreadInitializationMode::Resumed);
+    pub(crate) fn mcp_startup_started(&mut self) {
+        self.transition_to(ThreadInitializationPhase::McpStartup);
     }
 
-    pub(crate) fn configuration_resolution_started() {
-        Self::transition_to(ThreadInitializationPhase::ConfigurationResolution);
+    pub(crate) fn session_activation_started(&mut self) {
+        self.transition_to(ThreadInitializationPhase::SessionActivation);
     }
 
-    pub(crate) fn session_dependency_loading_started() {
-        Self::transition_to(ThreadInitializationPhase::SessionDependencyLoading);
+    pub(crate) fn thread_registration_started(&mut self) {
+        self.transition_to(ThreadInitializationPhase::ThreadRegistration);
     }
 
-    pub(crate) fn session_construction_started() {
-        Self::transition_to(ThreadInitializationPhase::SessionConstruction);
+    pub fn complete(self) -> CompletedCoreThreadInitialization {
+        self.complete_at(Instant::now())
     }
 
-    pub(crate) fn mcp_startup_started() {
-        Self::transition_to(ThreadInitializationPhase::McpStartup);
+    fn transition_to(&mut self, phase: ThreadInitializationPhase) {
+        self.transition_at(Instant::now(), phase);
     }
 
-    pub(crate) fn session_activation_started() {
-        Self::transition_to(ThreadInitializationPhase::SessionActivation);
-    }
-
-    pub(crate) fn thread_registration_started() {
-        Self::transition_to(ThreadInitializationPhase::ThreadRegistration);
-    }
-
-    fn transition_to(phase: ThreadInitializationPhase) {
-        Self::with_current(|timing| timing.transition_at(Instant::now(), phase));
-    }
-
-    fn start_configuration_resolution(mode: ThreadInitializationMode) {
-        Self::start_current(mode, ThreadInitializationPhase::ConfigurationResolution);
-    }
-
-    fn start_current(mode: ThreadInitializationMode, phase: ThreadInitializationPhase) {
-        Self::with_current(|timing| timing.start_core_at(Instant::now(), mode, phase));
-    }
-
-    fn with_current(f: impl FnOnce(&Self)) {
-        let _ = ACTIVE_THREAD_INITIALIZATION_TIMING.try_with(f);
-    }
-
-    fn new_at(request_started_at: Instant) -> Self {
-        Self(Arc::new(Mutex::new(ThreadInitializationTimingState {
-            request_started_at,
-            last_transition_at: None,
-            active_phase: None,
-            initialization_mode: None,
+    fn new_at(
+        started_at: Instant,
+        initialization_mode: ThreadInitializationMode,
+        active_phase: ThreadInitializationPhase,
+    ) -> Self {
+        Self {
+            last_transition_at: started_at,
+            active_phase,
+            initialization_mode,
             profile: ThreadInitializationProfile::default(),
-            core_complete: false,
-        })))
-    }
-
-    fn start_core_at(
-        &self,
-        now: Instant,
-        mode: ThreadInitializationMode,
-        phase: ThreadInitializationPhase,
-    ) {
-        let mut state = self.state();
-        if state.last_transition_at.is_some() || state.core_complete {
-            return;
         }
-        state.last_transition_at = Some(now);
-        state.active_phase = Some(phase);
-        state.initialization_mode = Some(mode);
     }
 
-    fn transition_at(&self, now: Instant, phase: ThreadInitializationPhase) {
-        let mut state = self.state();
-        if state.core_complete || state.last_transition_at.is_none() {
-            return;
+    fn transition_at(&mut self, now: Instant, phase: ThreadInitializationPhase) {
+        self.advance(now);
+        self.active_phase = phase;
+    }
+
+    fn complete_at(mut self, now: Instant) -> CompletedCoreThreadInitialization {
+        self.advance(now);
+        self.profile.core_duration_ms = core_duration_ms(&self.profile);
+        CompletedCoreThreadInitialization {
+            initialization_mode: self.initialization_mode,
+            profile: self.profile,
         }
-        state.advance(now);
-        state.active_phase = Some(phase);
     }
 
-    fn complete_core_at(&self, now: Instant) {
-        let mut state = self.state();
-        if state.core_complete || state.last_transition_at.is_none() {
-            return;
-        }
-        state.advance(now);
-        state.profile.core_duration_ms = core_duration_ms(&state.profile);
-        state.active_phase = None;
-        state.core_complete = true;
-    }
-
-    fn complete_request_at(&self, now: Instant) -> Option<CompletedThreadInitialization> {
-        let state = self.state();
-        if !state.core_complete {
-            return None;
-        }
-        let mut profile = state.profile;
-        profile.duration_ms =
-            duration_to_u64_ms(now.saturating_duration_since(state.request_started_at));
-        profile.app_server_duration_ms =
-            profile.duration_ms.saturating_sub(profile.core_duration_ms);
-        Some(CompletedThreadInitialization {
-            initialization_mode: state.initialization_mode?,
-            profile,
-        })
-    }
-
-    fn state(&self) -> MutexGuard<'_, ThreadInitializationTimingState> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl ThreadInitializationTimingState {
     fn advance(&mut self, now: Instant) {
-        let (Some(previous), Some(phase)) =
-            (self.last_transition_at.replace(now), self.active_phase)
-        else {
-            return;
-        };
-        let duration_ms = duration_to_u64_ms(now.saturating_duration_since(previous));
-        let phase_duration = phase_duration_mut(&mut self.profile, phase);
+        let duration_ms =
+            duration_to_u64_ms(now.saturating_duration_since(self.last_transition_at));
+        self.last_transition_at = now;
+        let phase_duration = phase_duration_mut(&mut self.profile, self.active_phase);
         *phase_duration = phase_duration.saturating_add(duration_ms);
     }
 }

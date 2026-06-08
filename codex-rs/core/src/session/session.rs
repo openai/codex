@@ -491,6 +491,7 @@ impl Session {
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
+        thread_initialization_timing: &mut ThreadInitializationTiming,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -530,7 +531,7 @@ impl Session {
         // - initialize thread persistence with new or resumed session info
         // - perform default shell discovery
         // - load history metadata (skipped for subagents)
-        ThreadInitializationTiming::session_dependency_loading_started();
+        thread_initialization_timing.session_dependency_loading_started();
         let thread_persistence_fut = async {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>(None)
@@ -655,7 +656,7 @@ impl Session {
             auth_and_mcp_fut,
             plugin_and_skill_warmup_fut
         );
-        ThreadInitializationTiming::session_construction_started();
+        thread_initialization_timing.session_construction_started();
 
         for err in &plugin_skill_errors {
             error!(
@@ -1110,7 +1111,7 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            ThreadInitializationTiming::mcp_startup_started();
+            thread_initialization_timing.mcp_startup_started();
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
                 .filter(|(_, server)| server.enabled() && server.required())
@@ -1217,7 +1218,7 @@ impl Session {
                     anyhow::bail!("required MCP servers failed to initialize: {details}");
                 }
             }
-            ThreadInitializationTiming::session_activation_started();
+            thread_initialization_timing.session_activation_started();
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {
@@ -1241,7 +1242,7 @@ impl Session {
         match session_result {
             Ok(sess) => {
                 live_thread_init.commit();
-                ThreadInitializationTiming::thread_registration_started();
+                thread_initialization_timing.thread_registration_started();
                 Ok(sess)
             }
             Err(err) => {

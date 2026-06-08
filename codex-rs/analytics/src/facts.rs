@@ -114,6 +114,12 @@ pub struct ThreadInitializationProfile {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompletedCoreThreadInitialization {
+    pub initialization_mode: ThreadInitializationMode,
+    pub profile: ThreadInitializationProfile,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CompletedThreadInitialization {
     pub initialization_mode: ThreadInitializationMode,
     pub profile: ThreadInitializationProfile,
