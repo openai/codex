@@ -199,10 +199,14 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
     shell_type: Option<&ShellType>,
     sandbox: SandboxType,
     windows_sandbox_level: WindowsSandboxLevel,
+    proxy_enforced: bool,
 ) -> Vec<String> {
     if shell_type != Some(&ShellType::PowerShell)
         || sandbox != SandboxType::WindowsRestrictedToken
-        || windows_sandbox_level != WindowsSandboxLevel::Elevated
+        || !crate::exec::windows_sandbox_uses_elevated_backend(
+            windows_sandbox_level,
+            proxy_enforced,
+        )
         || command.is_empty()
     {
         return command.to_vec();
@@ -443,6 +447,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::Elevated,
+            /* proxy_enforced */ false,
         );
 
         assert_eq!(
@@ -469,6 +474,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::Elevated,
+            /* proxy_enforced */ false,
         );
 
         assert_eq!(
@@ -496,9 +502,37 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::Elevated,
+            /* proxy_enforced */ false,
         );
 
         assert_eq!(rewritten, command);
+    }
+
+    #[test]
+    fn inserts_no_profile_for_proxy_elevated_restricted_token_sandbox() {
+        let command = vec![
+            "powershell.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Output ok".to_string(),
+        ];
+
+        let rewritten = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            Some(&ShellType::PowerShell),
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::RestrictedToken,
+            /* proxy_enforced */ true,
+        );
+
+        assert_eq!(
+            rewritten,
+            vec![
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Write-Output ok".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -514,6 +548,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::RestrictedToken,
+            /* proxy_enforced */ false,
         );
 
         assert_eq!(rewritten, command);
@@ -532,6 +567,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::PowerShell),
             SandboxType::None,
             WindowsSandboxLevel::Elevated,
+            /* proxy_enforced */ false,
         );
 
         assert_eq!(rewritten, command);
@@ -550,6 +586,7 @@ mod disable_powershell_profile_tests {
             Some(&ShellType::Bash),
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::Elevated,
+            /* proxy_enforced */ false,
         );
 
         assert_eq!(rewritten, command);

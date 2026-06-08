@@ -279,6 +279,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.shell_type.as_ref(),
             attempt.sandbox,
             attempt.windows_sandbox_level,
+            managed_network.is_some(),
         );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
