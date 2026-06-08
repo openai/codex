@@ -262,6 +262,7 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
                 image_urls.push(format!("data:image/png;base64,{result}"));
             }
             ResponseItem::Reasoning { .. }
+            | ResponseItem::AgentMessage { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
             | ResponseItem::ToolSearchCall { .. }
