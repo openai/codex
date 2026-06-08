@@ -220,7 +220,7 @@ fn deserialize_tool_input_schema(input_schema: JsonValue) -> Result<JsonSchema, 
 // Use compact normalized JSON bytes as a cheap local proxy for the 1k-token
 // schema budget.
 const MAX_COMPACT_TOOL_SCHEMA_BYTES: usize = 4_000;
-const MAX_COMPACT_TOOL_SCHEMA_DEPTH: usize = 2;
+const MAX_COMPACT_TOOL_SCHEMA_DEPTH: usize = 3;
 
 /// Shrink unusually large tool schemas while preserving the top-level argument
 /// surface. Compaction is best-effort rather than a hard cap: it runs only
