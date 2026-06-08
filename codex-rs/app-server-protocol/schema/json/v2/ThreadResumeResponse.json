@@ -1793,6 +1793,8 @@
       "enum": [
         "user",
         "subagent",
+        "system",
+        "automation",
         "memory_consolidation"
       ],
       "type": "string"

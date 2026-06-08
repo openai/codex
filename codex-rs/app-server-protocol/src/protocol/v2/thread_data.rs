@@ -67,6 +67,8 @@ impl From<SessionSource> for CoreSessionSource {
 pub enum ThreadSource {
     User,
     Subagent,
+    System,
+    Automation,
     MemoryConsolidation,
 }
 
@@ -75,6 +77,8 @@ impl From<CoreThreadSource> for ThreadSource {
         match value {
             CoreThreadSource::User => ThreadSource::User,
             CoreThreadSource::Subagent => ThreadSource::Subagent,
+            CoreThreadSource::System => ThreadSource::System,
+            CoreThreadSource::Automation => ThreadSource::Automation,
             CoreThreadSource::MemoryConsolidation => ThreadSource::MemoryConsolidation,
         }
     }
@@ -85,6 +89,8 @@ impl From<ThreadSource> for CoreThreadSource {
         match value {
             ThreadSource::User => CoreThreadSource::User,
             ThreadSource::Subagent => CoreThreadSource::Subagent,
+            ThreadSource::System => CoreThreadSource::System,
+            ThreadSource::Automation => CoreThreadSource::Automation,
             ThreadSource::MemoryConsolidation => CoreThreadSource::MemoryConsolidation,
         }
     }

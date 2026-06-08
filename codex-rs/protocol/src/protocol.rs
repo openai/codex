@@ -2501,6 +2501,8 @@ pub enum SessionSource {
 pub enum ThreadSource {
     User,
     Subagent,
+    System,
+    Automation,
     MemoryConsolidation,
 }
 
@@ -2509,6 +2511,8 @@ impl ThreadSource {
         match self {
             ThreadSource::User => "user",
             ThreadSource::Subagent => "subagent",
+            ThreadSource::System => "system",
+            ThreadSource::Automation => "automation",
             ThreadSource::MemoryConsolidation => "memory_consolidation",
         }
     }
@@ -2527,6 +2531,8 @@ impl FromStr for ThreadSource {
         match value {
             "user" => Ok(ThreadSource::User),
             "subagent" => Ok(ThreadSource::Subagent),
+            "system" => Ok(ThreadSource::System),
+            "automation" => Ok(ThreadSource::Automation),
             "memory_consolidation" => Ok(ThreadSource::MemoryConsolidation),
             other => Err(format!("unknown thread source: {other}")),
         }
