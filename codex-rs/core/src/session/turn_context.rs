@@ -112,7 +112,7 @@ enum TurnMultiAgentRuntime {
 }
 
 pub(crate) struct PreparedTurn {
-    session_configuration: SessionConfiguration,
+    pub(super) session_configuration: SessionConfiguration,
     turn_environments: ResolvedTurnEnvironments,
     permission_profile_changed: bool,
     previous_cwd: AbsolutePathBuf,
@@ -121,12 +121,6 @@ pub(crate) struct PreparedTurn {
     previous_config: Option<Config>,
     new_config: Option<Config>,
     final_output_json_schema: Option<Option<Value>>,
-}
-
-impl PreparedTurn {
-    pub(crate) fn collaboration_mode(&self) -> &CollaborationMode {
-        &self.session_configuration.collaboration_mode
-    }
 }
 
 impl TurnContext {

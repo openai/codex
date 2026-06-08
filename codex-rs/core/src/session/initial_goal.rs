@@ -72,7 +72,7 @@ impl Session {
             .replace_for_turn(InitialGoalInput {
                 turn_id,
                 goal,
-                collaboration_mode: prepared_turn.collaboration_mode(),
+                collaboration_mode: &prepared_turn.session_configuration.collaboration_mode,
                 session_store: &self.services.session_extension_data,
                 thread_store: &self.services.thread_extension_data,
             })
