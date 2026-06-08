@@ -17,6 +17,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
 
+use crate::context_manager::ToolOutputHistoryPolicy;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
@@ -219,8 +220,7 @@ fn truncate_code_mode_result(
     items: Vec<FunctionCallOutputContentItem>,
     max_output_tokens: Option<usize>,
 ) -> Vec<FunctionCallOutputContentItem> {
-    let max_output_tokens = resolve_max_tokens(max_output_tokens);
-    let policy = TruncationPolicy::Tokens(max_output_tokens);
+    let policy = TruncationPolicy::Tokens(resolve_max_tokens(max_output_tokens));
     if items
         .iter()
         .all(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
@@ -231,6 +231,10 @@ fn truncate_code_mode_result(
     }
 
     truncate_function_output_items_with_policy(&items, policy)
+}
+
+pub(super) fn code_mode_history_truncation_policy() -> ToolOutputHistoryPolicy {
+    ToolOutputHistoryPolicy::PreservePretruncated
 }
 
 async fn call_nested_tool(

@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use crate::context_manager::ToolOutputHistoryPolicy;
 use crate::function_tool::FunctionCallError;
 use crate::hook_runtime::PreToolUseHookResult;
 use crate::hook_runtime::record_additional_contexts;
@@ -56,6 +57,17 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
     /// host returns an aborted tool response.
     fn waits_for_runtime_cancellation(&self) -> bool {
         false
+    }
+
+    /// Overrides generic turn-history truncation for this tool's output.
+    ///
+    /// Runtimes may preserve output only after applying their own bounded
+    /// model-facing truncation before returning.
+    fn history_truncation_policy(
+        &self,
+        _invocation: &ToolInvocation,
+    ) -> Option<ToolOutputHistoryPolicy> {
+        None
     }
 
     fn telemetry_tags<'a>(
@@ -161,9 +173,17 @@ pub(crate) struct AnyToolResult {
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
     pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
+    pub(crate) history_truncation_policy: Option<ToolOutputHistoryPolicy>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct RecordedToolResponse {
+    pub(crate) response_item: ResponseInputItem,
+    pub(crate) history_truncation_policy: Option<ToolOutputHistoryPolicy>,
 }
 
 impl AnyToolResult {
+    #[cfg(test)]
     pub(crate) fn into_response(self) -> ResponseInputItem {
         let Self {
             call_id,
@@ -172,6 +192,20 @@ impl AnyToolResult {
             ..
         } = self;
         result.to_response_item(&call_id, &payload)
+    }
+
+    pub(crate) fn into_recorded_response(self) -> RecordedToolResponse {
+        let Self {
+            call_id,
+            payload,
+            result,
+            history_truncation_policy,
+            ..
+        } = self;
+        RecordedToolResponse {
+            response_item: result.to_response_item(&call_id, &payload),
+            history_truncation_policy,
+        }
     }
 
     pub(crate) fn code_mode_result(self) -> serde_json::Value {
@@ -299,6 +333,13 @@ impl CoreToolRuntime for ExposureOverride {
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
         self.handler.post_tool_use_payload(invocation, result)
+    }
+
+    fn history_truncation_policy(
+        &self,
+        invocation: &ToolInvocation,
+    ) -> Option<ToolOutputHistoryPolicy> {
+        self.handler.history_truncation_policy(invocation)
     }
 
     fn with_updated_hook_input(
@@ -709,11 +750,13 @@ async fn handle_any_tool(
     }
     let post_tool_use_payload =
         CoreToolRuntime::post_tool_use_payload(tool, &invocation, output.as_ref());
+    let history_truncation_policy = CoreToolRuntime::history_truncation_policy(tool, &invocation);
     Ok(AnyToolResult {
         call_id,
         payload,
         result: output,
         post_tool_use_payload,
+        history_truncation_policy,
     })
 }
 

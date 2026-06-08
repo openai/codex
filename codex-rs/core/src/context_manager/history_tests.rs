@@ -1055,6 +1055,22 @@ fn record_items_truncates_custom_tool_call_output_content() {
 }
 
 #[test]
+fn record_items_preserves_pretruncated_tool_output_content() {
+    let mut history = ContextManager::new();
+    let output = "already rendered output ".repeat(2_500);
+    let item = ResponseItem::CustomToolCallOutput {
+        call_id: "tool-preserve".to_string(),
+        name: None,
+        output: FunctionCallOutputPayload::from_text(output),
+    };
+
+    history
+        .record_items_with_history_policy([&item], ToolOutputHistoryPolicy::PreservePretruncated);
+
+    assert_eq!(history.items, vec![item]);
+}
+
+#[test]
 fn record_items_respects_custom_token_limit() {
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(10);

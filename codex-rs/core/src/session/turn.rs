@@ -17,6 +17,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
+use crate::context_manager::ToolOutputHistoryPolicy;
 use crate::feedback_tags;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -54,6 +55,7 @@ use crate::tasks::emit_compact_metric;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::registry::RecordedToolResponse;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::extension_tool_executors;
@@ -85,7 +87,6 @@ use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
@@ -1715,16 +1716,22 @@ async fn handle_assistant_item_done_in_plan_mode(
 }
 
 async fn drain_in_flight(
-    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<RecordedToolResponse>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
     while let Some(res) = in_flight.next().await {
         match res {
-            Ok(response_input) => {
-                let response_item = response_input.into();
-                sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
-                    .await;
+            Ok(recorded_tool_response) => {
+                let response_item = recorded_tool_response.response_item.into();
+                sess.record_conversation_items_with_history_policy(
+                    &turn_context,
+                    std::slice::from_ref(&response_item),
+                    recorded_tool_response.history_truncation_policy.unwrap_or(
+                        ToolOutputHistoryPolicy::Truncate(turn_context.truncation_policy),
+                    ),
+                )
+                .await;
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -1787,7 +1794,7 @@ async fn try_run_sampling_request(
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
-    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
+    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<RecordedToolResponse>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;

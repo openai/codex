@@ -50,6 +50,13 @@ pub(crate) struct ContextManager {
     reference_context_item: Option<TurnContextItem>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolOutputHistoryPolicy {
+    Truncate(TruncationPolicy),
+    /// Preserve output that the tool runtime already bounded before returning it.
+    PreservePretruncated,
+}
+
 impl ContextManager {
     pub(crate) fn new() -> Self {
         Self {
@@ -93,13 +100,27 @@ impl ContextManager {
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
+        self.record_items_with_history_policy(items, ToolOutputHistoryPolicy::Truncate(policy));
+    }
+
+    pub(crate) fn record_items_with_history_policy<I>(
+        &mut self,
+        items: I,
+        policy: ToolOutputHistoryPolicy,
+    ) where
+        I: IntoIterator,
+        I::Item: std::ops::Deref<Target = ResponseItem>,
+    {
         for item in items {
             let item_ref = item.deref();
             if !is_api_message(item_ref) {
                 continue;
             }
 
-            let processed = self.process_item(item_ref, policy);
+            let processed = match policy {
+                ToolOutputHistoryPolicy::Truncate(policy) => self.process_item(item_ref, policy),
+                ToolOutputHistoryPolicy::PreservePretruncated => item_ref.clone(),
+            };
             self.items.push(processed);
         }
     }

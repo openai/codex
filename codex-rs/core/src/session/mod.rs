@@ -28,6 +28,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
+use crate::context_manager::ToolOutputHistoryPolicy;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
@@ -2584,9 +2585,23 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
+        self.record_conversation_items_with_history_policy(
+            turn_context,
+            items,
+            ToolOutputHistoryPolicy::Truncate(turn_context.truncation_policy),
+        )
+        .await;
+    }
+
+    pub(crate) async fn record_conversation_items_with_history_policy(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        history_truncation_policy: ToolOutputHistoryPolicy,
+    ) {
         {
             let mut state = self.state.lock().await;
-            state.record_items(items.iter(), turn_context.truncation_policy);
+            state.record_items(items.iter(), history_truncation_policy);
         }
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;

@@ -11,6 +11,7 @@ use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
 use crate::context_manager::ContextManager;
+use crate::context_manager::ToolOutputHistoryPolicy;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
@@ -18,7 +19,6 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
-use codex_utils_output_truncation::TruncationPolicy;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
@@ -64,12 +64,12 @@ impl SessionState {
     }
 
     // History helpers
-    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
+    pub(crate) fn record_items<I>(&mut self, items: I, policy: ToolOutputHistoryPolicy)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
-        self.history.record_items(items, policy);
+        self.history.record_items_with_history_policy(items, policy);
     }
 
     pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {

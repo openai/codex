@@ -10,6 +10,7 @@ use codex_tools::ToolSpec;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
+use super::code_mode_history_truncation_policy;
 use super::handle_runtime_response;
 use super::is_exec_tool_name;
 
@@ -129,5 +130,12 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
 impl CoreToolRuntime for CodeModeExecuteHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Custom { .. })
+    }
+
+    fn history_truncation_policy(
+        &self,
+        _invocation: &ToolInvocation,
+    ) -> Option<crate::context_manager::ToolOutputHistoryPolicy> {
+        Some(code_mode_history_truncation_policy())
     }
 }

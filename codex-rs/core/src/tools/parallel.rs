@@ -20,6 +20,7 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::RecordedToolResponse;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
@@ -64,13 +65,13 @@ impl ToolCallRuntime {
         self,
         call: ToolCall,
         cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+    ) -> impl std::future::Future<Output = Result<RecordedToolResponse, CodexErr>> {
         let error_call = call.clone();
         let future =
             self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token);
         async move {
             match future.await {
-                Ok(response) => Ok(response.into_response()),
+                Ok(response) => Ok(response.into_recorded_response()),
                 Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
                 Err(other) => Ok(Self::failure_response(error_call, other)),
             }
@@ -183,9 +184,9 @@ impl ToolCallRuntime {
         FunctionCallError::Fatal(format!("tool task failed to receive: {err:?}"))
     }
 
-    fn failure_response(call: ToolCall, err: FunctionCallError) -> ResponseInputItem {
+    fn failure_response(call: ToolCall, err: FunctionCallError) -> RecordedToolResponse {
         let message = err.to_string();
-        match call.payload {
+        let response_item = match call.payload {
             ToolPayload::ToolSearch { .. } => ResponseInputItem::ToolSearchOutput {
                 call_id: call.call_id,
                 status: "completed".to_string(),
@@ -207,6 +208,10 @@ impl ToolCallRuntime {
                     success: Some(false),
                 },
             },
+        };
+        RecordedToolResponse {
+            response_item,
+            history_truncation_policy: None,
         }
     }
 
@@ -218,6 +223,7 @@ impl ToolCallRuntime {
                 message: Self::abort_message(call, secs),
             }),
             post_tool_use_payload: None,
+            history_truncation_policy: None,
         }
     }
 
@@ -240,6 +246,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    use crate::context_manager::ToolOutputHistoryPolicy;
     use crate::tools::context::FunctionToolOutput;
     use crate::tools::context::ToolInvocation;
     use crate::tools::registry::CoreToolRuntime;
@@ -255,6 +262,7 @@ mod tests {
 
     struct ImmediateHandler {
         tool_name: codex_tools::ToolName,
+        history_truncation_policy: Option<ToolOutputHistoryPolicy>,
     }
 
     #[async_trait::async_trait]
@@ -285,7 +293,14 @@ mod tests {
         }
     }
 
-    impl CoreToolRuntime for ImmediateHandler {}
+    impl CoreToolRuntime for ImmediateHandler {
+        fn history_truncation_policy(
+            &self,
+            _invocation: &ToolInvocation,
+        ) -> Option<ToolOutputHistoryPolicy> {
+            self.history_truncation_policy
+        }
+    }
 
     struct CancellationCleanupHandler {
         tool_name: codex_tools::ToolName,
@@ -419,6 +434,7 @@ mod tests {
         let tool_name = codex_tools::ToolName::plain("test_tool");
         let handler = Arc::new(ImmediateHandler {
             tool_name: tool_name.clone(),
+            history_truncation_policy: None,
         }) as Arc<dyn CoreToolRuntime>;
         let router = Arc::new(ToolRouter::from_parts(
             ToolRegistry::from_tools([handler]),
@@ -456,7 +472,7 @@ mod tests {
                 success: Some(true),
             },
         };
-        assert_eq!(expected_response, response);
+        assert_eq!(expected_response, response.response_item);
 
         let actual = records
             .lock()
@@ -464,6 +480,51 @@ mod tests {
             .drain(..)
             .collect::<Vec<_>>();
         assert_eq!(vec![ToolCallOutcome::Completed { success: true }], actual);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_tool_call_propagates_runtime_history_policy() -> anyhow::Result<()> {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("test_tool");
+        let handler = Arc::new(ImmediateHandler {
+            tool_name: tool_name.clone(),
+            history_truncation_policy: Some(ToolOutputHistoryPolicy::PreservePretruncated),
+        }) as Arc<dyn CoreToolRuntime>;
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+        ));
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(router, session, turn_context, tracker);
+        let call = ToolCall {
+            tool_name,
+            call_id: "call-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+
+        let response = runtime
+            .handle_tool_call(call, CancellationToken::new())
+            .await?;
+
+        assert_eq!(
+            response,
+            RecordedToolResponse {
+                response_item: ResponseInputItem::FunctionCallOutput {
+                    call_id: "call-1".to_string(),
+                    output: FunctionCallOutputPayload {
+                        body: FunctionCallOutputBody::Text("ok".to_string()),
+                        success: Some(true),
+                    },
+                },
+                history_truncation_policy: Some(ToolOutputHistoryPolicy::PreservePretruncated),
+            }
+        );
 
         Ok(())
     }
@@ -521,7 +582,7 @@ mod tests {
             .await
             .expect("timed out waiting for tool response")
             .expect("tool response task should join")?;
-        let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+        let ResponseInputItem::FunctionCallOutput { output, .. } = response.response_item else {
             anyhow::bail!("cancelled tool should return function output");
         };
         let FunctionCallOutputBody::Text(text) = output.body else {
