@@ -225,6 +225,7 @@ fn should_use_remote_compact_task_for_azure_provider() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
+        bedrock_mantle_additional_regions: Vec::new(),
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,

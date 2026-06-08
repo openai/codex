@@ -1489,6 +1489,13 @@
           "description": "Base URL for the provider's OpenAI-compatible API.",
           "type": "string"
         },
+        "bedrock_mantle_additional_regions": {
+          "description": "Additional AWS regions allowed for the built-in Amazon Bedrock Mantle endpoint.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "env_http_headers": {
           "additionalProperties": {
             "type": "string"

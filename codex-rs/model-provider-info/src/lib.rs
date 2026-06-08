@@ -102,6 +102,9 @@ pub struct ModelProviderInfo {
     pub auth: Option<ModelProviderAuthInfo>,
     /// AWS SigV4 auth configuration for this provider.
     pub aws: Option<ModelProviderAwsAuthInfo>,
+    /// Additional AWS regions allowed for the built-in Amazon Bedrock Mantle endpoint.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bedrock_mantle_additional_regions: Vec<String>,
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
@@ -147,6 +150,26 @@ pub struct ModelProviderAwsAuthInfo {
 }
 
 impl ModelProviderInfo {
+    /// Validates configured additions to the built-in Bedrock Mantle region allowlist.
+    pub fn validate_bedrock_mantle_additional_regions(&self) -> std::result::Result<(), String> {
+        for region in &self.bedrock_mantle_additional_regions {
+            let bytes = region.as_bytes();
+            let is_valid = !bytes.is_empty()
+                && bytes.len() <= 63
+                && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+                && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+                && bytes.iter().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-'
+                });
+            if !is_valid {
+                return Err(format!(
+                    "invalid Bedrock Mantle additional region `{region}`; expected a DNS-safe lowercase region label"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> std::result::Result<(), String> {
         if self.aws.is_some() {
             if self.supports_websockets {
@@ -330,6 +353,7 @@ impl ModelProviderInfo {
             experimental_bearer_token: None,
             auth: None,
             aws: None,
+            bedrock_mantle_additional_regions: Vec::new(),
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
@@ -372,6 +396,7 @@ impl ModelProviderInfo {
                 profile: None,
                 region: None,
             })),
+            bedrock_mantle_additional_regions: Vec::new(),
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(HashMap::from([(
@@ -444,7 +469,7 @@ pub fn built_in_model_providers(
 ///
 /// Configured providers extend the built-in set. Built-in providers are not
 /// generally overridable, but the built-in Amazon Bedrock provider allows the
-/// user to set `aws.profile` and `aws.region`.
+/// user to set `aws.profile`, `aws.region`, and additional Bedrock Mantle regions.
 pub fn merge_configured_model_providers(
     mut model_providers: HashMap<String, ModelProviderInfo>,
     configured_model_providers: HashMap<String, ModelProviderInfo>,
@@ -452,22 +477,28 @@ pub fn merge_configured_model_providers(
     for (key, mut provider) in configured_model_providers {
         if key == AMAZON_BEDROCK_PROVIDER_ID {
             let aws_override = provider.aws.take();
+            provider.validate_bedrock_mantle_additional_regions()?;
+            let bedrock_mantle_additional_regions =
+                std::mem::take(&mut provider.bedrock_mantle_additional_regions);
             if provider != ModelProviderInfo::default() {
                 return Err(format!(
                     "model_providers.{AMAZON_BEDROCK_PROVIDER_ID} only supports changing \
-`aws.profile` and `aws.region`; other non-default provider fields are not supported"
+`aws.profile`, `aws.region`, and `bedrock_mantle_additional_regions`; other non-default provider fields are not supported"
                 ));
             }
 
-            if let Some(aws_override) = aws_override
-                && let Some(built_in_provider) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID)
-                && let Some(built_in_aws) = built_in_provider.aws.as_mut()
-            {
-                if let Some(profile) = aws_override.profile {
-                    built_in_aws.profile = Some(profile);
-                }
-                if let Some(region) = aws_override.region {
-                    built_in_aws.region = Some(region);
+            if let Some(built_in_provider) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID) {
+                built_in_provider.bedrock_mantle_additional_regions =
+                    bedrock_mantle_additional_regions;
+                if let Some(aws_override) = aws_override
+                    && let Some(built_in_aws) = built_in_provider.aws.as_mut()
+                {
+                    if let Some(profile) = aws_override.profile {
+                        built_in_aws.profile = Some(profile);
+                    }
+                    if let Some(region) = aws_override.region {
+                        built_in_aws.region = Some(region);
+                    }
                 }
             }
         } else {
@@ -506,6 +537,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         experimental_bearer_token: None,
         auth: None,
         aws: None,
+        bedrock_mantle_additional_regions: Vec::new(),
         wire_api,
         query_params: None,
         http_headers: None,

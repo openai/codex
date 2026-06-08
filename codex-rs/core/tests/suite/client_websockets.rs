@@ -1989,6 +1989,7 @@ fn websocket_provider_with_connect_timeout(
         experimental_bearer_token: None,
         auth: None,
         aws: None,
+        bedrock_mantle_additional_regions: Vec::new(),
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,

@@ -19,6 +19,7 @@ base_url = "http://localhost:11434/v1"
         experimental_bearer_token: None,
         auth: None,
         aws: None,
+        bedrock_mantle_additional_regions: Vec::new(),
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -51,6 +52,7 @@ query_params = { api-version = "2025-04-01-preview" }
         experimental_bearer_token: None,
         auth: None,
         aws: None,
+        bedrock_mantle_additional_regions: Vec::new(),
         wire_api: WireApi::Responses,
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
@@ -86,6 +88,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         experimental_bearer_token: None,
         auth: None,
         aws: None,
+        bedrock_mantle_additional_regions: Vec::new(),
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: Some(maplit::hashmap! {
@@ -158,6 +161,7 @@ fn test_supports_remote_compaction_for_azure_name() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
+        bedrock_mantle_additional_regions: Vec::new(),
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -183,6 +187,7 @@ fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
+        bedrock_mantle_additional_regions: Vec::new(),
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -249,6 +254,45 @@ region = "us-west-2"
 }
 
 #[test]
+fn test_deserialize_bedrock_mantle_additional_regions() {
+    let provider_toml = r#"
+bedrock_mantle_additional_regions = ["test-region-1"]
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+
+    assert_eq!(
+        provider.bedrock_mantle_additional_regions,
+        vec!["test-region-1".to_string()]
+    );
+}
+
+#[test]
+fn test_validate_bedrock_mantle_additional_regions_rejects_invalid_dns_labels() {
+    for region in [
+        "",
+        "-test-region-1",
+        "test-region-1-",
+        "TEST-region-1",
+        "test_region_1",
+        "test-region-1.api.aws",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        let provider = ModelProviderInfo {
+            bedrock_mantle_additional_regions: vec![region.to_string()],
+            ..ModelProviderInfo::default()
+        };
+
+        assert_eq!(
+            provider.validate_bedrock_mantle_additional_regions(),
+            Err(format!(
+                "invalid Bedrock Mantle additional region `{region}`; expected a DNS-safe lowercase region label"
+            ))
+        );
+    }
+}
+
+#[test]
 fn test_create_amazon_bedrock_provider() {
     assert_eq!(
         ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
@@ -263,6 +307,7 @@ fn test_create_amazon_bedrock_provider() {
                 profile: None,
                 region: None,
             }),
+            bedrock_mantle_additional_regions: Vec::new(),
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(maplit::hashmap! {
@@ -361,6 +406,31 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_profile_override
 }
 
 #[test]
+fn test_merge_configured_model_providers_applies_amazon_bedrock_additional_regions() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        AMAZON_BEDROCK_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            bedrock_mantle_additional_regions: vec!["test-region-1".to_string()],
+            ..ModelProviderInfo::default()
+        },
+    )]);
+
+    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+    expected
+        .get_mut(AMAZON_BEDROCK_PROVIDER_ID)
+        .expect("Amazon Bedrock provider should be built in")
+        .bedrock_mantle_additional_regions = vec!["test-region-1".to_string()];
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(expected)
+    );
+}
+
+#[test]
 fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fields() {
     let configured_model_providers = std::collections::HashMap::from([(
         AMAZON_BEDROCK_PROVIDER_ID.to_string(),
@@ -380,7 +450,7 @@ fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fiel
             configured_model_providers,
         ),
         Err(
-            "model_providers.amazon-bedrock only supports changing `aws.profile` and `aws.region`; other non-default provider fields are not supported"
+            "model_providers.amazon-bedrock only supports changing `aws.profile`, `aws.region`, and `bedrock_mantle_additional_regions`; other non-default provider fields are not supported"
                 .to_string()
         )
     );

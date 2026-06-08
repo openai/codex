@@ -174,6 +174,7 @@ fn model_provider_from_proto(
             .map(model_provider_auth_from_proto)
             .transpose()?,
         aws: None,
+        bedrock_mantle_additional_regions: provider.bedrock_mantle_additional_regions,
         wire_api,
         query_params: provider.query_params.map(|map| map.values),
         http_headers: provider.http_headers.map(|map| map.values),
@@ -201,6 +202,7 @@ fn model_provider_to_proto(
         experimental_bearer_token,
         auth,
         aws: _,
+        bedrock_mantle_additional_regions,
         wire_api,
         query_params,
         http_headers,
@@ -221,6 +223,7 @@ fn model_provider_to_proto(
         env_key_instructions,
         experimental_bearer_token,
         auth: auth.map(model_provider_auth_to_proto),
+        bedrock_mantle_additional_regions,
         wire_api: proto_wire_api(wire_api).into(),
         query_params: query_params.map(proto_string_map),
         http_headers: http_headers.map(proto_string_map),
@@ -300,6 +303,7 @@ mod tests {
     use std::collections::HashMap;
     use std::num::NonZeroU64;
 
+    use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::config_types::ModelProviderAuthInfo;
@@ -394,11 +398,12 @@ mod tests {
 
     #[test]
     fn model_provider_proto_roundtrips_through_domain_type() {
-        let expected = expected_provider();
-        let proto = model_provider_to_proto("local", expected.clone());
+        let mut expected = expected_provider();
+        expected.bedrock_mantle_additional_regions = vec!["test-region-1".to_string()];
+        let proto = model_provider_to_proto(AMAZON_BEDROCK_PROVIDER_ID, expected.clone());
         let (id, actual) = model_provider_from_proto(proto).expect("model provider from proto");
 
-        assert_eq!(id, "local");
+        assert_eq!(id, AMAZON_BEDROCK_PROVIDER_ID);
         assert_eq!(actual, expected);
     }
 
@@ -448,6 +453,7 @@ mod tests {
                             websocket_connect_timeout_ms: Some(10_000),
                             requires_openai_auth: false,
                             supports_websockets: true,
+                            bedrock_mantle_additional_regions: Vec::new(),
                         }],
                         features: HashMap::from([
                             ("plugins".to_string(), false),
@@ -512,6 +518,7 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: true,
             aws: None,
+            bedrock_mantle_additional_regions: Vec::new(),
         }
     }
 

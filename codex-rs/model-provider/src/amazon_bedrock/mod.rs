@@ -85,12 +85,15 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     async fn api_provider(&self) -> Result<Provider> {
         let mut api_provider_info = self.info.clone();
-        api_provider_info.base_url = Some(runtime_base_url(&self.aws).await?);
+        api_provider_info.base_url =
+            Some(runtime_base_url(&self.aws, &self.info.bedrock_mantle_additional_regions).await?);
         api_provider_info.to_api_provider(/*auth_mode*/ None)
     }
 
     async fn runtime_base_url(&self) -> Result<Option<String>> {
-        Ok(Some(runtime_base_url(&self.aws).await?))
+        Ok(Some(
+            runtime_base_url(&self.aws, &self.info.bedrock_mantle_additional_regions).await?,
+        ))
     }
 
     async fn api_auth(&self) -> Result<SharedAuthProvider> {
@@ -120,7 +123,7 @@ mod tests {
         let region = "eu-central-1";
         let mut api_provider_info =
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
-        api_provider_info.base_url = Some(mantle::base_url(region).expect("supported region"));
+        api_provider_info.base_url = Some(mantle::base_url(region, &[]).expect("supported region"));
         let api_provider = api_provider_info
             .to_api_provider(/*auth_mode*/ None)
             .expect("api provider should build");
@@ -128,6 +131,25 @@ mod tests {
         assert_eq!(
             api_provider.base_url,
             "https://bedrock-mantle.eu-central-1.api.aws/openai/v1"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_base_url_uses_configured_additional_region_endpoint() {
+        let mut provider_info =
+            ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
+                profile: None,
+                region: Some("test-region-1".to_string()),
+            }));
+        provider_info.bedrock_mantle_additional_regions = vec!["test-region-1".to_string()];
+        let provider = AmazonBedrockModelProvider::new(provider_info);
+
+        assert_eq!(
+            provider
+                .runtime_base_url()
+                .await
+                .expect("configured additional region"),
+            Some("https://bedrock-mantle.test-region-1.api.aws/openai/v1".to_string())
         );
     }
 

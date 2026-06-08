@@ -899,7 +899,15 @@ pub fn validate_model_providers(
     validate_reserved_model_provider_ids(model_providers)?;
     for (key, provider) in model_providers {
         if key == AMAZON_BEDROCK_PROVIDER_ID {
+            provider
+                .validate_bedrock_mantle_additional_regions()
+                .map_err(|message| format!("model_providers.{key}: {message}"))?;
             continue;
+        }
+        if !provider.bedrock_mantle_additional_regions.is_empty() {
+            return Err(format!(
+                "model_providers.{key}: bedrock_mantle_additional_regions is only supported for `{AMAZON_BEDROCK_PROVIDER_ID}`"
+            ));
         }
         if provider.aws.is_some() {
             return Err(format!(

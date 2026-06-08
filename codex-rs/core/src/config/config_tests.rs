@@ -551,6 +551,37 @@ profile = "codex-bedrock"
 }
 
 #[test]
+fn rejects_bedrock_mantle_additional_regions_for_custom_provider() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.custom]
+name = "Custom Provider"
+bedrock_mantle_additional_regions = ["test-region-1"]
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains(
+        "model_providers.custom: bedrock_mantle_additional_regions is only supported for `amazon-bedrock`"
+    ));
+}
+
+#[test]
+fn rejects_invalid_bedrock_mantle_additional_region() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.amazon-bedrock]
+bedrock_mantle_additional_regions = ["test-region-1.api.aws/redirect"]
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains(
+        "model_providers.amazon-bedrock: invalid Bedrock Mantle additional region `test-region-1.api.aws/redirect`"
+    ));
+}
+
+#[test]
 fn accepts_amazon_bedrock_aws_profile_override() {
     let cfg = toml::from_str::<ConfigToml>(
         r#"
@@ -574,6 +605,52 @@ region = "us-west-2"
             .and_then(|provider| provider.aws.as_ref())
             .and_then(|aws| aws.region.as_deref()),
         Some("us-west-2")
+    );
+}
+
+#[tokio::test]
+async fn load_config_applies_amazon_bedrock_additional_regions() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock]
+bedrock_mantle_additional_regions = ["test-region-1"]
+
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+region = "test-region-1"
+"#,
+    )
+    .expect("Amazon Bedrock additional regions should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(
+        config.model_provider.bedrock_mantle_additional_regions,
+        vec!["test-region-1".to_string()]
+    );
+    assert_eq!(
+        config
+            .model_provider
+            .aws
+            .as_ref()
+            .and_then(|aws| aws.profile.as_deref()),
+        Some("codex-bedrock")
+    );
+    assert_eq!(
+        config
+            .model_provider
+            .aws
+            .as_ref()
+            .and_then(|aws| aws.region.as_deref()),
+        Some("test-region-1")
     );
 }
 
@@ -646,7 +723,7 @@ region = "us-west-2"
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(err.to_string().contains(
-        "model_providers.amazon-bedrock only supports changing `aws.profile` and `aws.region`; other non-default provider fields are not supported"
+        "model_providers.amazon-bedrock only supports changing `aws.profile`, `aws.region`, and `bedrock_mantle_additional_regions`; other non-default provider fields are not supported"
     ));
 }
 

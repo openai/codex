@@ -38,8 +38,12 @@ pub(super) fn region_from_config(aws: &ModelProviderAwsAuthInfo) -> Option<Strin
         .map(str::to_string)
 }
 
-pub(super) fn base_url(region: &str) -> Result<String> {
-    if BEDROCK_MANTLE_SUPPORTED_REGIONS.contains(&region) {
+pub(super) fn base_url(region: &str, additional_regions: &[String]) -> Result<String> {
+    if BEDROCK_MANTLE_SUPPORTED_REGIONS.contains(&region)
+        || additional_regions
+            .iter()
+            .any(|additional| additional == region)
+    {
         Ok(format!("https://bedrock-mantle.{region}.api.aws/openai/v1"))
     } else {
         Err(CodexErr::Fatal(format!(
@@ -48,9 +52,12 @@ pub(super) fn base_url(region: &str) -> Result<String> {
     }
 }
 
-pub(super) async fn runtime_base_url(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
+pub(super) async fn runtime_base_url(
+    aws: &ModelProviderAwsAuthInfo,
+    additional_regions: &[String],
+) -> Result<String> {
     let region = resolve_region(aws).await?;
-    base_url(&region)
+    base_url(&region, additional_regions)
 }
 
 async fn resolve_region(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
@@ -69,14 +76,23 @@ mod tests {
     #[test]
     fn base_url_uses_region_endpoint() {
         assert_eq!(
-            base_url("ap-northeast-1").expect("supported region"),
+            base_url("ap-northeast-1", &[]).expect("supported region"),
             "https://bedrock-mantle.ap-northeast-1.api.aws/openai/v1"
         );
     }
 
     #[test]
+    fn base_url_uses_configured_additional_region_endpoint() {
+        assert_eq!(
+            base_url("test-region-1", &["test-region-1".to_string()])
+                .expect("configured additional region"),
+            "https://bedrock-mantle.test-region-1.api.aws/openai/v1"
+        );
+    }
+
+    #[test]
     fn base_url_rejects_unsupported_region() {
-        let err = base_url("us-west-1").expect_err("unsupported region");
+        let err = base_url("us-west-1", &[]).expect_err("unsupported region");
 
         assert_eq!(
             err.to_string(),
