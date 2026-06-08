@@ -1206,6 +1206,26 @@ mod tests {
     }
 
     #[test]
+    fn plugin_location_request_params_select_exactly_one_location() {
+        let local_path = test_absolute_path("/marketplaces/local");
+
+        assert_eq!(
+            PluginLocation::Local {
+                marketplace_path: local_path.clone()
+            }
+            .into_request_params(),
+            (Some(local_path), None)
+        );
+        assert_eq!(
+            PluginLocation::Remote {
+                marketplace_name: "workspace-directory".to_string()
+            }
+            .into_request_params(),
+            (None, Some("workspace-directory".to_string()))
+        );
+    }
+
+    #[test]
     fn plugin_remote_section_error_message_adds_concrete_next_steps() {
         let cases = [
             (
