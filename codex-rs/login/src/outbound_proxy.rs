@@ -75,7 +75,7 @@ mod tests {
         use SystemProxyFeatureModeToml as SystemProxyFeatureMode;
 
         assert_eq!(
-            bootstrap_auth_route_config_from_system_proxy_config(None),
+            bootstrap_auth_route_config_from_system_proxy_config(/*system_proxy*/ None),
             None
         );
 
