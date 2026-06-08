@@ -86,13 +86,13 @@ pub(crate) fn app_server_extension_event_sink(
     thread_state_manager: ThreadStateManager,
 ) -> Arc<dyn ExtensionEventSink> {
     Arc::new(AppServerExtensionEventSink {
-        outgoing,
+        outgoing: Arc::downgrade(&outgoing),
         thread_state_manager,
     })
 }
 
 struct AppServerExtensionEventSink {
-    outgoing: Arc<OutgoingMessageSender>,
+    outgoing: Weak<OutgoingMessageSender>,
     thread_state_manager: ThreadStateManager,
 }
 
@@ -118,7 +118,9 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
                         "failed to enqueue extension goal update for {thread_id}: listener command channel is closed"
                     );
                 }
-                let outgoing = Arc::clone(&self.outgoing);
+                let Some(outgoing) = self.outgoing.upgrade() else {
+                    return;
+                };
                 tokio::spawn(async move {
                     outgoing
                         .send_server_notification(ServerNotification::ThreadGoalUpdated(
@@ -234,5 +236,40 @@ mod tests {
                 },
             }),
         }
+    }
+
+    #[test]
+    fn app_server_event_sink_does_not_retain_outgoing_sender() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(4);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            AnalyticsEventsClient::disabled(),
+        ));
+        let sink =
+            app_server_extension_event_sink(Arc::clone(&outgoing), ThreadStateManager::new());
+        drop(outgoing);
+
+        sink.emit(Event {
+            id: "call-1".to_string(),
+            msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                thread_id: ThreadId::default(),
+                turn_id: None,
+                goal: CoreThreadGoal {
+                    thread_id: ThreadId::default(),
+                    objective: "do not retain sender".to_string(),
+                    status: ThreadGoalStatus::Active,
+                    token_budget: None,
+                    tokens_used: 0,
+                    time_used_seconds: 0,
+                    created_at: 0,
+                    updated_at: 0,
+                },
+            }),
+        });
+
+        assert!(matches!(
+            outgoing_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
     }
 }
