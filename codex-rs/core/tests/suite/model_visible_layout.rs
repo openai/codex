@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 
+use core_test_support::test_codex::local_selections;
 use std::fs;
 use std::sync::Arc;
 
@@ -124,12 +125,11 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(first_turn_cwd),
+                environments: Some(local_selections(first_turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(first_sandbox_policy),
                 permission_profile: first_permission_profile,
@@ -160,12 +160,11 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                 text: "second turn with context updates".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(preturn_context_diff_cwd),
+                environments: Some(local_selections(preturn_context_diff_cwd)),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
@@ -252,12 +251,11 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
                 text: "first turn in agents_one".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd_one.clone()),
+                environments: Some(local_selections(cwd_one.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(first_sandbox_policy),
                 permission_profile: first_permission_profile,
@@ -286,12 +284,11 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
                 text: "second turn in agents_two".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd_two),
+                environments: Some(local_selections(cwd_two)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
@@ -366,7 +363,6 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     .await;
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "seed resume history".into(),
                 text_elements: Vec::new(),
@@ -413,12 +409,11 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                 text: "resume and change personality".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(resume_override_cwd),
+                environments: Some(local_selections(resume_override_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -483,7 +478,6 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     .await;
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "seed resume history".into(),
                 text_elements: Vec::new(),
@@ -517,7 +511,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     core_test_support::submit_thread_settings(
         &resumed.codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(resume_override_cwd),
+            environments: Some(local_selections(resume_override_cwd)),
             model: Some("gpt-5.2".to_string()),
             ..Default::default()
         },
@@ -526,7 +520,6 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     resumed
         .codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "first resumed turn after model override".into(),
                 text_elements: Vec::new(),

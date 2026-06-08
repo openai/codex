@@ -3199,12 +3199,14 @@ text(
                 text: "use exec to inspect and call hidden tools".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd),
+                environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                    cwd,
+                    Vec::new(),
+                )),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

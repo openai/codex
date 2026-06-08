@@ -627,6 +627,8 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     }
 
+    let config_snapshot = pending.config_snapshot;
+    let cwd = config_snapshot.cwd().clone();
     let ThreadConfigSnapshot {
         model,
         model_provider_id,
@@ -635,11 +637,10 @@ pub(super) async fn handle_pending_thread_resume_request(
         approvals_reviewer,
         permission_profile,
         active_permission_profile,
-        cwd,
         workspace_roots,
         reasoning_effort,
         ..
-    } = pending.config_snapshot;
+    } = config_snapshot;
     let instruction_sources = pending.instruction_sources;
     let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     let active_permission_profile =

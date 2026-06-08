@@ -53,7 +53,7 @@ impl AppsRequestProcessor {
             None
         };
         let fallback_cwd = match thread.as_ref() {
-            Some(thread) => Some(thread.config_snapshot().await.cwd.to_path_buf()),
+            Some(thread) => Some(thread.config_snapshot().await.cwd().to_path_buf()),
             None => None,
         };
         let mut config = self.load_latest_config(fallback_cwd).await?;

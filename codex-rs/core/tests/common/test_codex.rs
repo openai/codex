@@ -40,6 +40,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
@@ -69,6 +70,17 @@ const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
 const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
 static REMOTE_TEST_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const SUBMIT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub fn local(cwd: AbsolutePathBuf) -> TurnEnvironmentSelection {
+    TurnEnvironmentSelection {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        cwd,
+    }
+}
+
+pub fn local_selections(cwd: AbsolutePathBuf) -> TurnEnvironmentSelections {
+    TurnEnvironmentSelections::new(cwd.clone(), vec![local(cwd)])
+}
 
 #[derive(Debug)]
 pub struct TestEnv {
@@ -789,18 +801,20 @@ impl TestCodex {
         let (sandbox_policy, permission_profile) =
             turn_permission_fields(permission_profile, self.config.cwd.as_path());
         let session_model = self.session_configured.model.clone();
+        let turn_environment_selections = environments.map(|environments| {
+            TurnEnvironmentSelections::new(self.config.cwd.clone(), environments)
+        });
         self.codex
             .submit(Op::UserInput {
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                     text_elements: Vec::new(),
                 }],
-                environments,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
                 additional_context: Default::default(),
                 thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                    cwd: Some(self.config.cwd.clone()),
+                    environments: turn_environment_selections,
                     approval_policy: Some(approval_policy),
                     sandbox_policy: Some(sandbox_policy),
                     permission_profile,
