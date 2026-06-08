@@ -69,6 +69,7 @@ pub struct TurnContext {
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) thread_source_contract_version: Option<u32>,
     pub(crate) environments: ResolvedTurnEnvironments,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
@@ -240,6 +241,7 @@ impl TurnContext {
             session_source: self.session_source.clone(),
             parent_thread_id: self.parent_thread_id,
             thread_source: self.thread_source,
+            thread_source_contract_version: self.thread_source_contract_version,
             environments: self.environments.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.clone(),
@@ -508,19 +510,21 @@ impl Session {
             &model_info,
         );
         let per_turn_config = Arc::new(per_turn_config);
-        let turn_metadata_state = Arc::new(TurnMetadataState::new(
-            session_id.to_string(),
-            thread_id.to_string(),
-            session_configuration.forked_from_thread_id,
-            session_configuration.parent_thread_id,
-            &session_configuration.session_source,
-            session_configuration.thread_source,
-            sub_id.clone(),
-            cwd.clone(),
-            &session_configuration.permission_profile(),
-            session_configuration.windows_sandbox_level,
-            network.is_some(),
-        ));
+        let turn_metadata_state =
+            Arc::new(TurnMetadataState::new_with_thread_source_contract_version(
+                session_id.to_string(),
+                thread_id.to_string(),
+                session_configuration.forked_from_thread_id,
+                session_configuration.parent_thread_id,
+                &session_configuration.session_source,
+                session_configuration.thread_source,
+                session_configuration.thread_source_contract_version,
+                sub_id.clone(),
+                cwd.clone(),
+                &session_configuration.permission_profile(),
+                session_configuration.windows_sandbox_level,
+                network.is_some(),
+            ));
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
         extension_data.insert(HostLoadedSkills::new(Arc::clone(&skills_outcome)));
@@ -539,6 +543,7 @@ impl Session {
             session_source,
             parent_thread_id: session_configuration.parent_thread_id,
             thread_source: session_configuration.thread_source,
+            thread_source_contract_version: session_configuration.thread_source_contract_version,
             environments,
             #[allow(deprecated)]
             cwd,

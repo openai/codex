@@ -151,6 +151,7 @@ fn write_rollout_with_user_message(
                     cli_version: "test".to_string(),
                     source: SessionSource::Cli,
                     thread_source: None,
+                    thread_source_contract_version: None,
                     agent_nickname: None,
                     agent_role: None,
                     agent_path: None,

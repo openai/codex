@@ -254,6 +254,15 @@
         }
       ],
       "description": "Optional client-supplied analytics source classification for this thread."
+    },
+    "threadSourceContractVersion": {
+      "description": "Optional version of the semantic contract used to classify `threadSource`.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
     }
   },
   "title": "ThreadStartParams",

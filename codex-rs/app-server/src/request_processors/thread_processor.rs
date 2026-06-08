@@ -828,6 +828,7 @@ impl ThreadRequestProcessor {
             ephemeral,
             session_start_source,
             thread_source,
+            thread_source_contract_version,
             environments,
         } = params;
         if sandbox.is_some() && permissions.is_some() {
@@ -879,6 +880,7 @@ impl ThreadRequestProcessor {
                 dynamic_tools,
                 session_start_source,
                 thread_source.map(Into::into),
+                thread_source_contract_version,
                 environment_selections,
                 service_name,
                 experimental_raw_events,
@@ -951,6 +953,7 @@ impl ThreadRequestProcessor {
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
+        thread_source_contract_version: Option<u32>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
         experimental_raw_events: bool,
@@ -1068,6 +1071,7 @@ impl ThreadRequestProcessor {
                 },
                 session_source: None,
                 thread_source,
+                thread_source_contract_version,
                 dynamic_tools: core_dynamic_tools,
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
@@ -2578,11 +2582,10 @@ impl ThreadRequestProcessor {
                         return Ok(());
                     }
                 };
-                thread.thread_source = codex_thread
-                    .config_snapshot()
-                    .await
-                    .thread_source
-                    .map(Into::into);
+                let config_snapshot = codex_thread.config_snapshot().await;
+                thread.thread_source = config_snapshot.thread_source.map(Into::into);
+                thread.thread_source_contract_version =
+                    config_snapshot.thread_source_contract_version;
 
                 self.thread_watch_manager
                     .upsert_thread(thread.clone())
@@ -2598,7 +2601,6 @@ impl ThreadRequestProcessor {
                     thread_status,
                     /*has_live_in_progress_turn*/ false,
                 );
-                let config_snapshot = codex_thread.config_snapshot().await;
                 let sandbox = thread_response_sandbox_policy(
                     &config_snapshot.permission_profile,
                     config_snapshot.cwd.as_path(),
@@ -3144,6 +3146,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             ephemeral,
             thread_source,
+            thread_source_contract_version,
             exclude_turns,
         } = params;
         let include_turns = !exclude_turns;
@@ -3225,7 +3228,7 @@ impl ThreadRequestProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread_from_history(
+            .fork_thread_from_history_with_thread_source_contract_version(
                 ForkSnapshot::Interrupted,
                 config,
                 InitialHistory::Resumed(ResumedHistory {
@@ -3234,6 +3237,7 @@ impl ThreadRequestProcessor {
                     rollout_path: source_thread.rollout_path.clone(),
                 }),
                 thread_source.map(Into::into),
+                thread_source_contract_version,
                 self.request_trace_context(&request_id).await,
             )
             .await
@@ -3316,11 +3320,9 @@ impl ThreadRequestProcessor {
             set_thread_name_from_title(&mut thread, name);
         }
         thread.session_id = session_configured.session_id.to_string();
-        thread.thread_source = forked_thread
-            .config_snapshot()
-            .await
-            .thread_source
-            .map(Into::into);
+        let config_snapshot = forked_thread.config_snapshot().await;
+        thread.thread_source = config_snapshot.thread_source.map(Into::into);
+        thread.thread_source_contract_version = config_snapshot.thread_source_contract_version;
 
         self.thread_watch_manager
             .upsert_thread_silently(thread.clone())
@@ -4006,6 +4008,7 @@ pub(crate) fn thread_from_stored_thread(
         agent_role: source.get_agent_role(),
         source: source.into(),
         thread_source: thread.thread_source.map(Into::into),
+        thread_source_contract_version: thread.thread_source_contract_version,
         git_info,
         name: thread.name,
         turns: Vec::new(),
@@ -4211,6 +4214,7 @@ fn build_thread_from_snapshot(
         agent_role: config_snapshot.session_source.get_agent_role(),
         source: config_snapshot.session_source.clone().into(),
         thread_source: config_snapshot.thread_source.map(Into::into),
+        thread_source_contract_version: config_snapshot.thread_source_contract_version,
         git_info: None,
         name: None,
         turns: Vec::new(),

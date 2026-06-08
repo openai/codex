@@ -791,6 +791,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             ephemeral: None,
             session_start_source: None,
             thread_source: None,
+            thread_source_contract_version: None,
             dynamic_tools: None,
             environments: None,
             mock_experimental_field: None,

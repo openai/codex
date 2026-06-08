@@ -2454,6 +2454,11 @@ impl InitialHistory {
             .and_then(|meta| meta.thread_source)
     }
 
+    pub fn get_resumed_thread_source_contract_version(&self) -> Option<u32> {
+        self.get_resumed_session_meta()
+            .and_then(|meta| meta.thread_source_contract_version)
+    }
+
     pub fn get_resumed_parent_thread_id(&self) -> Option<ThreadId> {
         self.get_resumed_session_meta()
             .and_then(|meta| meta.parent_thread_id)
@@ -2503,6 +2508,9 @@ pub enum ThreadSource {
     Subagent,
     MemoryConsolidation,
 }
+
+/// Current semantic contract version for producer-supplied [`ThreadSource`] values.
+pub const THREAD_SOURCE_CONTRACT_VERSION: u32 = 1;
 
 impl ThreadSource {
     pub fn as_str(self) -> &'static str {
@@ -2768,6 +2776,9 @@ pub struct SessionMeta {
     /// Optional analytics source classification for this thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_source: Option<ThreadSource>,
+    /// Version of the semantic contract used to classify `thread_source`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_source_contract_version: Option<u32>,
     /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_nickname: Option<String>,
@@ -2802,6 +2813,7 @@ impl Default for SessionMeta {
             cli_version: String::new(),
             source: SessionSource::default(),
             thread_source: None,
+            thread_source_contract_version: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -3475,6 +3487,9 @@ pub struct SessionConfiguredEvent {
     /// Optional analytics source classification for this thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_source: Option<ThreadSource>,
+    /// Version of the semantic contract used to classify `thread_source`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_source_contract_version: Option<u32>,
 
     /// Optional user-facing thread name (may be unset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3545,6 +3560,8 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             #[serde(default)]
             thread_source: Option<ThreadSource>,
             #[serde(default)]
+            thread_source_contract_version: Option<u32>,
+            #[serde(default)]
             thread_name: Option<String>,
             model: String,
             model_provider_id: String,
@@ -3584,6 +3601,7 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             forked_from_id: wire.forked_from_id,
             parent_thread_id: wire.parent_thread_id,
             thread_source: wire.thread_source,
+            thread_source_contract_version: wire.thread_source_contract_version,
             thread_name: wire.thread_name,
             model: wire.model,
             model_provider_id: wire.model_provider_id,
@@ -5181,6 +5199,7 @@ mod tests {
                 forked_from_id: None,
                 parent_thread_id: None,
                 thread_source: None,
+                thread_source_contract_version: None,
                 thread_name: None,
                 model: "codex-mini-latest".to_string(),
                 model_provider_id: "openai".to_string(),

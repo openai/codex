@@ -52,6 +52,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
             cli_version: "test_version".to_string(),
             source: SessionSource::Cli,
             thread_source: None,
+            thread_source_contract_version: None,
             agent_path: None,
             agent_nickname: None,
             agent_role: None,

@@ -123,6 +123,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id.clone(),
             thread_source: Some(ThreadSource::User),
+            thread_source_contract_version: Some(1),
             ..Default::default()
         })
         .await?;
@@ -173,6 +174,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     assert!(thread.cwd.as_path().is_absolute());
     assert_eq!(thread.source, SessionSource::VsCode);
     assert_eq!(thread.thread_source, Some(ThreadSource::User));
+    assert_eq!(thread.thread_source_contract_version, Some(1));
     assert_eq!(thread.name, None);
 
     assert_eq!(
@@ -273,6 +275,7 @@ async fn thread_fork_inherits_explicit_source_name_from_session_index() -> Resul
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id.clone(),
+            thread_source: Some(ThreadSource::User),
             ..Default::default()
         })
         .await?;
@@ -289,6 +292,47 @@ async fn thread_fork_inherits_explicit_source_name_from_session_index() -> Resul
         .find(|candidate| candidate.id == thread.id)
         .expect("thread/list should include the forked thread");
     assert_eq!(listed.name.as_deref(), Some(source_name));
+    assert_eq!(thread.thread_source, Some(ThreadSource::User));
+    assert_eq!(thread.thread_source_contract_version, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_preserves_unsupported_thread_source_contract_version() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            thread_source: Some(ThreadSource::User),
+            thread_source_contract_version: Some(2),
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    assert_eq!(thread.thread_source, Some(ThreadSource::User));
+    assert_eq!(thread.thread_source_contract_version, Some(2));
 
     Ok(())
 }

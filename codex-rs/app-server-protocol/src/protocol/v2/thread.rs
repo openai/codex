@@ -141,6 +141,9 @@ pub struct ThreadStartParams {
     /// Optional client-supplied analytics source classification for this thread.
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,
+    /// Optional version of the semantic contract used to classify `threadSource`.
+    #[ts(optional = nullable)]
+    pub thread_source_contract_version: Option<u32>,
     /// Optional sticky environments for this thread.
     ///
     /// Omitted selects the default environment when environment access is
@@ -536,6 +539,9 @@ pub struct ThreadForkParams {
     /// Optional client-supplied analytics source classification for this forked thread.
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,
+    /// Optional version of the semantic contract used to classify `threadSource`.
+    #[ts(optional = nullable)]
+    pub thread_source_contract_version: Option<u32>,
     /// When true, return only thread metadata and live fork state without
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after forking.

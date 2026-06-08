@@ -104,6 +104,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) parent_thread_id: Option<ThreadId>,
     /// Optional analytics source classification for this thread.
     pub(super) thread_source: Option<ThreadSource>,
+    /// Version of the semantic contract used to classify `thread_source`.
+    pub(super) thread_source_contract_version: Option<u32>,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(super) user_shell_override: Option<shell::Shell>,
@@ -188,6 +190,7 @@ impl SessionConfiguration {
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
             thread_source: self.thread_source,
+            thread_source_contract_version: self.thread_source_contract_version,
         }
     }
 
@@ -543,6 +546,8 @@ impl Session {
                                 parent_thread_id,
                                 source: session_source,
                                 thread_source: session_configuration.thread_source,
+                                thread_source_contract_version: session_configuration
+                                    .thread_source_contract_version,
                                 base_instructions: BaseInstructions {
                                     text: session_configuration.base_instructions.clone(),
                                 },
@@ -1076,6 +1081,8 @@ impl Session {
                     forked_from_id,
                     parent_thread_id,
                     thread_source: session_configuration.thread_source,
+                    thread_source_contract_version: session_configuration
+                        .thread_source_contract_version,
                     thread_name: session_configuration.thread_name.clone(),
                     model: session_configuration.collaboration_mode.model().to_string(),
                     model_provider_id: config.model_provider_id.clone(),

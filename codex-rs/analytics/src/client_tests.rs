@@ -136,6 +136,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         cli_version: "0.0.0".to_string(),
         source: AppServerSessionSource::Exec,
         thread_source: None,
+        thread_source_contract_version: None,
         agent_nickname: None,
         agent_role: None,
         git_info: None,

@@ -140,6 +140,7 @@ pub(super) fn stored_thread_from_rollout_item(
         cli_version: item.cli_version.unwrap_or_default(),
         source,
         thread_source: None,
+        thread_source_contract_version: None,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
         agent_path: None,

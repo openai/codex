@@ -85,13 +85,14 @@ pub(super) async fn spawn_review_thread(
 
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
-    let turn_metadata_state = Arc::new(TurnMetadataState::new(
+    let turn_metadata_state = Arc::new(TurnMetadataState::new_with_thread_source_contract_version(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
         forked_from_thread_id,
         parent_turn_context.parent_thread_id,
         &session_source,
         parent_turn_context.thread_source,
+        parent_turn_context.thread_source_contract_version,
         review_turn_id.clone(),
         #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
@@ -122,6 +123,7 @@ pub(super) async fn spawn_review_thread(
         session_source,
         parent_thread_id: parent_turn_context.parent_thread_id,
         thread_source: parent_turn_context.thread_source,
+        thread_source_contract_version: parent_turn_context.thread_source_contract_version,
         environments: parent_turn_context.environments.clone(),
         available_models,
         unified_exec_shell_mode,

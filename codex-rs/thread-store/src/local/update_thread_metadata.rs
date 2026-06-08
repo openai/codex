@@ -222,6 +222,8 @@ async fn apply_metadata_update(
                 );
                 builder.model_provider = patch.model_provider.clone();
                 builder.thread_source = patch.thread_source.flatten();
+                builder.thread_source_contract_version =
+                    patch.thread_source_contract_version.flatten();
                 builder.agent_nickname = patch.agent_nickname.clone().flatten();
                 builder.agent_role = patch.agent_role.clone().flatten();
                 builder.agent_path = patch.agent_path.clone().flatten();
@@ -265,6 +267,9 @@ async fn apply_metadata_update(
             }
             if let Some(thread_source) = patch.thread_source {
                 metadata.thread_source = thread_source;
+            }
+            if let Some(thread_source_contract_version) = patch.thread_source_contract_version {
+                metadata.thread_source_contract_version = thread_source_contract_version;
             }
             if let Some(agent_nickname) = patch.agent_nickname {
                 metadata.agent_nickname = agent_nickname;
@@ -385,6 +390,7 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
         || patch.created_at.is_some()
         || patch.source.is_some()
         || patch.thread_source.is_some()
+        || patch.thread_source_contract_version.is_some()
         || patch.agent_nickname.is_some()
         || patch.agent_role.is_some()
         || patch.agent_path.is_some()

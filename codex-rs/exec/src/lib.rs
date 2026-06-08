@@ -92,6 +92,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::THREAD_SOURCE_CONTRACT_VERSION;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
@@ -1052,6 +1053,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         config: None,
         ephemeral: Some(config.ephemeral),
         thread_source: Some(ThreadSource::User),
+        thread_source_contract_version: Some(THREAD_SOURCE_CONTRACT_VERSION),
         ..ThreadStartParams::default()
     }
 }
@@ -1147,6 +1149,7 @@ fn session_configured_from_thread_start_response(
         &response.thread.id,
         response.thread.parent_thread_id.as_deref(),
         response.thread.thread_source.map(Into::into),
+        response.thread.thread_source_contract_version,
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -1170,6 +1173,7 @@ fn session_configured_from_thread_resume_response(
         &response.thread.id,
         response.thread.parent_thread_id.as_deref(),
         response.thread.thread_source.map(Into::into),
+        response.thread.thread_source_contract_version,
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -1202,6 +1206,7 @@ fn session_configured_from_thread_response(
     thread_id: &str,
     parent_thread_id: Option<&str>,
     thread_source: Option<codex_protocol::protocol::ThreadSource>,
+    thread_source_contract_version: Option<u32>,
     thread_name: Option<String>,
     rollout_path: Option<PathBuf>,
     model: String,
@@ -1229,6 +1234,7 @@ fn session_configured_from_thread_response(
         forked_from_id: None,
         parent_thread_id,
         thread_source,
+        thread_source_contract_version,
         thread_name,
         model,
         model_provider_id,

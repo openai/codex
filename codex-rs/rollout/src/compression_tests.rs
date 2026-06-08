@@ -466,6 +466,7 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
             cli_version: "test".to_string(),
             source: SessionSource::Cli,
             thread_source: None,
+            thread_source_contract_version: None,
             agent_path: None,
             agent_nickname: None,
             agent_role: None,

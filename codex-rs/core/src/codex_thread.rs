@@ -71,6 +71,7 @@ pub struct ThreadConfigSnapshot {
     pub forked_from_thread_id: Option<ThreadId>,
     pub parent_thread_id: Option<ThreadId>,
     pub thread_source: Option<ThreadSource>,
+    pub thread_source_contract_version: Option<u32>,
 }
 
 /// Explains why `CodexThread::try_start_turn_if_idle` rejected an automatic

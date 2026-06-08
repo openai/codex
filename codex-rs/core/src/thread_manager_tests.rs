@@ -325,6 +325,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            thread_source_contract_version: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
@@ -458,6 +459,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
                 InternalSessionSource::MemoryConsolidation,
             )),
             thread_source: None,
+            thread_source_contract_version: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
@@ -513,6 +515,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            thread_source_contract_version: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
@@ -783,6 +786,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: Some(ThreadSource::User),
+            thread_source_contract_version: Some(1),
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
@@ -825,6 +829,14 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             .thread_source
             .as_ref(),
         Some(&ThreadSource::User)
+    );
+    assert_eq!(
+        resumed
+            .thread
+            .config_snapshot()
+            .await
+            .thread_source_contract_version,
+        Some(1)
     );
 
     resumed

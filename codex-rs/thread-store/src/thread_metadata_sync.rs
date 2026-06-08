@@ -67,6 +67,7 @@ impl ThreadMetadataSync {
             updated_at: Some(created_at),
             source: Some(params.source.clone()),
             thread_source: Some(params.thread_source),
+            thread_source_contract_version: Some(params.thread_source_contract_version),
             agent_nickname: Some(params.source.get_nickname()),
             agent_role: Some(params.source.get_agent_role()),
             agent_path: Some(params.source.get_agent_path().map(Into::into)),
@@ -202,6 +203,8 @@ impl ThreadMetadataSync {
                     update.created_at = parse_session_timestamp(meta_line.meta.timestamp.as_str());
                     update.source = Some(meta_line.meta.source.clone());
                     update.thread_source = Some(meta_line.meta.thread_source);
+                    update.thread_source_contract_version =
+                        Some(meta_line.meta.thread_source_contract_version);
                     update.agent_nickname = Some(meta_line.meta.agent_nickname.clone());
                     update.agent_role = Some(meta_line.meta.agent_role.clone());
                     update.agent_path = Some(meta_line.meta.agent_path.clone());

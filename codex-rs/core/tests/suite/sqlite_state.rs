@@ -215,6 +215,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     cli_version: "test".to_string(),
                     source: SessionSource::default(),
                     thread_source: None,
+                    thread_source_contract_version: None,
                     agent_path: None,
                     agent_nickname: None,
                     agent_role: None,

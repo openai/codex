@@ -178,6 +178,7 @@ pub struct StartThreadOptions {
     pub initial_history: InitialHistory,
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
+    pub thread_source_contract_version: Option<u32>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
@@ -572,6 +573,7 @@ impl ThreadManager {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            thread_source_contract_version: None,
             dynamic_tools,
             metrics_service_name: None,
             parent_trace: None,
@@ -599,6 +601,11 @@ impl ThreadManager {
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
         let session_source = options.session_source.unwrap_or(resumed_session_source);
         let thread_source = options.thread_source.or(resumed_thread_source);
+        let thread_source_contract_version = options.thread_source_contract_version.or_else(|| {
+            options
+                .initial_history
+                .get_resumed_thread_source_contract_version()
+        });
         Box::pin(self.state.spawn_thread_with_source(
             options.config,
             options.initial_history,
@@ -608,6 +615,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
+            thread_source_contract_version,
             options.dynamic_tools,
             options.metrics_service_name,
             /*inherited_shell_snapshot*/ None,
@@ -687,6 +695,8 @@ impl ThreadManager {
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
+        let thread_source_contract_version =
+            initial_history.get_resumed_thread_source_contract_version();
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
@@ -696,6 +706,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
+            thread_source_contract_version,
             Vec::new(),
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
@@ -724,6 +735,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
+            /*thread_source_contract_version*/ None,
             Vec::new(),
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
@@ -748,6 +760,8 @@ impl ThreadManager {
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
+        let thread_source_contract_version =
+            initial_history.get_resumed_thread_source_contract_version();
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
@@ -757,6 +771,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
+            thread_source_contract_version,
             Vec::new(),
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
@@ -841,10 +856,40 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
+        self.fork_thread_with_thread_source_contract_version(
+            snapshot,
+            config,
+            path,
+            thread_source,
+            /*thread_source_contract_version*/ None,
+            parent_trace,
+        )
+        .await
+    }
+
+    pub async fn fork_thread_with_thread_source_contract_version<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        path: PathBuf,
+        thread_source: Option<ThreadSource>,
+        thread_source_contract_version: Option<u32>,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
         let snapshot = snapshot.into();
         let history = self.initial_history_from_rollout_path(path).await?;
-        self.fork_thread_from_history(snapshot, config, history, thread_source, parent_trace)
-            .await
+        self.fork_thread_from_history_with_thread_source_contract_version(
+            snapshot,
+            config,
+            history,
+            thread_source,
+            thread_source_contract_version,
+            parent_trace,
+        )
+        .await
     }
 
     async fn initial_history_from_rollout_path(
@@ -877,11 +922,35 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
+        self.fork_thread_from_history_with_thread_source_contract_version(
+            snapshot,
+            config,
+            history,
+            thread_source,
+            /*thread_source_contract_version*/ None,
+            parent_trace,
+        )
+        .await
+    }
+
+    pub async fn fork_thread_from_history_with_thread_source_contract_version<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        thread_source: Option<ThreadSource>,
+        thread_source_contract_version: Option<u32>,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
         self.fork_thread_with_initial_history(
             snapshot.into(),
             config,
             history,
             thread_source,
+            thread_source_contract_version,
             parent_trace,
         )
         .await
@@ -893,6 +962,7 @@ impl ThreadManager {
         config: Config,
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
+        thread_source_contract_version: Option<u32>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
@@ -927,6 +997,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
+            thread_source_contract_version,
             Vec::new(),
             /*metrics_service_name*/ None,
             parent_trace,
@@ -1096,6 +1167,7 @@ impl ThreadManagerState {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
+            /*thread_source_contract_version*/ None,
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
@@ -1113,6 +1185,7 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
+        thread_source_contract_version: Option<u32>,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
@@ -1130,6 +1203,7 @@ impl ThreadManagerState {
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
+            thread_source_contract_version,
             Vec::new(),
             metrics_service_name,
             inherited_shell_snapshot,
@@ -1157,6 +1231,8 @@ impl ThreadManagerState {
         let environments =
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
         let thread_source = initial_history.get_resumed_thread_source();
+        let thread_source_contract_version =
+            initial_history.get_resumed_thread_source_contract_version();
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
@@ -1166,6 +1242,7 @@ impl ThreadManagerState {
             parent_thread_id,
             /*forked_from_thread_id*/ None,
             thread_source,
+            thread_source_contract_version,
             Vec::new(),
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
@@ -1185,6 +1262,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         thread_source: Option<ThreadSource>,
+        thread_source_contract_version: Option<u32>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -1203,6 +1281,7 @@ impl ThreadManagerState {
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
+            thread_source_contract_version,
             Vec::new(),
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
@@ -1225,6 +1304,7 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
+        thread_source_contract_version: Option<u32>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
@@ -1240,6 +1320,7 @@ impl ThreadManagerState {
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
+            thread_source_contract_version,
             dynamic_tools,
             metrics_service_name,
             /*inherited_shell_snapshot*/ None,
@@ -1262,6 +1343,7 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
+        thread_source_contract_version: Option<u32>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -1323,6 +1405,7 @@ impl ThreadManagerState {
             forked_from_thread_id,
             parent_thread_id,
             thread_source,
+            thread_source_contract_version,
             agent_control,
             dynamic_tools,
             metrics_service_name,

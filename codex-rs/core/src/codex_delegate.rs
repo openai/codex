@@ -94,6 +94,7 @@ pub(crate) async fn run_codex_thread_interactive(
         forked_from_thread_id,
         parent_thread_id: Some(parent_session.thread_id),
         thread_source: Some(ThreadSource::Subagent),
+        thread_source_contract_version: None,
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),
         metrics_service_name: None,

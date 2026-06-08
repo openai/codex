@@ -371,6 +371,7 @@ pub struct SubAgentThreadStartedInput {
     pub client_version: String,
     pub model: String,
     pub ephemeral: bool,
+    pub thread_source_contract_version: Option<u32>,
     pub subagent_source: SubAgentSource,
     pub created_at: u64,
 }

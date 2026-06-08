@@ -316,6 +316,7 @@ pub(crate) fn summary_to_thread(
         agent_role: source.get_agent_role(),
         source: source.into(),
         thread_source: None,
+        thread_source_contract_version: None,
         git_info,
         name: None,
         turns: Vec::new(),

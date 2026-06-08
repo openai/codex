@@ -154,6 +154,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Exec,
             thread_source: None,
+            thread_source_contract_version: None,
             agent_nickname: None,
             agent_role: None,
             git_info: None,

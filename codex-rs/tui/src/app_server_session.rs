@@ -122,6 +122,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::protocol::THREAD_SOURCE_CONTRACT_VERSION;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
@@ -1414,6 +1415,7 @@ fn thread_start_params_from_config(
         ephemeral: Some(config.ephemeral),
         session_start_source,
         thread_source: Some(ThreadSource::User),
+        thread_source_contract_version: Some(THREAD_SOURCE_CONTRACT_VERSION),
         developer_instructions: with_terminal_visualization_instructions(
             config, /*control_instructions*/ None,
         ),
@@ -1491,6 +1493,7 @@ fn thread_fork_params_from_config(
         ),
         ephemeral: config.ephemeral,
         thread_source: Some(ThreadSource::User),
+        thread_source_contract_version: Some(THREAD_SOURCE_CONTRACT_VERSION),
         ..ThreadForkParams::default()
     }
 }

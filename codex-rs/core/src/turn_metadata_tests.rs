@@ -118,13 +118,14 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let cwd = temp_dir.path().abs();
     let permission_profile = PermissionProfile::read_only();
 
-    let state = TurnMetadataState::new(
+    let state = TurnMetadataState::new_with_thread_source_contract_version(
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
         Some(ThreadSource::User),
+        Some(1),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -149,6 +150,11 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     assert_eq!(session_id, Some("session-a"));
     assert_eq!(thread_id, Some("thread-a"));
     assert_eq!(thread_source, Some("user"));
+    assert_eq!(
+        json.get("thread_source_contract_version")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
     assert!(json.get("forked_from_thread_id").is_none());
     assert!(json.get("parent_thread_id").is_none());
     assert!(json.get("subagent_kind").is_none());

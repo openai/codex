@@ -69,6 +69,8 @@ pub struct CreateThreadParams {
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
+    /// Version of the semantic contract used to classify `thread_source`.
+    pub thread_source_contract_version: Option<u32>,
     /// Base instructions persisted in session metadata.
     pub base_instructions: BaseInstructions,
     /// Dynamic tools available to the thread at startup.
@@ -379,6 +381,8 @@ pub struct StoredThread {
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
+    /// Version of the semantic contract used to classify `thread_source`.
+    pub thread_source_contract_version: Option<u32>,
     /// Optional random nickname for thread-spawn sub-agents.
     pub agent_nickname: Option<String>,
     /// Optional role for thread-spawn sub-agents.
@@ -485,6 +489,13 @@ pub struct ThreadMetadataPatch {
         with = "optional_option"
     )]
     pub thread_source: ClearableField<ThreadSource>,
+    /// Optional thread-source contract version.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub thread_source_contract_version: ClearableField<u32>,
     /// Optional agent nickname.
     #[serde(
         default,
@@ -564,6 +575,9 @@ impl ThreadMetadataPatch {
         if next.thread_source.is_some() {
             self.thread_source = next.thread_source;
         }
+        if next.thread_source_contract_version.is_some() {
+            self.thread_source_contract_version = next.thread_source_contract_version;
+        }
         if next.agent_nickname.is_some() {
             self.agent_nickname = next.agent_nickname;
         }
@@ -613,6 +627,7 @@ impl ThreadMetadataPatch {
             && self.updated_at.is_none()
             && self.source.is_none()
             && self.thread_source.is_none()
+            && self.thread_source_contract_version.is_none()
             && self.agent_nickname.is_none()
             && self.agent_role.is_none()
             && self.agent_path.is_none()

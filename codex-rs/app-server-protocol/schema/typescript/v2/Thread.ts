@@ -66,6 +66,10 @@ source: SessionSource,
  */
 threadSource: ThreadSource | null,
 /**
+ * Version of the semantic contract used to classify `thread_source`.
+ */
+threadSourceContractVersion: number | null,
+/**
  * Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
  */
 agentNickname: string | null,

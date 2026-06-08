@@ -71,6 +71,8 @@ pub struct ThreadMetadata {
     pub source: String,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
+    /// Version of the semantic contract used to classify `thread_source`.
+    pub thread_source_contract_version: Option<u32>,
     /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
     pub agent_nickname: Option<String>,
     /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
@@ -124,6 +126,8 @@ pub struct ThreadMetadataBuilder {
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
+    /// Version of the semantic contract used to classify `thread_source`.
+    pub thread_source_contract_version: Option<u32>,
     /// Optional random unique nickname assigned to the session.
     pub agent_nickname: Option<String>,
     /// Optional role (agent_role) assigned to the session.
@@ -165,6 +169,7 @@ impl ThreadMetadataBuilder {
             updated_at: None,
             source,
             thread_source: None,
+            thread_source_contract_version: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -197,6 +202,7 @@ impl ThreadMetadataBuilder {
             updated_at,
             source,
             thread_source: self.thread_source,
+            thread_source_contract_version: self.thread_source_contract_version,
             agent_nickname: self.agent_nickname.clone(),
             agent_role: self.agent_role.clone(),
             agent_path: self
@@ -342,6 +348,7 @@ pub(crate) struct ThreadRow {
     updated_at: i64,
     source: String,
     thread_source: Option<String>,
+    thread_source_contract_version: Option<i64>,
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     agent_path: Option<String>,
@@ -371,6 +378,7 @@ impl ThreadRow {
             updated_at: row.try_get("updated_at")?,
             source: row.try_get("source")?,
             thread_source: row.try_get("thread_source")?,
+            thread_source_contract_version: row.try_get("thread_source_contract_version")?,
             agent_nickname: row.try_get("agent_nickname")?,
             agent_role: row.try_get("agent_role")?,
             agent_path: row.try_get("agent_path")?,
@@ -404,6 +412,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             updated_at,
             source,
             thread_source,
+            thread_source_contract_version,
             agent_nickname,
             agent_role,
             agent_path,
@@ -434,6 +443,9 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             updated_at: epoch_millis_to_datetime(updated_at)?,
             source,
             thread_source,
+            thread_source_contract_version: thread_source_contract_version
+                .map(u32::try_from)
+                .transpose()?,
             agent_nickname,
             agent_role,
             agent_path,
@@ -521,6 +533,7 @@ mod tests {
             updated_at: 1_700_000_100,
             source: "cli".to_string(),
             thread_source: None,
+            thread_source_contract_version: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -551,6 +564,7 @@ mod tests {
             updated_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
             source: "cli".to_string(),
             thread_source: None,
+            thread_source_contract_version: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,

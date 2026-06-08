@@ -484,6 +484,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
         "2025-01-05T12-00-00",
         &conversation_id,
         "user",
+        1,
     )?;
 
     let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
@@ -506,6 +507,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
         "session id should not be empty"
     );
     assert_eq!(thread.thread_source, Some(ThreadSource::User));
+    assert_eq!(thread.thread_source_contract_version, Some(1));
 
     let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
@@ -518,6 +520,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
         "user",
     );
     assert_eq!(event["event_params"]["thread_source"], "user");
+    assert_eq!(event["event_params"]["thread_source_contract_version"], 1);
     Ok(())
 }
 
@@ -526,6 +529,7 @@ fn set_thread_source_on_fake_rollout(
     filename_ts: &str,
     thread_id: &str,
     thread_source: &str,
+    thread_source_contract_version: u32,
 ) -> Result<()> {
     let path = rollout_path(codex_home, filename_ts, thread_id);
     let contents = std::fs::read_to_string(&path)?;
@@ -535,6 +539,8 @@ fn set_thread_source_on_fake_rollout(
         .ok_or_else(|| anyhow::anyhow!("fake rollout missing session meta"))?;
     let mut session_meta: serde_json::Value = serde_json::from_str(session_meta)?;
     session_meta["payload"]["thread_source"] = serde_json::json!(thread_source);
+    session_meta["payload"]["thread_source_contract_version"] =
+        serde_json::json!(thread_source_contract_version);
     let remaining = lines.collect::<Vec<_>>().join("\n");
     std::fs::write(&path, format!("{session_meta}\n{remaining}\n"))?;
     Ok(())
@@ -1881,6 +1887,7 @@ stream_max_retries = 0
         cli_version: "0.0.0".to_string(),
         source: RolloutSessionSource::Cli,
         thread_source: None,
+        thread_source_contract_version: None,
         agent_path: None,
         agent_nickname: None,
         agent_role: None,

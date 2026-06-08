@@ -140,6 +140,8 @@ pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_source: Option<ThreadSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread_source_contract_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
@@ -194,6 +196,7 @@ fn merge_turn_metadata(
                     | "forked_from_thread_id"
                     | "parent_thread_id"
                     | "subagent_kind"
+                    | "thread_source_contract_version"
                     | REQUEST_KIND_KEY
                     | COMPACTION_KEY
                     | WINDOW_ID_KEY
@@ -228,6 +231,7 @@ pub async fn build_turn_metadata_header(
         parent_thread_id: None,
         subagent_kind: None,
         thread_source: None,
+        thread_source_contract_version: None,
         turn_id: None,
         workspaces: BTreeMap::new(),
         sandbox: sandbox.map(ToString::to_string),
@@ -257,6 +261,7 @@ pub(crate) struct TurnMetadataState {
 }
 
 impl TurnMetadataState {
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session_id: String,
@@ -265,6 +270,37 @@ impl TurnMetadataState {
         parent_thread_id: Option<ThreadId>,
         session_source: &SessionSource,
         thread_source: Option<ThreadSource>,
+        turn_id: String,
+        cwd: AbsolutePathBuf,
+        permission_profile: &PermissionProfile,
+        windows_sandbox_level: WindowsSandboxLevel,
+        enforce_managed_network: bool,
+    ) -> Self {
+        Self::new_with_thread_source_contract_version(
+            session_id,
+            thread_id,
+            forked_from_thread_id,
+            parent_thread_id,
+            session_source,
+            thread_source,
+            /*thread_source_contract_version*/ None,
+            turn_id,
+            cwd,
+            permission_profile,
+            windows_sandbox_level,
+            enforce_managed_network,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_thread_source_contract_version(
+        session_id: String,
+        thread_id: String,
+        forked_from_thread_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
+        session_source: &SessionSource,
+        thread_source: Option<ThreadSource>,
+        thread_source_contract_version: Option<u32>,
         turn_id: String,
         cwd: AbsolutePathBuf,
         permission_profile: &PermissionProfile,
@@ -298,6 +334,7 @@ impl TurnMetadataState {
             parent_thread_id,
             subagent_kind,
             thread_source,
+            thread_source_contract_version,
             turn_id: Some(turn_id),
             workspaces: BTreeMap::new(),
             sandbox,

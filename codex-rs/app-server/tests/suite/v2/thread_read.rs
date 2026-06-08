@@ -1360,6 +1360,7 @@ async fn seed_pathless_store_thread(
             parent_thread_id: None,
             source: ProtocolSessionSource::Cli,
             thread_source: None,
+            thread_source_contract_version: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,

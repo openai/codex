@@ -45,6 +45,8 @@ pub(crate) fn builder_from_session_meta(
         created_at,
         session_meta.meta.source.clone(),
     );
+    builder.thread_source = session_meta.meta.thread_source;
+    builder.thread_source_contract_version = session_meta.meta.thread_source_contract_version;
     builder.model_provider = session_meta.meta.model_provider.clone();
     builder.agent_nickname = session_meta.meta.agent_nickname.clone();
     builder.agent_role = session_meta.meta.agent_role.clone();

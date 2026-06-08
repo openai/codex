@@ -51,6 +51,7 @@ fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThre
         cli_version: "test".to_string(),
         source: SessionSource::Cli,
         thread_source: None,
+        thread_source_contract_version: None,
         agent_nickname: None,
         agent_role: None,
         agent_path: None,

@@ -134,6 +134,8 @@ pub struct Thread {
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
+    /// Version of the semantic contract used to classify `thread_source`.
+    pub thread_source_contract_version: Option<u32>,
     /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
     pub agent_nickname: Option<String>,
     /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
