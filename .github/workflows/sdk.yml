@@ -45,10 +45,12 @@ jobs:
     runs-on:
       group: codex-runners
       labels: codex-linux-x64
-    timeout-minutes: 60
+    timeout-minutes: 45
     environment:
       name: bazel
       deployment: false
+    env:
+      BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -74,13 +76,25 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Setup Rust for local source build
+        if: ${{ env.BUILDBUDDY_API_KEY == '' }}
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+      - name: Configure rusty_v8 artifacts for local source build
+        if: ${{ env.BUILDBUDDY_API_KEY == '' }}
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+
       - name: Set up Bazel CI
+        if: ${{ env.BUILDBUDDY_API_KEY != '' }}
         id: setup_bazel
         uses: ./.github/actions/setup-bazel-ci
         with:
           target: x86_64-unknown-linux-gnu
 
       - name: Build codex with Bazel
+        if: ${{ env.BUILDBUDDY_API_KEY != '' }}
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
@@ -135,7 +149,16 @@ jobs:
           install -m 755 "${codex_bazel_output_path}" "${install_dir}/codex"
           echo "CODEX_EXEC_PATH=${install_dir}/codex" >> "$GITHUB_ENV"
 
-      - name: Warm up Bazel-built codex
+      - name: Build codex with Cargo
+        if: ${{ env.BUILDBUDDY_API_KEY == '' }}
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p codex-cli --bin codex --profile ci-test
+          echo "CODEX_EXEC_PATH=${GITHUB_WORKSPACE}/codex-rs/target/ci-test/codex" >> "$GITHUB_ENV"
+
+      - name: Warm up source-built codex
         shell: bash
         run: |
           set -euo pipefail
@@ -164,7 +187,7 @@ jobs:
         run: pnpm -r --filter ./sdk/typescript run test
 
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        if: ${{ always() && !cancelled() && env.BUILDBUDDY_API_KEY != '' && steps.setup_bazel.outputs.cache-hit != 'true' }}
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
