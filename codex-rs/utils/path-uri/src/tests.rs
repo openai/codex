@@ -68,17 +68,15 @@ fn file_uri_parses_a_posix_path_on_any_host() {
 }
 
 #[test]
-#[cfg(unix)]
-fn file_uri_round_trips_posix_paths_that_resemble_windows_paths() {
-    for input in ["/C:/Project", "/C:"] {
-        let path = AbsolutePathBuf::from_absolute_path_checked(input).expect("absolute POSIX path");
-        let uri = PathUri::from_file_path(&path).expect("path should convert to a file URI");
+fn file_uri_preserves_paths_that_resemble_windows_paths() {
+    for (input, expected_path) in [("file:///C:/Project", "/C:/Project"), ("file:///C:", "/C:")] {
+        let uri = PathUri::parse(input).expect("file URI should parse");
         let reparsed = PathUri::parse(&uri.to_string()).expect("file URI should reparse");
         let PathUriView::File(view) = uri.view() else {
             panic!("expected file view");
         };
 
-        assert_eq!(view.path().as_str(), input);
+        assert_eq!(view.path().as_str(), expected_path);
         assert_eq!(reparsed, uri);
     }
 }
@@ -105,21 +103,14 @@ fn file_uri_accepts_non_utf8_posix_paths() {
 }
 
 #[test]
-#[cfg(unix)]
 fn file_uri_round_trips_literal_percent_characters() {
-    let path =
-        AbsolutePathBuf::from_absolute_path_checked("/tmp/100%/file").expect("absolute POSIX path");
-    let uri = PathUri::from_file_path(&path).expect("path should convert to a file URI");
+    let uri = PathUri::parse("file:///tmp/100%25/file").expect("file URI should parse");
 
     assert_eq!(uri.to_string(), "file:///tmp/100%25/file");
     let PathUriView::File(view) = uri.view() else {
         panic!("expected file view");
     };
-    assert_eq!(
-        view.to_native_path()
-            .expect("URI should convert to native path"),
-        path
-    );
+    assert_eq!(view.path().as_str(), "/tmp/100%/file");
 }
 
 #[test]
@@ -174,8 +165,8 @@ fn environment_uri_round_trips_a_unix_path() {
     assert_eq!(
         uri.view(),
         PathUriView::Environment(EnvironmentUriView {
-            environment_id,
-            path,
+            environment_id: &environment_id,
+            path: &path,
         })
     );
 }
@@ -199,8 +190,8 @@ fn environment_uri_round_trips_a_windows_path_on_any_host() {
     assert_eq!(
         uri.view(),
         PathUriView::Environment(EnvironmentUriView {
-            environment_id,
-            path,
+            environment_id: &environment_id,
+            path: &path,
         })
     );
 }
@@ -224,14 +215,25 @@ fn environment_uri_round_trips_a_windows_unc_path_on_any_host() {
 }
 
 #[test]
-fn unknown_scheme_is_rejected_at_construction() {
-    let error = PathUri::parse("artifact://store/object-1")
-        .expect_err("unknown schemes should be rejected");
+fn unsupported_schemes_are_rejected_at_construction() {
+    for (input, expected_scheme) in [
+        ("artifact://store/object-1", "artifact"),
+        ("http://example.com/file", "http"),
+        ("https://example.com/file", "https"),
+        ("ssh://host/workspace", "ssh"),
+        ("vscode-remote://ssh-remote+host/workspace", "vscode-remote"),
+        ("untitled:Untitled-1", "untitled"),
+    ] {
+        let error = PathUri::parse(input).expect_err("unsupported schemes should be rejected");
 
-    assert!(matches!(
-        error,
-        PathUriParseError::UnsupportedScheme(scheme) if scheme == "artifact"
-    ));
+        assert!(
+            matches!(
+                error,
+                PathUriParseError::UnsupportedScheme(scheme) if scheme == expected_scheme
+            ),
+            "parsing {input}"
+        );
+    }
 }
 
 #[test]

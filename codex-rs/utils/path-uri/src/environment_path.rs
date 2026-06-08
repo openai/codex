@@ -2,14 +2,6 @@ use std::fmt;
 
 use thiserror::Error;
 
-/// Native path syntax used by an execution environment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum PathFlavor {
-    Posix,
-    Windows,
-}
-
 /// A normalized absolute URI path in a configured environment.
 ///
 /// The stored representation is host-independent and always uses `/`
@@ -28,24 +20,39 @@ pub enum PathFlavor {
 /// therefore not preserved. Filesystem aliases, symlinks, case sensitivity,
 /// reserved names, and Unicode normalization are intentionally not resolved.
 ///
-/// Use [`Self::posix`] or [`Self::windows`] for native input so a POSIX filename
-/// that happens to resemble a drive or UNC path is not assigned Windows root
-/// semantics. [`Self::new`] accepts the canonical URI representation and
-/// recognizes canonical drive and UNC roots. Converting back to native syntax
-/// requires an explicit [`PathFlavor`].
+/// [`Self::new`] accepts the canonical URI representation and recognizes
+/// canonical drive and UNC roots. Use [`Self::from_native_path`] for a path
+/// from the current host, or [`Self::posix`] and [`Self::windows`] when the
+/// source host's path syntax is known explicitly. The explicit constructors
+/// ensure a POSIX filename that resembles a drive or UNC path is not assigned
+/// Windows root semantics. Converting back to native syntax requires an
+/// explicit [`PathFlavor`].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EnvironmentPath(String);
 
 impl EnvironmentPath {
-    /// Creates a path that is already in normalized URI path syntax.
+    /// Creates a path from absolute canonical URI path syntax.
+    ///
+    /// This constructor recognizes `/c:/` drive roots and `//server/share` UNC
+    /// roots regardless of the current host. Use [`Self::from_native_path`] for
+    /// native input from the current host.
     pub fn new(path: impl Into<String>) -> Result<Self, EnvironmentPathError> {
         let path = path.into();
         validate_environment_path(&path)?;
         let path = normalize_environment_path(&path, PathNormalization::InferWindowsRoots);
-        validate_environment_path(&path)?;
         Ok(Self(path))
     }
 
+    /// Converts an absolute native path from the current host.
+    pub fn from_native_path(path: impl Into<String>) -> Result<Self, EnvironmentPathError> {
+        if cfg!(windows) {
+            Self::windows(path)
+        } else {
+            Self::posix(path)
+        }
+    }
+
+    /// Converts an absolute native POSIX path.
     pub fn posix(path: impl Into<String>) -> Result<Self, EnvironmentPathError> {
         let path = path.into();
         validate_posix_path(&path)?;
@@ -55,6 +62,7 @@ impl EnvironmentPath {
         )))
     }
 
+    /// Converts an absolute native Windows drive or UNC path.
     pub fn windows(path: impl Into<String>) -> Result<Self, EnvironmentPathError> {
         let path = path.into();
         validate_windows_path(&path)?;
@@ -69,6 +77,7 @@ impl EnvironmentPath {
         Self::new(format!("/{path}"))
     }
 
+    /// Returns the canonical URI path spelling.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -163,12 +172,10 @@ impl AsRef<str> for EnvironmentPath {
     }
 }
 
-impl EnvironmentPath {
-    pub(crate) fn from_normalized(path: String) -> Self {
-        Self(path)
-    }
-}
-
+/// Validates a path that is already expressed in canonical URI syntax.
+///
+/// Canonical paths use POSIX separators, but a leading drive or UNC root is
+/// interpreted using Windows root rules.
 fn validate_environment_path(path: &str) -> Result<(), EnvironmentPathError> {
     validate_posix_path(path)?;
     if has_unsupported_windows_namespace(path) {
@@ -184,6 +191,7 @@ fn validate_environment_path(path: &str) -> Result<(), EnvironmentPathError> {
     Ok(())
 }
 
+/// Validates the invariants common to absolute POSIX and canonical URI paths.
 fn validate_posix_path(path: &str) -> Result<(), EnvironmentPathError> {
     if path.is_empty() {
         return Err(EnvironmentPathError::Empty);
@@ -197,6 +205,10 @@ fn validate_posix_path(path: &str) -> Result<(), EnvironmentPathError> {
     Ok(())
 }
 
+/// Validates an absolute native Windows drive or UNC path.
+///
+/// Root-relative paths such as `\src` and drive-relative paths such as
+/// `C:src` are rejected because their meaning depends on process state.
 fn validate_windows_path(path: &str) -> Result<(), EnvironmentPathError> {
     if path.is_empty() {
         return Err(EnvironmentPathError::Empty);
@@ -228,6 +240,11 @@ fn validate_windows_path(path: &str) -> Result<(), EnvironmentPathError> {
     Err(EnvironmentPathError::NotAbsolute(path.to_string()))
 }
 
+/// Returns whether a normalized UNC path contains both its server and share.
+///
+/// Callers only pass strings beginning with `//`. The server and share cannot
+/// be dot segments because those would make root depth ambiguous during lexical
+/// normalization.
 fn is_valid_unc_path(path: &str) -> bool {
     let mut components = path[2..]
         .split('/')
@@ -240,19 +257,26 @@ fn is_valid_unc_path(path: &str) -> bool {
             .is_some_and(|component| !matches!(component, "." | ".."))
 }
 
+/// Detects Windows device and verbatim namespaces that URI paths cannot model.
 fn has_unsupported_windows_namespace(path: &str) -> bool {
     let path = path.replace('\\', "/");
     path.starts_with("//?/") || path.starts_with("//./")
 }
 
+/// Controls whether a canonical path may assign Windows root semantics.
 #[derive(Clone, Copy)]
 enum PathNormalization {
+    /// Treat every component as POSIX filename text.
     Posix,
+    /// Recognize canonical drive and UNC roots.
     InferWindowsRoots,
 }
 
+/// Lexically normalizes separators and dot segments without filesystem access.
 fn normalize_environment_path(path: &str, normalization: PathNormalization) -> String {
     let mut path = path.to_string();
+    // Drive letters are case-insensitive in native Windows paths. Lowercasing
+    // gives canonical URI identity without folding the rest of the path.
     if matches!(normalization, PathNormalization::InferWindowsRoots)
         && matches!(
             path.as_bytes(),
@@ -263,6 +287,8 @@ fn normalize_environment_path(path: &str, normalization: PathNormalization) -> S
         path[1..2].make_ascii_lowercase();
     }
 
+    // Root components are protected from `..`: none for POSIX, the drive for a
+    // drive path, and the server plus share for UNC.
     let root_depth = match normalization {
         PathNormalization::Posix => 0,
         PathNormalization::InferWindowsRoots => environment_path_root_depth(&path),
@@ -281,6 +307,7 @@ fn normalize_environment_path(path: &str, normalization: PathNormalization) -> S
     format_environment_path(&path, &components, normalization)
 }
 
+/// Returns the number of components that form an inferred Windows root.
 fn environment_path_root_depth(path: &str) -> usize {
     if path.starts_with("//") && !path.starts_with("///") {
         2
@@ -291,6 +318,7 @@ fn environment_path_root_depth(path: &str) -> usize {
     }
 }
 
+/// Recognizes canonical `/c:/...` Windows drive paths.
 fn is_windows_drive_path(path: &str) -> bool {
     matches!(
         path.as_bytes(),
@@ -298,6 +326,7 @@ fn is_windows_drive_path(path: &str) -> bool {
     )
 }
 
+/// Splits a canonical path into non-empty components after its leading slash.
 fn environment_path_components(path: &str) -> Vec<&str> {
     path.trim_start_matches('/')
         .split('/')
@@ -305,6 +334,7 @@ fn environment_path_components(path: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Reassembles normalized components while preserving the inferred root form.
 fn format_environment_path(
     original: &str,
     components: &[&str],
@@ -326,6 +356,14 @@ fn format_environment_path(
     } else {
         path
     }
+}
+
+/// Native path syntax used by an execution environment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PathFlavor {
+    Posix,
+    Windows,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]

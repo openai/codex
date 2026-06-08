@@ -76,6 +76,20 @@ fn posix_paths_preserve_backslashes_and_unicode_as_filename_characters() {
 }
 
 #[test]
+fn native_path_constructor_uses_the_current_host_flavor() {
+    let (input, expected) = if cfg!(windows) {
+        (r"C:\workspace\src", "/c:/workspace/src")
+    } else {
+        ("/workspace/src", "/workspace/src")
+    };
+
+    assert_eq!(
+        EnvironmentPath::from_native_path(input),
+        Ok(canonical(expected))
+    );
+}
+
+#[test]
 fn windows_drive_paths_normalize_on_every_host() {
     for (input, expected) in [
         (r"C:\Users\Alice\src", "/c:/Users/Alice/src"),
