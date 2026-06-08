@@ -662,7 +662,13 @@ pub(super) async fn handle_pending_thread_resume_request(
         reasoning_effort,
         initial_turns_page,
     };
-    outgoing.send_response(request_id, response).await;
+    outgoing
+        .send_response_with_thread_initialization_profile(
+            request_id,
+            response,
+            pending.thread_initialization_profile,
+        )
+        .await;
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.
     if let Some(token_usage_thread) = token_usage_thread {

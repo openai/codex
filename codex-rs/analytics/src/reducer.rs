@@ -70,6 +70,7 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::ThreadInitializationProfile;
 use crate::facts::TurnCodexError;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfile;
@@ -109,6 +110,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::WebSearchAction;
@@ -294,6 +296,7 @@ impl ThreadMetadataState {
 }
 
 enum RequestState {
+    ClearedThreadStart,
     TurnStart(PendingTurnStartState),
     TurnSteer(PendingTurnSteerState),
 }
@@ -406,9 +409,16 @@ impl AnalyticsReducer {
                 connection_id,
                 request_id,
                 response,
+                thread_initialization_profile,
             } => {
                 if let Some(response) = response.into_client_response(request_id) {
-                    self.ingest_response(connection_id, response, out).await;
+                    self.ingest_response(
+                        connection_id,
+                        response,
+                        thread_initialization_profile,
+                        out,
+                    )
+                    .await;
                 }
             }
             AnalyticsFact::ErrorResponse {
@@ -579,6 +589,14 @@ impl AnalyticsReducer {
         request: ClientRequest,
     ) {
         match request {
+            ClientRequest::ThreadStart { params, .. }
+                if params.session_start_source == Some(ThreadStartSource::Clear) =>
+            {
+                self.requests.insert(
+                    (connection_id, request_id),
+                    RequestState::ClearedThreadStart,
+                );
+            }
             ClientRequest::TurnStart { params, .. } => {
                 self.requests.insert(
                     (connection_id, request_id),
@@ -760,15 +778,24 @@ impl AnalyticsReducer {
         &mut self,
         connection_id: u64,
         response: ClientResponse,
+        thread_initialization_profile: Option<ThreadInitializationProfile>,
         out: &mut Vec<TrackEventRequest>,
     ) {
         match response {
-            ClientResponse::ThreadStart { response, .. } => {
+            ClientResponse::ThreadStart {
+                request_id,
+                response,
+            } => {
+                let initialization_mode = match self.requests.remove(&(connection_id, request_id)) {
+                    Some(RequestState::ClearedThreadStart) => ThreadInitializationMode::Cleared,
+                    _ => ThreadInitializationMode::New,
+                };
                 self.emit_thread_initialized(
                     connection_id,
                     response.thread,
                     response.model,
-                    ThreadInitializationMode::New,
+                    initialization_mode,
+                    thread_initialization_profile,
                     out,
                 );
             }
@@ -778,6 +805,7 @@ impl AnalyticsReducer {
                     response.thread,
                     response.model,
                     ThreadInitializationMode::Resumed,
+                    thread_initialization_profile,
                     out,
                 );
             }
@@ -787,6 +815,7 @@ impl AnalyticsReducer {
                     response.thread,
                     response.model,
                     ThreadInitializationMode::Forked,
+                    thread_initialization_profile,
                     out,
                 );
             }
@@ -1038,6 +1067,7 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         match request {
+            RequestState::ClearedThreadStart => {}
             RequestState::TurnStart(_) => {}
             RequestState::TurnSteer(pending_request) => {
                 self.ingest_turn_steer_error_response(
@@ -1190,6 +1220,7 @@ impl AnalyticsReducer {
         thread: codex_app_server_protocol::Thread,
         model: String,
         initialization_mode: ThreadInitializationMode,
+        profile: Option<ThreadInitializationProfile>,
         out: &mut Vec<TrackEventRequest>,
     ) {
         let session_source: SessionSource = thread.source.into();
@@ -1230,6 +1261,7 @@ impl AnalyticsReducer {
                     parent_thread_id: thread_metadata.parent_thread_id,
                     forked_from_thread_id,
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                    profile,
                 },
             },
         ));

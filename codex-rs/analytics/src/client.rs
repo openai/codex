@@ -17,6 +17,7 @@ use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadInitializationProfile;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfileFact;
@@ -31,6 +32,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
+use codex_app_server_protocol::ThreadStartSource;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
@@ -197,10 +199,14 @@ impl AnalyticsEventsClient {
         request_id: RequestId,
         request: &ClientRequest,
     ) {
-        if !matches!(
-            request,
-            ClientRequest::TurnStart { .. } | ClientRequest::TurnSteer { .. }
-        ) {
+        let should_track = match request {
+            ClientRequest::ThreadStart { params, .. } => {
+                params.session_start_source == Some(ThreadStartSource::Clear)
+            }
+            ClientRequest::TurnStart { .. } | ClientRequest::TurnSteer { .. } => true,
+            _ => false,
+        };
+        if !should_track {
             return;
         }
         self.record_fact(AnalyticsFact::ClientRequest {
@@ -317,6 +323,7 @@ impl AnalyticsEventsClient {
         connection_id: u64,
         request_id: RequestId,
         response: ClientResponsePayload,
+        thread_initialization_profile: Option<ThreadInitializationProfile>,
     ) {
         if !matches!(
             response,
@@ -332,6 +339,7 @@ impl AnalyticsEventsClient {
             connection_id,
             request_id,
             response: Box::new(response),
+            thread_initialization_profile,
         });
     }
 

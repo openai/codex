@@ -61,6 +61,7 @@ use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::ThreadInitializationProfile;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfile;
@@ -114,7 +115,9 @@ use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSource as AppServerThreadSource;
+use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -410,6 +413,64 @@ fn sample_turn_profile() -> TurnProfile {
     }
 }
 
+fn sample_thread_initialization_profile() -> ThreadInitializationProfile {
+    ThreadInitializationProfile {
+        duration_ms: 110,
+        app_server_duration_ms: 10,
+        core_duration_ms: 100,
+        existing_thread_lookup_ms: 5,
+        configuration_resolution_ms: 10,
+        session_dependency_loading_ms: 20,
+        session_construction_ms: 25,
+        mcp_startup_ms: 15,
+        session_activation_ms: 15,
+        thread_registration_ms: 10,
+        thread_persistence_ms: 12,
+        state_db_loading_ms: 8,
+        auth_and_mcp_discovery_ms: 17,
+        plugin_and_skill_warmup_ms: 19,
+    }
+}
+
+fn expected_thread_initialized_event(
+    app_server_client: serde_json::Value,
+    runtime: serde_json::Value,
+    ephemeral: bool,
+    initialization_mode: &str,
+    profile: Option<ThreadInitializationProfile>,
+) -> serde_json::Value {
+    let mut event_params = json!({
+        "thread_id": "thread-1",
+        "session_id": "session-thread-1",
+        "app_server_client": app_server_client,
+        "runtime": runtime,
+        "model": "gpt-5",
+        "ephemeral": ephemeral,
+        "thread_source": "user",
+        "initialization_mode": initialization_mode,
+        "subagent_source": null,
+        "parent_thread_id": null,
+        "forked_from_thread_id": null,
+        "created_at": 1,
+    });
+    if let Some(profile) = profile {
+        event_params
+            .as_object_mut()
+            .expect("event params object")
+            .extend(
+                serde_json::to_value(profile)
+                    .expect("serialize thread initialization profile")
+                    .as_object()
+                    .expect("thread initialization profile object")
+                    .clone(),
+            );
+    }
+    json!({
+        "event_type": "codex_thread_initialized",
+        "event_params": event_params,
+    })
+}
+
 fn sample_turn_steer_request(
     thread_id: &str,
     expected_turn_id: &str,
@@ -527,6 +588,7 @@ async fn ingest_rejected_turn_steer(
             AnalyticsFact::ClientResponse {
                 connection_id: 8,
                 request_id: RequestId::Integer(6),
+                thread_initialization_profile: None,
                 response: Box::new(sample_thread_resume_response(
                     "thread-2", /*ephemeral*/ false, "gpt-5",
                 )),
@@ -600,6 +662,7 @@ async fn ingest_turn_prerequisites(
                 AnalyticsFact::ClientResponse {
                     connection_id: 7,
                     request_id: RequestId::Integer(1),
+                    thread_initialization_profile: None,
                     response: Box::new(sample_thread_start_response(
                         "thread-2", /*ephemeral*/ false, "gpt-5",
                     )),
@@ -625,6 +688,7 @@ async fn ingest_turn_prerequisites(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
+                thread_initialization_profile: None,
                 response: Box::new(sample_turn_start_response("turn-2")),
             },
             out,
@@ -689,6 +753,7 @@ async fn ingest_review_prerequisites(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(1),
+                thread_initialization_profile: None,
                 response: Box::new(sample_thread_start_response(
                     "thread-1", /*ephemeral*/ false, "gpt-5",
                 )),
@@ -1352,8 +1417,8 @@ fn thread_initialized_event_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(ThreadInitializedEvent {
         event_type: "codex_thread_initialized",
         event_params: ThreadInitializedEventParams {
-            thread_id: "thread-0".to_string(),
-            session_id: "session-thread-0".to_string(),
+            thread_id: "thread-1".to_string(),
+            session_id: "session-thread-1".to_string(),
             app_server_client: CodexAppServerClientMetadata {
                 product_client_id: DEFAULT_ORIGINATOR.to_string(),
                 client_name: Some("codex-tui".to_string()),
@@ -1375,6 +1440,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             parent_thread_id: None,
             forked_from_thread_id: None,
             created_at: 1,
+            profile: Some(sample_thread_initialization_profile()),
         },
     });
 
@@ -1382,34 +1448,24 @@ fn thread_initialized_event_serializes_expected_shape() {
 
     assert_eq!(
         payload,
-        json!({
-            "event_type": "codex_thread_initialized",
-            "event_params": {
-                "thread_id": "thread-0",
-                "session_id": "session-thread-0",
-                "app_server_client": {
-                    "product_client_id": DEFAULT_ORIGINATOR,
-                    "client_name": "codex-tui",
-                    "client_version": "1.0.0",
-                    "rpc_transport": "stdio",
-                    "experimental_api_enabled": true
-                },
-                "runtime": {
-                    "codex_rs_version": "0.1.0",
-                    "runtime_os": "macos",
-                    "runtime_os_version": "15.3.1",
-                    "runtime_arch": "aarch64"
-                },
-                "model": "gpt-5",
-                "ephemeral": true,
-                "thread_source": "user",
-                "initialization_mode": "new",
-                "subagent_source": null,
-                "parent_thread_id": null,
-                "forked_from_thread_id": null,
-                "created_at": 1
-            }
-        })
+        expected_thread_initialized_event(
+            json!({
+                "product_client_id": DEFAULT_ORIGINATOR,
+                "client_name": "codex-tui",
+                "client_version": "1.0.0",
+                "rpc_transport": "stdio",
+                "experimental_api_enabled": true
+            }),
+            json!({
+                "codex_rs_version": "0.1.0",
+                "runtime_os": "macos",
+                "runtime_os_version": "15.3.1",
+                "runtime_arch": "aarch64"
+            }),
+            true,
+            "new",
+            Some(sample_thread_initialization_profile()),
+        )
     );
 }
 
@@ -1598,6 +1654,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(1),
+                thread_initialization_profile: None,
                 response: Box::new(sample_thread_start_response(
                     "thread-no-client",
                     /*ephemeral*/ false,
@@ -1644,6 +1701,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(2),
+                thread_initialization_profile: None,
                 response: Box::new(sample_thread_resume_response(
                     "thread-1", /*ephemeral*/ true, "gpt-5",
                 )),
@@ -1652,42 +1710,85 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
         )
         .await;
 
-    let payload = serde_json::to_value(&events).expect("serialize events");
-    assert_eq!(payload.as_array().expect("events array").len(), 1);
-    assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
-    assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
     assert_eq!(
-        payload[0]["event_params"]["app_server_client"]["product_client_id"],
-        DEFAULT_ORIGINATOR
+        serde_json::to_value(events).expect("serialize events"),
+        json!([expected_thread_initialized_event(
+            json!({
+                "product_client_id": DEFAULT_ORIGINATOR,
+                "client_name": "codex-tui",
+                "client_version": "1.0.0",
+                "rpc_transport": "websocket",
+                "experimental_api_enabled": false
+            }),
+            json!({
+                "codex_rs_version": "0.99.0",
+                "runtime_os": "linux",
+                "runtime_os_version": "24.04",
+                "runtime_arch": "x86_64"
+            }),
+            true,
+            "resumed",
+            None,
+        )])
     );
+}
+
+#[tokio::test]
+async fn cleared_thread_start_uses_existing_initialized_event_with_profile() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    ingest_initialize(&mut reducer, &mut events).await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::ClientRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                request: Box::new(ClientRequest::ThreadStart {
+                    request_id: RequestId::Integer(2),
+                    params: ThreadStartParams {
+                        session_start_source: Some(ThreadStartSource::Clear),
+                        ..Default::default()
+                    },
+                }),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                thread_initialization_profile: Some(sample_thread_initialization_profile()),
+                response: Box::new(sample_thread_start_response(
+                    "thread-1", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
     assert_eq!(
-        payload[0]["event_params"]["app_server_client"]["client_name"],
-        "codex-tui"
-    );
-    assert_eq!(
-        payload[0]["event_params"]["app_server_client"]["client_version"],
-        "1.0.0"
-    );
-    assert_eq!(
-        payload[0]["event_params"]["app_server_client"]["rpc_transport"],
-        "websocket"
-    );
-    assert_eq!(
-        payload[0]["event_params"]["app_server_client"]["experimental_api_enabled"],
-        false
-    );
-    assert_eq!(
-        payload[0]["event_params"]["runtime"]["codex_rs_version"],
-        "0.99.0"
-    );
-    assert_eq!(payload[0]["event_params"]["runtime"]["runtime_os"], "linux");
-    assert_eq!(
-        payload[0]["event_params"]["runtime"]["runtime_os_version"],
-        "24.04"
-    );
-    assert_eq!(
-        payload[0]["event_params"]["runtime"]["runtime_arch"],
-        "x86_64"
+        serde_json::to_value(events).expect("serialize events"),
+        json!([expected_thread_initialized_event(
+            json!({
+                "product_client_id": "codex-tui",
+                "client_name": "codex-tui",
+                "client_version": "1.0.0",
+                "rpc_transport": "stdio",
+                "experimental_api_enabled": null
+            }),
+            json!({
+                "codex_rs_version": "0.1.0",
+                "runtime_os": "macos",
+                "runtime_os_version": "15.3.1",
+                "runtime_arch": "aarch64"
+            }),
+            false,
+            "cleared",
+            Some(sample_thread_initialization_profile()),
+        )])
     );
 }
 
@@ -1716,6 +1817,7 @@ async fn unrelated_client_requests_are_ignored_by_reducer() {
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
+                thread_initialization_profile: None,
                 response: Box::new(sample_turn_start_response("turn-2")),
             },
             &mut events,
@@ -1739,6 +1841,7 @@ async fn unrelated_client_responses_are_ignored_by_reducer() {
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(9),
+                thread_initialization_profile: None,
                 response: Box::new(ClientResponsePayload::ThreadArchive(
                     ThreadArchiveResponse {},
                 )),
@@ -1786,6 +1889,7 @@ async fn compaction_event_ingests_custom_fact() {
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(2),
+                thread_initialization_profile: None,
                 response: Box::new(sample_thread_resume_response_with_source(
                     "thread-1",
                     /*ephemeral*/ false,
@@ -1902,6 +2006,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(1),
+                thread_initialization_profile: None,
                 response: Box::new(sample_thread_start_response(
                     "thread-guardian",
                     /*ephemeral*/ false,
@@ -2405,6 +2510,7 @@ async fn item_review_summaries_do_not_cross_threads_with_reused_item_ids() {
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(2),
+                thread_initialization_profile: None,
                 response: Box::new(sample_thread_start_response(
                     "thread-2", /*ephemeral*/ false, "gpt-5",
                 )),
@@ -2690,6 +2796,7 @@ async fn subagent_thread_started_inherits_parent_connection_for_new_thread() {
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(1),
+                thread_initialization_profile: None,
                 response: Box::new(sample_thread_start_response(
                     &parent_thread_id_string,
                     /*ephemeral*/ false,
@@ -3448,6 +3555,7 @@ async fn accepted_turn_steer_emits_expected_event() {
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
+                thread_initialization_profile: None,
                 response: Box::new(sample_turn_steer_response("turn-2")),
             },
             &mut out,
@@ -3619,6 +3727,7 @@ async fn turn_start_error_response_discards_pending_start_request() {
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
+                thread_initialization_profile: None,
                 response: Box::new(sample_turn_start_response("turn-2")),
             },
             &mut out,
@@ -3918,6 +4027,7 @@ async fn accepted_steers_increment_turn_steer_count() {
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
+                thread_initialization_profile: None,
                 response: Box::new(sample_turn_steer_response("turn-2")),
             },
             &mut out,
@@ -3965,6 +4075,7 @@ async fn accepted_steers_increment_turn_steer_count() {
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(6),
+                thread_initialization_profile: None,
                 response: Box::new(sample_turn_steer_response("turn-2")),
             },
             &mut out,

@@ -89,12 +89,31 @@ pub struct TurnResolvedConfigFact {
     pub is_first_turn: bool,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadInitializationMode {
     New,
+    Cleared,
     Forked,
     Resumed,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ThreadInitializationProfile {
+    pub duration_ms: u64,
+    pub app_server_duration_ms: u64,
+    pub core_duration_ms: u64,
+    pub existing_thread_lookup_ms: u64,
+    pub configuration_resolution_ms: u64,
+    pub session_dependency_loading_ms: u64,
+    pub session_construction_ms: u64,
+    pub mcp_startup_ms: u64,
+    pub session_activation_ms: u64,
+    pub thread_registration_ms: u64,
+    pub thread_persistence_ms: u64,
+    pub state_db_loading_ms: u64,
+    pub auth_and_mcp_discovery_ms: u64,
+    pub plugin_and_skill_warmup_ms: u64,
 }
 
 #[derive(Clone)]
@@ -457,6 +476,7 @@ pub(crate) enum AnalyticsFact {
         connection_id: u64,
         request_id: RequestId,
         response: Box<ClientResponsePayload>,
+        thread_initialization_profile: Option<ThreadInitializationProfile>,
     },
     ErrorResponse {
         connection_id: u64,

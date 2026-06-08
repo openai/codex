@@ -37,6 +37,7 @@ pub use facts::InvocationType;
 pub use facts::SkillInvocation;
 pub use facts::SubAgentThreadStartedInput;
 pub use facts::ThreadInitializationMode;
+pub use facts::ThreadInitializationProfile;
 pub use facts::TrackEventsContext;
 pub use facts::TurnCodexErrorFact;
 pub use facts::TurnProfile;

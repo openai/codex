@@ -1055,7 +1055,7 @@ impl ThreadRequestProcessor {
             thread_id,
             thread,
             session_configured,
-            ..
+            thread_initialization_profile,
         } = listener_task_context
             .thread_manager
             .start_thread_with_options(StartThreadOptions {
@@ -1083,6 +1083,9 @@ impl ThreadRequestProcessor {
                 CodexErr::InvalidRequest(message) => invalid_request(message),
                 err => internal_error(format!("error creating thread: {err}")),
             })?;
+        let thread_initialization_profile = thread_initialization_profile.ok_or_else(|| {
+            internal_error("thread initialization profile missing for app-server thread/start")
+        })?;
         let session_telemetry = thread.session_telemetry();
         session_telemetry.record_startup_phase(
             "thread_start_create_thread",
@@ -1176,7 +1179,11 @@ impl ThreadRequestProcessor {
         let notif = thread_started_notification(thread);
         listener_task_context
             .outgoing
-            .send_response(request_id, response)
+            .send_response_with_thread_initialization_profile(
+                request_id,
+                response,
+                thread_initialization_profile,
+            )
             .instrument(tracing::info_span!(
                 "app_server.thread_start.send_response",
                 otel.name = "app_server.thread_start.send_response",
@@ -2526,8 +2533,19 @@ impl ThreadRequestProcessor {
                 thread_id,
                 thread: codex_thread,
                 session_configured,
-                ..
+                thread_initialization_profile,
             }) => {
+                let Some(thread_initialization_profile) = thread_initialization_profile else {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            internal_error(
+                                "thread initialization profile missing for app-server thread/resume",
+                            ),
+                        )
+                        .await;
+                    return Ok(());
+                };
                 if let Err(err) = Self::set_app_server_client_info(
                     codex_thread.as_ref(),
                     app_server_client_name,
@@ -2648,7 +2666,13 @@ impl ThreadRequestProcessor {
                 };
 
                 let connection_id = request_id.connection_id;
-                self.outgoing.send_response(request_id, response).await;
+                self.outgoing
+                    .send_response_with_thread_initialization_profile(
+                        request_id,
+                        response,
+                        thread_initialization_profile,
+                    )
+                    .await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
                 if let Some(token_usage_thread) = token_usage_thread {
@@ -2707,6 +2731,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<bool, JSONRPCErrorError> {
+        let thread_initialization_timing = ThreadInitializationTiming::start();
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
                 && self
@@ -2804,6 +2829,8 @@ impl ThreadRequestProcessor {
             }
             let redact_resume_payloads =
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
+            let thread_initialization_profile =
+                thread_initialization_timing.complete_existing_thread_lookup();
             let history_items = source_thread
                 .history
                 .as_ref()
@@ -2859,6 +2886,7 @@ impl ThreadRequestProcessor {
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
+                    thread_initialization_profile,
                     history_items,
                     config_snapshot,
                     instruction_sources,
@@ -3222,7 +3250,7 @@ impl ThreadRequestProcessor {
             thread_id,
             thread: forked_thread,
             session_configured,
-            ..
+            thread_initialization_profile,
         } = self
             .thread_manager
             .fork_thread_from_history(
@@ -3244,6 +3272,9 @@ impl ThreadRequestProcessor {
                 CodexErr::InvalidRequest(message) => invalid_request(message),
                 err => internal_error(format!("error forking thread: {err}")),
             })?;
+        let thread_initialization_profile = thread_initialization_profile.ok_or_else(|| {
+            internal_error("thread initialization profile missing for app-server thread/fork")
+        })?;
 
         Self::set_app_server_client_info(
             forked_thread.as_ref(),
@@ -3358,7 +3389,13 @@ impl ThreadRequestProcessor {
         let notif = thread_started_notification(thread);
         let connection_id = request_id.connection_id;
         let token_usage_thread = include_turns.then(|| response.thread.clone());
-        self.outgoing.send_response(request_id, response).await;
+        self.outgoing
+            .send_response_with_thread_initialization_profile(
+                request_id,
+                response,
+                thread_initialization_profile,
+            )
+            .await;
         // `excludeTurns` is the cheap fork path, so skip restored usage replay
         // instead of rebuilding history only to attribute a historical update.
         if let Some(token_usage_thread) = token_usage_thread {

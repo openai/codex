@@ -1,4 +1,5 @@
 use crate::SkillsManager;
+use crate::ThreadInitializationProfile;
 use crate::agent::AgentControl;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
@@ -16,6 +17,8 @@ use crate::session::resolve_multi_agent_version;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
+use crate::thread_initialization_timing::ThreadInitializationPhase;
+use crate::thread_initialization_timing::ThreadInitializationTiming;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
@@ -112,6 +115,7 @@ pub struct NewThread {
     pub thread_id: ThreadId,
     pub thread: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
+    pub thread_initialization_profile: Option<ThreadInitializationProfile>,
 }
 
 // TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
@@ -584,14 +588,19 @@ impl ThreadManager {
         &self,
         options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
-        self.start_thread_with_options_and_fork_source(options, /*forked_from_thread_id*/ None)
-            .await
+        self.start_thread_with_options_and_fork_source(
+            options,
+            /*forked_from_thread_id*/ None,
+            ThreadInitializationTiming::start_configuration_resolution(),
+        )
+        .await
     }
 
     async fn start_thread_with_options_and_fork_source(
         &self,
         options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
+        thread_initialization_timing: ThreadInitializationTiming,
     ) -> CodexResult<NewThread> {
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history
@@ -615,6 +624,7 @@ impl ThreadManager {
             options.parent_trace,
             options.environments,
             /*user_shell_override*/ None,
+            thread_initialization_timing,
         ))
         .await
     }
@@ -626,6 +636,8 @@ impl ThreadManager {
         forked_from_thread_id: ThreadId,
         mut options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
+        let thread_initialization_timing =
+            ThreadInitializationTiming::start_configuration_resolution();
         let fork_source = self.get_thread(forked_from_thread_id).await?;
         // Persist queued rollout updates before reading the fork snapshot.
         fork_source.ensure_rollout_materialized().await;
@@ -652,8 +664,12 @@ impl ThreadManager {
                 inherited_multi_agent_version,
             ),
         );
-        self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
-            .await
+        self.start_thread_with_options_and_fork_source(
+            options,
+            Some(forked_from_thread_id),
+            thread_initialization_timing,
+        )
+        .await
     }
 
     pub async fn resume_thread_from_rollout(
@@ -663,12 +679,15 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        let thread_initialization_timing =
+            ThreadInitializationTiming::start_configuration_resolution();
         let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
-        Box::pin(self.resume_thread_with_history(
+        Box::pin(self.resume_thread_with_history_with_timing(
             config,
             initial_history,
             auth_manager,
             parent_trace,
+            thread_initialization_timing,
         ))
         .await
     }
@@ -680,6 +699,26 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        Box::pin(self.resume_thread_with_history_with_timing(
+            config,
+            initial_history,
+            auth_manager,
+            parent_trace,
+            ThreadInitializationTiming::start_configuration_resolution(),
+        ))
+        .await
+    }
+
+    async fn resume_thread_with_history_with_timing(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
+        thread_initialization_timing: ThreadInitializationTiming,
+    ) -> CodexResult<NewThread> {
+        thread_initialization_timing
+            .transition_to(ThreadInitializationPhase::ConfigurationResolution);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -703,6 +742,7 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
+            thread_initialization_timing,
         ))
         .await
     }
@@ -712,6 +752,8 @@ impl ThreadManager {
         config: Config,
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
+        let thread_initialization_timing =
+            ThreadInitializationTiming::start_configuration_resolution();
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -729,6 +771,7 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
+            thread_initialization_timing,
         ))
         .await
     }
@@ -740,6 +783,8 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
+        let thread_initialization_timing =
+            ThreadInitializationTiming::start_configuration_resolution();
         let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -764,6 +809,7 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
+            thread_initialization_timing,
         ))
         .await
     }
@@ -841,10 +887,19 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
+        let thread_initialization_timing =
+            ThreadInitializationTiming::start_configuration_resolution();
         let snapshot = snapshot.into();
         let history = self.initial_history_from_rollout_path(path).await?;
-        self.fork_thread_from_history(snapshot, config, history, thread_source, parent_trace)
-            .await
+        self.fork_thread_with_initial_history(
+            snapshot,
+            config,
+            history,
+            thread_source,
+            parent_trace,
+            thread_initialization_timing,
+        )
+        .await
     }
 
     async fn initial_history_from_rollout_path(
@@ -883,6 +938,7 @@ impl ThreadManager {
             history,
             thread_source,
             parent_trace,
+            ThreadInitializationTiming::start_configuration_resolution(),
         )
         .await
     }
@@ -894,6 +950,7 @@ impl ThreadManager {
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
+        thread_initialization_timing: ThreadInitializationTiming,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
@@ -932,6 +989,7 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
+            thread_initialization_timing,
         ))
         .await
     }
@@ -1118,6 +1176,8 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
+        let thread_initialization_timing =
+            ThreadInitializationTiming::start_configuration_resolution();
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
         });
@@ -1137,6 +1197,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
+            thread_initialization_timing,
         ))
         .await
     }
@@ -1145,6 +1206,8 @@ impl ThreadManagerState {
         &self,
         options: ResumeThreadWithHistoryOptions,
     ) -> CodexResult<NewThread> {
+        let thread_initialization_timing =
+            ThreadInitializationTiming::start_configuration_resolution();
         let ResumeThreadWithHistoryOptions {
             config,
             initial_history,
@@ -1173,6 +1236,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
+            thread_initialization_timing,
         ))
         .await
     }
@@ -1191,6 +1255,8 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
+        let thread_initialization_timing =
+            ThreadInitializationTiming::start_configuration_resolution();
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
         });
@@ -1210,6 +1276,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
+            thread_initialization_timing,
         ))
         .await
     }
@@ -1230,6 +1297,7 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
+        thread_initialization_timing: ThreadInitializationTiming,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -1247,6 +1315,7 @@ impl ThreadManagerState {
             parent_trace,
             environments,
             user_shell_override,
+            thread_initialization_timing,
         ))
         .await
     }
@@ -1269,9 +1338,12 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
+        thread_initialization_timing: ThreadInitializationTiming,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if let InitialHistory::Resumed(resumed) = &initial_history {
+            thread_initialization_timing
+                .transition_to(ThreadInitializationPhase::ExistingThreadLookup);
             let mut threads = self.threads.write().await;
             if let Some(thread) = threads.get(&resumed.conversation_id).cloned() {
                 if thread.is_running() {
@@ -1287,11 +1359,16 @@ impl ThreadManagerState {
                         thread_id: resumed.conversation_id,
                         session_configured: thread.session_configured(),
                         thread,
+                        thread_initialization_profile: Some(
+                            thread_initialization_timing.complete_existing_thread_lookup(),
+                        ),
                     });
                 }
                 threads.remove(&resumed.conversation_id);
             }
         }
+        thread_initialization_timing
+            .transition_to(ThreadInitializationPhase::ConfigurationResolution);
         let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
         let parent_rollout_thread_trace = self
@@ -1336,14 +1413,16 @@ impl ThreadManagerState {
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
+            thread_initialization_timing: thread_initialization_timing.clone(),
         }))
         .await?;
-        let new_thread = self
+        let mut new_thread = self
             .finalize_thread_spawn(codex, thread_id, tracked_session_source)
             .await?;
         if is_resumed_thread {
             new_thread.thread.emit_thread_resume_lifecycle().await;
         }
+        new_thread.thread_initialization_profile = Some(thread_initialization_timing.complete());
         Ok(new_thread)
     }
 
@@ -1378,6 +1457,7 @@ impl ThreadManagerState {
                     thread_id,
                     thread,
                     session_configured,
+                    thread_initialization_profile: None,
                 });
             }
         }

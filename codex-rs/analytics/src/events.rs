@@ -15,6 +15,7 @@ use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::ThreadInitializationProfile;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -159,6 +160,8 @@ pub(crate) struct ThreadInitializedEventParams {
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) forked_from_thread_id: Option<String>,
     pub(crate) created_at: u64,
+    #[serde(flatten)]
+    pub(crate) profile: Option<ThreadInitializationProfile>,
 }
 
 #[derive(Serialize)]
@@ -1070,6 +1073,7 @@ pub(crate) fn subagent_thread_started_event_request(
         parent_thread_id: input.parent_thread_id,
         forked_from_thread_id: input.forked_from_thread_id,
         created_at: input.created_at,
+        profile: None,
     };
     ThreadInitializedEvent {
         event_type: "codex_thread_initialized",

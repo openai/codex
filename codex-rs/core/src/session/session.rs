@@ -4,6 +4,9 @@ use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
+use crate::thread_initialization_timing::SessionDependencyBranch;
+use crate::thread_initialization_timing::ThreadInitializationPhase;
+use crate::thread_initialization_timing::ThreadInitializationTiming;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
@@ -490,6 +493,7 @@ impl Session {
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
+        thread_initialization_timing: ThreadInitializationTiming,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -529,7 +533,12 @@ impl Session {
         // - initialize thread persistence with new or resumed session info
         // - perform default shell discovery
         // - load history metadata (skipped for subagents)
+        thread_initialization_timing
+            .transition_to(ThreadInitializationPhase::SessionDependencyLoading);
+        let thread_persistence_timing = thread_initialization_timing.clone();
         let thread_persistence_fut = async {
+            let _timing_guard = thread_persistence_timing
+                .begin_session_dependency(SessionDependencyBranch::ThreadPersistence);
             if config.ephemeral {
                 Ok::<_, anyhow::Error>(None)
             } else {
@@ -591,7 +600,10 @@ impl Session {
             otel.name = "session_init.thread_persistence",
             session_init.ephemeral = config.ephemeral,
         ));
+        let state_db_timing = thread_initialization_timing.clone();
         let state_db_fut = async {
+            let _timing_guard =
+                state_db_timing.begin_session_dependency(SessionDependencyBranch::StateDbLoading);
             if config.ephemeral {
                 None
             } else if let Some(local_store) =
@@ -611,7 +623,10 @@ impl Session {
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
+        let auth_and_mcp_timing = thread_initialization_timing.clone();
         let auth_and_mcp_fut = async move {
+            let _timing_guard = auth_and_mcp_timing
+                .begin_session_dependency(SessionDependencyBranch::AuthAndMcpDiscovery);
             let auth = auth_manager_clone.auth().await;
             let mcp_servers = mcp_manager_for_mcp
                 .effective_servers(&config_for_mcp, auth.as_ref())
@@ -629,13 +644,19 @@ impl Session {
             otel.name = "session_init.auth_mcp",
         ));
 
-        let plugin_and_skill_warmup_fut = warm_plugins_and_skills_for_session_init(
-            Arc::clone(&config),
-            Arc::clone(&environment_manager),
-            Arc::clone(&plugins_manager),
-            Arc::clone(&skills_manager),
-            session_configuration.environments.clone(),
-        )
+        let plugin_and_skill_warmup_timing = thread_initialization_timing.clone();
+        let plugin_and_skill_warmup_fut = async {
+            let _timing_guard = plugin_and_skill_warmup_timing
+                .begin_session_dependency(SessionDependencyBranch::PluginAndSkillWarmup);
+            warm_plugins_and_skills_for_session_init(
+                Arc::clone(&config),
+                Arc::clone(&environment_manager),
+                Arc::clone(&plugins_manager),
+                Arc::clone(&skills_manager),
+                session_configuration.environments.clone(),
+            )
+            .await
+        }
         .instrument(info_span!(
             "session_init.plugin_skill_warmup",
             otel.name = "session_init.plugin_skill_warmup",
@@ -653,6 +674,7 @@ impl Session {
             auth_and_mcp_fut,
             plugin_and_skill_warmup_fut
         );
+        thread_initialization_timing.transition_to(ThreadInitializationPhase::SessionConstruction);
 
         for err in &plugin_skill_errors {
             error!(
@@ -1107,6 +1129,7 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
+            thread_initialization_timing.transition_to(ThreadInitializationPhase::McpStartup);
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
                 .filter(|(_, server)| server.enabled() && server.required())
@@ -1213,6 +1236,8 @@ impl Session {
                     anyhow::bail!("required MCP servers failed to initialize: {details}");
                 }
             }
+            thread_initialization_timing
+                .transition_to(ThreadInitializationPhase::SessionActivation);
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {

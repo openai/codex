@@ -7,6 +7,7 @@ use codex_config::types::OtelExporterKind;
 use codex_config::types::OtelHttpProtocol;
 use codex_core::config::ConfigBuilder;
 use pretty_assertions::assert_eq;
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -206,4 +207,91 @@ pub(crate) fn assert_basic_thread_initialized_event(
         initialization_mode
     );
     assert!(event["event_params"]["created_at"].as_u64().is_some());
+    assert_thread_initialization_profile(event);
+}
+
+pub(crate) fn assert_thread_initialization_profile(event: &Value) {
+    let profile = parse_thread_initialization_profile(event);
+    assert_eq!(
+        (profile.duration_ms, profile.core_duration_ms),
+        (
+            profile
+                .app_server_duration_ms
+                .saturating_add(profile.core_duration_ms),
+            profile
+                .existing_thread_lookup_ms
+                .saturating_add(profile.configuration_resolution_ms)
+                .saturating_add(profile.session_dependency_loading_ms)
+                .saturating_add(profile.session_construction_ms)
+                .saturating_add(profile.mcp_startup_ms)
+                .saturating_add(profile.session_activation_ms)
+                .saturating_add(profile.thread_registration_ms),
+        )
+    );
+}
+
+pub(crate) fn assert_loaded_resume_thread_initialization_profile(event: &Value) {
+    let profile = parse_thread_initialization_profile(event);
+    let expected = CapturedThreadInitializationProfile {
+        duration_ms: profile.duration_ms,
+        app_server_duration_ms: profile.app_server_duration_ms,
+        core_duration_ms: profile.existing_thread_lookup_ms,
+        existing_thread_lookup_ms: profile.existing_thread_lookup_ms,
+        ..Default::default()
+    };
+    assert_eq!(profile, expected);
+}
+
+pub(crate) async fn wait_for_thread_initialized_events(
+    server: &MockServer,
+    read_timeout: Duration,
+    expected_count: usize,
+) -> Result<Vec<Value>> {
+    timeout(read_timeout, async {
+        loop {
+            let events = server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .iter()
+                .filter(|request| {
+                    request.method == "POST"
+                        && request.url.path() == "/codex/analytics-events/events"
+                })
+                .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
+                .flat_map(|payload| payload["events"].as_array().cloned().unwrap_or_default())
+                .filter(|event| event["event_type"] == "codex_thread_initialized")
+                .collect::<Vec<_>>();
+            if events.len() >= expected_count {
+                return Ok::<Vec<Value>, anyhow::Error>(events);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await?
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+struct CapturedThreadInitializationProfile {
+    duration_ms: u64,
+    app_server_duration_ms: u64,
+    core_duration_ms: u64,
+    existing_thread_lookup_ms: u64,
+    configuration_resolution_ms: u64,
+    session_dependency_loading_ms: u64,
+    session_construction_ms: u64,
+    mcp_startup_ms: u64,
+    session_activation_ms: u64,
+    thread_registration_ms: u64,
+    thread_persistence_ms: u64,
+    state_db_loading_ms: u64,
+    auth_and_mcp_discovery_ms: u64,
+    plugin_and_skill_warmup_ms: u64,
+}
+
+fn parse_thread_initialization_profile(event: &Value) -> CapturedThreadInitializationProfile {
+    match serde_json::from_value(event["event_params"].clone()) {
+        Ok(profile) => profile,
+        Err(error) => panic!("thread initialized event should include a complete profile: {error}"),
+    }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::ThreadInitializationTiming;
 use crate::compact::InitialContextInjection;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
@@ -735,6 +736,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         thread_store,
         attestation_provider: None,
         inherited_multi_agent_version: None,
+        thread_initialization_timing: ThreadInitializationTiming::start(),
     })
     .await
     .expect("spawn guardian subagent");

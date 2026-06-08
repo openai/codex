@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
@@ -532,6 +533,7 @@ impl MessageProcessor {
         transport: &AppServerTransport,
         session: Arc<ConnectionSessionState>,
     ) {
+        let request_started_at = Instant::now();
         let request_method = request.method.as_str();
         tracing::trace!(
             ?connection_id,
@@ -548,7 +550,12 @@ impl MessageProcessor {
             traceparent: trace.traceparent.clone(),
             tracestate: trace.tracestate.clone(),
         });
-        let request_context = RequestContext::new(request_id.clone(), request_span, request_trace);
+        let request_context = RequestContext::new(
+            request_id.clone(),
+            request_span,
+            request_trace,
+            request_started_at,
+        );
         Self::run_request_with_context(
             Arc::clone(&self.outgoing),
             request_context.clone(),
@@ -595,14 +602,19 @@ impl MessageProcessor {
         session: Arc<ConnectionSessionState>,
         outbound_initialized: &AtomicBool,
     ) {
+        let request_started_at = Instant::now();
         let request_id = ConnectionRequestId {
             connection_id,
             request_id: request.id().clone(),
         };
         let request_span =
             crate::app_server_tracing::typed_request_span(&request, connection_id, &session);
-        let request_context =
-            RequestContext::new(request_id.clone(), request_span, /*parent_trace*/ None);
+        let request_context = RequestContext::new(
+            request_id.clone(),
+            request_span,
+            /*parent_trace*/ None,
+            request_started_at,
+        );
         tracing::trace!(
             ?connection_id,
             request_id = ?request_id.request_id,
@@ -1384,7 +1396,7 @@ impl MessageProcessor {
         match result {
             Ok(Some(response)) => {
                 self.outgoing
-                    .send_response_as(request_id.clone(), response)
+                    .send_response_as(request_id.clone(), response, None)
                     .await;
             }
             Ok(None) => {}
