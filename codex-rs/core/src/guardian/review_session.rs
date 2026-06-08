@@ -67,6 +67,12 @@ pub(crate) enum GuardianReviewSessionOutcome {
     Aborted,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum GuardianReviewRetryCleanup {
+    NoAction,
+    ResetTrunk,
+}
+
 pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_session: Arc<Session>,
     pub(crate) parent_turn: Arc<TurnContext>,
@@ -320,7 +326,11 @@ impl GuardianReviewSessionManager {
     pub(super) async fn run_review(
         &self,
         params: GuardianReviewSessionParams,
-    ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
+    ) -> (
+        GuardianReviewSessionOutcome,
+        GuardianReviewAnalyticsResult,
+        GuardianReviewRetryCleanup,
+    ) {
         let deadline = params.deadline;
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
         let mut stale_trunk_to_shutdown = None;
@@ -361,10 +371,15 @@ impl GuardianReviewSessionManager {
                             return (
                                 GuardianReviewSessionOutcome::PromptBuildFailed(err),
                                 GuardianReviewAnalyticsResult::without_session(),
+                                GuardianReviewRetryCleanup::NoAction,
                             );
                         }
                         Err(outcome) => {
-                            return (outcome, GuardianReviewAnalyticsResult::without_session());
+                            return (
+                                outcome,
+                                GuardianReviewAnalyticsResult::without_session(),
+                                GuardianReviewRetryCleanup::NoAction,
+                            );
                         }
                     };
                     state.trunk = Some(Arc::clone(&review_session));
@@ -373,7 +388,13 @@ impl GuardianReviewSessionManager {
 
                 state.trunk.as_ref().cloned()
             }
-            Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
+            Err(outcome) => {
+                return (
+                    outcome,
+                    GuardianReviewAnalyticsResult::without_session(),
+                    GuardianReviewRetryCleanup::NoAction,
+                );
+            }
         };
 
         if let Some(review_session) = stale_trunk_to_shutdown {
@@ -386,6 +407,7 @@ impl GuardianReviewSessionManager {
                     "guardian review session was not available after spawn"
                 ))),
                 GuardianReviewAnalyticsResult::without_session(),
+                GuardianReviewRetryCleanup::NoAction,
             );
         };
 
@@ -430,12 +452,20 @@ impl GuardianReviewSessionManager {
         drop(trunk_guard);
 
         if keep_review_session {
-            (outcome, analytics_result)
+            (
+                outcome,
+                analytics_result,
+                GuardianReviewRetryCleanup::ResetTrunk,
+            )
         } else {
             if let Some(review_session) = self.remove_trunk_if_current(&trunk).await {
                 review_session.shutdown_in_background();
             }
-            (outcome, analytics_result)
+            (
+                outcome,
+                analytics_result,
+                GuardianReviewRetryCleanup::NoAction,
+            )
         }
     }
 
@@ -544,7 +574,11 @@ impl GuardianReviewSessionManager {
         reuse_key: GuardianReviewSessionReuseKey,
         deadline: tokio::time::Instant,
         fork_snapshot: Option<GuardianReviewForkSnapshot>,
-    ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
+    ) -> (
+        GuardianReviewSessionOutcome,
+        GuardianReviewAnalyticsResult,
+        GuardianReviewRetryCleanup,
+    ) {
         let spawn_cancel_token = CancellationToken::new();
         let mut fork_config = params.spawn_config.clone();
         fork_config.ephemeral = true;
@@ -567,9 +601,16 @@ impl GuardianReviewSessionManager {
                 return (
                     GuardianReviewSessionOutcome::PromptBuildFailed(err),
                     GuardianReviewAnalyticsResult::without_session(),
+                    GuardianReviewRetryCleanup::NoAction,
                 );
             }
-            Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
+            Err(outcome) => {
+                return (
+                    outcome,
+                    GuardianReviewAnalyticsResult::without_session(),
+                    GuardianReviewRetryCleanup::NoAction,
+                );
+            }
         };
         self.register_active_ephemeral(Arc::clone(&review_session))
             .await;
@@ -587,7 +628,11 @@ impl GuardianReviewSessionManager {
             cleanup.disarm();
             review_session.shutdown_in_background();
         }
-        (outcome, analytics_result)
+        (
+            outcome,
+            analytics_result,
+            GuardianReviewRetryCleanup::NoAction,
+        )
     }
 }
 

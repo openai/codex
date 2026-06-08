@@ -2349,12 +2349,13 @@ async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
+async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() -> anyhow::Result<()>
+{
     const TEST_STACK_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
     let handle =
         std::thread::Builder::new()
-            .name("guardian_parallel_reviews_fork_from_last_committed_trunk_history".to_string())
+            .name("guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history".to_string())
             .stack_size(TEST_STACK_SIZE_BYTES)
             .spawn(|| -> anyhow::Result<()> {
                 let runtime = tokio::runtime::Builder::new_current_thread()
@@ -2409,8 +2410,16 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                 gate: None,
                 body: sse(vec![
                     ev_response_created("resp-guardian-3"),
-                    ev_assistant_message("msg-guardian-3", &third_assessment),
+                    ev_assistant_message("msg-guardian-3", "not valid guardian json"),
                     ev_completed("resp-guardian-3"),
+                ]),
+            }],
+            vec![StreamingSseChunk {
+                gate: None,
+                body: sse(vec![
+                    ev_response_created("resp-guardian-4"),
+                    ev_assistant_message("msg-guardian-4", &third_assessment),
+                    ev_completed("resp-guardian-4"),
                 ]),
             }],
         ])
@@ -2539,20 +2548,28 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         .await;
         assert_eq!(third_decision, ReviewDecision::Approved);
         let requests = server.requests().await;
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 4);
         let second_request_body = serde_json::from_slice::<serde_json::Value>(&requests[1])?;
-        let third_request_body = serde_json::from_slice::<serde_json::Value>(&requests[2])?;
+        let failed_ephemeral_request_body =
+            serde_json::from_slice::<serde_json::Value>(&requests[2])?;
+        let retried_ephemeral_request_body =
+            serde_json::from_slice::<serde_json::Value>(&requests[3])?;
         assert_eq!(
             second_request_body["prompt_cache_key"],
-            third_request_body["prompt_cache_key"],
+            failed_ephemeral_request_body["prompt_cache_key"],
             "forked guardian review should reuse the trunk guardian prompt cache key"
         );
-        let third_request_body_text = third_request_body.to_string();
+        assert_eq!(
+            failed_ephemeral_request_body["prompt_cache_key"],
+            retried_ephemeral_request_body["prompt_cache_key"],
+            "retried ephemeral review should preserve the guardian prompt cache key"
+        );
+        let third_request_body_text = retried_ephemeral_request_body.to_string();
         assert!(
             third_request_body_text.contains("first guardian rationale"),
             "forked guardian review should include the last committed trunk assessment"
         );
-        let third_user_message = last_user_message_text_from_body(&third_request_body);
+        let third_user_message = last_user_message_text_from_body(&retried_ephemeral_request_body);
         assert!(third_user_message.contains(">>> TRANSCRIPT DELTA START\n"));
         assert!(
             third_user_message.contains("[5] user: Please inspect pending changes before pushing.")
@@ -2583,7 +2600,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     match handle.join() {
         Ok(result) => result,
         Err(_) => Err(anyhow::anyhow!(
-            "guardian_parallel_reviews_fork_from_last_committed_trunk_history thread panicked"
+            "guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history thread panicked"
         )),
     }
 }
