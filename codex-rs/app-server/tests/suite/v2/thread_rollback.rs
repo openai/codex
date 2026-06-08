@@ -3,6 +3,8 @@ use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use codex_app_server_protocol::DeprecationNoticeNotification;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadItem;
@@ -97,6 +99,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    mcp.clear_message_buffer();
 
     // Roll back the last turn.
     let rollback_id = mcp
@@ -105,6 +108,25 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
             num_turns: 1,
         })
         .await?;
+    let deprecation_notice = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+    let JSONRPCMessage::Notification(deprecation_notice) = deprecation_notice else {
+        panic!("thread/rollback should emit deprecationNotice before its response");
+    };
+    assert_eq!(deprecation_notice.method, "deprecationNotice");
+    let deprecation_notice: DeprecationNoticeNotification = serde_json::from_value(
+        deprecation_notice
+            .params
+            .expect("deprecationNotice params should be present"),
+    )?;
+    assert_eq!(
+        deprecation_notice,
+        DeprecationNoticeNotification {
+            summary: "thread/rollback is deprecated and will be removed soon".to_string(),
+            details: Some(
+                "Instead, use `thread/fork` with the `turnId` parameter to fork a new thread that retains the history up through the specified turn.".to_string(),
+            ),
+        }
+    );
     let rollback_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(rollback_id)),

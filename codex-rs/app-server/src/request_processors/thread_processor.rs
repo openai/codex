@@ -5,6 +5,9 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
+const THREAD_ROLLBACK_DEPRECATION_SUMMARY: &str =
+    "thread/rollback is deprecated and will be removed soon";
+const THREAD_ROLLBACK_DEPRECATION_DETAILS: &str = "Instead, use `thread/fork` with the `turnId` parameter to fork a new thread that retains the history up through the specified turn.";
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
@@ -561,9 +564,23 @@ impl ThreadRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadRollbackParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.send_thread_rollback_deprecation_notice(request_id.connection_id)
+            .await;
         self.thread_rollback_inner(request_id, params)
             .await
             .map(|()| None)
+    }
+
+    async fn send_thread_rollback_deprecation_notice(&self, connection_id: ConnectionId) {
+        self.outgoing
+            .send_server_notification_to_connections(
+                &[connection_id],
+                ServerNotification::DeprecationNotice(DeprecationNoticeNotification {
+                    summary: THREAD_ROLLBACK_DEPRECATION_SUMMARY.to_string(),
+                    details: Some(THREAD_ROLLBACK_DEPRECATION_DETAILS.to_string()),
+                }),
+            )
+            .await;
     }
 
     pub(crate) async fn thread_list(

@@ -17815,6 +17815,7 @@
       },
       "ThreadRollbackParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "DEPRECATED: `thread/rollback` will be removed soon.\n\nInstead, use `thread/fork` with the `turnId` parameter to fork a new thread that retains the history up through the specified turn.",
         "properties": {
           "numTurns": {
             "description": "The number of turns to drop from the end of the thread. Must be >= 1.\n\nThis only modifies the thread's history and does not revert local file changes that have been made by the agent. Clients are responsible for reverting these changes.",
