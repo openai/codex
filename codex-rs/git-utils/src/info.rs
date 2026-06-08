@@ -391,6 +391,14 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
+    run_git_command_with_timeout_from(Path::new("git"), args, cwd).await
+}
+
+async fn run_git_command_with_timeout_from(
+    git: &Path,
+    args: &[&str],
+    cwd: &Path,
+) -> Option<std::process::Output> {
     // Only commands that inspect the worktree can recover the cost of probing.
     // Built-in fsmonitor avoids worktree and untracked-file scans:
     // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/Documentation/git-fsmonitor--daemon.adoc#L49-L57
@@ -399,12 +407,12 @@ async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::
         || matches!(args.first(), Some(&"ls-files"))
         || (matches!(args.first(), Some(&"diff")) && !args.contains(&"--no-index"));
     let deadline = TokioInstant::now() + GIT_COMMAND_TIMEOUT;
-    let fsmonitor_enabled = benefits_from_fsmonitor && {
+    let fsmonitor_configured = benefits_from_fsmonitor && {
         // Do not cache this decision. Effective Git config is layered, can use
         // conditional includes, and can change while Codex is running.
         // https://git-scm.com/docs/git-config#SCOPES
         // https://git-scm.com/docs/git-config#_conditional_includes
-        let mut probe = Command::new("git");
+        let mut probe = Command::new(git);
         probe
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("LC_ALL", "C")
@@ -428,8 +436,29 @@ async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::
             },
         }
     };
+    let fsmonitor_enabled = fsmonitor_configured && {
+        // Git 2.35.1 and older interpret "true" as a hook pathname. Before
+        // Git 2.26, an empty successful hook response can hide tracked changes.
+        // Require the feature line Git added specifically for capability tests.
+        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/Documentation/config/core.adoc#L90-L99
+        // https://github.com/git/git/commit/dd77cf61a1a2fbf52c94d0cd986d555ad2ba8a4b
+        let mut probe = Command::new(git);
+        probe
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("LC_ALL", "C")
+            .args(["version", "--build-options"])
+            .current_dir(cwd)
+            .kill_on_drop(true);
+        match timeout_at(deadline, probe.output()).await {
+            Ok(Ok(output)) if output.status.success() => output
+                .stdout
+                .split(|byte| *byte == b'\n')
+                .any(|line| line.trim_ascii() == b"feature: fsmonitor--daemon"),
+            _ => false,
+        }
+    };
 
-    let mut command = Command::new("git");
+    let mut command = Command::new(git);
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         // Keep internal Git commands independent of repository-selected hooks
@@ -889,6 +918,8 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn canonicalize_git_remote_url_normalizes_github_variants() {
@@ -925,5 +956,51 @@ mod tests {
         for remote in ["", "file:///tmp/repo", "github.com/openai", "/tmp/repo"] {
             assert_eq!(canonicalize_git_remote_url(remote), None);
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fsmonitor_override_requires_builtin_daemon_support() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let git = temp_dir.path().join("git");
+        let supported = temp_dir.path().join("git.supported");
+        let log = temp_dir.path().join("git.log");
+        std::fs::write(
+            &git,
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$*\" >>\"$0.log\"\n\
+             case \"$1\" in\n\
+             config) printf 'true\\n' ;;\n\
+             version) test ! -e \"$0.supported\" || printf 'feature: fsmonitor--daemon\\n' ;;\n\
+             esac\n",
+        )
+        .expect("write fake Git");
+        let mut permissions = std::fs::metadata(&git)
+            .expect("read fake Git metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&git, permissions).expect("mark fake Git executable");
+
+        run_git_command_with_timeout_from(&git, &["status", "--porcelain"], temp_dir.path())
+            .await
+            .expect("run unsupported fake Git");
+        std::fs::write(&supported, "").expect("enable built-in fsmonitor feature");
+        run_git_command_with_timeout_from(&git, &["status", "--porcelain"], temp_dir.path())
+            .await
+            .expect("run supported fake Git");
+
+        let actual = std::fs::read_to_string(log).expect("read fake Git log");
+        let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
+        assert_eq!(
+            actual.lines().map(str::to_string).collect::<Vec<_>>(),
+            vec![
+                "config --type=bool --get core.fsmonitor".to_string(),
+                "version --build-options".to_string(),
+                format!("-c {disabled_hooks} -c core.fsmonitor=false status --porcelain"),
+                "config --type=bool --get core.fsmonitor".to_string(),
+                "version --build-options".to_string(),
+                format!("-c {disabled_hooks} -c core.fsmonitor=true status --porcelain"),
+            ]
+        );
     }
 }
