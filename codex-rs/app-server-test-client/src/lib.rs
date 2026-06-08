@@ -86,6 +86,9 @@ use tungstenite::stream::MaybeTlsStream;
 use url::Url;
 use uuid::Uuid;
 
+mod loopback_responses_server;
+mod plugin_analytics_smoke;
+
 const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
     // v2 item deltas.
     "command/exec/outputDelta",
@@ -271,6 +274,16 @@ enum CliCommand {
         #[arg(long, default_value_t = 15)]
         hold_seconds: u64,
     },
+    /// Exercise remote plugin analytics through production app-server RPC paths.
+    #[command(name = "plugin-analytics-smoke")]
+    PluginAnalyticsSmoke {
+        /// Installed local plugin id, such as `linear@openai-curated-remote`.
+        #[arg(long)]
+        plugin_id: String,
+        /// JSONL output path. Defaults to a PID-specific file under the system temp directory.
+        #[arg(long)]
+        capture_file: Option<PathBuf>,
+    },
 }
 
 pub async fn run() -> Result<()> {
@@ -421,6 +434,17 @@ pub async fn run() -> Result<()> {
                 script,
                 hold_seconds,
             )
+        }
+        CliCommand::PluginAnalyticsSmoke {
+            plugin_id,
+            capture_file,
+        } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "plugin-analytics-smoke")?;
+            if url.is_some() {
+                bail!("plugin-analytics-smoke requires --codex-bin and does not support --url");
+            }
+            let codex_bin = codex_bin.context("plugin-analytics-smoke requires --codex-bin")?;
+            plugin_analytics_smoke::run(&codex_bin, &config_overrides, &plugin_id, capture_file)
         }
     }
 }
@@ -1437,6 +1461,14 @@ impl CodexClient {
     }
 
     fn spawn_stdio(codex_bin: &Path, config_overrides: &[String]) -> Result<Self> {
+        Self::spawn_stdio_with_env(codex_bin, config_overrides, &[])
+    }
+
+    fn spawn_stdio_with_env(
+        codex_bin: &Path,
+        config_overrides: &[String],
+        environment: &[(OsString, OsString)],
+    ) -> Result<Self> {
         let codex_bin_display = codex_bin.display();
         let mut cmd = Command::new(codex_bin);
         if let Some(codex_bin_parent) = codex_bin.parent() {
@@ -1449,6 +1481,9 @@ impl CodexClient {
         }
         for override_kv in config_overrides {
             cmd.arg("--config").arg(override_kv);
+        }
+        for (name, value) in environment {
+            cmd.env(name, value);
         }
         let mut codex_app_server = cmd
             .arg("app-server")

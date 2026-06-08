@@ -18,6 +18,33 @@ cargo run -p codex-app-server-test-client -- \
 cargo run -p codex-app-server-test-client -- model-list
 ```
 
+## Testing Plugin Analytics
+
+The `plugin-analytics-smoke` command exercises `plugin/installed`, plugin
+enable/disable config writes, and a structured plugin mention through one
+app-server connection. Analytics are captured to a local JSONL file and are
+not sent to the analytics backend. The model turn uses a loopback Responses
+API server.
+
+The selected plugin must already be installed remotely, and the active Codex
+profile must be authenticated.
+
+```bash
+# Build a debug Codex binary; analytics capture is unavailable in release builds.
+cargo build -p codex-cli --bin codex
+
+cargo run -p codex-app-server-test-client -- \
+  --codex-bin ./target/debug/codex \
+  plugin-analytics-smoke \
+  --plugin-id linear@openai-curated-remote
+```
+
+Use `--capture-file /tmp/plugin-analytics.jsonl` to select the output path.
+The command validates one `codex_plugin_disabled`, `codex_plugin_enabled`, and
+`codex_plugin_used` event, prints them, and leaves the JSONL file in place for
+inspection. It does not install or uninstall plugins and does not modify the
+profile's persistent config.
+
 ## Watching Raw Inbound Traffic
 
 Initialize a connection, then print every inbound JSON-RPC message until you stop it with
