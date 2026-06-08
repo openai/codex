@@ -876,6 +876,7 @@ async fn load_auth_reads_personal_access_token_from_env() {
             /*enable_codex_api_key_env*/ false,
             auth_credentials_store_mode,
             /*chatgpt_base_url*/ None,
+            /*auth_route_config*/ None,
         )
         .await
         .expect("env auth should load")

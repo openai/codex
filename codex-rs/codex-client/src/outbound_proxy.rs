@@ -254,7 +254,7 @@ fn configure_proxy_for_route(
         } else {
             configure_env_proxy_handling(
                 builder,
-                None,
+                /*origin*/ None,
                 route_class,
                 EnvProxyHandling::DelegateToReqwest,
             )
