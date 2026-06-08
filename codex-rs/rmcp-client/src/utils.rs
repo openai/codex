@@ -5,9 +5,12 @@ use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
+use reqwest::header::USER_AGENT;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
+
+const MCP_USER_AGENT: &str = "openai-mcp/1.0.0 (Chat)";
 
 pub(crate) fn create_env_for_mcp_server(
     extra_env: Option<HashMap<OsString, OsString>>,
@@ -62,6 +65,7 @@ pub(crate) fn build_default_headers(
     env_http_headers: Option<HashMap<String, String>>,
 ) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(MCP_USER_AGENT));
 
     if let Some(static_headers) = http_headers {
         for (name, value) in static_headers {
@@ -287,6 +291,57 @@ mod tests {
         assert!(
             err.to_string().contains("requires remote MCP stdio"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn build_default_headers_includes_mcp_user_agent() {
+        let headers =
+            build_default_headers(/*http_headers*/ None, /*env_http_headers*/ None)
+                .expect("default headers should build");
+        let mut expected = HeaderMap::new();
+        expected.insert(USER_AGENT, HeaderValue::from_static(MCP_USER_AGENT));
+
+        assert_eq!(headers, expected);
+    }
+
+    #[test]
+    fn build_default_headers_allows_static_user_agent_override() {
+        let headers = build_default_headers(
+            Some(HashMap::from([(
+                "User-Agent".to_string(),
+                "custom-client/1.0".to_string(),
+            )])),
+            /*env_http_headers*/ None,
+        )
+        .expect("default headers should build");
+
+        assert_eq!(
+            headers.get(USER_AGENT),
+            Some(&HeaderValue::from_static("custom-client/1.0"))
+        );
+    }
+
+    #[test]
+    #[serial(mcp_user_agent)]
+    fn build_default_headers_allows_environment_user_agent_override() {
+        let env_var = "CODEX_TEST_MCP_USER_AGENT";
+        let _guard = EnvVarGuard::set(env_var, "environment-client/1.0");
+        let headers = build_default_headers(
+            Some(HashMap::from([(
+                "User-Agent".to_string(),
+                "static-client/1.0".to_string(),
+            )])),
+            Some(HashMap::from([(
+                "User-Agent".to_string(),
+                env_var.to_string(),
+            )])),
+        )
+        .expect("default headers should build");
+
+        assert_eq!(
+            headers.get(USER_AGENT),
+            Some(&HeaderValue::from_static("environment-client/1.0"))
         );
     }
 
