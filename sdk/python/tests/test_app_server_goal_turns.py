@@ -243,6 +243,7 @@ def test_sync_goal_run_aggregates_automatic_continuation(tmp_path) -> None:
                 "reasoningOutputTokens": 0,
                 "totalTokens": 8,
             },
+            "modelContextWindow": 258_400,
             "total": {
                 "cachedInputTokens": 2,
                 "inputTokens": 12,
