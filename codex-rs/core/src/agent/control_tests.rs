@@ -632,7 +632,7 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
 }
 
 #[tokio::test]
-async fn resume_agent_from_rollout_registers_v2_descendants_without_reopening_them() {
+async fn resume_agent_from_rollout_does_not_reopen_v2_descendants() {
     let (home, mut config) = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     let _ = config.features.enable(Feature::Sqlite);
@@ -719,40 +719,6 @@ async fn resume_agent_from_rollout_registers_v2_descendants_without_reopening_th
     );
     assert_thread_not_loaded(&resumed_manager, worker_thread_id).await;
     assert_thread_not_loaded(&resumed_manager, reviewer_thread_id).await;
-
-    assert_eq!(
-        resumed_control
-            .resolve_agent_reference(parent_thread_id, &SessionSource::Exec, "worker")
-            .await
-            .expect("worker path should resolve after resume"),
-        worker_thread_id
-    );
-    assert_eq!(
-        resumed_control
-            .resolve_agent_reference(parent_thread_id, &SessionSource::Exec, "worker/reviewer")
-            .await
-            .expect("reviewer path should resolve after resume"),
-        reviewer_thread_id
-    );
-
-    resumed_control
-        .ensure_v2_agent_loaded(harness.config.clone(), worker_thread_id)
-        .await
-        .expect("restored worker should lazy reload");
-    let _ = resumed_manager
-        .get_thread(worker_thread_id)
-        .await
-        .expect("worker thread should be loaded on demand");
-    assert_thread_not_loaded(&resumed_manager, reviewer_thread_id).await;
-
-    resumed_control
-        .ensure_v2_agent_loaded(harness.config.clone(), reviewer_thread_id)
-        .await
-        .expect("restored reviewer should lazy reload");
-    let _ = resumed_manager
-        .get_thread(reviewer_thread_id)
-        .await
-        .expect("reviewer thread should be loaded on demand");
 }
 
 #[tokio::test]
