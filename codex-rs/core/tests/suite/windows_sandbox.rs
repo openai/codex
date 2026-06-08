@@ -9,14 +9,12 @@ use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::EventMsg;
 use core_test_support::PathExt;
 use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_assistant_message;
@@ -27,8 +25,6 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use serial_test::serial;
@@ -407,7 +403,7 @@ async fn windows_unified_exec_managed_network_enforces_deny_read() -> anyhow::Re
         "cmd": "cmd.exe /D /C \"(type secret.env 1>NUL 2>NUL && echo SECRET-READ || echo SECRET-DENIED) & type public.txt\"",
         "yield_time_ms": 10_000,
     });
-    mount_sse_sequence(
+    let mock = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
@@ -426,32 +422,8 @@ async fn windows_unified_exec_managed_network_enforces_deny_read() -> anyhow::Re
     test.submit_turn_with_permission_profile("read the fixture files", permission_profile)
         .await?;
 
-    let output = wait_for_event_with_timeout(
-        &test.codex,
-        |event| {
-            matches!(
-                event,
-                EventMsg::RawResponseItem(raw)
-                    if matches!(
-                        &raw.item,
-                        ResponseItem::FunctionCallOutput {
-                            call_id: output_call_id,
-                            ..
-                        } if output_call_id == call_id
-                    )
-            )
-        },
-        tokio::time::Duration::from_secs(30),
-    )
-    .await;
-    let EventMsg::RawResponseItem(raw) = output else {
-        unreachable!("matched raw response item");
-    };
-    let ResponseItem::FunctionCallOutput { output, .. } = raw.item else {
-        unreachable!("matched function call output");
-    };
-    let output = output
-        .text_content()
+    let output = mock
+        .function_call_output_text(call_id)
         .expect("function call output should contain text");
 
     assert!(
@@ -467,9 +439,5 @@ async fn windows_unified_exec_managed_network_enforces_deny_read() -> anyhow::Re
         "allowed reads should still work: {output}"
     );
 
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
     Ok(())
 }
