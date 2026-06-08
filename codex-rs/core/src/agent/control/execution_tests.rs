@@ -5,6 +5,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn execution_permits_count_active_v2_subagent_turns() {

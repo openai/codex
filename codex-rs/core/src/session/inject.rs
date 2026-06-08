@@ -7,7 +7,10 @@ use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InterAgentCommunication;
 use std::sync::Arc;
 
 impl Session {
@@ -131,6 +134,35 @@ impl Session {
             ));
         }
         Ok(())
+    }
+
+    pub(crate) async fn try_start_inter_agent_communication(
+        self: &Arc<Self>,
+        communication: InterAgentCommunication,
+    ) -> CodexResult<()> {
+        let turn_state = {
+            let mut active_turn = self.active_turn.lock().await;
+            if active_turn.is_some() {
+                return Err(CodexErr::InvalidRequest("agent is not idle".to_string()));
+            }
+            let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
+            Arc::clone(&active_turn.turn_state)
+        };
+
+        let turn_context = self.new_default_turn().await;
+        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        let result = self
+            .start_task(
+                turn_context,
+                vec![TurnInput::ResponseItem(communication.to_model_input_item())],
+                RegularTask::new(),
+            )
+            .await;
+        if result.is_err() {
+            self.clear_reserved_idle_turn(&turn_state).await;
+        }
+        result
     }
 
     pub(crate) async fn clear_reserved_idle_turn(

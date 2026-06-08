@@ -132,8 +132,6 @@ impl AgentControl {
             _ => non_empty_task_message(render_input_preview(&initial_operation)),
         };
         let state = self.upgrade()?;
-        self.ensure_execution_capacity_for_op(agent_id, &initial_operation)
-            .await?;
         let result = self
             .handle_thread_request_result(
                 agent_id,
@@ -152,6 +150,29 @@ impl AgentControl {
         result
     }
 
+    pub(crate) async fn try_start_inter_agent_communication(
+        &self,
+        agent_id: ThreadId,
+        communication: InterAgentCommunication,
+    ) -> CodexResult<()> {
+        let last_task_message = last_task_message_from_communication(&communication);
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        thread
+            .codex
+            .session
+            .try_start_inter_agent_communication(communication)
+            .await?;
+        match last_task_message {
+            Some(last_task_message) => {
+                self.state
+                    .update_last_task_message(agent_id, last_task_message);
+            }
+            None => self.state.clear_last_task_message(agent_id),
+        }
+        Ok(())
+    }
+
     pub(crate) async fn send_inter_agent_communication(
         &self,
         agent_id: ThreadId,
@@ -160,7 +181,6 @@ impl AgentControl {
         let last_task_message = last_task_message_from_communication(&communication);
         let state = self.upgrade()?;
         let op = Op::InterAgentCommunication { communication };
-        self.ensure_execution_capacity_for_op(agent_id, &op).await?;
         let result = self
             .handle_thread_request_result(agent_id, &state, state.send_op(agent_id, op).await)
             .await;

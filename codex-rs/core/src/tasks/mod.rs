@@ -541,10 +541,6 @@ impl Session {
         }
         if reason == TurnAbortReason::Interrupted && aborted_turn {
             self.maybe_start_turn_for_pending_work().await;
-            self.services
-                .agent_control
-                .maybe_start_v2_pending_work()
-                .await;
         }
     }
 
@@ -584,10 +580,6 @@ impl Session {
 
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;
-            self.services
-                .agent_control
-                .maybe_start_v2_pending_work()
-                .await;
         }
 
         true
@@ -811,10 +803,6 @@ impl Session {
             return;
         }
         self.emit_thread_idle_lifecycle_if_idle().await;
-        self.services
-            .agent_control
-            .maybe_start_v2_pending_work()
-            .await;
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
