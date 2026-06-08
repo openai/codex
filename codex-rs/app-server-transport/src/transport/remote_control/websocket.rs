@@ -77,6 +77,7 @@ const REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(30);
 const REMOTE_CONTROL_CONNECTION_SHUTDOWN_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(5);
+const REMOTE_APP_SERVER_NOT_FOUND_DETAIL: &str = "Remote app server not found";
 
 struct BoundedOutboundBuffer {
     buffer_by_stream: HashMap<(ClientId, StreamId), VecDeque<ServerEnvelope>>,
@@ -1248,7 +1249,9 @@ pub(super) async fn connect_remote_control_websocket(
         Ok((websocket_stream, response)) => Ok((websocket_stream, response.map(|_| ()))),
         Err(err) => {
             match &err {
-                tungstenite::Error::Http(response) if response.status().as_u16() == 404 => {
+                tungstenite::Error::Http(response)
+                    if websocket_response_reports_missing_remote_app_server(response) =>
+                {
                     info!(
                         "remote control websocket returned HTTP 404; clearing stale enrollment before re-enrolling: websocket_url={}, account_id={}, server_id={}, environment_id={}",
                         remote_control_target.websocket_url,
@@ -1266,6 +1269,23 @@ pub(super) async fn connect_remote_control_websocket(
                         status_publisher,
                     )
                     .await;
+                }
+                tungstenite::Error::Http(response) if response.status().as_u16() == 404 => {
+                    let response_body = response
+                        .body()
+                        .as_deref()
+                        .map(preview_remote_control_response_body)
+                        .unwrap_or_else(|| "<missing>".to_string());
+                    warn!(
+                        websocket_url = %remote_control_target.websocket_url,
+                        account_id = %auth.account_id,
+                        server_id = %enrollment.server_id,
+                        environment_id = %enrollment.environment_id,
+                        response_status = %response.status(),
+                        response_headers = %format_headers(response.headers()),
+                        response_body = %response_body,
+                        "remote control websocket returned unrecognized HTTP 404; preserving enrollment before retry"
+                    );
                 }
                 tungstenite::Error::Http(response)
                     if matches!(response.status().as_u16(), 401 | 403) =>
@@ -1432,6 +1452,18 @@ async fn prepare_remote_control_enrollment(
     }
 
     Ok(auth)
+}
+
+fn websocket_response_reports_missing_remote_app_server(
+    response: &tungstenite::http::Response<Option<Vec<u8>>>,
+) -> bool {
+    response.status().as_u16() == 404
+        && response.body().as_deref().is_some_and(|body| {
+            serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|body| {
+                body.get("detail").and_then(serde_json::Value::as_str)
+                    == Some(REMOTE_APP_SERVER_NOT_FOUND_DETAIL)
+            })
+        })
 }
 
 async fn clear_remote_control_enrollment(
@@ -1673,6 +1705,46 @@ mod tests {
         assert_eq!(reconnect_attempt, 1);
     }
 
+    #[test]
+    fn websocket_404_only_reports_explicit_missing_remote_app_server() {
+        let cases = [
+            (
+                Some(br#"{"detail":"Remote app server not found"}"#.to_vec()),
+                true,
+            ),
+            (
+                Some(br#" { "detail": "Remote app server not found", "extra": true } "#.to_vec()),
+                true,
+            ),
+            (Some(br#"{"detail":"Not Found"}"#.to_vec()), false),
+            (Some(b"Not Found".to_vec()), false),
+            (Some(b"{".to_vec()), false),
+            (Some(Vec::new()), false),
+            (None, false),
+        ];
+
+        for (body, expected) in cases {
+            let response = tungstenite::http::Response::builder()
+                .status(/*status*/ 404)
+                .body(body)
+                .expect("response should build");
+            assert_eq!(
+                websocket_response_reports_missing_remote_app_server(&response),
+                expected
+            );
+        }
+
+        let response = tungstenite::http::Response::builder()
+            .status(/*status*/ 503)
+            .body(Some(
+                br#"{"detail":"Remote app server not found"}"#.to_vec(),
+            ))
+            .expect("response should build");
+        assert!(!websocket_response_reports_missing_remote_app_server(
+            &response
+        ));
+    }
+
     fn remote_control_status_channel() -> (
         RemoteControlStatusPublisher,
         watch::Receiver<RemoteControlStatusChangedNotification>,
@@ -1769,6 +1841,7 @@ mod tests {
             }),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
+            personal_access_token: None,
         }
     }
 

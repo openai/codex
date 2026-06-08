@@ -6677,6 +6677,13 @@
               "agentIdentity"
             ],
             "type": "string"
+          },
+          {
+            "description": "Programmatic Codex auth backed by a personal access token.",
+            "enum": [
+              "personalAccessToken"
+            ],
+            "type": "string"
           }
         ]
       },
@@ -8013,12 +8020,12 @@
               "null"
             ]
           },
-          "allowedPermissions": {
-            "items": {
-              "type": "string"
+          "allowedPermissionProfiles": {
+            "additionalProperties": {
+              "type": "boolean"
             },
             "type": [
-              "array",
+              "object",
               "null"
             ]
           },
@@ -8057,6 +8064,12 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "defaultPermissions": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "enforceResidency": {
@@ -11449,6 +11462,12 @@
           },
           "status": {
             "$ref": "#/definitions/v2/McpServerStartupState"
+          },
+          "threadId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

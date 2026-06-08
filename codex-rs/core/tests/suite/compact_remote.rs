@@ -884,6 +884,10 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
         compact_request.header("x-codex-window-id").as_deref()
     );
     assert_eq!(
+        compact_request.body_json()["client_metadata"]["x-codex-window-id"].as_str(),
+        compact_metadata["window_id"].as_str()
+    );
+    assert_eq!(
         compact_metadata["compaction"],
         json!({
             "trigger": "manual",

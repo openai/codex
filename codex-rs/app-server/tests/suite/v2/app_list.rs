@@ -118,6 +118,7 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            personal_access_token: None,
         },
         AuthCredentialsStoreMode::File,
     )?;

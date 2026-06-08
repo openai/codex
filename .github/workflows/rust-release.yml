@@ -64,6 +64,8 @@ jobs:
       run:
         working-directory: codex-rs
     env:
+      # macOS release packages archive packed dSYM bundles before stripping.
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ contains(matrix.target, 'apple-darwin') && 'packed' || 'off' }}
       # Use the git CLI instead of Cargo's libgit2 path for git dependencies.
       # macOS release runners have intermittently failed to fetch nested
       # submodules through SecureTransport/libgit2, especially libwebrtc's
@@ -163,7 +165,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           targets: ${{ matrix.target }}
@@ -222,6 +224,10 @@ jobs:
             exit 1
           fi
 
+          # Codex embeds this digest at build time and verifies the bundled
+          # bwrap resource before use. Strip bwrap before hashing so the digest
+          # covers the exact bytes that the release packages.
+          strip --strip-debug --strip-unneeded "$bwrap_path"
           digest="$(sha256sum "$bwrap_path" | awk '{print $1}')"
           echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
           echo "Built bwrap ${bwrap_path} with sha256:${digest}"
@@ -235,6 +241,11 @@ jobs:
           fi
           build_args=()
           for binary in ${{ matrix.binaries }}; do
+            # bwrap was built, finalized, and hashed before this build so
+            # Codex can embed the digest of the bytes that will be packaged.
+            if [[ "$binary" == "bwrap" ]]; then
+              continue
+            fi
             build_args+=(--bin "$binary")
           done
           cargo build --target "$target" --release --timings "${build_args[@]}"
@@ -245,6 +256,32 @@ jobs:
           name: cargo-timings-rust-release-${{ matrix.target }}-${{ matrix.bundle }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
+
+      - name: Build symbols archive and strip binaries
+        shell: bash
+        run: |
+          binaries=()
+          for binary in ${{ matrix.binaries }}; do
+            # bwrap is already stripped before hashing. Its symbols are not
+            # useful enough to justify a separate pre-Codex symbols pass.
+            if [[ "$binary" == "bwrap" ]]; then
+              continue
+            fi
+            binaries+=("$binary")
+          done
+          bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
+            --target "${{ matrix.target }}" \
+            --artifact-name "${{ matrix.artifact_name }}" \
+            --release-dir "target/${{ matrix.target }}/release" \
+            --archive-dir "symbols-dist/${{ matrix.artifact_name }}" \
+            --binaries "${binaries[*]}"
+
+      - name: Upload symbols archive
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-symbols
+          path: codex-rs/symbols-dist/${{ matrix.artifact_name }}/*
+          if-no-files-found: error
 
       - if: ${{ runner.os == 'macOS' }}
         name: Stage unsigned macOS artifacts

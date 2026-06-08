@@ -7,7 +7,8 @@ Scenario: After five varied ChatGPT-auth turns, remote manual compaction reuses 
 --- Last Normal /responses Request
 +++ Remote /responses/compact Request
 -  "client_metadata": {
--    "x-codex-installation-id": "<UUID>"
+-    "x-codex-installation-id": "<UUID>",
+-    "x-codex-window-id": "<UUID>:0"
 -  },
 -  "include": [
 -    "reasoning.encrypted_content"
