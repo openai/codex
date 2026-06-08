@@ -2,8 +2,6 @@
 //!
 //! See [`PathUri`] for scheme, normalization, and serialization behavior.
 
-mod environment_path;
-
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -16,33 +14,25 @@ use thiserror::Error;
 use ts_rs::TS;
 use url::Url;
 
-pub use environment_path::EnvironmentPath;
-pub use environment_path::EnvironmentPathError;
-pub use environment_path::PathFlavor;
-
 pub const FILE_SCHEME: &str = "file";
 
 /// An immutable, cross-platform representation of a `file:` URI.
 ///
-/// Only the `file:` scheme is currently accepted. Construction validates and
-/// caches the path components, which keeps [`Self::view`] infallible. The URI
-/// cannot be mutated after construction. To perform path operations, use the
-/// [`EnvironmentPath`] from [`Self::view`] and construct a new `PathUri` from
-/// the resulting native path when appropriate.
+/// Only the `file:` scheme is currently accepted. Construction validates the
+/// URL, and the URI cannot be mutated after construction. [`Self::basename`],
+/// [`Self::parent`], and [`Self::join`] operate on URI path segments without
+/// interpreting them using the operating system running Codex.
 ///
-/// `file:` paths retain URI path spelling so they can be parsed independently
+/// `file:` paths retain their URI spelling so they can be parsed independently
 /// of the current host. In particular, `/C:/src` remains ambiguous between a
-/// Windows drive path and a valid POSIX path until
-/// [`FileUriView::to_native_path`] applies the current host's rules. A local
-/// POSIX `file:` URI can also retain percent-encoded non-UTF-8 bytes for
-/// lossless native round trips.
+/// Windows drive path and a valid POSIX path until [`Self::to_native_path`]
+/// applies the current host's rules. A local POSIX `file:` URI can also retain
+/// percent-encoded non-UTF-8 bytes for lossless native round trips.
 ///
-/// Like [VS Code resources], the cached path view uses `/` separators on every
-/// host, so basename, parent, join, and comparison are host-independent.
-/// Windows drive letters can be normalized by constructing an
-/// [`EnvironmentPath`] with Windows semantics, and UNC paths retain a leading
-/// `//`. Filesystem aliases, symlinks, case sensitivity, and Unicode
-/// normalization are not resolved.
+/// Like [VS Code resources], path operations use `/` URI separators on every
+/// host. They preserve a URL authority but do not infer Windows drive or UNC
+/// roots from path text. Native path normalization, filesystem aliases,
+/// symlinks, case sensitivity, and Unicode normalization are not resolved.
 ///
 /// Serde represents a `PathUri` as its canonical URI string. Deserialization
 /// also accepts an absolute native path for compatibility with fields that
@@ -55,15 +45,7 @@ pub const FILE_SCHEME: &str = "file";
 /// [VS Code resources]: https://github.com/microsoft/vscode/blob/main/src/vs/base/common/resources.ts
 #[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
 #[ts(type = "string")]
-pub struct PathUri {
-    url: Url,
-    parsed: ParsedPathUri,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum ParsedPathUri {
-    File { path: EnvironmentPath },
-}
+pub struct PathUri(Url);
 
 impl PathUri {
     /// Parses and validates a `file:` URI.
@@ -75,72 +57,101 @@ impl PathUri {
     pub fn from_file_path(path: &AbsolutePathBuf) -> Result<Self, PathUriParseError> {
         let url = Url::from_file_path(path.as_path())
             .map_err(|()| PathUriParseError::PathCannotBeRepresentedAsFileUri)?;
-        // `url` preserves the spelling of a Windows drive path. Rebuild local
-        // drive URLs through `EnvironmentPath` so drive case and separators
-        // match the cross-platform canonical form. UNC paths already use the
-        // URL authority for their server name and must retain that structure.
-        if cfg!(windows)
-            && url.host().is_none()
-            && let Some(path) = path.as_path().to_str()
-        {
-            return Self::try_from(file_url(&EnvironmentPath::windows(path)?)?);
-        }
         Self::try_from(url)
     }
 
     /// Returns `file`.
     pub fn scheme(&self) -> &str {
-        self.url.scheme()
+        self.0.scheme()
     }
 
-    /// Returns the cached path components.
-    pub fn view(&self) -> PathUriView<'_> {
-        match &self.parsed {
-            ParsedPathUri::File { path } => PathUriView::File(FileUriView {
-                path,
-                url: &self.url,
-            }),
+    /// Returns the percent-encoded URI path.
+    ///
+    /// The URL authority is not included. For example,
+    /// `file://server/share/file.rs` has the path `/share/file.rs`.
+    pub fn path(&self) -> &str {
+        self.0.path()
+    }
+
+    /// Returns the decoded final URI path segment, or `None` for the URI root.
+    ///
+    /// If the segment contains non-UTF-8 encoded bytes, its percent-encoded
+    /// spelling is returned instead.
+    pub fn basename(&self) -> Option<String> {
+        self.0
+            .path_segments()?
+            .rfind(|segment| !segment.is_empty())
+            .map(decode_uri_path)
+    }
+
+    /// Returns the parent URI, or `None` for the URI root.
+    pub fn parent(&self) -> Option<Self> {
+        if self.path() == "/" {
+            return None;
         }
+
+        let mut url = self.0.clone();
+        let Ok(mut segments) = url.path_segments_mut() else {
+            unreachable!("validated file URLs support hierarchical path segments");
+        };
+        segments.pop_if_empty().pop();
+        drop(segments);
+        Some(Self(url))
     }
 
-    /// Returns a clone of the canonical URL.
-    pub fn to_url(&self) -> Result<Url, PathUriParseError> {
-        Ok(self.url.clone())
-    }
-}
+    /// Lexically joins a relative URI path onto this URI.
+    ///
+    /// Empty and `.` segments are ignored, while `..` removes one segment
+    /// without escaping the URI root. Literal `%`, `?`, and `#` characters are
+    /// percent-encoded as filename text.
+    pub fn join(&self, path: &str) -> Result<Self, PathUriParseError> {
+        if path.starts_with('/') {
+            return Err(PathUriParseError::JoinPathMustBeRelative(path.to_string()));
+        }
+        if path.contains('\0') {
+            return Err(PathUriParseError::InvalidFileUriPath);
+        }
+        if path.is_empty() {
+            return Ok(self.clone());
+        }
 
-/// A closed view over the path URI schemes understood by this crate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PathUriView<'a> {
-    File(FileUriView<'a>),
-}
-
-/// Borrowed components of a validated `file:` URI.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FileUriView<'a> {
-    path: &'a EnvironmentPath,
-    url: &'a Url,
-}
-
-impl<'a> FileUriView<'a> {
-    pub fn path(self) -> &'a EnvironmentPath {
-        self.path
+        let mut url = self.0.clone();
+        let Ok(mut segments) = url.path_segments_mut() else {
+            unreachable!("validated file URLs support hierarchical path segments");
+        };
+        segments.pop_if_empty();
+        for component in path.split('/') {
+            match component {
+                "" | "." => {}
+                ".." => {
+                    segments.pop();
+                }
+                component => {
+                    segments.push(component);
+                }
+            }
+        }
+        drop(segments);
+        Self::try_from(url)
     }
 
     /// Converts this file URI to a path using the current host's path rules.
     ///
-    /// This fails when the URI describes a path form that the current host
-    /// cannot represent, such as a Windows UNC authority on POSIX, or when the
-    /// converted path is not absolute under the current host's rules. The URI
-    /// and [`Self::path`] remain usable for lexical operations in those cases.
-    pub fn to_native_path(self) -> Result<AbsolutePathBuf, PathUriParseError> {
+    /// This fails when the URI cannot be represented as an absolute native
+    /// path on the current host. Callers should only use this method when the
+    /// URI is known to identify a path on that host.
+    pub fn to_native_path(&self) -> Result<AbsolutePathBuf, PathUriParseError> {
         let path = self
-            .url
+            .0
             .to_file_path()
             .map_err(|()| PathUriParseError::InvalidFileUriPath)?;
         AbsolutePathBuf::from_absolute_path_checked(path)
             .map_err(|_| PathUriParseError::InvalidFileUriPath)
+    }
+
+    /// Returns a clone of the canonical URL.
+    pub fn to_url(&self) -> Url {
+        self.0.clone()
     }
 }
 
@@ -153,11 +164,9 @@ impl TryFrom<Url> for PathUri {
                 url.scheme().to_string(),
             ));
         }
-        let parsed = ParsedPathUri::File {
-            path: parse_file_path(&url)?,
-        };
+        validate_file_url(&url)?;
         let url = canonical_file_url(url)?;
-        Ok(Self { url, parsed })
+        Ok(Self(url))
     }
 }
 
@@ -195,7 +204,7 @@ impl FromStr for PathUri {
 
 impl fmt::Display for PathUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.url.fmt(f)
+        self.0.fmt(f)
     }
 }
 
@@ -204,7 +213,7 @@ impl Serialize for PathUri {
     where
         S: Serializer,
     {
-        serializer.serialize_str(self.url.as_str())
+        serializer.serialize_str(self.0.as_str())
     }
 }
 
@@ -230,8 +239,7 @@ pub mod legacy_file_path_serde {
     where
         S: Serializer,
     {
-        let PathUriView::File(view) = uri.view();
-        view.to_native_path()
+        uri.to_native_path()
             .map_err(serde::ser::Error::custom)?
             .serialize(serializer)
     }
@@ -242,31 +250,6 @@ pub mod legacy_file_path_serde {
     {
         PathUri::deserialize(deserializer)
     }
-}
-
-/// Validates a `file:` URL and extracts its host-independent URI path.
-///
-/// A non-local authority is represented as a canonical UNC path. Local paths
-/// retain their URI spelling because interpreting `/C:/...` as Windows or POSIX
-/// is deferred until native conversion.
-fn parse_file_path(url: &Url) -> Result<EnvironmentPath, PathUriParseError> {
-    validate_file_url(url)?;
-    if url.host_str().is_some_and(|host| host != "localhost") {
-        return EnvironmentPath::new(decode_file_uri_path(url))
-            .map_err(|_| PathUriParseError::InvalidFileUriPath);
-    }
-    EnvironmentPath::posix(decode_uri_path(url.path()))
-        .map_err(|_| PathUriParseError::InvalidFileUriPath)
-}
-
-/// Rebuilds a local Windows drive path as a canonical `file:` URL.
-///
-/// `Url::from_file_path` preserves drive-letter case. This helper is called for
-/// local Windows drive paths so their URL spelling matches `EnvironmentPath`.
-fn file_url(path: &EnvironmentPath) -> Result<Url, PathUriParseError> {
-    let mut url = Url::parse("file:///")?;
-    url.set_path(&path.as_str().replace('%', "%25"));
-    Ok(url)
 }
 
 /// Removes the local `localhost` alias while retaining non-local UNC authority.
@@ -342,16 +325,6 @@ fn validate_file_url(url: &Url) -> Result<(), PathUriParseError> {
     Ok(())
 }
 
-/// Converts a `file:` URL path and optional authority into canonical path text.
-fn decode_file_uri_path(url: &Url) -> String {
-    let path = decode_uri_path(url.path());
-    if let Some(host) = url.host_str().filter(|host| *host != "localhost") {
-        format!("//{host}{path}")
-    } else {
-        path
-    }
-}
-
 /// Returns a syntactically valid URI scheme prefix without parsing the URI.
 fn uri_scheme(uri: &str) -> Option<&str> {
     let (scheme, _) = uri.split_once(':')?;
@@ -379,7 +352,7 @@ fn looks_like_uri(value: &str) -> bool {
             .is_some_and(|separator| matches!(separator, b'/' | b'\\')))
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum PathUriParseError {
     #[error("invalid URI: {0}")]
     InvalidUri(#[from] url::ParseError),
@@ -395,8 +368,8 @@ pub enum PathUriParseError {
     QueryNotAllowed,
     #[error("fragments are not allowed in path URIs")]
     FragmentNotAllowed,
-    #[error(transparent)]
-    InvalidEnvironmentPath(#[from] EnvironmentPathError),
+    #[error("path `{0}` must be relative when joining a path URI")]
+    JoinPathMustBeRelative(String),
 }
 
 #[cfg(test)]

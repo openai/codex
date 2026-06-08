@@ -12,12 +12,6 @@ struct LegacyFilePathField {
     path: PathUri,
 }
 
-fn file_view(uri: &PathUri) -> FileUriView<'_> {
-    match uri.view() {
-        PathUriView::File(view) => view,
-    }
-}
-
 #[test]
 fn file_uri_round_trips_an_absolute_path() {
     let path = AbsolutePathBuf::current_dir()
@@ -29,14 +23,14 @@ fn file_uri_round_trips_an_absolute_path() {
     let uri_string = uri.to_string();
     assert!(uri_string.starts_with("file:"));
     assert!(uri_string.ends_with("/a%20path/file.rs"));
-    let view = file_view(&uri);
     assert_eq!(
         PathUri::parse(&uri_string).expect("serialized URI should parse"),
         uri
     );
     assert_eq!(
-        view.path().to_native_path(PathFlavor::Posix),
-        Ok(view.path().as_str().to_string())
+        uri.to_native_path()
+            .expect("local file URI should convert to a native path"),
+        path
     );
 }
 
@@ -45,15 +39,11 @@ fn file_uri_parses_a_windows_path_on_any_host() {
     let uri = PathUri::parse("file:///C:/Users/Alice%20Smith/src/main.rs")
         .expect("Windows file URI should parse on every host");
 
-    let view = file_view(&uri);
-    assert_eq!(view.path().as_str(), "/C:/Users/Alice Smith/src/main.rs");
+    assert_eq!(uri.path(), "/C:/Users/Alice%20Smith/src/main.rs");
+    assert_eq!(uri.basename(), Some("main.rs".to_string()));
     assert_eq!(
         uri.to_string(),
         "file:///C:/Users/Alice%20Smith/src/main.rs"
-    );
-    assert_eq!(
-        view.path().to_native_path(PathFlavor::Windows),
-        Ok(r"c:\Users\Alice Smith\src\main.rs".to_string())
     );
 }
 
@@ -62,8 +52,8 @@ fn file_uri_parses_a_posix_path_on_any_host() {
     let uri = PathUri::parse("file:///home/alice/src/main.rs")
         .expect("POSIX file URI should parse on every host");
 
-    let view = file_view(&uri);
-    assert_eq!(view.path().as_str(), "/home/alice/src/main.rs");
+    assert_eq!(uri.path(), "/home/alice/src/main.rs");
+    assert_eq!(uri.basename(), Some("main.rs".to_string()));
     assert_eq!(uri.to_string(), "file:///home/alice/src/main.rs");
 }
 
@@ -72,9 +62,7 @@ fn file_uri_preserves_paths_that_resemble_windows_paths() {
     for (input, expected_path) in [("file:///C:/Project", "/C:/Project"), ("file:///C:", "/C:")] {
         let uri = PathUri::parse(input).expect("file URI should parse");
         let reparsed = PathUri::parse(&uri.to_string()).expect("file URI should reparse");
-        let view = file_view(&uri);
-
-        assert_eq!(view.path().as_str(), expected_path);
+        assert_eq!(uri.path(), expected_path);
         assert_eq!(reparsed, uri);
     }
 }
@@ -86,9 +74,8 @@ fn file_uri_accepts_non_utf8_posix_paths() {
     let path = AbsolutePathBuf::from_absolute_path_checked(path).expect("absolute POSIX path");
 
     let uri = PathUri::from_file_path(&path).expect("non-UTF-8 path should convert to a file URI");
-    let view = file_view(&uri);
     assert_eq!(
-        view.to_native_path()
+        uri.to_native_path()
             .expect("URI should convert to native path"),
         path
     );
@@ -103,8 +90,8 @@ fn file_uri_round_trips_literal_percent_characters() {
     let uri = PathUri::parse("file:///tmp/100%25/file").expect("file URI should parse");
 
     assert_eq!(uri.to_string(), "file:///tmp/100%25/file");
-    let view = file_view(&uri);
-    assert_eq!(view.path().as_str(), "/tmp/100%/file");
+    assert_eq!(uri.path(), "/tmp/100%25/file");
+    assert_eq!(uri.basename(), Some("file".to_string()));
 }
 
 #[test]
@@ -113,17 +100,16 @@ fn file_uri_round_trips_windows_unc_paths() {
     let path = AbsolutePathBuf::from_absolute_path_checked(r"\\server\share\src\main.rs")
         .expect("absolute UNC path");
     let uri = PathUri::from_file_path(&path).expect("UNC path should convert to a file URI");
-    let view = file_view(&uri);
 
-    assert_eq!(view.path().as_str(), "//server/share/src/main.rs");
+    assert_eq!(uri.path(), "/share/src/main.rs");
+    assert_eq!(uri.to_native_path().expect("UNC URI should convert"), path);
 }
 
 #[test]
-fn file_uri_path_view_retains_unc_authority() {
+fn file_uri_retains_unc_authority() {
     let uri = PathUri::parse("file://server/share/src/main.rs").expect("valid file URI");
-    let view = file_view(&uri);
 
-    assert_eq!(view.path().as_str(), "//server/share/src/main.rs");
+    assert_eq!(uri.path(), "/share/src/main.rs");
     assert_eq!(uri.to_string(), "file://server/share/src/main.rs");
 }
 
@@ -261,8 +247,8 @@ fn encoded_filename_characters_round_trip_without_becoming_uri_metadata() {
         .expect("encoded filename characters should parse");
 
     assert_eq!(uri.to_string(), "file:///tmp/a%3Fb%23c%25d");
-    let view = file_view(&uri);
-    assert_eq!(view.path().as_str(), "/tmp/a?b#c%d");
+    assert_eq!(uri.path(), "/tmp/a%3Fb%23c%25d");
+    assert_eq!(uri.basename(), Some("a?b#c%d".to_string()));
 }
 
 #[test]
@@ -271,6 +257,99 @@ fn double_encoded_separator_remains_filename_text() {
         .expect("double-encoded separator should parse as filename text");
 
     assert_eq!(uri.to_string(), "file:///tmp/a%252Fb");
-    let view = file_view(&uri);
-    assert_eq!(view.path().as_str(), "/tmp/a%2Fb");
+    assert_eq!(uri.path(), "/tmp/a%252Fb");
+    assert_eq!(uri.basename(), Some("a%2Fb".to_string()));
+}
+
+#[test]
+fn basename_uses_decoded_uri_segments() {
+    for (input, expected) in [
+        ("file:///", None),
+        ("file:///workspace/src/lib.rs", Some("lib.rs")),
+        ("file:///workspace/a%20file.rs", Some("a file.rs")),
+        ("file:///C:/", Some("C:")),
+        ("file://server/share", Some("share")),
+    ] {
+        let uri = PathUri::parse(input).expect("valid file URI");
+        assert_eq!(
+            uri.basename(),
+            expected.map(str::to_string),
+            "basename for {input}"
+        );
+    }
+}
+
+#[test]
+fn parent_uses_uri_hierarchy_and_preserves_authority() {
+    for (input, expected) in [
+        (
+            "file:///workspace/src/lib.rs",
+            Some("file:///workspace/src"),
+        ),
+        ("file:///workspace", Some("file:///")),
+        ("file:///", None),
+        ("file:///C:/Users", Some("file:///C:")),
+        ("file:///C:/", Some("file:///")),
+        (
+            "file://server/share/src/main.rs",
+            Some("file://server/share/src"),
+        ),
+        ("file://server/share", Some("file://server/")),
+    ] {
+        let uri = PathUri::parse(input).expect("valid file URI");
+        let expected = expected.map(|value| PathUri::parse(value).expect("valid expected URI"));
+        assert_eq!(uri.parent(), expected, "parent for {input}");
+    }
+}
+
+#[test]
+fn join_normalizes_relative_uri_segments() {
+    for (base, relative, expected) in [
+        (
+            "file:///workspace/src",
+            "../tests/test.rs",
+            "file:///workspace/tests/test.rs",
+        ),
+        ("file:///", "../../etc", "file:///etc"),
+        ("file:///C:/Users", "../Windows", "file:///C:/Windows"),
+        (
+            "file://server/share/src",
+            "../tests",
+            "file://server/share/tests",
+        ),
+        (
+            "file:///workspace",
+            "a?b#c%d",
+            "file:///workspace/a%3Fb%23c%25d",
+        ),
+        ("file:///workspace/", "", "file:///workspace/"),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(relative), Ok(expected), "joining {relative}");
+    }
+}
+
+#[test]
+fn join_rejects_absolute_and_null_paths() {
+    let base = PathUri::parse("file:///workspace").expect("valid base URI");
+
+    assert!(matches!(
+        base.join("/src"),
+        Err(PathUriParseError::JoinPathMustBeRelative(path)) if path == "/src"
+    ));
+    assert!(matches!(
+        base.join("src\0file"),
+        Err(PathUriParseError::InvalidFileUriPath)
+    ));
+}
+
+#[test]
+fn to_url_returns_the_validated_url() {
+    let uri = PathUri::parse("file://localhost/workspace/a%20file.rs").expect("valid file URI");
+
+    assert_eq!(
+        uri.to_url(),
+        Url::parse("file:///workspace/a%20file.rs").expect("valid URL")
+    );
 }
