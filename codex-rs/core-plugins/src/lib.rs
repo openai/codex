@@ -34,6 +34,7 @@ pub use manager::PluginDetailsUnavailableReason;
 pub use manager::PluginInstallError;
 pub use manager::PluginInstallOutcome;
 pub use manager::PluginInstallRequest;
+pub use manager::PluginListBackgroundTaskOptions;
 pub use manager::PluginReadOutcome;
 pub use manager::PluginReadRequest;
 pub use manager::PluginUninstallError;
