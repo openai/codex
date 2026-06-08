@@ -10,8 +10,23 @@ impl App {
     pub(super) async fn open_agent_picker(&mut self, app_server: &mut AppServerSession) {
         self.backfill_loaded_subagent_threads(app_server).await;
         // V2 subagents are identified by canonical paths observed from activity events or loaded
-        // thread metadata. Their status display is intentionally best-effort and uses only local
-        // buffered activity, avoiding one thread/read request per agent.
+        // thread metadata. Prefer local buffered turn state for liveness, and fall back to
+        // thread/read only when no local event channel exists.
+        let path_backed_thread_ids: Vec<_> = self
+            .agent_navigation
+            .ordered_path_backed_subagent_threads(self.primary_thread_id)
+            .into_iter()
+            .map(|(thread_id, _)| thread_id)
+            .collect();
+        for thread_id in path_backed_thread_ids {
+            if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                let is_running = channel.store.lock().await.active_turn_id().is_some();
+                self.agent_navigation.set_running(thread_id, is_running);
+            } else {
+                self.refresh_agent_picker_thread_liveness(app_server, thread_id)
+                    .await;
+            }
+        }
         let path_backed_threads = self
             .agent_navigation
             .ordered_path_backed_subagent_threads(self.primary_thread_id);

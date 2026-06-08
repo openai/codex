@@ -360,7 +360,9 @@ impl TurnToolCounts {
             ThreadItem::FileChange { .. } => self.file_change += 1,
             ThreadItem::McpToolCall { .. } => self.mcp_tool_call += 1,
             ThreadItem::DynamicToolCall { .. } => self.dynamic_tool_call += 1,
-            ThreadItem::CollabAgentToolCall { .. } => self.subagent_tool_call += 1,
+            ThreadItem::CollabAgentToolCall { .. } | ThreadItem::SubAgentActivity { .. } => {
+                self.subagent_tool_call += 1;
+            }
             ThreadItem::WebSearch { .. } => self.web_search += 1,
             ThreadItem::ImageGeneration { .. } => self.image_generation += 1,
             ThreadItem::UserMessage { .. }
@@ -368,7 +370,6 @@ impl TurnToolCounts {
             | ThreadItem::AgentMessage { .. }
             | ThreadItem::Plan { .. }
             | ThreadItem::Reasoning { .. }
-            | ThreadItem::SubAgentActivity { .. }
             | ThreadItem::ImageView { .. }
             | ThreadItem::EnteredReviewMode { .. }
             | ThreadItem::ExitedReviewMode { .. }
@@ -1092,6 +1093,18 @@ impl AnalyticsReducer {
                 );
             }
             ServerNotification::ItemCompleted(notification) => {
+                if matches!(notification.item, ThreadItem::SubAgentActivity { .. }) {
+                    let Some(turn_state) = self.turns.get_mut(&notification.turn_id) else {
+                        tracing::warn!(
+                            thread_id = %notification.thread_id,
+                            turn_id = %notification.turn_id,
+                            "dropping sub-agent activity tool count update: missing turn state"
+                        );
+                        return;
+                    };
+                    turn_state.tool_counts.record(&notification.item);
+                    return;
+                }
                 let Some(item_id) = tracked_tool_item_id(&notification.item) else {
                     return;
                 };
