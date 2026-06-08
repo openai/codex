@@ -5,6 +5,8 @@ use std::net::TcpListener;
 use anyhow::Result;
 use tempfile::TempDir;
 
+const BWRAP_UNAVAILABLE_ERR: &str = "bubblewrap is unavailable";
+
 #[test]
 fn sandbox_with_network_proxy_blocks_direct_loopback_access() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -45,12 +47,18 @@ mode = "full"
         ])
         .output()?;
 
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains(BWRAP_UNAVAILABLE_ERR) {
+        eprintln!("skipping network proxy sandbox test: bubblewrap is unavailable");
+        return Ok(());
+    }
+
     assert!(
         output.status.success(),
         "expected direct loopback access to be blocked; status={:?}; stdout={}; stderr={}",
         output.status.code(),
         String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        stderr,
     );
 
     Ok(())
