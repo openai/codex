@@ -2074,7 +2074,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         guardian_rejection_message(session.as_ref(), "review-shell-guardian-error").await;
     assert!(
         rejection_message
-            .contains("Reason: Automatic approval review failed because the reviewer session")
+            .contains("Reason: Automatic approval review failed because the reviewer returned")
             && rejection_message.contains(error_message),
         "rejection message should include guardian rationale: {rejection_message}"
     );
@@ -2085,6 +2085,8 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_review_retries_reviewer_availability_failure() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
+
+    const PRIOR_RETRY_REASON: &str = "The command is being retried without sandboxing.";
 
     let server = start_mock_server().await;
     let guardian_assessment = serde_json::json!({
@@ -2128,12 +2130,19 @@ async fn guardian_review_retries_reviewer_availability_failure() -> anyhow::Resu
             additional_permissions: None,
             justification: Some("Inspect repo state before proceeding.".to_string()),
         },
-        /*retry_reason*/ None,
+        /*retry_reason*/ Some(PRIOR_RETRY_REASON.to_string()),
     )
     .await;
 
     assert_eq!(decision, ReviewDecision::Approved);
-    assert_eq!(request_log.requests().len(), 2);
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    let retry_request = requests[1].body_json().to_string();
+    assert!(retry_request.contains(PRIOR_RETRY_REASON));
+    assert!(retry_request.contains(
+        "The previous automatic approval review was temporarily unavailable. Retry the review once before blocking the action."
+    ));
+    assert!(!retry_request.contains("reviewer capacity temporarily unavailable"));
 
     Ok(())
 }

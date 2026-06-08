@@ -59,8 +59,8 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
 );
 
 const GUARDIAN_RETRY_WARNING: &str = concat!(
-    "Automatic approval review hit a retryable reviewer availability failure. ",
-    "Retrying once before failing closed."
+    "Automatic approval review is temporarily unavailable. ",
+    "Retrying once before blocking the action.",
 );
 
 pub(crate) fn new_guardian_review_id() -> String {
@@ -86,7 +86,7 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
                 || rationale.starts_with("Automatic approval review could not")
             {
                 format!(
-                    "This action was blocked because automatic approval review could not complete safely.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}",
+                    "Automatic approval review could not complete, so this action was blocked.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}",
                 )
             } else {
                 format!(
@@ -155,12 +155,14 @@ impl GuardianReviewError {
 
     fn retry_reason(&self) -> String {
         match self {
-            Self::Session { message } => format!(
-                "Previous automatic approval review failed due to reviewer capacity, transport, or session error: {message}. Retry once before treating this as a failed-closed review."
-            ),
+            Self::Session { .. } => concat!(
+                "The previous automatic approval review was temporarily unavailable. ",
+                "Retry the review once before blocking the action."
+            )
+            .to_string(),
             Self::Timeout => concat!(
-                "Previous automatic approval review timed out. ",
-                "Retry once before treating this as a failed-closed review."
+                "The previous automatic approval review timed out. ",
+                "Retry the review once before blocking the action."
             )
             .to_string(),
             Self::PromptBuild { .. } | Self::Parse { .. } | Self::Cancelled => {
@@ -532,12 +534,12 @@ async fn run_guardian_review(
                     }
                     GuardianReviewError::Session { message } => {
                         format!(
-                            "Automatic approval review failed because the reviewer session returned an error: {message}"
+                            "Automatic approval review failed because the reviewer returned an error: {message}"
                         )
                     }
                     GuardianReviewError::Parse { message } => {
                         format!(
-                            "Automatic approval review returned an unreadable assessment: {message}"
+                            "Automatic approval review failed because the reviewer returned an unreadable response: {message}"
                         )
                     }
                     GuardianReviewError::Timeout | GuardianReviewError::Cancelled => {
@@ -679,11 +681,15 @@ async fn run_guardian_review_session_with_retry(
         )
         .await;
 
+    let retry_reason = match retry_reason {
+        Some(retry_reason) => format!("{retry_reason}\n\n{}", error.retry_reason()),
+        None => error.retry_reason(),
+    };
     run_guardian_review_session(
         session,
         turn,
         request,
-        Some(error.retry_reason()),
+        Some(retry_reason),
         schema,
         external_cancel,
     )
