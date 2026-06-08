@@ -476,15 +476,6 @@ def test_terminal_goal_failure_stops_continuation_and_releases_routing(tmp_path)
                 ]
             )
         )
-        harness.responses.enqueue_sse(
-            streaming_response(
-                "goal-failure-rollover",
-                "msg-goal-failure-rollover",
-                ["automatic ", "rollover"],
-            ),
-            delay_between_events_s=0.5,
-        )
-
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
             with pytest.raises(RuntimeError, match="goal model failed"):
@@ -495,16 +486,16 @@ def test_terminal_goal_failure_stops_continuation_and_releases_routing(tmp_path)
                 response_id="goal-failure-follow-up",
             )
             follow_up = thread.run("Run after the goal failure")
-            harness.responses.wait_for_requests(3)
+            harness.responses.wait_for_requests(2)
             requests = harness.responses.requests()
 
     assert {
         "follow_up": (follow_up.status, follow_up.final_response),
         "request_count": len(requests),
-        "follow_up_input": requests[2].message_input_texts("user")[-1:],
+        "follow_up_input": requests[1].message_input_texts("user")[-1:],
     } == {
         "follow_up": (TurnStatus.completed, "Recovered with an ordinary turn."),
-        "request_count": 3,
+        "request_count": 2,
         "follow_up_input": ["Run after the goal failure"],
     }
 
