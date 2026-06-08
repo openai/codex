@@ -8,7 +8,6 @@ use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
-use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -1500,104 +1499,4 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             .count(),
         1,
     );
-}
-
-#[tokio::test]
-async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = config.codex_home.abs();
-    config
-        .features
-        .enable(Feature::Goals)
-        .expect("goals should be enableable in tests");
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager.clone(),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        empty_extension_registry(),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, state_db.clone()),
-        state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-        /*attestation_provider*/ None,
-    );
-
-    let source = manager
-        .resume_thread_with_history(
-            config.clone(),
-            InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("keep working"))]),
-            auth_manager.clone(),
-            /*parent_trace*/ None,
-        )
-        .await
-        .expect("create source thread");
-    let source_path = source
-        .thread
-        .rollout_path()
-        .expect("source rollout path should exist");
-    source.thread.flush_rollout().await?;
-    let state_db = source
-        .thread
-        .state_db()
-        .expect("source thread should have a state db");
-    state_db
-        .thread_goals()
-        .replace_thread_goal(
-            source.thread_id,
-            "Keep working until the task is done",
-            codex_state::ThreadGoalStatus::Paused,
-            /*token_budget*/ None,
-        )
-        .await?;
-    source.thread.shutdown_and_wait().await?;
-    manager.remove_thread(&source.thread_id).await;
-
-    let resumed = manager
-        .resume_thread_from_rollout(
-            config.clone(),
-            source_path,
-            auth_manager,
-            /*parent_trace*/ None,
-        )
-        .await
-        .expect("resume source thread");
-    let goal = state_db
-        .thread_goals()
-        .get_thread_goal(resumed.thread_id)
-        .await?
-        .expect("goal should still exist after resume");
-    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
-    assert!(
-        resumed
-            .thread
-            .codex
-            .session
-            .active_turn
-            .lock()
-            .await
-            .is_none()
-    );
-
-    resumed.thread.continue_active_goal_if_idle().await?;
-    assert!(
-        resumed
-            .thread
-            .codex
-            .session
-            .active_turn
-            .lock()
-            .await
-            .is_none()
-    );
-
-    resumed.thread.shutdown_and_wait().await?;
-    Ok(())
 }

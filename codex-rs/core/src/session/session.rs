@@ -2,7 +2,6 @@ use super::input_queue::InputQueue;
 use super::*;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
-use crate::goals::GoalRuntimeState;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
@@ -37,7 +36,6 @@ pub(crate) struct Session {
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) input_queue: InputQueue,
-    pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) next_internal_sub_id: AtomicU64,
@@ -950,7 +948,12 @@ impl Session {
             } else {
                 SessionId::from(thread_id)
             };
-            let agent_control = agent_control.with_session_id(session_id);
+            let agent_control = agent_control.with_session_id(
+                session_id,
+                config
+                    .effective_agent_max_threads(MultiAgentVersion::V2)
+                    .unwrap_or(usize::MAX),
+            );
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             let thread_extension_data =
@@ -1059,7 +1062,6 @@ impl Session {
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
                 input_queue: InputQueue::new(),
-                goal_runtime: GoalRuntimeState::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 next_internal_sub_id: AtomicU64::new(0),

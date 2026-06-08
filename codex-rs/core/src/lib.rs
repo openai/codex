@@ -39,9 +39,6 @@ pub mod exec_env;
 mod exec_policy;
 #[cfg(test)]
 mod git_info_tests;
-mod goals;
-pub use goals::ExternalGoalPreviousStatus;
-pub use goals::ExternalGoalSet;
 mod guardian;
 mod hook_runtime;
 mod installation_id;

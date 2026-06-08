@@ -212,7 +212,8 @@ impl ModelProvider for ConfiguredModelProvider {
                     CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
-                    | CodexAuth::AgentIdentity(_) => {
+                    | CodexAuth::AgentIdentity(_)
+                    | CodexAuth::PersonalAccessToken(_) => {
                         let email = auth.get_account_email();
                         let plan_type = auth.account_plan_type();
 
@@ -450,6 +451,21 @@ mod tests {
                 account: Some(ProviderAccount::ApiKey),
                 requires_openai_auth: true,
             })
+        );
+    }
+
+    #[test]
+    fn openai_provider_rejects_chatgpt_account_state_without_email() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            )),
+        );
+
+        assert_eq!(
+            provider.account_state(),
+            Err(ProviderAccountError::MissingChatgptAccountDetails)
         );
     }
 
