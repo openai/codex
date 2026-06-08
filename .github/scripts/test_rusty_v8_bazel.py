@@ -53,7 +53,7 @@ class RustyV8BazelTest(unittest.TestCase):
             "aarch64_pc_windows_gnullvm",
             "aarch64_pc_windows_msvc",
             "aarch64_unknown_linux_gnu_bazel",
-            "aarch64_unknown_linux_musl_release_base",
+            "aarch64_unknown_linux_musl_release",
             "x86_64_apple_darwin_bazel",
             "x86_64_pc_windows_gnullvm",
             "x86_64_pc_windows_msvc",
