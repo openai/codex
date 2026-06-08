@@ -1133,7 +1133,13 @@ mod tests {
                 "OS language en-US",
             )
             .detail("os: macOS 15.0")
-            .detail("os language: en-US"),
+            .detail("os language: en-US")
+            .detail("VISUAL: code --wait")
+            .detail("EDITOR: vim")
+            .detail("PAGER: less -R")
+            .detail("GIT_PAGER: delta")
+            .detail("GH_PAGER: less")
+            .detail("LESS: -FRX"),
             DoctorCheck::new(
                 "runtime.provenance",
                 "runtime",
@@ -1246,6 +1252,12 @@ Environment
   ✓ system       en-US
       os                       macOS 15.0
       OS language              en-US
+      VISUAL                   code --wait
+      EDITOR                   vim
+      PAGER                    less -R
+      GIT_PAGER                delta
+      GH_PAGER                 less
+      LESS                     -FRX
   ✓ runtime      running local build on darwin-arm64
   ✓ install      consistent
       managed by               npm: no · bun: no · package root —
