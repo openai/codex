@@ -582,6 +582,11 @@ pub(crate) fn mcp_approvals_reviewer(
             connector_id
                 .and_then(|connector_id| apps_config.apps.get(connector_id))
                 .and_then(|app| app.approvals_reviewer)
+                .or_else(|| {
+                    apps_config
+                        .default
+                        .and_then(|defaults| defaults.approvals_reviewer)
+                })
         })
     } else {
         None

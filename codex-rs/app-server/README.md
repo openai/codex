@@ -1722,13 +1722,18 @@ The server also emits `app/list/updated` notifications whenever either source (a
 ```
 
 Connected apps may override the thread's approval reviewer in `config.toml`.
-When omitted, the app inherits the top-level `approvals_reviewer` value:
+Use `apps._default.approvals_reviewer` to set the reviewer for all apps, and a
+per-app value to override that default. When both are omitted, the app inherits
+the top-level `approvals_reviewer` value:
 
 ```toml
 approvals_reviewer = "auto_review"
 
-[apps.demo-app]
+[apps._default]
 approvals_reviewer = "user"
+
+[apps.demo-app]
+approvals_reviewer = "auto_review"
 ```
 
 Setting the app value to `"user"` routes its approval prompts to the user
