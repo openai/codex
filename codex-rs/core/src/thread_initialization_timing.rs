@@ -21,14 +21,6 @@ enum ThreadInitializationPhase {
     ThreadRegistration,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SessionDependencyBranch {
-    ThreadPersistence,
-    StateDbLoading,
-    AuthAndMcpDiscovery,
-    PluginAndSkillWarmup,
-}
-
 tokio::task_local! {
     static ACTIVE_THREAD_INITIALIZATION_TIMING: ThreadInitializationTiming;
 }
@@ -45,13 +37,6 @@ struct ThreadInitializationTimingState {
     initialization_mode: Option<ThreadInitializationMode>,
     profile: ThreadInitializationProfile,
     core_complete: bool,
-}
-
-#[must_use]
-pub(crate) struct SessionDependencyTimingGuard {
-    timing: ThreadInitializationTiming,
-    branch: SessionDependencyBranch,
-    started_at: Instant,
 }
 
 impl ThreadInitializationTiming {
@@ -123,40 +108,12 @@ impl ThreadInitializationTiming {
         Self::transition_to(ThreadInitializationPhase::ThreadRegistration);
     }
 
-    pub(crate) fn begin_thread_persistence() -> Option<SessionDependencyTimingGuard> {
-        Self::begin_session_dependency(SessionDependencyBranch::ThreadPersistence)
-    }
-
-    pub(crate) fn begin_state_db_loading() -> Option<SessionDependencyTimingGuard> {
-        Self::begin_session_dependency(SessionDependencyBranch::StateDbLoading)
-    }
-
-    pub(crate) fn begin_auth_and_mcp_discovery() -> Option<SessionDependencyTimingGuard> {
-        Self::begin_session_dependency(SessionDependencyBranch::AuthAndMcpDiscovery)
-    }
-
-    pub(crate) fn begin_plugin_and_skill_warmup() -> Option<SessionDependencyTimingGuard> {
-        Self::begin_session_dependency(SessionDependencyBranch::PluginAndSkillWarmup)
-    }
-
     fn transition_to(phase: ThreadInitializationPhase) {
         Self::with_current(|timing| timing.transition_at(Instant::now(), phase));
     }
 
     fn start_configuration_resolution(mode: ThreadInitializationMode) {
         Self::start_current(mode, ThreadInitializationPhase::ConfigurationResolution);
-    }
-
-    fn begin_session_dependency(
-        branch: SessionDependencyBranch,
-    ) -> Option<SessionDependencyTimingGuard> {
-        ACTIVE_THREAD_INITIALIZATION_TIMING
-            .try_with(|timing| SessionDependencyTimingGuard {
-                timing: timing.clone(),
-                branch,
-                started_at: Instant::now(),
-            })
-            .ok()
     }
 
     fn start_current(mode: ThreadInitializationMode, phase: ThreadInitializationPhase) {
@@ -229,26 +186,8 @@ impl ThreadInitializationTiming {
         })
     }
 
-    fn record_dependency(&self, branch: SessionDependencyBranch, duration: Duration) {
-        let mut state = self.state();
-        if state.core_complete || state.last_transition_at.is_none() {
-            return;
-        }
-        let duration_ms = duration_to_u64_ms(duration);
-        *dependency_duration_mut(&mut state.profile, branch) = duration_ms;
-    }
-
     fn state(&self) -> MutexGuard<'_, ThreadInitializationTimingState> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl Drop for SessionDependencyTimingGuard {
-    fn drop(&mut self) {
-        self.timing.record_dependency(
-            self.branch,
-            Instant::now().saturating_duration_since(self.started_at),
-        );
     }
 }
 
@@ -281,18 +220,6 @@ fn phase_duration_mut(
         ThreadInitializationPhase::McpStartup => &mut profile.mcp_startup_ms,
         ThreadInitializationPhase::SessionActivation => &mut profile.session_activation_ms,
         ThreadInitializationPhase::ThreadRegistration => &mut profile.thread_registration_ms,
-    }
-}
-
-fn dependency_duration_mut(
-    profile: &mut ThreadInitializationProfile,
-    branch: SessionDependencyBranch,
-) -> &mut u64 {
-    match branch {
-        SessionDependencyBranch::ThreadPersistence => &mut profile.thread_persistence_ms,
-        SessionDependencyBranch::StateDbLoading => &mut profile.state_db_loading_ms,
-        SessionDependencyBranch::AuthAndMcpDiscovery => &mut profile.auth_and_mcp_discovery_ms,
-        SessionDependencyBranch::PluginAndSkillWarmup => &mut profile.plugin_and_skill_warmup_ms,
     }
 }
 

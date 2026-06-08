@@ -6,7 +6,6 @@ use codex_analytics::ThreadInitializationMode;
 use codex_analytics::ThreadInitializationProfile;
 use pretty_assertions::assert_eq;
 
-use super::SessionDependencyBranch;
 use super::ThreadInitializationPhase;
 use super::ThreadInitializationTiming;
 
@@ -32,14 +31,6 @@ fn thread_initialization_profile_breaks_down_request_and_core_time() {
     ] {
         timing.transition_at(core_started_at + Duration::from_millis(elapsed_ms), phase);
     }
-    for (branch, duration_ms) in [
-        (SessionDependencyBranch::ThreadPersistence, 12),
-        (SessionDependencyBranch::StateDbLoading, 8),
-        (SessionDependencyBranch::AuthAndMcpDiscovery, 15),
-        (SessionDependencyBranch::PluginAndSkillWarmup, 18),
-    ] {
-        timing.record_dependency(branch, Duration::from_millis(duration_ms));
-    }
     timing.complete_core_at(core_started_at + Duration::from_millis(230));
     assert_eq!(
         timing.complete_request_at(request_started_at + Duration::from_millis(275)),
@@ -56,10 +47,6 @@ fn thread_initialization_profile_breaks_down_request_and_core_time() {
                 mcp_startup_ms: 40,
                 session_activation_ms: 50,
                 thread_registration_ms: 60,
-                thread_persistence_ms: 12,
-                state_db_loading_ms: 8,
-                auth_and_mcp_discovery_ms: 15,
-                plugin_and_skill_warmup_ms: 18,
             },
         })
     );

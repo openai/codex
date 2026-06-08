@@ -111,10 +111,6 @@ pub struct ThreadInitializationProfile {
     pub mcp_startup_ms: u64,
     pub session_activation_ms: u64,
     pub thread_registration_ms: u64,
-    pub thread_persistence_ms: u64,
-    pub state_db_loading_ms: u64,
-    pub auth_and_mcp_discovery_ms: u64,
-    pub plugin_and_skill_warmup_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

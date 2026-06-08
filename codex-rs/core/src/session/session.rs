@@ -532,7 +532,6 @@ impl Session {
         // - load history metadata (skipped for subagents)
         ThreadInitializationTiming::session_dependency_loading_started();
         let thread_persistence_fut = async {
-            let _timing_guard = ThreadInitializationTiming::begin_thread_persistence();
             if config.ephemeral {
                 Ok::<_, anyhow::Error>(None)
             } else {
@@ -595,7 +594,6 @@ impl Session {
             session_init.ephemeral = config.ephemeral,
         ));
         let state_db_fut = async {
-            let _timing_guard = ThreadInitializationTiming::begin_state_db_loading();
             if config.ephemeral {
                 None
             } else if let Some(local_store) =
@@ -616,7 +614,6 @@ impl Session {
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
-            let _timing_guard = ThreadInitializationTiming::begin_auth_and_mcp_discovery();
             let auth = auth_manager_clone.auth().await;
             let mcp_servers = mcp_manager_for_mcp
                 .effective_servers(&config_for_mcp, auth.as_ref())
@@ -634,17 +631,13 @@ impl Session {
             otel.name = "session_init.auth_mcp",
         ));
 
-        let plugin_and_skill_warmup_fut = async {
-            let _timing_guard = ThreadInitializationTiming::begin_plugin_and_skill_warmup();
-            warm_plugins_and_skills_for_session_init(
-                Arc::clone(&config),
-                Arc::clone(&environment_manager),
-                Arc::clone(&plugins_manager),
-                Arc::clone(&skills_manager),
-                session_configuration.environments.clone(),
-            )
-            .await
-        }
+        let plugin_and_skill_warmup_fut = warm_plugins_and_skills_for_session_init(
+            Arc::clone(&config),
+            Arc::clone(&environment_manager),
+            Arc::clone(&plugins_manager),
+            Arc::clone(&skills_manager),
+            session_configuration.environments.clone(),
+        )
         .instrument(info_span!(
             "session_init.plugin_skill_warmup",
             otel.name = "session_init.plugin_skill_warmup",
