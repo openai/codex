@@ -68,8 +68,18 @@ pub(super) fn run(
 
     let installed = plugin_installed(&mut client)?;
     let expected = expected_plugin(&installed, plugin_id)?;
-    write_plugin_enabled(&mut client, temporary_config.path(), plugin_id, false)?;
-    write_plugin_enabled(&mut client, temporary_config.path(), plugin_id, true)?;
+    write_plugin_enabled(
+        &mut client,
+        temporary_config.path(),
+        plugin_id,
+        /*enabled*/ false,
+    )?;
+    write_plugin_enabled(
+        &mut client,
+        temporary_config.path(),
+        plugin_id,
+        /*enabled*/ true,
+    )?;
 
     let plugin_config_key = format!("plugins.{plugin_id}.enabled");
     let thread = client.thread_start(ThreadStartParams {
