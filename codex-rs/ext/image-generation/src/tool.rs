@@ -178,6 +178,8 @@ fn request_for_args(
                     "`num_last_images_to_include` must be between 1 and {MAX_EDIT_IMAGES}"
                 )));
             }
+            // Pathless images have no stable reference, so this bounded window may include newer
+            // unrelated images. This remains best-effort until the harness provides stable refs.
             let images = recent_images(history, count);
             if images.len() != count {
                 return Err(FunctionCallError::RespondToModel(format!(
