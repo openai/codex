@@ -64,7 +64,6 @@ const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
     "apps_mcp_product_sku",
     "model_provider",
     "model_providers",
-    "network",
     "notify",
     "profile",
     "profiles",
