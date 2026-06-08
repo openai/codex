@@ -578,11 +578,10 @@ async fn assert_exec_process_signal_reports_unsupported_on_windows(use_remote: b
         })
         .await?;
 
-    let err = session
-        .process
-        .signal(ProcessSignal::Interrupt)
-        .await
-        .expect_err("Windows non-TTY signal should report unsupported");
+    let err = match session.process.signal(ProcessSignal::Interrupt).await {
+        Ok(()) => anyhow::bail!("Windows non-TTY signal should report unsupported"),
+        Err(err) => err,
+    };
     let message = err.to_string();
     assert!(
         message.contains("failed to signal process"),
