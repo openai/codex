@@ -65,12 +65,13 @@ impl PolicyParser {
         )
         .map_err(Error::Starlark)?;
         let globals = GlobalsBuilder::standard().with(policy_builtins).build();
-        let module = Module::new();
-        {
+        Module::with_temp_heap(|module| {
             let mut eval = Evaluator::new(&module);
             eval.extra = Some(&self.builder);
-            eval.eval_module(ast, &globals).map_err(Error::Starlark)?;
-        }
+            eval.eval_module(ast, &globals)
+                .map(|_| ())
+                .map_err(Error::Starlark)
+        })?;
         self.builder
             .borrow()
             .validate_pending_examples_from(pending_validation_count)?;
