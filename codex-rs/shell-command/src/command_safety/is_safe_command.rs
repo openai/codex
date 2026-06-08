@@ -1,9 +1,5 @@
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::command_safety::is_dangerous_command::executable_name_lookup_key;
-// Find the first matching git subcommand, skipping known global options that
-// may appear before it (e.g., `-C`, `-c`, `--git-dir`).
-// Implemented in `is_dangerous_command` and shared here.
-use crate::command_safety::is_dangerous_command::find_git_subcommand;
 #[cfg(windows)]
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 #[cfg(windows)]
@@ -153,9 +149,6 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
             })
         }
 
-        // Git
-        Some("git") => is_safe_git_command(command),
-
         // Special-case `sed -n {N|M,N}p`
         Some("sed")
             if {
@@ -170,128 +163,6 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         // ── anything else ─────────────────────────────────────────────────
         _ => false,
     }
-}
-
-pub(crate) fn is_safe_git_command(command: &[String]) -> bool {
-    let Some((subcommand_idx, subcommand)) =
-        find_git_subcommand(command, &["status", "log", "diff", "show", "branch"])
-    else {
-        return false;
-    };
-
-    let global_args = &command[1..subcommand_idx];
-    if git_has_unsafe_global_option(global_args) {
-        return false;
-    }
-
-    let subcommand_args = &command[subcommand_idx + 1..];
-
-    match subcommand {
-        "status" | "log" | "diff" | "show" => git_subcommand_args_are_read_only(subcommand_args),
-        "branch" => {
-            git_subcommand_args_are_read_only(subcommand_args)
-                && git_branch_is_read_only(subcommand_args)
-        }
-        other => {
-            debug_assert!(false, "unexpected git subcommand from matcher: {other}");
-            false
-        }
-    }
-}
-
-// Treat `git branch` as safe only when the arguments clearly indicate
-// a read-only query, not a branch mutation (create/rename/delete).
-fn git_branch_is_read_only(branch_args: &[String]) -> bool {
-    if branch_args.is_empty() {
-        // `git branch` with no additional args lists branches.
-        return true;
-    }
-
-    let mut saw_read_only_flag = false;
-    for arg in branch_args.iter().map(String::as_str) {
-        match arg {
-            "--list" | "-l" | "--show-current" | "-a" | "--all" | "-r" | "--remotes" | "-v"
-            | "-vv" | "--verbose" => {
-                saw_read_only_flag = true;
-            }
-            _ if arg.starts_with("--format=") => {
-                saw_read_only_flag = true;
-            }
-            _ => {
-                // Any other flag or positional argument may create, rename, or delete branches.
-                return false;
-            }
-        }
-    }
-
-    saw_read_only_flag
-}
-
-#[derive(Clone, Copy)]
-enum GitOptionPattern {
-    Exact(&'static str),
-    ShortWithInlineValue(&'static str),
-    Prefix(&'static str),
-}
-
-const UNSAFE_GIT_GLOBAL_OPTIONS: &[GitOptionPattern] = &[
-    GitOptionPattern::Exact("-C"),
-    GitOptionPattern::ShortWithInlineValue("-C"),
-    GitOptionPattern::Exact("-c"),
-    GitOptionPattern::ShortWithInlineValue("-c"),
-    GitOptionPattern::Exact("-p"),
-    GitOptionPattern::Exact("--config-env"),
-    GitOptionPattern::Prefix("--config-env="),
-    GitOptionPattern::Exact("--exec-path"),
-    GitOptionPattern::Prefix("--exec-path="),
-    GitOptionPattern::Exact("--git-dir"),
-    GitOptionPattern::Prefix("--git-dir="),
-    GitOptionPattern::Exact("--namespace"),
-    GitOptionPattern::Prefix("--namespace="),
-    GitOptionPattern::Exact("--paginate"),
-    GitOptionPattern::Exact("--super-prefix"),
-    GitOptionPattern::Prefix("--super-prefix="),
-    GitOptionPattern::Exact("--work-tree"),
-    GitOptionPattern::Prefix("--work-tree="),
-];
-
-const UNSAFE_GIT_SUBCOMMAND_OPTIONS: &[GitOptionPattern] = &[
-    GitOptionPattern::Exact("--output"),
-    GitOptionPattern::Prefix("--output="),
-    GitOptionPattern::Exact("--ext-diff"),
-    GitOptionPattern::Exact("--textconv"),
-    GitOptionPattern::Exact("--exec"),
-    GitOptionPattern::Prefix("--exec="),
-];
-
-impl GitOptionPattern {
-    fn matches(self, arg: &str) -> bool {
-        match self {
-            GitOptionPattern::Exact(option) => arg == option,
-            GitOptionPattern::ShortWithInlineValue(option) => {
-                arg.starts_with(option) && arg.len() > option.len()
-            }
-            GitOptionPattern::Prefix(prefix) => arg.starts_with(prefix),
-        }
-    }
-}
-
-fn git_matches_option_pattern(arg: &str, patterns: &[GitOptionPattern]) -> bool {
-    patterns.iter().any(|pattern| pattern.matches(arg))
-}
-
-fn git_has_unsafe_global_option(global_args: &[String]) -> bool {
-    global_args
-        .iter()
-        .map(String::as_str)
-        .any(|arg| git_matches_option_pattern(arg, UNSAFE_GIT_GLOBAL_OPTIONS))
-}
-
-fn git_subcommand_args_are_read_only(args: &[String]) -> bool {
-    !args
-        .iter()
-        .map(String::as_str)
-        .any(|arg| git_matches_option_pattern(arg, UNSAFE_GIT_SUBCOMMAND_OPTIONS))
 }
 
 // (bash parsing helpers implemented in crate::bash)
@@ -345,13 +216,6 @@ mod tests {
     #[test]
     fn known_safe_examples() {
         assert!(is_safe_to_call_with_exec(&vec_str(&["ls"])));
-        assert!(is_safe_to_call_with_exec(&vec_str(&["git", "status"])));
-        assert!(is_safe_to_call_with_exec(&vec_str(&["git", "branch"])));
-        assert!(is_safe_to_call_with_exec(&vec_str(&[
-            "git",
-            "branch",
-            "--show-current"
-        ])));
         assert!(is_safe_to_call_with_exec(&vec_str(&["base64"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "sed", "-n", "1,5p", "file.txt"
@@ -377,20 +241,16 @@ mod tests {
     }
 
     #[test]
-    fn git_branch_mutating_flags_are_not_safe() {
+    fn git_commands_require_approval() {
+        assert!(!is_known_safe_command(&vec_str(&["git", "status"])));
+        assert!(!is_known_safe_command(&vec_str(&["git", "diff", "-p"])));
         assert!(!is_known_safe_command(&vec_str(&[
-            "git", "branch", "-d", "feature"
+            "git", "log", "-p", "-1"
         ])));
         assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "branch",
-            "new-branch"
+            "git", "show", "-p", "HEAD",
         ])));
-    }
-
-    #[test]
-    fn git_branch_global_options_respect_safety_rules() {
-        assert!(is_known_safe_command(&vec_str(&[
+        assert!(!is_known_safe_command(&vec_str(&[
             "git",
             "branch",
             "--show-current",
@@ -401,128 +261,10 @@ mod tests {
         assert!(!is_known_safe_command(&vec_str(&[
             "bash",
             "-lc",
-            "git branch -d feature",
-        ])));
-    }
-
-    #[test]
-    fn git_first_positional_is_the_subcommand() {
-        // In git, the first non-option token is the subcommand. Later positional
-        // args (like branch names) must not be treated as subcommands.
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git", "checkout", "status",
-        ])));
-    }
-
-    #[test]
-    fn git_output_flags_are_not_safe() {
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "log",
-            "--output=/tmp/git-log-out-test",
-            "-n",
-            "1",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "diff",
-            "--output",
-            "/tmp/git-diff-out-test",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "show",
-            "--output=/tmp/git-show-out-test",
-            "HEAD",
-        ])));
-    }
-
-    #[test]
-    fn git_global_pagination_flags_are_not_safe() {
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "--paginate",
-            "log",
-            "-1",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git", "-p", "log", "-1",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git --paginate log -1",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git -p log -1",
-        ])));
-    }
-
-    #[test]
-    fn git_subcommand_patch_flags_remain_safe() {
-        assert!(is_known_safe_command(&vec_str(&["git", "log", "-p", "-1"])));
-        assert!(is_known_safe_command(&vec_str(&["git", "diff", "-p"])));
-        assert!(is_known_safe_command(&vec_str(&[
-            "git", "show", "-p", "HEAD",
-        ])));
-        assert!(is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
             "git log -p -1",
         ])));
-    }
-
-    #[test]
-    fn git_global_override_flags_are_not_safe() {
         assert!(!is_known_safe_command(&vec_str(&[
             "git", "-C", ".", "status",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&["git", "-C.", "status",])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "-c",
-            "core.pager=cat",
-            "log",
-            "-n",
-            "1",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "-ccore.pager=cat",
-            "status",
-        ])));
-
-        for args in [
-            vec_str(&["git", "--config-env", "core.pager=PAGER", "show", "HEAD"]),
-            vec_str(&["git", "--config-env=core.pager=PAGER", "show", "HEAD"]),
-            vec_str(&["git", "--git-dir", ".evil-git", "diff", "HEAD~1..HEAD"]),
-            vec_str(&["git", "--git-dir=.evil-git", "diff", "HEAD~1..HEAD"]),
-            vec_str(&["git", "--work-tree", ".", "status"]),
-            vec_str(&["git", "--work-tree=.", "status"]),
-            vec_str(&["git", "--exec-path", ".git/helpers", "show", "HEAD"]),
-            vec_str(&["git", "--exec-path=.git/helpers", "show", "HEAD"]),
-            vec_str(&["git", "--namespace", "attacker", "show", "HEAD"]),
-            vec_str(&["git", "--namespace=attacker", "show", "HEAD"]),
-            vec_str(&["git", "--super-prefix", "attacker/", "show", "HEAD"]),
-            vec_str(&["git", "--super-prefix=attacker/", "show", "HEAD"]),
-        ] {
-            assert!(
-                !is_known_safe_command(&args),
-                "expected {args:?} to require approval due to unsafe git global option",
-            );
-        }
-
-        assert!(!is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git -C .project-deps/test-fixtures status",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git --git-dir=.evil-git diff HEAD~1..HEAD",
         ])));
     }
 
@@ -636,12 +378,12 @@ mod tests {
     }
 
     #[test]
-    fn windows_git_full_path_is_safe() {
+    fn windows_git_full_path_status_requires_approval() {
         if !cfg!(windows) {
             return;
         }
 
-        assert!(is_known_safe_command(&vec_str(&[
+        assert!(!is_known_safe_command(&vec_str(&[
             r"C:\Program Files\Git\cmd\git.exe",
             "status",
         ])));
@@ -651,11 +393,6 @@ mod tests {
     fn bash_lc_safe_examples() {
         assert!(is_known_safe_command(&vec_str(&["bash", "-lc", "ls"])));
         assert!(is_known_safe_command(&vec_str(&["bash", "-lc", "ls -1"])));
-        assert!(is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git status"
-        ])));
         assert!(is_known_safe_command(&vec_str(&[
             "bash",
             "-lc",
@@ -705,6 +442,11 @@ mod tests {
 
     #[test]
     fn bash_lc_unsafe_examples() {
+        assert!(!is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git status"
+        ])));
         assert!(
             !is_known_safe_command(&vec_str(&["bash", "-lc", "git", "status"])),
             "Four arg version is not known to be safe."

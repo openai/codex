@@ -1,4 +1,3 @@
-use crate::command_safety::is_safe_command::is_safe_git_command;
 use crate::command_safety::powershell_parser::PowershellParseOutcome;
 use crate::command_safety::powershell_parser::parse_with_powershell_ast;
 use std::path::Path;
@@ -188,7 +187,7 @@ pub(crate) fn is_safe_powershell_words(words: &[String]) -> bool {
         "select-object" | "select" => true,
         "get-item" => true,
 
-        "git" => is_safe_git_command(words),
+        "git" => false,
 
         "rg" => is_safe_ripgrep(words),
 
@@ -225,7 +224,6 @@ fn is_safe_ripgrep(words: &[String]) -> bool {
 mod tests {
     use super::*;
     use crate::powershell::try_find_pwsh_executable_blocking;
-    use pretty_assertions::assert_eq;
     use std::string::ToString;
 
     /// Converts a slice of string literals into owned `String`s for the tests.
@@ -234,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_safe_powershell_wrappers() {
+    fn classifies_powershell_wrappers() {
         assert!(is_safe_command_windows(&vec_str(&[
             "powershell.exe",
             "-NoLogo",
@@ -242,7 +240,7 @@ mod tests {
             "Get-ChildItem -Path .",
         ])));
 
-        assert!(is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_command_windows(&vec_str(&[
             "powershell.exe",
             "-NoProfile",
             "-Command",
@@ -290,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn allows_read_only_pipelines_and_git_usage() {
+    fn allows_read_only_pipelines() {
         let Some(pwsh) = try_find_pwsh_executable_blocking() else {
             return;
         };
@@ -313,7 +311,7 @@ mod tests {
             "Get-Content foo.rs | Select-Object -Skip 200".to_string()
         ]));
 
-        assert!(is_safe_command_windows(&[
+        assert!(!is_safe_command_windows(&[
             pwsh.clone(),
             "-Command".to_string(),
             "git show HEAD:foo.rs".to_string()
@@ -330,86 +328,6 @@ mod tests {
             "-Command".to_string(),
             "Get-Item foo.rs | Select-Object Length".to_string()
         ]));
-    }
-
-    #[test]
-    fn rejects_git_global_override_options() {
-        let Some(pwsh) = try_find_pwsh_executable_blocking() else {
-            return;
-        };
-
-        let pwsh: String = pwsh.as_path().to_str().unwrap().into();
-        for script in [
-            "git -c core.pager=cat show HEAD:foo.rs",
-            "git --config-env core.pager=PAGER show HEAD:foo.rs",
-            "git --config-env=core.pager=PAGER show HEAD:foo.rs",
-            "git --git-dir .evil-git diff HEAD~1..HEAD",
-            "git --git-dir=.evil-git diff HEAD~1..HEAD",
-            "git --work-tree . status",
-            "git --work-tree=. status",
-            "git --exec-path .git/helpers show HEAD:foo.rs",
-            "git --exec-path=.git/helpers show HEAD:foo.rs",
-            "git --namespace attacker show HEAD:foo.rs",
-            "git --namespace=attacker show HEAD:foo.rs",
-            "git --super-prefix attacker/ show HEAD:foo.rs",
-            "git --super-prefix=attacker/ show HEAD:foo.rs",
-        ] {
-            assert!(
-                !is_safe_command_windows(&[
-                    pwsh.clone(),
-                    "-NoLogo".to_string(),
-                    "-NoProfile".to_string(),
-                    "-Command".to_string(),
-                    script.to_string(),
-                ]),
-                "expected {script:?} to require approval due to unsafe git global option",
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_git_subcommand_options_with_side_effects() {
-        let results: Vec<(&str, bool)> = [
-            "git diff --output codex_poc.txt",
-            "git diff --ext-diff HEAD",
-            "git log --textconv -1",
-            "git show --output=codex_poc.txt HEAD",
-            "git cat-file --filters HEAD:a.txt",
-        ]
-        .into_iter()
-        .map(|script| {
-            (
-                script,
-                is_safe_command_windows(&[
-                    "powershell.exe".to_string(),
-                    "-NoProfile".to_string(),
-                    "-Command".to_string(),
-                    script.to_string(),
-                ]),
-            )
-        })
-        .collect();
-
-        assert_eq!(
-            vec![
-                ("git diff --output codex_poc.txt", false),
-                ("git diff --ext-diff HEAD", false),
-                ("git log --textconv -1", false),
-                ("git show --output=codex_poc.txt HEAD", false),
-                ("git cat-file --filters HEAD:a.txt", false),
-            ],
-            results
-        );
-    }
-
-    #[test]
-    fn rejects_stop_parsing_git_forms() {
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-NoProfile",
-            "-Command",
-            "git log --% HEAD --output=codex_poc.txt",
-        ])));
     }
 
     #[test]
