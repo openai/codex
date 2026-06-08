@@ -85,6 +85,44 @@ impl AgentControl {
             Err(CodexErr::AgentLimitReached { max_threads })
         }
     }
+
+    pub(crate) async fn maybe_start_v2_pending_work(&self) {
+        let Ok(state) = self.upgrade() else {
+            return;
+        };
+        for metadata in self.state.live_agents() {
+            let Some(thread_id) = metadata.agent_id else {
+                continue;
+            };
+            let Ok(thread) = state.get_thread(thread_id).await else {
+                continue;
+            };
+            let multi_agent_version = match thread.multi_agent_version() {
+                Some(multi_agent_version) => multi_agent_version,
+                None => {
+                    let config = thread.codex.session.get_config().await;
+                    config.multi_agent_version_from_features()
+                }
+            };
+            if !uses_v2_execution_slot(multi_agent_version, &thread.session_source) {
+                continue;
+            }
+            if !thread
+                .codex
+                .session
+                .input_queue
+                .has_trigger_turn_mailbox_items()
+                .await
+            {
+                continue;
+            }
+            thread
+                .codex
+                .session
+                .maybe_start_turn_for_pending_work()
+                .await;
+        }
+    }
 }
 
 impl V2ExecutionSlots {
