@@ -182,8 +182,10 @@ async fn mark_thread_interrupted(thread: &CodexThread) {
         .send_event(
             turn.as_ref(),
             EventMsg::TurnAborted(TurnAbortedEvent {
-                turn_id: turn.sub_id.clone(),
+                turn_id: Some(turn.sub_id.clone()),
                 reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
             }),
         )
         .await;
