@@ -21,7 +21,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
-use codex_sandboxing::SandboxTransformError;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
@@ -426,8 +425,9 @@ impl<'a> SandboxAttempt<'a> {
         command: SandboxCommand,
         options: ExecOptions,
         network: Option<&NetworkProxy>,
-    ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
-        self.manager
+    ) -> codex_protocol::error::Result<crate::sandboxing::ExecRequest> {
+        let exec_request = self
+            .manager
             .transform(SandboxTransformRequest {
                 command,
                 permissions: self.permissions,
@@ -455,6 +455,8 @@ impl<'a> SandboxAttempt<'a> {
                     self.workspace_roots.to_vec(),
                 )
             })
+            .map_err(CodexErr::from)?;
+        crate::exec::apply_windows_sandbox_filesystem_overrides(exec_request)
     }
 }
 

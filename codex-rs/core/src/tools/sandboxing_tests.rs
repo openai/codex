@@ -1,12 +1,101 @@
 use super::*;
+use crate::exec::ExecCapturePolicy;
+use crate::exec::ExecExpiration;
+use crate::exec::WindowsSandboxFilesystemOverrides;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::hook_names::HookToolName;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxType;
+use codex_utils_absolute_path::test_support::PathBufExt;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::HashMap;
+
+#[test]
+fn shell_sandbox_attempt_applies_windows_deny_read_overrides() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let blocked = temp_dir.path().join(".env");
+    std::fs::write(&blocked, "secret").expect("write blocked file");
+    let expected_blocked = dunce::canonicalize(&blocked)
+        .expect("canonical blocked file")
+        .abs();
+    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: blocked.abs(),
+            },
+            access: FileSystemAccessMode::Deny,
+        },
+    ]);
+    let permissions = PermissionProfile::from_runtime_permissions(
+        &file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let sandbox_cwd = temp_dir.path().abs();
+    let manager = SandboxManager::new();
+    let attempt = SandboxAttempt {
+        sandbox: SandboxType::WindowsRestrictedToken,
+        permissions: &permissions,
+        enforce_managed_network: false,
+        manager: &manager,
+        sandbox_cwd: &sandbox_cwd,
+        workspace_roots: std::slice::from_ref(&sandbox_cwd),
+        codex_linux_sandbox_exe: None,
+        use_legacy_landlock: false,
+        windows_sandbox_level: WindowsSandboxLevel::Elevated,
+        windows_sandbox_private_desktop: false,
+        network_denial_cancellation_token: None,
+    };
+    let command = SandboxCommand {
+        program: "echo".into(),
+        args: vec!["ok".to_string()],
+        cwd: sandbox_cwd.clone(),
+        env: HashMap::new(),
+        additional_permissions: None,
+    };
+    let options = ExecOptions {
+        expiration: ExecExpiration::DefaultTimeout,
+        capture_policy: ExecCapturePolicy::ShellTool,
+    };
+
+    let exec_request = attempt
+        .env_for(command, options, /*network*/ None)
+        .expect("prepare shell exec request");
+
+    assert_eq!(
+        exec_request.windows_sandbox_filesystem_overrides,
+        Some(WindowsSandboxFilesystemOverrides {
+            read_roots_override: None,
+            read_roots_include_platform_defaults: false,
+            write_roots_override: None,
+            additional_deny_read_paths: vec![expected_blocked.clone()],
+            additional_deny_write_paths: vec![expected_blocked],
+        })
+    );
+}
 
 #[test]
 fn bash_permission_request_payload_omits_missing_description() {

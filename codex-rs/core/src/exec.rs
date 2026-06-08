@@ -385,7 +385,7 @@ pub fn build_exec_request(
         expiration,
         capture_policy,
     };
-    let mut exec_req = manager
+    let exec_req = manager
         .transform(SandboxTransformRequest {
             command,
             permissions: permission_profile,
@@ -414,6 +414,12 @@ pub fn build_exec_request(
             )
         })
         .map_err(CodexErr::from)?;
+    apply_windows_sandbox_filesystem_overrides(exec_req)
+}
+
+pub(crate) fn apply_windows_sandbox_filesystem_overrides(
+    mut exec_req: ExecRequest,
+) -> Result<ExecRequest> {
     let use_windows_elevated_backend = windows_sandbox_uses_elevated_backend(
         exec_req.windows_sandbox_level,
         exec_req.network.is_some(),
@@ -422,14 +428,14 @@ pub fn build_exec_request(
         resolve_windows_elevated_filesystem_overrides(
             exec_req.sandbox,
             &exec_req.permission_profile,
-            sandbox_cwd,
+            &exec_req.windows_sandbox_policy_cwd,
             use_windows_elevated_backend,
         )
     } else {
         resolve_windows_restricted_token_filesystem_overrides(
             exec_req.sandbox,
             &exec_req.permission_profile,
-            sandbox_cwd,
+            &exec_req.windows_sandbox_policy_cwd,
             exec_req.windows_sandbox_level,
         )
     }

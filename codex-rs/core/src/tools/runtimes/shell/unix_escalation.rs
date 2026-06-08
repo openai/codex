@@ -141,7 +141,7 @@ pub(super) async fn try_run_zsh_fork(
             options,
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions),
         )
-        .map_err(|err| ToolError::Codex(err.into()))?;
+        .map_err(ToolError::Codex)?;
     let crate::sandboxing::ExecRequest {
         command,
         cwd: sandbox_cwd,
