@@ -244,7 +244,8 @@ impl App {
                         is_closed,
                     );
                 }
-                self.agent_navigation.set_running(thread_id, false);
+                self.agent_navigation
+                    .set_running(thread_id, /*is_running*/ false);
                 true
             }
         }
