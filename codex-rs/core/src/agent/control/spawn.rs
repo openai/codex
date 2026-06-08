@@ -537,12 +537,14 @@ impl AgentControl {
         let Ok(resumed_thread) = state.get_thread(resumed_thread_id).await else {
             return Ok(resumed_thread_id);
         };
-        if resumed_thread.multi_agent_version() == Some(MultiAgentVersion::V2) {
-            return Ok(resumed_thread_id);
-        }
         let Some(state_db_ctx) = resumed_thread.state_db() else {
             return Ok(resumed_thread_id);
         };
+        if resumed_thread.multi_agent_version() == Some(MultiAgentVersion::V2) {
+            self.register_v2_open_descendants_from_store(&state_db_ctx, thread_id)
+                .await;
+            return Ok(resumed_thread_id);
+        }
 
         let mut resume_queue = VecDeque::from([(thread_id, root_depth)]);
         while let Some((parent_thread_id, parent_depth)) = resume_queue.pop_front() {
@@ -596,6 +598,74 @@ impl AgentControl {
         }
 
         Ok(resumed_thread_id)
+    }
+
+    async fn register_v2_open_descendants_from_store(
+        &self,
+        state_db_ctx: &codex_rollout::state_db::StateDbHandle,
+        root_thread_id: ThreadId,
+    ) {
+        let mut resume_queue = VecDeque::from([root_thread_id]);
+        while let Some(parent_thread_id) = resume_queue.pop_front() {
+            let child_ids = match state_db_ctx
+                .list_thread_spawn_children_with_status(
+                    parent_thread_id,
+                    DirectionalThreadSpawnEdgeStatus::Open,
+                )
+                .await
+            {
+                Ok(child_ids) => child_ids,
+                Err(err) => {
+                    warn!(
+                        "failed to load persisted thread-spawn children for {parent_thread_id}: {err}"
+                    );
+                    continue;
+                }
+            };
+
+            for child_thread_id in child_ids {
+                let child_metadata = match state_db_ctx.get_thread(child_thread_id).await {
+                    Ok(Some(child_metadata)) => child_metadata,
+                    Ok(None) => {
+                        warn!("missing thread metadata for open V2 child {child_thread_id}");
+                        resume_queue.push_back(child_thread_id);
+                        continue;
+                    }
+                    Err(err) => {
+                        warn!(
+                            "failed to load thread metadata for open V2 child {child_thread_id}: {err}"
+                        );
+                        resume_queue.push_back(child_thread_id);
+                        continue;
+                    }
+                };
+                let agent_path = child_metadata
+                    .agent_path
+                    .as_deref()
+                    .and_then(|agent_path| AgentPath::try_from(agent_path).ok())
+                    .or_else(|| {
+                        serde_json::from_str::<SessionSource>(&child_metadata.source)
+                            .or_else(|_| {
+                                serde_json::from_value(serde_json::Value::String(
+                                    child_metadata.source.clone(),
+                                ))
+                            })
+                            .ok()
+                            .and_then(|source| source.get_agent_path())
+                    });
+                if agent_path.is_none() {
+                    warn!("open V2 child {child_thread_id} is missing an agent path");
+                }
+                self.state.register_restored_thread(AgentMetadata {
+                    agent_id: Some(child_thread_id),
+                    agent_path,
+                    agent_nickname: child_metadata.agent_nickname,
+                    agent_role: child_metadata.agent_role,
+                    last_task_message: None,
+                });
+                resume_queue.push_back(child_thread_id);
+            }
+        }
     }
 
     async fn resume_single_agent_from_rollout(
