@@ -208,16 +208,6 @@ fn codex_apps_mcp_url_for_base_url_keeps_existing_paths() {
 }
 
 #[test]
-fn codex_apps_mcp_url_uses_legacy_codex_apps_path() {
-    let config = test_mcp_config(PathBuf::from("/tmp"));
-
-    assert_eq!(
-        codex_apps_mcp_url(&config),
-        "https://chatgpt.com/backend-api/wham/apps"
-    );
-}
-
-#[test]
 fn codex_apps_server_config_uses_legacy_codex_apps_path() {
     let mut config = test_mcp_config(PathBuf::from("/tmp"));
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();

@@ -120,12 +120,12 @@ impl McpRequestProcessor {
             timeout_secs,
         } = params;
 
-        let configured_servers = self
+        let runtime_servers = self
             .thread_manager
             .mcp_manager()
-            .configured_servers(&config)
+            .runtime_servers(&config)
             .await;
-        let Some(server) = configured_servers.get(&name) else {
+        let Some(server) = runtime_servers.get(&name) else {
             return Err(invalid_request(format!(
                 "No MCP server named '{name}' found."
             )));

@@ -396,13 +396,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     snapshot
 }
 
-pub(crate) fn codex_apps_mcp_url(config: &McpConfig) -> String {
-    codex_apps_mcp_url_for_base_url(
-        &config.chatgpt_base_url,
-        config.apps_mcp_path_override.as_deref(),
-    )
-}
-
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
 /// MCP server/tool names are user-controlled, so sanitize the fully-qualified
 /// name we expose to the model by replacing any disallowed character with `_`.

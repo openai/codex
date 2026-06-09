@@ -6,7 +6,7 @@ pub enum McpServerContribution {
     /// Adds or replaces a named MCP server.
     Set {
         name: String,
-        config: McpServerConfig,
+        config: Box<McpServerConfig>,
     },
     /// Removes a named MCP server.
     Remove { name: String },

@@ -97,7 +97,7 @@ impl McpManager {
         for contribution in contributions {
             match contribution {
                 McpServerContribution::Set { name, config } => {
-                    servers.insert(name.clone(), config.clone());
+                    servers.insert(name.clone(), config.as_ref().clone());
                 }
                 McpServerContribution::Remove { name } => {
                     servers.remove(name);

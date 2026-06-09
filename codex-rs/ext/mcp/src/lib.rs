@@ -17,11 +17,11 @@ impl McpServerContributor<Config> for HostedAppsMcpExtension {
 
         vec![McpServerContribution::Set {
             name,
-            config: codex_apps_mcp_server_config(
+            config: Box::new(codex_apps_mcp_server_config(
                 &config.chatgpt_base_url,
                 config.apps_mcp_path_override.as_deref(),
                 config.apps_mcp_product_sku.as_deref(),
-            ),
+            )),
         }]
     }
 }
