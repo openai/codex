@@ -19,7 +19,9 @@ impl App {
             .map(|(thread_id, _)| thread_id)
             .collect();
         for thread_id in path_backed_thread_ids {
-            if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+            if let Some(channel) = self.thread_event_channels.get(&thread_id)
+                && channel.attachment() == ThreadEventAttachment::Live
+            {
                 let is_running = channel.store.lock().await.active_turn_id().is_some();
                 self.agent_navigation.set_running(thread_id, is_running);
             } else {
@@ -308,6 +310,9 @@ impl App {
             }
         };
         let channel = self.ensure_thread_channel(thread_id);
+        if !live_attached {
+            channel.mark_replay_only();
+        }
         let mut store = channel.store.lock().await;
         store.set_session(session, turns);
         Ok(live_attached)
