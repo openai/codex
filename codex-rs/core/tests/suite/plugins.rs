@@ -138,6 +138,25 @@ async fn build_apps_enabled_plugin_test_codex(
         .expect("create new conversation"))
 }
 
+async fn build_api_key_plugin_test_codex(
+    server: &MockServer,
+    codex_home: Arc<TempDir>,
+) -> Result<TestCodex> {
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow feature update");
+        });
+    Ok(builder
+        .build(server)
+        .await
+        .expect("create new conversation"))
+}
+
 fn tool_names(body: &serde_json::Value) -> Vec<String> {
     body.get("tools")
         .and_then(serde_json::Value::as_array)
@@ -321,6 +340,64 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     assert!(
         calendar_description.contains("This tool is part of plugin `sample`."),
         "expected plugin app provenance in tool description: {calendar_description:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_plugin_mentions_route_guidance_to_mcp_for_api_key_auth() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let rmcp_test_server_bin = match stdio_server_bin() {
+        Ok(bin) => bin,
+        Err(err) => {
+            eprintln!("test_stdio_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
+    write_plugin_skill_plugin(codex_home.as_ref());
+    write_plugin_mcp_plugin(codex_home.as_ref(), &rmcp_test_server_bin);
+    write_plugin_app_plugin(codex_home.as_ref());
+
+    let test_codex = build_api_key_plugin_test_codex(&server, codex_home).await?;
+    let codex = Arc::clone(&test_codex.codex);
+    wait_for_mcp_server(&codex, "sample").await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![codex_protocol::user_input::UserInput::Mention {
+                name: "sample".into(),
+                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = mock.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    assert!(
+        developer_messages
+            .iter()
+            .any(|text| text.contains("MCP servers from this plugin")),
+        "expected plugin MCP guidance for API-key auth: {developer_messages:?}"
+    );
+    assert!(
+        developer_messages
+            .iter()
+            .all(|text| !text.contains("Apps from this plugin")),
+        "did not expect plugin app guidance for API-key auth: {developer_messages:?}"
     );
 
     Ok(())

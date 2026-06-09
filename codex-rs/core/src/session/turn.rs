@@ -540,8 +540,12 @@ async fn build_skills_and_plugins(
         &available_connectors,
         &skill_name_counts_lower,
     );
-    let plugin_items =
-        build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    let plugin_items = build_plugin_injections(
+        &mentioned_plugins,
+        &mcp_tools,
+        &available_connectors,
+        sess.services.auth_manager.auth_mode(),
+    );
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&user_input);
     explicitly_enabled_connectors.extend(skill_connector_ids);
     let connector_names_by_id = available_connectors
