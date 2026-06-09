@@ -2031,10 +2031,9 @@ async fn assert_write_stdin_ctrl_c_interrupts_non_tty_session(
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
+        if let Err(err) = config.features.enable(Feature::UnifiedExec) {
+            panic!("test config should allow feature update: {err}");
+        }
     });
     let test = builder.build_with_remote_env(&server).await?;
 
@@ -2101,7 +2100,7 @@ async fn assert_write_stdin_ctrl_c_interrupts_non_tty_session(
 
     let start_output = outputs
         .get(&start_call_id)
-        .expect("missing start output for exec_command");
+        .with_context(|| format!("missing start output for exec_command {start_call_id}"))?;
     assert_eq!(
         start_output.process_id.as_deref(),
         Some("1000"),
@@ -2119,7 +2118,7 @@ async fn assert_write_stdin_ctrl_c_interrupts_non_tty_session(
 
     let interrupt_output = outputs
         .get(&interrupt_call_id)
-        .expect("missing interrupt output for write_stdin");
+        .with_context(|| format!("missing interrupt output for write_stdin {interrupt_call_id}"))?;
     assert!(
         interrupt_output.process_id.is_none(),
         "interrupted process should be cleared from the session map"
