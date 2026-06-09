@@ -75,6 +75,21 @@ from .generated.v2_all import (
 )
 from .models import InitializeResponse, JsonObject, Notification
 
+_MAX_THREAD_GOAL_OBJECTIVE_CHARS = 4_000
+
+
+def _normalize_goal_objective(objective: str) -> str:
+    if not isinstance(objective, str):
+        raise TypeError("goal objective must be a string")
+    objective = objective.strip()
+    if not objective:
+        raise ValueError("goal objective must not be empty")
+    if len(objective) > _MAX_THREAD_GOAL_OBJECTIVE_CHARS:
+        raise ValueError(
+            f"goal objective must be at most {_MAX_THREAD_GOAL_OBJECTIVE_CHARS} characters"
+        )
+    return objective
+
 
 class Codex:
     """Synchronous client for creating threads and running Codex turns.
@@ -574,6 +589,10 @@ class Thread:
         finally:
             stream.close()
 
+    def run_goal(self, objective: str) -> TurnResult:
+        """Run a persisted goal to completion as one logical turn."""
+        return self.start_goal(objective).run()
+
     # BEGIN GENERATED: Thread.flat_methods
     def turn(
         self,
@@ -610,6 +629,19 @@ class Thread:
         return TurnHandle(self._client, self.id, turn.turn.id)
 
     # END GENERATED: Thread.flat_methods
+
+    def start_goal(self, objective: str) -> TurnHandle:
+        """Activate a persisted goal and return its logical turn handle."""
+        objective = _normalize_goal_objective(objective)
+        state, turn_id = self._client.start_goal_operation(self.id, objective)
+        handle = TurnHandle(self._client, self.id, turn_id)
+        handle._goal = _GoalTurnHandleAdapter(
+            client=self._client,
+            state=state,
+            thread_id=self.id,
+            logical_turn_id=turn_id,
+        )
+        return handle
 
     def read(self, *, include_turns: bool = False) -> ThreadReadResponse:
         """Read this thread, optionally including its turn history."""
@@ -662,6 +694,11 @@ class AsyncThread:
         finally:
             await stream.aclose()
 
+    async def run_goal(self, objective: str) -> TurnResult:
+        """Run a persisted goal asynchronously as one logical turn."""
+        goal = await self.start_goal(objective)
+        return await goal.run()
+
     # BEGIN GENERATED: AsyncThread.flat_methods
     async def turn(
         self,
@@ -703,6 +740,20 @@ class AsyncThread:
         return AsyncTurnHandle(self._codex, self.id, turn.turn.id)
 
     # END GENERATED: AsyncThread.flat_methods
+
+    async def start_goal(self, objective: str) -> AsyncTurnHandle:
+        """Activate a persisted goal and return its async logical turn handle."""
+        objective = _normalize_goal_objective(objective)
+        await self._codex._ensure_initialized()
+        state, turn_id = await self._codex._client.start_goal_operation(self.id, objective)
+        handle = AsyncTurnHandle(self._codex, self.id, turn_id)
+        handle._goal = _AsyncGoalTurnHandleAdapter(
+            client=self._codex._client,
+            state=state,
+            thread_id=self.id,
+            logical_turn_id=turn_id,
+        )
+        return handle
 
     async def read(self, *, include_turns: bool = False) -> ThreadReadResponse:
         """Read this thread, optionally including its turn history."""

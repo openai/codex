@@ -72,6 +72,17 @@ with Codex() as codex:
 Use `Thread.turn(...)` when you need a `TurnHandle` for streaming, steering,
 or interrupting an active turn.
 
+For a longer objective on an idle, persisted thread, run a dedicated goal
+operation:
+
+```python
+result = thread.run_goal("Improve the benchmark coverage in this repository.")
+```
+
+A goal may continue working internally, but it streams and returns as one
+logical turn. It uses the thread's existing configuration and replaces any
+stored goal.
+
 ## 4. Choose Sandbox Access
 
 Use one enum for the initial thread and later turn overrides:
