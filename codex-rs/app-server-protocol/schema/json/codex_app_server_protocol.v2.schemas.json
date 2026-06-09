@@ -13696,7 +13696,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional analytics source classification for this thread."
+          "description": "Optional source classification for this thread. `side` threads do not receive multi-agent collaboration tools."
         },
         "turns": {
           "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
@@ -13912,7 +13912,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional client-supplied analytics source classification for this forked thread."
+          "description": "Optional client-supplied source classification for this forked thread. Threads marked as `side` do not receive multi-agent collaboration tools."
         }
       },
       "required": [
@@ -15876,6 +15876,7 @@
     "ThreadSource": {
       "enum": [
         "user",
+        "side",
         "subagent",
         "memory_consolidation"
       ],
@@ -16014,7 +16015,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional client-supplied analytics source classification for this thread."
+          "description": "Optional client-supplied source classification for this thread. Threads marked as `side` do not receive multi-agent collaboration tools."
         }
       },
       "title": "ThreadStartParams",

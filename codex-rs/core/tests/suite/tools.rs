@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::StartThreadOptions;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
@@ -16,6 +17,11 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSource;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -30,6 +36,8 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
@@ -49,6 +57,85 @@ fn tool_names(body: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn side_threads_omit_multi_agent_tools_from_requests() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("multi-agent v2 should enable for test");
+        config
+            .features
+            .enable(Feature::SpawnCsv)
+            .expect("spawn CSV should enable for test");
+    });
+    let test = builder.build(&server).await?;
+    let side_thread = test
+        .thread_manager
+        .start_thread_with_options(StartThreadOptions {
+            config: test.config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: Some(ThreadSource::Side),
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+        })
+        .await?;
+
+    side_thread
+        .thread
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "which tools are available?".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&side_thread.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let tools = tool_names(&response_mock.single_request().body_json());
+    assert!(tools.contains(&"update_plan".to_string()));
+    let present_multi_agent_tools = tools
+        .into_iter()
+        .filter(|tool| {
+            matches!(
+                tool.as_str(),
+                "spawn_agent"
+                    | "send_message"
+                    | "followup_task"
+                    | "wait_agent"
+                    | "interrupt_agent"
+                    | "list_agents"
+                    | "spawn_agents_on_csv"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(present_multi_agent_tools, Vec::<String>::new());
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

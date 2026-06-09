@@ -2534,6 +2534,7 @@ pub enum SessionSource {
 #[ts(rename_all = "snake_case")]
 pub enum ThreadSource {
     User,
+    Side,
     Subagent,
     MemoryConsolidation,
 }
@@ -2542,6 +2543,7 @@ impl ThreadSource {
     pub fn as_str(self) -> &'static str {
         match self {
             ThreadSource::User => "user",
+            ThreadSource::Side => "side",
             ThreadSource::Subagent => "subagent",
             ThreadSource::MemoryConsolidation => "memory_consolidation",
         }
@@ -2560,6 +2562,7 @@ impl FromStr for ThreadSource {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "user" => Ok(ThreadSource::User),
+            "side" => Ok(ThreadSource::Side),
             "subagent" => Ok(ThreadSource::Subagent),
             "memory_consolidation" => Ok(ThreadSource::MemoryConsolidation),
             other => Err(format!("unknown thread source: {other}")),

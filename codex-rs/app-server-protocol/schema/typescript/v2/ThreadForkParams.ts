@@ -25,6 +25,7 @@ model?: string | null, modelProvider?: string | null, serviceTier?: string | nul
  * and subsequent turns.
  */
 approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, ephemeral?: boolean, /**
- * Optional client-supplied analytics source classification for this forked thread.
+ * Optional client-supplied source classification for this forked thread. Threads marked as
+ * `side` do not receive multi-agent collaboration tools.
  */
 threadSource?: ThreadSource | null};

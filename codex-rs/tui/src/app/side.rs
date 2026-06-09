@@ -564,7 +564,10 @@ impl App {
             .await;
 
         let fork_config = self.side_fork_config();
-        match app_server.fork_thread(fork_config, parent_thread_id).await {
+        match app_server
+            .fork_thread(fork_config, parent_thread_id, ThreadSource::Side)
+            .await
+        {
             Ok(forked) => {
                 let child_thread_id = forked.session.thread_id;
                 let channel = self.ensure_thread_channel(child_thread_id);

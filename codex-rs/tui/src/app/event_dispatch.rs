@@ -144,7 +144,10 @@ impl App {
                 if let Some(thread_id) = self.chat_widget.thread_id() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
-                    match app_server.fork_thread(self.config.clone(), thread_id).await {
+                    match app_server
+                        .fork_thread(self.config.clone(), thread_id, ThreadSource::User)
+                        .await
+                    {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;
                             match self

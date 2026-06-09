@@ -109,6 +109,7 @@
     "ThreadSource": {
       "enum": [
         "user",
+        "side",
         "subagent",
         "memory_consolidation"
       ],
@@ -253,7 +254,7 @@
           "type": "null"
         }
       ],
-      "description": "Optional client-supplied analytics source classification for this thread."
+      "description": "Optional client-supplied source classification for this thread. Threads marked as `side` do not receive multi-agent collaboration tools."
     }
   },
   "title": "ThreadStartParams",

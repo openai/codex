@@ -126,6 +126,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -960,7 +961,7 @@ impl App {
                     &[("source", "cli_subcommand")],
                 );
                 let forked = app_server
-                    .fork_thread(config.clone(), target_session.thread_id)
+                    .fork_thread(config.clone(), target_session.thread_id, ThreadSource::User)
                     .await
                     .map_err(|err| session_start_error("fork", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {
