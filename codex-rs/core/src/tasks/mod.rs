@@ -550,11 +550,22 @@ impl Session {
         true
     }
 
-    async fn drain_guardian_reviews(&self, drain: crate::guardian::GuardianReviewDrain) {
-        if drain.drain().await == crate::guardian::GuardianReviewDrainOutcome::Forced {
-            self.guardian_review_session
-                .shutdown_in_background(&self.services.runtime_handle);
+    async fn drain_guardian_reviews(
+        &self,
+        turn_context: &TurnContext,
+        drain: crate::guardian::GuardianReviewDrain,
+    ) {
+        let crate::guardian::GuardianReviewDrainOutcome::Forced(events) = drain.drain().await
+        else {
+            return;
+        };
+        for mut event in events {
+            event.completed_at_ms = Some(crate::turn_timing::now_unix_timestamp_ms());
+            self.send_event(turn_context, EventMsg::GuardianAssessment(event))
+                .await;
         }
+        self.guardian_review_session
+            .shutdown_in_background(&self.services.runtime_handle);
     }
 
     pub async fn on_task_finished(
@@ -577,7 +588,7 @@ impl Session {
         let Some(turn_state) = turn_state else {
             return;
         };
-        self.drain_guardian_reviews(turn_context.guardian_reviews.close())
+        self.drain_guardian_reviews(turn_context.as_ref(), turn_context.guardian_reviews.close())
             .await;
         let pending_input = self
             .input_queue
@@ -797,7 +808,8 @@ impl Session {
         let task_already_cancelled = task.cancellation_token.is_cancelled();
         task.cancellation_token.cancel();
         if task_already_cancelled {
-            self.drain_guardian_reviews(guardian_drain).await;
+            self.drain_guardian_reviews(task.turn_context.as_ref(), guardian_drain)
+                .await;
             return;
         }
 
@@ -824,7 +836,8 @@ impl Session {
         session_task
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
-        self.drain_guardian_reviews(guardian_drain).await;
+        self.drain_guardian_reviews(task.turn_context.as_ref(), guardian_drain)
+            .await;
 
         if reason == TurnAbortReason::Interrupted
             && let Some(marker) = interrupted_turn_history_marker(

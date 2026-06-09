@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_protocol::protocol::GuardianAssessmentEvent;
 use tokio::runtime::Handle;
 use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
@@ -18,12 +19,41 @@ const GUARDIAN_REVIEW_DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
 #[derive(Debug, PartialEq)]
 pub(crate) enum GuardianReviewDrainOutcome {
     Drained,
-    Forced,
+    Forced(Vec<GuardianAssessmentEvent>),
 }
 
 #[derive(Debug)]
 struct TrackedGuardianReview {
     abort_handle: AbortHandle,
+    lifecycle: GuardianReviewLifecycle,
+}
+
+#[derive(Clone, Debug, Default)]
+struct GuardianReviewLifecycle {
+    fallback: Arc<Mutex<Option<GuardianAssessmentEvent>>>,
+}
+
+impl GuardianReviewLifecycle {
+    fn mark_started(&self, fallback: GuardianAssessmentEvent) {
+        *self
+            .fallback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fallback);
+    }
+
+    fn mark_terminal(&self) {
+        self.fallback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
+    fn take_fallback(&self) -> Option<GuardianAssessmentEvent> {
+        self.fallback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -58,12 +88,14 @@ impl GuardianReviewTaskOwner {
             owner: Arc::clone(self),
             cancellation_token: self.cancellation_token.child_token(),
             committed: Arc::new(AtomicBool::new(false)),
+            lifecycle: GuardianReviewLifecycle::default(),
         })
     }
 
     pub(crate) fn spawn<F>(
         self: &Arc<Self>,
         runtime_handle: &Handle,
+        activity: &GuardianReviewActivity,
         future: F,
     ) -> Option<JoinHandle<F::Output>>
     where
@@ -78,6 +110,7 @@ impl GuardianReviewTaskOwner {
         let mut state = state;
         state.reviews.push(TrackedGuardianReview {
             abort_handle: task.abort_handle(),
+            lifecycle: activity.lifecycle.clone(),
         });
         drop(state);
         Some(task)
@@ -104,11 +137,20 @@ pub(crate) struct GuardianReviewActivity {
     owner: Arc<GuardianReviewTaskOwner>,
     cancellation_token: CancellationToken,
     committed: Arc<AtomicBool>,
+    lifecycle: GuardianReviewLifecycle,
 }
 
 impl GuardianReviewActivity {
     pub(crate) fn cancellation_token(&self) -> CancellationToken {
         self.cancellation_token.clone()
+    }
+
+    pub(crate) fn mark_started(&self, fallback: GuardianAssessmentEvent) {
+        self.lifecycle.mark_started(fallback);
+    }
+
+    pub(crate) fn mark_terminal(&self) {
+        self.lifecycle.mark_terminal();
     }
 
     pub(crate) fn cancel(&self) -> bool {
@@ -164,7 +206,13 @@ impl GuardianReviewDrain {
             }
             self.owner.tasks.wait().await;
             warn!("timed out waiting for Guardian reviews to stop");
-            GuardianReviewDrainOutcome::Forced
+        }
+        let forced_aborts: Vec<_> = reviews
+            .into_iter()
+            .filter_map(|review| review.lifecycle.take_fallback())
+            .collect();
+        if timed_out || !forced_aborts.is_empty() {
+            GuardianReviewDrainOutcome::Forced(forced_aborts)
         } else {
             GuardianReviewDrainOutcome::Drained
         }

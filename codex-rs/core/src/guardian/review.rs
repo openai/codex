@@ -286,24 +286,28 @@ async fn run_guardian_review(
         GUARDIAN_REVIEW_TIMEOUT.as_millis() as u64,
     );
     let started_at_ms = review_tracking.started_at_ms.try_into().unwrap_or_default();
+    let started_event = GuardianAssessmentEvent {
+        id: review_id.clone(),
+        target_item_id: target_item_id.clone(),
+        turn_id: assessment_turn_id.clone(),
+        started_at_ms,
+        completed_at_ms: None,
+        status: GuardianAssessmentStatus::InProgress,
+        risk_level: None,
+        user_authorization: None,
+        rationale: None,
+        decision_source: None,
+        action: action_summary.clone(),
+    };
+    let abort_fallback = GuardianAssessmentEvent {
+        status: GuardianAssessmentStatus::Aborted,
+        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+        ..started_event.clone()
+    };
     session
-        .send_event(
-            turn.as_ref(),
-            EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: review_id.clone(),
-                target_item_id: target_item_id.clone(),
-                turn_id: assessment_turn_id.clone(),
-                started_at_ms,
-                completed_at_ms: None,
-                status: GuardianAssessmentStatus::InProgress,
-                risk_level: None,
-                user_authorization: None,
-                rationale: None,
-                decision_source: None,
-                action: action_summary.clone(),
-            }),
-        )
+        .send_event(turn.as_ref(), EventMsg::GuardianAssessment(started_event))
         .await;
+    review_context.activity.mark_started(abort_fallback);
 
     if cancellation_token.is_cancelled() {
         let completed_at_ms = now_unix_timestamp_ms();
@@ -338,6 +342,7 @@ async fn run_guardian_review(
                 }),
             )
             .await;
+        review_context.activity.mark_terminal();
         record_guardian_non_denial(&session, &assessment_turn_id).await;
         return ReviewDecision::Abort;
     }
@@ -457,6 +462,7 @@ async fn run_guardian_review(
                         }),
                     )
                     .await;
+                review_context.activity.mark_terminal();
                 record_guardian_non_denial(&session, &assessment_turn_id).await;
                 return ReviewDecision::TimedOut;
             }
@@ -492,6 +498,7 @@ async fn run_guardian_review(
                         }),
                     )
                     .await;
+                review_context.activity.mark_terminal();
                 record_guardian_non_denial(&session, &assessment_turn_id).await;
                 return ReviewDecision::Abort;
             }
@@ -590,6 +597,8 @@ async fn run_guardian_review(
             }),
         )
         .await;
+    review_context.activity.mark_terminal();
+
     if count_denial_for_circuit_breaker {
         record_guardian_denial(&session, &turn, &assessment_turn_id).await;
     } else {
@@ -631,17 +640,20 @@ async fn run_guardian_review_in_task(
             generation: review_generation,
         },
     );
-    let Some(review) = turn.guardian_reviews.spawn(&runtime_handle, async move {
-        tokio::pin!(review);
-        tokio::select! {
-            biased;
-            _ = request_cancel.cancelled() => {
-                cancel_activity.cancel();
-                review.await
+    let Some(review) = turn
+        .guardian_reviews
+        .spawn(&runtime_handle, &review_activity, async move {
+            tokio::pin!(review);
+            tokio::select! {
+                biased;
+                _ = request_cancel.cancelled() => {
+                    cancel_activity.cancel();
+                    review.await
+                }
+                decision = &mut review => decision,
             }
-            decision = &mut review => decision,
-        }
-    }) else {
+        })
+    else {
         return ReviewDecision::Abort;
     };
     match review.await {
