@@ -5,6 +5,7 @@ pub(crate) mod provider;
 pub(crate) mod trace_context;
 
 mod otlp;
+mod process_exit_upload;
 mod targets;
 
 use crate::metrics::Result as MetricsResult;
@@ -24,6 +25,8 @@ pub use crate::metrics::runtime_metrics::RuntimeMetricTotals;
 pub use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
 pub use crate::metrics::timer::Timer;
 pub use crate::metrics::*;
+pub use crate::process_exit_upload::ProcessExitUploadError;
+pub use crate::process_exit_upload::run_process_exit_upload_if_requested;
 pub use crate::provider::OtelProvider;
 pub use crate::trace_context::context_from_w3c_trace_context;
 pub use crate::trace_context::current_span_trace_id;

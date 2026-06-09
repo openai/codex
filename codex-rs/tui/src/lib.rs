@@ -1144,6 +1144,11 @@ pub async fn run_main(
             None
         }
     };
+    if let Some(otel) = otel.as_ref()
+        && let Some(executable) = arg0_paths.codex_self_exe.clone()
+    {
+        otel.configure_statsig_metrics_uploader(executable);
+    }
     crate::legacy_core::otel_init::record_process_start(otel.as_ref(), otel_originator.as_str());
     crate::legacy_core::otel_init::install_sqlite_telemetry(
         otel.as_ref(),

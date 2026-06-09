@@ -2323,6 +2323,7 @@ dependencies = [
  "codex-memories-write",
  "codex-model-provider",
  "codex-models-manager",
+ "codex-otel",
  "codex-plugin",
  "codex-protocol",
  "codex-responses-api-proxy",
@@ -3477,6 +3478,7 @@ dependencies = [
 name = "codex-otel"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "codex-api",
  "codex-app-server-protocol",
@@ -3486,8 +3488,10 @@ dependencies = [
  "eventsource-stream",
  "gethostname",
  "http 1.4.0",
+ "libc",
  "opentelemetry",
  "opentelemetry-appender-tracing",
+ "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
@@ -3497,12 +3501,14 @@ dependencies = [
  "serde",
  "serde_json",
  "strum_macros 0.28.0",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]

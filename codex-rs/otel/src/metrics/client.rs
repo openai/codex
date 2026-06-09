@@ -9,6 +9,8 @@ use crate::metrics::validation::validate_metric_name;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::metrics::validation::validate_tags;
+use crate::process_exit_upload::StatsigUpload;
+use crate::process_exit_upload::StatsigUploadClient;
 use codex_utils_string::sanitize_metric_tag_value;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Counter;
@@ -93,6 +95,7 @@ struct MetricsClientInner {
     duration_histograms: Mutex<HashMap<String, Histogram<f64>>>,
     runtime_reader: Option<Arc<ManualReader>>,
     default_tags: BTreeMap<String, String>,
+    process_exit_upload: Option<StatsigUpload>,
 }
 
 impl MetricsClientInner {
@@ -197,6 +200,13 @@ impl MetricsClientInner {
             .map_err(|source| MetricsError::ProviderShutdown { source })?;
         Ok(())
     }
+
+    fn shutdown_on_process_exit(&self) -> Result<()> {
+        debug!("handing off final OTEL metrics");
+        self.meter_provider
+            .shutdown()
+            .map_err(|source| MetricsError::ProviderShutdown { source })
+    }
 }
 
 /// OpenTelemetry metrics client used by Codex.
@@ -239,13 +249,18 @@ impl MetricsClient {
             )
         });
 
-        let (meter_provider, meter) = match exporter {
+        let (meter_provider, meter, process_exit_upload) = match exporter {
             MetricsExporter::InMemory(exporter) => {
-                build_provider(resource, exporter, export_interval, runtime_reader.clone())
+                let (meter_provider, meter) =
+                    build_provider(resource, exporter, export_interval, runtime_reader.clone());
+                (meter_provider, meter, None)
             }
             MetricsExporter::Otlp(exporter) => {
-                let exporter = build_otlp_metric_exporter(exporter, Temporality::Delta)?;
-                build_provider(resource, exporter, export_interval, runtime_reader.clone())
+                let (exporter, process_exit_upload) =
+                    build_otlp_metric_exporter(exporter, Temporality::Delta)?;
+                let (meter_provider, meter) =
+                    build_provider(resource, exporter, export_interval, runtime_reader.clone());
+                (meter_provider, meter, process_exit_upload)
             }
         };
 
@@ -257,6 +272,7 @@ impl MetricsClient {
             duration_histograms: Mutex::new(HashMap::new()),
             runtime_reader,
             default_tags,
+            process_exit_upload,
         })))
     }
 
@@ -319,6 +335,23 @@ impl MetricsClient {
     pub fn shutdown(&self) -> Result<()> {
         self.0.shutdown()
     }
+
+    pub(crate) fn configure_statsig_metrics_uploader(&self, executable: std::path::PathBuf) {
+        if let Some(upload) = self.0.process_exit_upload.as_ref() {
+            upload.configure_executable(executable);
+        }
+    }
+
+    pub(crate) fn prepare_process_exit_upload(&self) -> bool {
+        self.0
+            .process_exit_upload
+            .as_ref()
+            .is_some_and(StatsigUpload::prepare)
+    }
+
+    pub(crate) fn shutdown_on_process_exit(&self) -> Result<()> {
+        self.0.shutdown_on_process_exit()
+    }
 }
 
 fn os_resource_attributes() -> Vec<KeyValue> {
@@ -363,13 +396,28 @@ where
 fn build_otlp_metric_exporter(
     exporter: OtelExporter,
     temporality: Temporality,
-) -> Result<opentelemetry_otlp::MetricExporter> {
+) -> Result<(opentelemetry_otlp::MetricExporter, Option<StatsigUpload>)> {
     match exporter {
         OtelExporter::None => Err(MetricsError::ExporterDisabled),
-        OtelExporter::Statsig => build_otlp_metric_exporter(
-            crate::config::resolve_exporter(&OtelExporter::Statsig),
-            temporality,
-        ),
+        OtelExporter::Statsig => {
+            let OtelExporter::OtlpHttp {
+                endpoint,
+                headers,
+                protocol,
+                tls,
+            } = crate::config::resolve_exporter(&OtelExporter::Statsig)
+            else {
+                return Err(MetricsError::ExporterDisabled);
+            };
+            build_http_metric_exporter(
+                endpoint,
+                headers,
+                protocol,
+                tls,
+                temporality,
+                /*process_exit_upload*/ true,
+            )
+        }
         OtelExporter::OtlpGrpc {
             endpoint,
             headers,
@@ -391,47 +439,75 @@ fn build_otlp_metric_exporter(
                 None => base_tls_config,
             };
 
-            opentelemetry_otlp::MetricExporter::builder()
+            let exporter = opentelemetry_otlp::MetricExporter::builder()
                 .with_tonic()
                 .with_endpoint(endpoint)
                 .with_temporality(temporality)
                 .with_metadata(MetadataMap::from_headers(header_map))
                 .with_tls_config(tls_config)
                 .build()
-                .map_err(|source| MetricsError::ExporterBuild { source })
+                .map_err(|source| MetricsError::ExporterBuild { source })?;
+            Ok((exporter, None))
         }
         OtelExporter::OtlpHttp {
             endpoint,
             headers,
             protocol,
             tls,
-        } => {
-            debug!("Using OTLP Http exporter for metrics: {endpoint}");
-
-            let protocol = match protocol {
-                OtelHttpProtocol::Binary => Protocol::HttpBinary,
-                OtelHttpProtocol::Json => Protocol::HttpJson,
-            };
-
-            let mut exporter_builder = opentelemetry_otlp::MetricExporter::builder()
-                .with_http()
-                .with_endpoint(endpoint)
-                .with_temporality(temporality)
-                .with_protocol(protocol)
-                .with_headers(headers);
-
-            if let Some(tls) = tls.as_ref() {
-                let client =
-                    crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
-                        .map_err(|err| MetricsError::InvalidConfig {
-                            message: err.to_string(),
-                        })?;
-                exporter_builder = exporter_builder.with_http_client(client);
-            }
-
-            exporter_builder
-                .build()
-                .map_err(|source| MetricsError::ExporterBuild { source })
-        }
+        } => build_http_metric_exporter(
+            endpoint,
+            headers,
+            protocol,
+            tls,
+            temporality,
+            /*process_exit_upload*/ false,
+        ),
     }
 }
+
+fn build_http_metric_exporter(
+    endpoint: String,
+    headers: HashMap<String, String>,
+    protocol: OtelHttpProtocol,
+    tls: Option<crate::config::OtelTlsConfig>,
+    temporality: Temporality,
+    process_exit_upload: bool,
+) -> Result<(opentelemetry_otlp::MetricExporter, Option<StatsigUpload>)> {
+    debug!("Using OTLP Http exporter for metrics: {endpoint}");
+
+    let protocol = match protocol {
+        OtelHttpProtocol::Binary => Protocol::HttpBinary,
+        OtelHttpProtocol::Json => Protocol::HttpJson,
+    };
+
+    let mut exporter_builder = opentelemetry_otlp::MetricExporter::builder()
+        .with_http()
+        .with_endpoint(endpoint)
+        .with_temporality(temporality)
+        .with_protocol(protocol)
+        .with_headers(headers);
+    let upload = process_exit_upload.then(StatsigUpload::new);
+
+    if tls.is_some() || upload.is_some() {
+        let tls = tls.unwrap_or_default();
+        let client = crate::otlp::build_http_client(&tls, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
+            .map_err(|err| MetricsError::InvalidConfig {
+                message: err.to_string(),
+            })?;
+        exporter_builder = match upload.as_ref() {
+            Some(upload) => {
+                exporter_builder.with_http_client(StatsigUploadClient::new(client, upload.clone()))
+            }
+            None => exporter_builder.with_http_client(client),
+        };
+    }
+
+    let exporter = exporter_builder
+        .build()
+        .map_err(|source| MetricsError::ExporterBuild { source })?;
+    Ok((exporter, upload))
+}
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

@@ -45,6 +45,11 @@ struct TopCli {
 }
 
 fn main() -> anyhow::Result<()> {
+    if let Some(result) = codex_otel::run_process_exit_upload_if_requested() {
+        result?;
+        return Ok(());
+    }
+
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let top_cli = TopCli::parse();
         let mut inner = top_cli.inner;

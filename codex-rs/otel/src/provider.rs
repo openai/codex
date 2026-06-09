@@ -40,6 +40,7 @@ use opentelemetry_semantic_conventions as semconv;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::mem::ManuallyDrop;
+use std::path::PathBuf;
 use std::time::Duration;
 use tracing::debug;
 use tracing_subscriber::Layer;
@@ -93,9 +94,17 @@ impl OtelProvider {
     }
 
     fn shutdown_on_process_exit_with(
-        self,
+        mut self,
         spawn: impl FnOnce(Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()>,
     ) {
+        if let Some(metrics) = self.metrics.take() {
+            if metrics.prepare_process_exit_upload() {
+                let _ = metrics.shutdown_on_process_exit();
+            } else {
+                self.metrics = Some(metrics);
+            }
+        }
+
         let provider = ManuallyDrop::new(self);
         if let Err(err) = spawn(Box::new(move || {
             drop(ManuallyDrop::into_inner(provider));
@@ -134,7 +143,7 @@ impl OtelProvider {
                 settings.environment.clone(),
                 settings.service_name.clone(),
                 settings.service_version.clone(),
-                metric_exporter,
+                settings.metrics_exporter.clone(),
             );
             if settings.runtime_metrics {
                 config = config.with_runtime_reader();
@@ -221,6 +230,13 @@ impl OtelProvider {
 
     pub fn metrics(&self) -> Option<&MetricsClient> {
         self.metrics.as_ref()
+    }
+
+    /// Route built-in Statsig metric exports through detached Codex helpers.
+    pub fn configure_statsig_metrics_uploader(&self, executable: PathBuf) {
+        if let Some(metrics) = self.metrics.as_ref() {
+            metrics.configure_statsig_metrics_uploader(executable);
+        }
     }
 }
 

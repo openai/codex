@@ -919,6 +919,11 @@ fn stage_str(stage: Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
+    if let Some(result) = codex_otel::run_process_exit_upload_if_requested() {
+        result?;
+        return Ok(());
+    }
+
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         cli_main(arg0_paths).await?;
         Ok(())
