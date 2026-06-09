@@ -217,7 +217,7 @@ impl TraceReducer {
                     tool_edge_id(tool_call_id),
                     InteractionEdgeKind::AssignAgentTask,
                     target_thread_id,
-                    None,
+                    /*unresolved_spawn_thread_id*/ None,
                 ),
             (ToolCallKind::SendMessage, SubAgentActivityKind::Interacted) => self
                 .queue_sub_agent_activity_message_edge(
@@ -226,7 +226,7 @@ impl TraceReducer {
                     tool_edge_id(tool_call_id),
                     InteractionEdgeKind::SendMessage,
                     target_thread_id,
-                    None,
+                    /*unresolved_spawn_thread_id*/ None,
                 ),
             (ToolCallKind::CloseAgent, SubAgentActivityKind::Interrupted) => self
                 .upsert_close_agent_interaction(
