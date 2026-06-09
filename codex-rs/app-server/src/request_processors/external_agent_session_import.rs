@@ -182,12 +182,12 @@ impl ExternalAgentSessionImporter {
             parent_thread_id: None,
             source: source.clone(),
             thread_source: None,
-            base_instructions: BaseInstructions {
+            base_instructions: Some(BaseInstructions {
                 text: config
                     .base_instructions
                     .clone()
                     .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
-            },
+            }),
             dynamic_tools: Vec::new(),
             multi_agent_version: Some(MultiAgentVersion::V1),
             metadata: ThreadPersistenceMetadata {

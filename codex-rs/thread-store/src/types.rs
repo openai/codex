@@ -75,8 +75,11 @@ pub struct CreateThreadParams {
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
-    /// Base instructions persisted in session metadata.
-    pub base_instructions: BaseInstructions,
+    /// Fixed base instructions persisted in session metadata.
+    ///
+    /// `None` leaves model-derived instructions unresolved so the current model catalog can rebuild
+    /// them when the thread is resumed.
+    pub base_instructions: Option<BaseInstructions>,
     /// Dynamic tools available to the thread at startup.
     pub dynamic_tools: Vec<DynamicToolSpec>,
     /// Multi-agent runtime selected when the thread was created.

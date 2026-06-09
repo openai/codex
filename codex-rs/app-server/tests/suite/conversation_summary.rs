@@ -127,7 +127,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
             parent_thread_id: None,
             source: SessionSource::Cli,
             thread_source: None,
-            base_instructions: BaseInstructions::default(),
+            base_instructions: Some(BaseInstructions::default()),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
             metadata: ThreadPersistenceMetadata {

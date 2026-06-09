@@ -178,7 +178,7 @@ impl ThreadStore for InMemoryThreadStore {
             source: params.source.clone(),
             thread_source: params.thread_source,
             model_provider: Some(params.metadata.model_provider.clone()),
-            base_instructions: Some(params.base_instructions.clone()),
+            base_instructions: params.base_instructions.clone(),
             dynamic_tools: (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone()),
             memory_mode: matches!(params.metadata.memory_mode, ThreadMemoryMode::Disabled)
                 .then_some("disabled".to_string()),

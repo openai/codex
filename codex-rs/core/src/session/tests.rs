@@ -3531,7 +3531,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             parent_thread_id: None,
             source: SessionSource::Exec,
             thread_source: None,
-            base_instructions: BaseInstructions::default(),
+            base_instructions: Some(BaseInstructions::default()),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
             metadata: ThreadPersistenceMetadata {
@@ -4677,6 +4677,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     ));
     let result = Session::new(
         session_configuration,
+        BaseInstructionsOrigin::Fixed,
         Arc::clone(&config),
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
@@ -5017,6 +5018,7 @@ async fn make_session_with_config_and_rx(
 
     let session = Session::new(
         session_configuration,
+        BaseInstructionsOrigin::Fixed,
         Arc::clone(&config),
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
@@ -5118,6 +5120,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
 
     let session = Session::new(
         session_configuration,
+        BaseInstructionsOrigin::Fixed,
         Arc::clone(&config),
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
@@ -6366,7 +6369,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             parent_thread_id: None,
             source: SessionSource::Exec,
             thread_source: None,
-            base_instructions: BaseInstructions::default(),
+            base_instructions: Some(BaseInstructions::default()),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
             metadata: ThreadPersistenceMetadata {

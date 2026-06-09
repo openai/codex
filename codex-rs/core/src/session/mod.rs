@@ -216,6 +216,7 @@ pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 use self::review::spawn_review_thread;
 use self::session::AppServerClientMetadata;
+use self::session::BaseInstructionsOrigin;
 use self::session::Session;
 use self::session::SessionConfiguration;
 pub(crate) use self::session::SessionSettingsUpdate;
@@ -562,11 +563,17 @@ impl Codex {
         config
             .validate_multi_agent_v2_config()
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
-        let base_instructions = config
+        let fixed_base_instructions = config
             .base_instructions
             .clone()
-            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text));
+        let (base_instructions, base_instructions_origin) = match fixed_base_instructions {
+            Some(base_instructions) => (base_instructions, BaseInstructionsOrigin::Fixed),
+            None => (
+                model_info.get_model_instructions(config.personality),
+                BaseInstructionsOrigin::ModelDerived,
+            ),
+        };
 
         // Dynamic tools are defined at thread start and persisted in rollout session metadata.
         let dynamic_tools = if dynamic_tools.is_empty() {
@@ -629,6 +636,7 @@ impl Codex {
 
         let session = Box::pin(Session::new(
             session_configuration,
+            base_instructions_origin,
             config.clone(),
             installation_id,
             auth_manager.clone(),

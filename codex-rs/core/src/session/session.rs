@@ -16,6 +16,12 @@ use codex_protocol::protocol::TurnEnvironmentSelections;
 use std::sync::OnceLock;
 use tokio::sync::Semaphore;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BaseInstructionsOrigin {
+    Fixed,
+    ModelDerived,
+}
+
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
@@ -474,6 +480,7 @@ impl Session {
     )]
     pub(crate) async fn new(
         mut session_configuration: SessionConfiguration,
+        base_instructions_origin: BaseInstructionsOrigin,
         config: Arc<Config>,
         installation_id: String,
         auth_manager: Arc<AuthManager>,
@@ -548,8 +555,11 @@ impl Session {
                                 parent_thread_id,
                                 source: session_source,
                                 thread_source: session_configuration.thread_source,
-                                base_instructions: BaseInstructions {
-                                    text: session_configuration.base_instructions.clone(),
+                                base_instructions: match base_instructions_origin {
+                                    BaseInstructionsOrigin::Fixed => Some(BaseInstructions {
+                                        text: session_configuration.base_instructions.clone(),
+                                    }),
+                                    BaseInstructionsOrigin::ModelDerived => None,
                                 },
                                 dynamic_tools: session_configuration.dynamic_tools.clone(),
                                 multi_agent_version: initial_multi_agent_version,

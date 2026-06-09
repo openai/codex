@@ -86,7 +86,8 @@ pub enum RolloutRecorderParams {
         parent_thread_id: Option<ThreadId>,
         source: SessionSource,
         thread_source: Option<ThreadSource>,
-        base_instructions: BaseInstructions,
+        /// Fixed instructions to persist; model-derived instructions remain unresolved.
+        base_instructions: Option<BaseInstructions>,
         dynamic_tools: Vec<DynamicToolSpec>,
         multi_agent_version: Option<MultiAgentVersion>,
     },
@@ -163,7 +164,7 @@ impl RolloutRecorderParams {
         parent_thread_id: Option<ThreadId>,
         source: SessionSource,
         thread_source: Option<ThreadSource>,
-        base_instructions: BaseInstructions,
+        base_instructions: Option<BaseInstructions>,
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> Self {
         Self::Create {
@@ -707,7 +708,7 @@ impl RolloutRecorder {
                     source,
                     thread_source,
                     model_provider: Some(config.model_provider_id().to_string()),
-                    base_instructions: Some(base_instructions),
+                    base_instructions,
                     dynamic_tools: if dynamic_tools.is_empty() {
                         None
                     } else {
