@@ -19,6 +19,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
@@ -61,6 +62,8 @@ fn tool_names(body: &Value) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn side_threads_omit_multi_agent_tools_from_requests() -> Result<()> {
+    const ROOT_USAGE_HINT: &str = "side threads must not receive root multi-agent guidance";
+
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -82,6 +85,7 @@ async fn side_threads_omit_multi_agent_tools_from_requests() -> Result<()> {
             .features
             .enable(Feature::SpawnCsv)
             .expect("spawn CSV should enable for test");
+        config.multi_agent_v2.root_agent_usage_hint_text = Some(ROOT_USAGE_HINT.to_string());
     });
     let test = builder.build(&server).await?;
     let side_thread = test
@@ -97,6 +101,10 @@ async fn side_threads_omit_multi_agent_tools_from_requests() -> Result<()> {
             environments: Vec::new(),
         })
         .await?;
+    assert_eq!(
+        side_thread.thread.multi_agent_version(),
+        Some(MultiAgentVersion::Disabled)
+    );
 
     side_thread
         .thread
@@ -116,7 +124,9 @@ async fn side_threads_omit_multi_agent_tools_from_requests() -> Result<()> {
     })
     .await;
 
-    let tools = tool_names(&response_mock.single_request().body_json());
+    let request = response_mock.single_request();
+    assert!(!request.body_json().to_string().contains(ROOT_USAGE_HINT));
+    let tools = tool_names(&request.body_json());
     assert!(tools.contains(&"update_plan".to_string()));
     let present_multi_agent_tools = tools
         .into_iter()

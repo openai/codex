@@ -17,7 +17,6 @@ use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::ThreadSource;
 use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -1042,42 +1041,6 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         direct_model_only.exposure("spawn_agent"),
         ToolExposure::DirectModelOnly
     );
-}
-
-#[tokio::test]
-async fn side_threads_do_not_expose_multi_agent_tools() {
-    let v1 = probe(|turn| {
-        set_features(turn, &[Feature::Collab, Feature::SpawnCsv]);
-        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
-        turn.thread_source = Some(ThreadSource::Side);
-    })
-    .await;
-    v1.assert_visible_lacks(&[MULTI_AGENT_V1_NAMESPACE, "spawn_agents_on_csv"]);
-    v1.assert_registered_lacks(&[
-        &ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "spawn_agent").to_string(),
-        &ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "send_input").to_string(),
-        &ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "resume_agent").to_string(),
-        &ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "wait_agent").to_string(),
-        &ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "close_agent").to_string(),
-        "spawn_agents_on_csv",
-    ]);
-
-    let v2 = probe(|turn| {
-        set_features(turn, &[Feature::MultiAgentV2, Feature::SpawnCsv]);
-        turn.thread_source = Some(ThreadSource::Side);
-    })
-    .await;
-    let v2_tools = [
-        "spawn_agent",
-        "send_message",
-        "followup_task",
-        "wait_agent",
-        "interrupt_agent",
-        "list_agents",
-        "spawn_agents_on_csv",
-    ];
-    v2.assert_visible_lacks(&v2_tools);
-    v2.assert_registered_lacks(&v2_tools);
 }
 
 #[tokio::test]

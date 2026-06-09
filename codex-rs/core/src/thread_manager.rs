@@ -1298,14 +1298,17 @@ impl ThreadManagerState {
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
-        let multi_agent_version = self
-            .initial_multi_agent_version_for_spawn(
+        let multi_agent_version = if thread_source == Some(ThreadSource::Side) {
+            Some(MultiAgentVersion::Disabled)
+        } else {
+            self.initial_multi_agent_version_for_spawn(
                 &initial_history,
                 Some(&session_source),
                 parent_thread_id,
                 forked_from_thread_id,
             )
-            .await;
+            .await
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
