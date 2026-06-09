@@ -21,6 +21,7 @@ codex-config = { workspace = true }
 codex-features = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
+codex-model-provider = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
@@ -39,6 +40,7 @@ tracing = { workspace = true, features = ["log"] }
 uuid = { workspace = true, features = ["v4", "v5"] }
 
 [dev-dependencies]
+codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
 core_test_support = { workspace = true }
 pretty_assertions = { workspace = true }

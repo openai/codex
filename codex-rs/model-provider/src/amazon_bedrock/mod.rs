@@ -68,6 +68,14 @@ impl ModelProvider for AmazonBedrockModelProvider {
         AMAZON_BEDROCK_GPT_5_4_MODEL_ID
     }
 
+    fn memory_extraction_preferred_model(&self) -> &'static str {
+        AMAZON_BEDROCK_GPT_5_4_MODEL_ID
+    }
+
+    fn memory_consolidation_preferred_model(&self) -> &'static str {
+        AMAZON_BEDROCK_GPT_5_4_MODEL_ID
+    }
+
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         None
     }
