@@ -2298,7 +2298,11 @@ async fn guardian_review_waits_until_eager_compaction_snapshot_is_committed() ->
     let (GuardianReviewOutcome::Completed(_), _) = first_outcome else {
         panic!("expected first guardian assessment");
     };
-    tokio::time::timeout(REQUEST_WAIT_TIMEOUT, server.wait_for_request_count(2)).await?;
+    tokio::time::timeout(
+        REQUEST_WAIT_TIMEOUT,
+        server.wait_for_request_count(/*count*/ 2),
+    )
+    .await?;
 
     let session_for_second = Arc::clone(&session);
     let turn_for_second = Arc::clone(&turn);
@@ -2312,9 +2316,12 @@ async fn guardian_review_waits_until_eager_compaction_snapshot_is_committed() ->
     });
 
     assert!(
-        tokio::time::timeout(BLOCKED_REVIEW_OBSERVATION, server.wait_for_request_count(3))
-            .await
-            .is_err(),
+        tokio::time::timeout(
+            BLOCKED_REVIEW_OBSERVATION,
+            server.wait_for_request_count(/*count*/ 3),
+        )
+        .await
+        .is_err(),
         "the next guardian request must not start while eager compaction is in flight"
     );
     assert!(!second_review.is_finished());
@@ -2322,7 +2329,11 @@ async fn guardian_review_waits_until_eager_compaction_snapshot_is_committed() ->
     compaction_tx
         .send(())
         .expect("eager compaction response gate should still be open");
-    tokio::time::timeout(REQUEST_WAIT_TIMEOUT, server.wait_for_request_count(3)).await?;
+    tokio::time::timeout(
+        REQUEST_WAIT_TIMEOUT,
+        server.wait_for_request_count(/*count*/ 3),
+    )
+    .await?;
 
     let committed_rollout_items = session
         .guardian_review_session
@@ -2418,7 +2429,11 @@ async fn guardian_eager_compaction_failure_falls_back_to_pre_turn_compaction() -
     let (GuardianReviewOutcome::Completed(_), _) = first_outcome else {
         panic!("expected first guardian assessment");
     };
-    tokio::time::timeout(REQUEST_WAIT_TIMEOUT, server.wait_for_request_count(2)).await?;
+    tokio::time::timeout(
+        REQUEST_WAIT_TIMEOUT,
+        server.wait_for_request_count(/*count*/ 2),
+    )
+    .await?;
 
     let second_outcome = run_followup_eager_compaction_review(
         &session,
