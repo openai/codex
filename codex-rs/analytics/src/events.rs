@@ -270,6 +270,9 @@ pub struct GuardianReviewEventParams {
     pub guardian_session_kind: Option<GuardianReviewSessionKind>,
     pub guardian_model: Option<String>,
     pub guardian_reasoning_effort: Option<String>,
+    pub guardian_catalog_contains_auto_review: Option<bool>,
+    pub guardian_catalog_contains_post_override_review_model: Option<bool>,
+    pub guardian_model_provider_id: Option<String>,
     pub had_prior_review_context: Option<bool>,
     pub review_timeout_ms: u64,
     pub tool_call_count: Option<u64>,
@@ -342,6 +345,10 @@ impl GuardianReviewTrackContext {
             guardian_session_kind: result.guardian_session_kind,
             guardian_model: result.guardian_model,
             guardian_reasoning_effort: result.guardian_reasoning_effort,
+            guardian_catalog_contains_auto_review: result.guardian_catalog_contains_auto_review,
+            guardian_catalog_contains_post_override_review_model: result
+                .guardian_catalog_contains_post_override_review_model,
+            guardian_model_provider_id: result.guardian_model_provider_id,
             had_prior_review_context: result.had_prior_review_context,
             review_timeout_ms: self.review_timeout_ms,
             // TODO(rhan-oai): plumb nested Guardian review session tool-call counts.
@@ -377,6 +384,9 @@ pub struct GuardianReviewAnalyticsResult {
     pub guardian_session_kind: Option<GuardianReviewSessionKind>,
     pub guardian_model: Option<String>,
     pub guardian_reasoning_effort: Option<String>,
+    pub guardian_catalog_contains_auto_review: Option<bool>,
+    pub guardian_catalog_contains_post_override_review_model: Option<bool>,
+    pub guardian_model_provider_id: Option<String>,
     pub had_prior_review_context: Option<bool>,
     pub reviewed_action_truncated: bool,
     pub token_usage: Option<TokenUsage>,
@@ -396,6 +406,9 @@ impl GuardianReviewAnalyticsResult {
             guardian_session_kind: None,
             guardian_model: None,
             guardian_reasoning_effort: None,
+            guardian_catalog_contains_auto_review: None,
+            guardian_catalog_contains_post_override_review_model: None,
+            guardian_model_provider_id: None,
             had_prior_review_context: None,
             reviewed_action_truncated: false,
             token_usage: None,
@@ -408,6 +421,9 @@ impl GuardianReviewAnalyticsResult {
         guardian_session_kind: GuardianReviewSessionKind,
         guardian_model: String,
         guardian_reasoning_effort: Option<String>,
+        guardian_catalog_contains_auto_review: bool,
+        guardian_catalog_contains_post_override_review_model: bool,
+        guardian_model_provider_id: String,
         had_prior_review_context: bool,
     ) -> Self {
         Self {
@@ -415,6 +431,11 @@ impl GuardianReviewAnalyticsResult {
             guardian_session_kind: Some(guardian_session_kind),
             guardian_model: Some(guardian_model),
             guardian_reasoning_effort,
+            guardian_catalog_contains_auto_review: Some(guardian_catalog_contains_auto_review),
+            guardian_catalog_contains_post_override_review_model: Some(
+                guardian_catalog_contains_post_override_review_model,
+            ),
+            guardian_model_provider_id: Some(guardian_model_provider_id),
             had_prior_review_context: Some(had_prior_review_context),
             ..Self::without_session()
         }

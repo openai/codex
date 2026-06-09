@@ -1943,6 +1943,9 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                     guardian_session_kind: None,
                     guardian_model: None,
                     guardian_reasoning_effort: None,
+                    guardian_catalog_contains_auto_review: Some(false),
+                    guardian_catalog_contains_post_override_review_model: Some(false),
+                    guardian_model_provider_id: Some("openai".to_string()),
                     had_prior_review_context: None,
                     review_timeout_ms: 90_000,
                     tool_call_count: None,
@@ -2008,6 +2011,18 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
     assert_eq!(payload[0]["event_params"]["terminal_status"], "timed_out");
     assert_eq!(payload[0]["event_params"]["failure_reason"], "timeout");
     assert_eq!(payload[0]["event_params"]["review_timeout_ms"], 90_000);
+    assert_eq!(
+        payload[0]["event_params"]["guardian_catalog_contains_auto_review"],
+        false
+    );
+    assert_eq!(
+        payload[0]["event_params"]["guardian_catalog_contains_post_override_review_model"],
+        false
+    );
+    assert_eq!(
+        payload[0]["event_params"]["guardian_model_provider_id"],
+        "openai"
+    );
 }
 
 #[tokio::test]

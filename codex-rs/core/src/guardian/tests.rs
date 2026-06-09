@@ -1313,7 +1313,12 @@ enum GuardianTestCatalog {
 async fn guardian_request_model_for_auto_review(
     auto_review_model_override: Option<String>,
     catalog: GuardianTestCatalog,
-) -> anyhow::Result<(String, String, String, serde_json::Value)> {
+) -> anyhow::Result<(
+    String,
+    String,
+    String,
+    codex_analytics::GuardianReviewAnalyticsResult,
+)> {
     let server = start_mock_server().await;
     let guardian_assessment = serde_json::json!({
         "outcome": "allow",
@@ -1355,7 +1360,7 @@ async fn guardian_request_model_for_auto_review(
     let preferred_model = turn.provider.approval_review_preferred_model().to_string();
     seed_guardian_parent_history(&session, &turn).await;
 
-    let outcome = run_guardian_review_session_for_test(
+    let (outcome, analytics_result) = run_guardian_review_session_for_test(
         Arc::clone(&session),
         turn,
         GuardianApprovalRequest::Shell {
@@ -1371,7 +1376,7 @@ async fn guardian_request_model_for_auto_review(
         /*external_cancel*/ None,
     )
     .await;
-    let (GuardianReviewOutcome::Completed(_), _) = outcome else {
+    let GuardianReviewOutcome::Completed(_) = outcome else {
         panic!("expected guardian assessment");
     };
 
@@ -1382,13 +1387,13 @@ async fn guardian_request_model_for_auto_review(
         .and_then(|value| value.as_str())
         .expect("guardian request should include a model")
         .to_string();
-    let turn_metadata = serde_json::from_str(
-        &request
-            .header("x-codex-turn-metadata")
-            .expect("guardian request should include turn metadata"),
-    )?;
 
-    Ok((request_model, parent_model, preferred_model, turn_metadata))
+    Ok((
+        request_model,
+        parent_model,
+        preferred_model,
+        analytics_result,
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1397,7 +1402,7 @@ async fn guardian_review_uses_model_catalog_override_when_preferred_review_model
     skip_if_no_network!(Ok(()));
 
     let override_model = "guardian-review-model-override".to_string();
-    let (request_model, parent_model, preferred_model, turn_metadata) =
+    let (request_model, parent_model, preferred_model, analytics_result) =
         guardian_request_model_for_auto_review(
             Some(override_model.clone()),
             GuardianTestCatalog::Bundled,
@@ -1408,16 +1413,16 @@ async fn guardian_review_uses_model_catalog_override_when_preferred_review_model
     assert_ne!(request_model, parent_model);
     assert_ne!(request_model, preferred_model);
     assert_eq!(
-        turn_metadata["guardian_catalog_contains_auto_review"],
-        "true"
+        analytics_result.guardian_catalog_contains_auto_review,
+        Some(true)
     );
     assert_eq!(
-        turn_metadata["guardian_catalog_contains_post_override_review_model"],
-        "false"
+        analytics_result.guardian_catalog_contains_post_override_review_model,
+        Some(false)
     );
     assert_eq!(
-        turn_metadata["guardian_model_provider_id"],
-        OPENAI_PROVIDER_ID
+        analytics_result.guardian_model_provider_id.as_deref(),
+        Some(OPENAI_PROVIDER_ID)
     );
 
     Ok(())
@@ -1428,7 +1433,7 @@ async fn guardian_review_uses_preferred_review_model_without_model_catalog_overr
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (request_model, parent_model, preferred_model, turn_metadata) =
+    let (request_model, parent_model, preferred_model, analytics_result) =
         guardian_request_model_for_auto_review(
             /*auto_review_model_override*/ None,
             GuardianTestCatalog::Bundled,
@@ -1438,27 +1443,27 @@ async fn guardian_review_uses_preferred_review_model_without_model_catalog_overr
     assert_eq!(request_model, preferred_model);
     assert_ne!(request_model, parent_model);
     assert_eq!(
-        turn_metadata["guardian_catalog_contains_auto_review"],
-        "true"
+        analytics_result.guardian_catalog_contains_auto_review,
+        Some(true)
     );
     assert_eq!(
-        turn_metadata["guardian_catalog_contains_post_override_review_model"],
-        "true"
+        analytics_result.guardian_catalog_contains_post_override_review_model,
+        Some(true)
     );
     assert_eq!(
-        turn_metadata["guardian_model_provider_id"],
-        OPENAI_PROVIDER_ID
+        analytics_result.guardian_model_provider_id.as_deref(),
+        Some(OPENAI_PROVIDER_ID)
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_records_missing_auto_review_model_in_request_metadata()
+async fn guardian_review_records_missing_auto_review_model_in_analytics_metadata()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (request_model, parent_model, preferred_model, turn_metadata) =
+    let (request_model, parent_model, preferred_model, analytics_result) =
         guardian_request_model_for_auto_review(
             /*auto_review_model_override*/ None,
             GuardianTestCatalog::ParentOnly,
@@ -1468,16 +1473,16 @@ async fn guardian_review_records_missing_auto_review_model_in_request_metadata()
     assert_eq!(request_model, parent_model);
     assert_ne!(request_model, preferred_model);
     assert_eq!(
-        turn_metadata["guardian_catalog_contains_auto_review"],
-        "false"
+        analytics_result.guardian_catalog_contains_auto_review,
+        Some(false)
     );
     assert_eq!(
-        turn_metadata["guardian_catalog_contains_post_override_review_model"],
-        "false"
+        analytics_result.guardian_catalog_contains_post_override_review_model,
+        Some(false)
     );
     assert_eq!(
-        turn_metadata["guardian_model_provider_id"],
-        OPENAI_PROVIDER_ID
+        analytics_result.guardian_model_provider_id.as_deref(),
+        Some(OPENAI_PROVIDER_ID)
     );
 
     Ok(())

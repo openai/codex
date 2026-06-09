@@ -17,7 +17,6 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -697,23 +696,10 @@ pub(super) async fn run_guardian_review_session(
     let review_model = available_models
         .iter()
         .find(|preset| preset.model == review_model_id);
-    let responsesapi_client_metadata = HashMap::from([
-        (
-            "guardian_catalog_contains_auto_review".to_string(),
-            available_models
-                .iter()
-                .any(|preset| preset.model == default_review_model_id)
-                .to_string(),
-        ),
-        (
-            "guardian_catalog_contains_post_override_review_model".to_string(),
-            review_model.is_some().to_string(),
-        ),
-        (
-            "guardian_model_provider_id".to_string(),
-            turn.config.model_provider_id.clone(),
-        ),
-    ]);
+    let guardian_catalog_contains_auto_review = available_models
+        .iter()
+        .any(|preset| preset.model == default_review_model_id);
+    let guardian_catalog_contains_post_override_review_model = review_model.is_some();
     let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = review_model {
         let reasoning_effort = preferred_reasoning_effort(
             preset
@@ -767,8 +753,9 @@ pub(super) async fn run_guardian_review_session(
                 retry_reason,
                 schema,
                 model: guardian_model,
-                responsesapi_client_metadata: Some(responsesapi_client_metadata),
                 reasoning_effort: guardian_reasoning_effort,
+                guardian_catalog_contains_auto_review,
+                guardian_catalog_contains_post_override_review_model,
                 reasoning_summary: turn.reasoning_summary,
                 personality: turn.personality,
                 external_cancel,

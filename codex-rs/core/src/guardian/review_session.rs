@@ -73,8 +73,9 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) retry_reason: Option<String>,
     pub(crate) schema: Value,
     pub(crate) model: String,
-    pub(crate) responsesapi_client_metadata: Option<HashMap<String, String>>,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+    pub(crate) guardian_catalog_contains_auto_review: bool,
+    pub(crate) guardian_catalog_contains_post_override_review_model: bool,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) personality: Option<Personality>,
     pub(crate) external_cancel: Option<CancellationToken>,
@@ -669,6 +670,9 @@ async fn run_review_on_session(
         guardian_session_kind,
         params.model.clone(),
         guardian_reasoning_effort.map(|effort| effort.to_string()),
+        params.guardian_catalog_contains_auto_review,
+        params.guardian_catalog_contains_post_override_review_model,
+        params.spawn_config.model_provider_id.clone(),
         had_prior_review_context(&prompt_mode),
     );
     if send_followup_reminder {
@@ -736,7 +740,7 @@ async fn run_review_on_session(
         Box::pin(review_session.codex.submit(Op::UserInput {
             items: prompt_items.items,
             final_output_json_schema: Some(params.schema.clone()),
-            responsesapi_client_metadata: params.responsesapi_client_metadata.clone(),
+            responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
@@ -1145,8 +1149,9 @@ mod tests {
             retry_reason: None,
             schema: super::super::prompt::guardian_output_schema(),
             model,
-            responsesapi_client_metadata: None,
             reasoning_effort,
+            guardian_catalog_contains_auto_review: true,
+            guardian_catalog_contains_post_override_review_model: true,
             reasoning_summary,
             personality,
             external_cancel: None,
