@@ -12,6 +12,7 @@ use crate::StartedExecProcess;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::Session;
 use crate::protocol::ExecParams;
+use crate::protocol::ProcessSignal;
 use crate::protocol::ReadResponse;
 use crate::protocol::WriteResponse;
 
@@ -74,6 +75,11 @@ impl ExecProcess for RemoteExecProcess {
     async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
         trace!("exec process write");
         self.session.write(chunk).await
+    }
+
+    async fn signal(&self, signal: ProcessSignal) -> Result<(), ExecServerError> {
+        trace!("exec process signal");
+        self.session.signal(signal).await
     }
 
     async fn terminate(&self) -> Result<(), ExecServerError> {

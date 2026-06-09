@@ -15,6 +15,7 @@ pub const INITIALIZED_METHOD: &str = "initialized";
 pub const EXEC_METHOD: &str = "process/start";
 pub const EXEC_READ_METHOD: &str = "process/read";
 pub const EXEC_WRITE_METHOD: &str = "process/write";
+pub const EXEC_SIGNAL_METHOD: &str = "process/signal";
 pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
 pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
@@ -165,6 +166,23 @@ pub enum WriteStatus {
 pub struct WriteResponse {
     pub status: WriteStatus,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProcessSignal {
+    Interrupt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalParams {
+    pub process_id: ProcessId,
+    pub signal: ProcessSignal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

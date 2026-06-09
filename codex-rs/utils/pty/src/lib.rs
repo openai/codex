@@ -17,6 +17,8 @@ pub use pipe::spawn_process_no_stdin as spawn_pipe_process_no_stdin;
 pub use process::ProcessDriver;
 /// Handle for interacting with a spawned process (PTY or pipe).
 pub use process::ProcessHandle;
+/// Process signal supported by spawned-process handles.
+pub use process::ProcessSignal;
 /// Bundle of process handles plus split output and exit receivers returned by spawn helpers.
 pub use process::SpawnedProcess;
 /// Terminal size in character cells used for PTY spawn and resize operations.
