@@ -21,6 +21,21 @@ pub(crate) struct CommandRunResult {
     pub error: Option<String>,
 }
 
+impl CommandRunResult {
+    pub(crate) fn failed(error: String) -> Self {
+        let timestamp = chrono::Utc::now().timestamp();
+        Self {
+            started_at: timestamp,
+            completed_at: timestamp,
+            duration_ms: 0,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            error: Some(error),
+        }
+    }
+}
+
 pub(crate) async fn run_command(
     shell: &CommandShell,
     handler: &ConfiguredHandler,

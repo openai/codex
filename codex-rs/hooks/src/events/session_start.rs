@@ -12,7 +12,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
-use crate::engine::async_output::AsyncHookOutputQueue;
+use crate::engine::async_output::AsyncCommandRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -109,7 +109,7 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
-    async_output_queue: &AsyncHookOutputQueue,
+    async_runtime: &AsyncCommandRuntime,
     request: SessionStartRequest,
     turn_id: Option<String>,
 ) -> SessionStartOutcome {
@@ -128,31 +128,18 @@ pub(crate) async fn run(
     }
 
     let (input_json, turn_id) = match request.target {
-        StartHookTarget::SessionStart { source } => {
-            let input_json = match serde_json::to_string(&SessionStartCommandInput::new(
+        StartHookTarget::SessionStart { source } => (
+            serde_json::to_string(&SessionStartCommandInput::new(
                 request.session_id.to_string(),
                 request.transcript_path.clone(),
                 request.cwd.display().to_string(),
                 request.model.clone(),
                 request.permission_mode.clone(),
                 source.as_str().to_string(),
-            )) {
-                Ok(input_json) => input_json,
-                Err(error) => {
-                    let error_message =
-                        format!("failed to serialize session start hook input: {error}");
-                    let matched = dispatcher::synchronous_handlers_after_serialization_failure(
-                        async_output_queue,
-                        matched,
-                        &error_message,
-                    );
-                    return serialization_failure_outcome(
-                        common::serialization_failure_hook_events(matched, turn_id, error_message),
-                    );
-                }
-            };
-            (input_json, turn_id)
-        }
+            ))
+            .map_err(|error| format!("failed to serialize session start hook input: {error}")),
+            turn_id,
+        ),
         StartHookTarget::SubagentStart {
             turn_id: subagent_turn_id,
             agent_id,
@@ -169,32 +156,15 @@ pub(crate) async fn run(
                 agent_id,
                 agent_type,
             };
-            let input_json = match serde_json::to_string(&input) {
-                Ok(input_json) => input_json,
-                Err(error) => {
-                    let error_message =
-                        format!("failed to serialize subagent start hook input: {error}");
-                    let matched = dispatcher::synchronous_handlers_after_serialization_failure(
-                        async_output_queue,
-                        matched,
-                        &error_message,
-                    );
-                    return serialization_failure_outcome(
-                        common::serialization_failure_hook_events(
-                            matched,
-                            Some(subagent_turn_id),
-                            error_message,
-                        ),
-                    );
-                }
-            };
+            let input_json = serde_json::to_string(&input)
+                .map_err(|error| format!("failed to serialize subagent start hook input: {error}"));
             (input_json, Some(subagent_turn_id))
         }
     };
 
     let results = dispatcher::execute_handlers(
         shell,
-        async_output_queue,
+        async_runtime,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -344,15 +314,6 @@ fn parse_completed(
             additional_contexts_for_model,
         },
         completion_order: 0,
-    }
-}
-
-fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> SessionStartOutcome {
-    SessionStartOutcome {
-        hook_events,
-        should_stop: false,
-        stop_reason: None,
-        additional_contexts: Vec::new(),
     }
 }
 

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
-use crate::engine::async_output::AsyncHookOutputQueue;
+use crate::engine::async_output::AsyncCommandRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -88,7 +88,7 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
-    async_output_queue: &AsyncHookOutputQueue,
+    async_runtime: &AsyncCommandRuntime,
     request: PermissionRequestRequest,
 ) -> PermissionRequestOutcome {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
@@ -104,32 +104,12 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = match serde_json::to_string(&build_command_input(&request)) {
-        Ok(input_json) => input_json,
-        Err(error) => {
-            let error_message =
-                format!("failed to serialize permission request hook input: {error}");
-            let matched = dispatcher::synchronous_handlers_after_serialization_failure(
-                async_output_queue,
-                matched,
-                &error_message,
-            );
-            let hook_events = common::serialization_failure_hook_events_for_tool_use(
-                matched,
-                Some(request.turn_id.clone()),
-                error_message,
-                &request.run_id_suffix,
-            );
-            return PermissionRequestOutcome {
-                hook_events,
-                decision: None,
-            };
-        }
-    };
+    let input_json = serde_json::to_string(&build_command_input(&request))
+        .map_err(|error| format!("failed to serialize permission request hook input: {error}"));
 
     let results = dispatcher::execute_handlers(
         shell,
-        async_output_queue,
+        async_runtime,
         matched,
         input_json,
         request.cwd.as_path(),

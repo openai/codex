@@ -925,14 +925,9 @@ impl Session {
                     (None, None)
                 };
 
-            let async_hook_output_queue = codex_hooks::AsyncHookOutputQueue::default();
-            let hooks = build_hooks_for_config(
-                &config,
-                plugins_manager.as_ref(),
-                &default_shell,
-                async_hook_output_queue.clone(),
-            )
-            .await;
+            let hooks_config =
+                build_hooks_config(&config, plugins_manager.as_ref(), &default_shell).await;
+            let hooks = Hooks::new(hooks_config);
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -997,7 +992,6 @@ impl Session {
                 main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
                 analytics_events_client,
                 hooks: arc_swap::ArcSwap::from_pointee(hooks),
-                async_hook_output_queue,
                 rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
                 shell_snapshot_tx,

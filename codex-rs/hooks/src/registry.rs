@@ -2,7 +2,6 @@ use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
 use tokio::process::Command;
 
-use crate::engine::AsyncHookOutputQueue;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
 use crate::engine::HookListEntry;
@@ -37,7 +36,6 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
-    pub async_output_queue: AsyncHookOutputQueue,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -60,13 +58,8 @@ impl Default for Hooks {
 
 impl Hooks {
     pub fn new(config: HooksConfig) -> Self {
-        let after_agent = config
-            .legacy_notify_argv
-            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
-            .map(crate::notify_hook)
-            .into_iter()
-            .collect();
-        let engine = ClaudeHooksEngine::new_with_async_output_queue(
+        let after_agent = after_agent_hooks(config.legacy_notify_argv);
+        let engine = ClaudeHooksEngine::new(
             config.feature_enabled,
             config.bypass_hook_trust,
             config.config_layer_stack.as_ref(),
@@ -76,12 +69,34 @@ impl Hooks {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
             },
-            config.async_output_queue,
         );
         Self {
             after_agent,
             engine,
         }
+    }
+
+    pub fn reconfigured(&self, config: HooksConfig) -> Self {
+        let after_agent = after_agent_hooks(config.legacy_notify_argv);
+        let engine = self.engine.reconfigured(
+            config.feature_enabled,
+            config.bypass_hook_trust,
+            config.config_layer_stack.as_ref(),
+            config.plugin_hook_sources,
+            config.plugin_hook_load_warnings,
+            CommandShell {
+                program: config.shell_program.unwrap_or_default(),
+                args: config.shell_args,
+            },
+        );
+        Self {
+            after_agent,
+            engine,
+        }
+    }
+
+    pub async fn shutdown(&self) {
+        self.engine.shutdown().await;
     }
 
     pub fn startup_warnings(&self) -> &[String] {
@@ -206,6 +221,14 @@ impl Hooks {
     pub async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         self.engine.run_stop(request).await
     }
+}
+
+fn after_agent_hooks(legacy_notify_argv: Option<Vec<String>>) -> Vec<Hook> {
+    legacy_notify_argv
+        .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+        .map(crate::notify_hook)
+        .into_iter()
+        .collect()
 }
 
 pub fn list_hooks(config: HooksConfig) -> HookListOutcome {

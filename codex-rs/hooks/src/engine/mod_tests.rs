@@ -20,6 +20,7 @@ use codex_config::TomlValue;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
@@ -30,10 +31,39 @@ use tempfile::tempdir;
 
 use super::ClaudeHooksEngine;
 use super::CommandShell;
+use super::ConfiguredHandler;
 use crate::events::pre_tool_use::PreToolUseRequest;
+use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 
 fn cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::current_dir().expect("current dir")
+}
+
+fn disabled_engine() -> ClaudeHooksEngine {
+    ClaudeHooksEngine::new(
+        /*enabled*/ false,
+        /*bypass_hook_trust*/ false,
+        /*config_layer_stack*/ None,
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    )
+}
+
+fn user_prompt_request() -> UserPromptSubmitRequest {
+    UserPromptSubmitRequest {
+        session_id: ThreadId::new(),
+        turn_id: "turn-1".to_string(),
+        subagent: None,
+        cwd: cwd(),
+        transcript_path: None,
+        model: "gpt-test".to_string(),
+        permission_mode: "default".to_string(),
+        prompt: "next prompt".to_string(),
+    }
 }
 
 fn managed_hooks_for_current_platform(
@@ -221,7 +251,6 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
-        async_output_queue: Default::default(),
     });
     assert!(listed.hooks[0].is_managed);
     let cwd = cwd();
@@ -1220,7 +1249,6 @@ print(json.dumps({
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
-        async_output_queue: Default::default(),
     });
     assert_eq!(
         listed.hooks[0].plugin_id.as_deref(),
@@ -1360,4 +1388,67 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
     );
 
     assert_eq!(engine.warnings(), &["failed plugin hook".to_string()]);
+}
+
+#[tokio::test]
+async fn reconfiguration_preserves_pending_async_output() {
+    let engine = disabled_engine();
+    engine
+        .async_runtime
+        .push(HookEventName::PostToolUse, "queued context".to_string());
+
+    let reconfigured = engine.reconfigured(
+        /*enabled*/ false,
+        /*bypass_hook_trust*/ false,
+        /*config_layer_stack*/ None,
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+    let outcome = reconfigured
+        .run_user_prompt_submit(user_prompt_request())
+        .await;
+
+    assert_eq!(outcome.hook_events, Vec::new());
+    assert_eq!(outcome.additional_contexts.len(), 1);
+    assert!(outcome.additional_contexts[0].contains("queued context"));
+    assert!(reconfigured.async_runtime.prepare_batch().is_none());
+}
+
+#[tokio::test]
+async fn blocked_prompt_preserves_pending_async_output() {
+    let mut engine = disabled_engine();
+    engine.handlers.push(ConfiguredHandler {
+        event_name: HookEventName::UserPromptSubmit,
+        matcher: None,
+        command: if cfg!(windows) {
+            "echo blocked 1>&2 & exit /b 2".to_string()
+        } else {
+            "printf blocked >&2; exit 2".to_string()
+        },
+        timeout_sec: 5,
+        r#async: false,
+        status_message: None,
+        source_path: cwd(),
+        source: HookSource::User,
+        display_order: 0,
+        env: HashMap::new(),
+    });
+    engine
+        .async_runtime
+        .push(HookEventName::PostToolUse, "queued context".to_string());
+    let request = user_prompt_request();
+
+    let blocked = engine.run_user_prompt_submit(request.clone()).await;
+    assert!(blocked.should_stop);
+    assert!(engine.async_runtime.prepare_batch().is_some());
+
+    engine.handlers.clear();
+    let accepted = engine.run_user_prompt_submit(request).await;
+    assert!(!accepted.should_stop);
+    assert!(accepted.additional_contexts[0].contains("queued context"));
+    assert!(engine.async_runtime.prepare_batch().is_none());
 }

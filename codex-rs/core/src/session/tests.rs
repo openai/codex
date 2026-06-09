@@ -105,7 +105,6 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::GranularApprovalConfig;
-use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -4777,7 +4776,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .expect("create environment"),
     );
 
-    let async_hook_output_queue = codex_hooks::AsyncHookOutputQueue::default();
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(
             McpConnectionManager::new_uninitialized_with_permission_profile(
@@ -4799,10 +4797,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         hooks: arc_swap::ArcSwap::from_pointee(Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
-            async_output_queue: async_hook_output_queue.clone(),
             ..HooksConfig::default()
         })),
-        async_hook_output_queue,
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
@@ -6857,7 +6853,6 @@ where
             .expect("create environment"),
     );
 
-    let async_hook_output_queue = codex_hooks::AsyncHookOutputQueue::default();
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(
             McpConnectionManager::new_uninitialized_with_permission_profile(
@@ -6879,10 +6874,8 @@ where
         ),
         hooks: arc_swap::ArcSwap::from_pointee(Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
-            async_output_queue: async_hook_output_queue.clone(),
             ..HooksConfig::default()
         })),
-        async_hook_output_queue,
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
@@ -8566,10 +8559,6 @@ async fn abort_gracefully_emits_marker_before_turn_aborted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let queued_context = "queued async hook context";
-    sess.services
-        .async_hook_output_queue
-        .push(HookEventName::PostToolUse, queued_context.to_string());
     let input = vec![TurnInput::UserInput {
         content: vec![UserInput::Text {
             text: "hello".to_string(),
@@ -8623,32 +8612,6 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         history.raw_items().iter().any(|item| item == &expected),
         "expected pending input to be persisted into history on turn completion"
     );
-    let user_index = history
-        .raw_items()
-        .iter()
-        .position(|item| item == &expected)
-        .expect("pending user input in history");
-    let developer_index = history
-        .raw_items()
-        .iter()
-        .position(|item| {
-            matches!(
-                item,
-                ResponseItem::Message { role, content, .. }
-                    if role == "developer"
-                        && content.iter().any(|content| {
-                            matches!(content, ContentItem::InputText { text } if text.contains(queued_context))
-                        })
-            )
-        })
-        .expect("queued async hook context in history");
-    assert!(user_index < developer_index);
-    assert!(
-        sess.services
-            .async_hook_output_queue
-            .pending_batch()
-            .is_none()
-    );
 
     let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
         .await
@@ -8701,16 +8664,10 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
 
     let fifth = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
         .await
-        .expect("expected async hook context event")
-        .expect("channel open");
-    assert!(matches!(fifth.msg, EventMsg::RawResponseItem(_)));
-
-    let sixth = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
         .expect("expected turn complete event")
         .expect("channel open");
     assert!(matches!(
-        sixth.msg,
+        fifth.msg,
         EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id,
             last_agent_message: None,

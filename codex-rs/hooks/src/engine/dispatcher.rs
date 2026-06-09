@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::path::PathBuf;
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -14,8 +13,7 @@ use codex_protocol::protocol::HookScope;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
-use super::async_output::AsyncHookOutputQueue;
-use super::async_output::deliverable_output;
+use super::async_output::AsyncCommandRuntime;
 use super::command_runner::CommandRunResult;
 use super::command_runner::run_command;
 use crate::events::common::matches_matcher;
@@ -98,63 +96,6 @@ fn partition_handlers(
     handlers.into_iter().partition(|handler| !handler.r#async)
 }
 
-fn spawn_async_handlers(
-    shell: &CommandShell,
-    output_queue: &AsyncHookOutputQueue,
-    handlers: Vec<ConfiguredHandler>,
-    input_json: String,
-    cwd: &Path,
-) {
-    for handler in handlers {
-        let shell = shell.clone();
-        let output_queue = output_queue.clone();
-        let cancellation = output_queue.cancellation_token();
-        let input_json = input_json.clone();
-        let cwd = PathBuf::from(cwd);
-        output_queue.clone().spawn(async move {
-            tokio::select! {
-                _ = cancellation.cancelled() => {}
-                run_result = run_command(&shell, &handler, &input_json, &cwd) => {
-                    if let Some(output) = deliverable_output(handler.event_name, &run_result) {
-                        output_queue.push(handler.event_name, output);
-                    }
-                }
-            }
-        });
-    }
-}
-
-fn spawn_async_failures(
-    output_queue: &AsyncHookOutputQueue,
-    handlers: Vec<ConfiguredHandler>,
-    error: String,
-) {
-    for handler in handlers {
-        let output_queue = output_queue.clone();
-        let cancellation = output_queue.cancellation_token();
-        let error = error.clone();
-        output_queue.clone().spawn(async move {
-            if !cancellation.is_cancelled() {
-                output_queue.push(handler.event_name, error);
-            }
-        });
-    }
-}
-
-pub(crate) fn synchronous_handlers_after_serialization_failure(
-    output_queue: &AsyncHookOutputQueue,
-    handlers: Vec<ConfiguredHandler>,
-    error: &str,
-) -> Vec<ConfiguredHandler> {
-    let (synchronous, asynchronous) = partition_handlers(handlers);
-    spawn_async_failures(
-        output_queue,
-        asynchronous,
-        format!("Async hook input serialization failed: {error}"),
-    );
-    synchronous
-}
-
 pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
     HookRunSummary {
         id: handler.run_id(),
@@ -176,22 +117,32 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
 
 pub(crate) async fn execute_handlers<T>(
     shell: &CommandShell,
-    output_queue: &AsyncHookOutputQueue,
+    async_runtime: &AsyncCommandRuntime,
     handlers: Vec<ConfiguredHandler>,
-    input_json: String,
+    input_json: Result<String, String>,
     cwd: &Path,
     turn_id: Option<String>,
     parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
     let (handlers, asynchronous) = partition_handlers(handlers);
-    spawn_async_handlers(shell, output_queue, asynchronous, input_json.clone(), cwd);
+    for handler in asynchronous {
+        async_runtime.spawn_handler(
+            shell.clone(),
+            handler,
+            input_json.clone(),
+            cwd.to_path_buf(),
+        );
+    }
 
     let mut pending = FuturesUnordered::new();
     for (configured_order, handler) in handlers.into_iter().enumerate() {
         let input_json = input_json.clone();
         let turn_id = turn_id.clone();
         pending.push(async move {
-            let result = run_command(shell, &handler, &input_json, cwd).await;
+            let result = match input_json {
+                Ok(input_json) => run_command(shell, &handler, &input_json, cwd).await,
+                Err(error) => CommandRunResult::failed(error),
+            };
             (configured_order, parse(&handler, result, turn_id))
         });
     }
@@ -247,14 +198,24 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookRunStatus;
     use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
 
+    use super::CommandRunResult;
+    use super::CommandShell;
     use super::ConfiguredHandler;
+    use super::ParsedHandler;
+    use super::completed_summary;
+    use super::execute_handlers;
     use super::select_handlers;
     use super::select_handlers_for_matcher_inputs;
+    use crate::engine::async_output::AsyncCommandRuntime;
 
     fn make_handler(
         event_name: HookEventName,
@@ -559,5 +520,69 @@ mod tests {
                 vec!["second".to_string()],
             )
         );
+    }
+
+    #[tokio::test]
+    async fn input_serialization_failure_uses_sync_and_async_execution_paths() {
+        let synchronous = make_handler(
+            HookEventName::PreToolUse,
+            Some("Bash"),
+            "sync",
+            /*display_order*/ 0,
+        );
+        let mut asynchronous = synchronous.clone();
+        asynchronous.command = "async".to_string();
+        asynchronous.display_order = 1;
+        asynchronous.r#async = true;
+        let runtime = AsyncCommandRuntime::default();
+        let cwd = test_path_buf("/tmp").abs();
+
+        let results = execute_handlers(
+            &CommandShell {
+                program: String::new(),
+                args: Vec::new(),
+            },
+            &runtime,
+            vec![synchronous, asynchronous],
+            Err("serialize failed".to_string()),
+            cwd.as_path(),
+            Some("turn-1".to_string()),
+            parse_failure,
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].completed.run.status, HookRunStatus::Failed);
+        assert_eq!(results[0].data, "serialize failed");
+        let batch = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(batch) = runtime.prepare_batch() {
+                    break batch;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("async serialization failure completion");
+        let output = batch.into_text();
+        assert!(output.contains("Async hook failed to run: serialize failed"));
+        assert!(output.contains("event=\"PreToolUse\""));
+        runtime.shutdown().await;
+    }
+
+    fn parse_failure(
+        handler: &ConfiguredHandler,
+        run_result: CommandRunResult,
+        turn_id: Option<String>,
+    ) -> ParsedHandler<String> {
+        let error = run_result.error.clone().expect("failed command result");
+        ParsedHandler {
+            completed: HookCompletedEvent {
+                turn_id,
+                run: completed_summary(handler, &run_result, HookRunStatus::Failed, Vec::new()),
+            },
+            data: error,
+            completion_order: 0,
+        }
     }
 }

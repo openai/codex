@@ -13,7 +13,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
-use crate::engine::async_output::AsyncHookOutputQueue;
+use crate::engine::async_output::AsyncCommandRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -96,7 +96,7 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
-    async_output_queue: &AsyncHookOutputQueue,
+    async_runtime: &AsyncCommandRuntime,
     request: StopRequest,
 ) -> StopOutcome {
     let matched = dispatcher::select_handlers(
@@ -130,24 +130,8 @@ pub(crate) async fn run(
                     request.last_assistant_message.clone(),
                 ),
             };
-            match serde_json::to_string(&input) {
-                Ok(input_json) => input_json,
-                Err(error) => {
-                    let error_message = format!("failed to serialize stop hook input: {error}");
-                    let matched = dispatcher::synchronous_handlers_after_serialization_failure(
-                        async_output_queue,
-                        matched,
-                        &error_message,
-                    );
-                    return serialization_failure_outcome(
-                        common::serialization_failure_hook_events(
-                            matched,
-                            Some(request.turn_id),
-                            error_message,
-                        ),
-                    );
-                }
-            }
+            serde_json::to_string(&input)
+                .map_err(|error| format!("failed to serialize stop hook input: {error}"))
         }
         StopHookTarget::SubagentStop {
             agent_id,
@@ -170,31 +154,14 @@ pub(crate) async fn run(
                     request.last_assistant_message.clone(),
                 ),
             };
-            match serde_json::to_string(&input) {
-                Ok(input_json) => input_json,
-                Err(error) => {
-                    let error_message =
-                        format!("failed to serialize subagent stop hook input: {error}");
-                    let matched = dispatcher::synchronous_handlers_after_serialization_failure(
-                        async_output_queue,
-                        matched,
-                        &error_message,
-                    );
-                    return serialization_failure_outcome(
-                        common::serialization_failure_hook_events(
-                            matched,
-                            Some(request.turn_id),
-                            error_message,
-                        ),
-                    );
-                }
-            }
+            serde_json::to_string(&input)
+                .map_err(|error| format!("failed to serialize subagent stop hook input: {error}"))
         }
     };
 
     let results = dispatcher::execute_handlers(
         shell,
-        async_output_queue,
+        async_runtime,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -419,17 +386,6 @@ fn aggregate_results<'a>(
         should_block,
         block_reason,
         continuation_fragments,
-    }
-}
-
-fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> StopOutcome {
-    StopOutcome {
-        hook_events,
-        should_stop: false,
-        stop_reason: None,
-        should_block: false,
-        block_reason: None,
-        continuation_fragments: Vec::new(),
     }
 }
 

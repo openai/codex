@@ -2,11 +2,7 @@ use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
-use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
-
-use crate::engine::ConfiguredHandler;
-use crate::engine::dispatcher;
 
 /// Identifies a thread-spawned subagent when a normal hook runs inside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,42 +46,6 @@ pub(crate) fn flatten_additional_contexts<'a>(
     additional_contexts
         .into_iter()
         .flat_map(|chunk| chunk.iter().cloned())
-        .collect()
-}
-
-pub(crate) fn serialization_failure_hook_events(
-    handlers: Vec<ConfiguredHandler>,
-    turn_id: Option<String>,
-    error_message: String,
-) -> Vec<HookCompletedEvent> {
-    handlers
-        .into_iter()
-        .map(|handler| {
-            let mut run = dispatcher::running_summary(&handler);
-            run.status = HookRunStatus::Failed;
-            run.completed_at = Some(run.started_at);
-            run.duration_ms = Some(0);
-            run.entries = vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Error,
-                text: error_message.clone(),
-            }];
-            HookCompletedEvent {
-                turn_id: turn_id.clone(),
-                run,
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn serialization_failure_hook_events_for_tool_use(
-    handlers: Vec<ConfiguredHandler>,
-    turn_id: Option<String>,
-    error_message: String,
-    tool_use_id: &str,
-) -> Vec<HookCompletedEvent> {
-    serialization_failure_hook_events(handlers, turn_id, error_message)
-        .into_iter()
-        .map(|event| hook_completed_for_tool_use(event, tool_use_id))
         .collect()
 }
 

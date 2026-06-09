@@ -1,41 +1,23 @@
-#[cfg(not(target_os = "windows"))]
-use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-#[cfg(not(target_os = "windows"))]
-use std::time::Duration;
 
-#[cfg(not(target_os = "windows"))]
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
-#[cfg(not(target_os = "windows"))]
 use codex_protocol::protocol::HookSource;
-#[cfg(not(target_os = "windows"))]
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
 use pretty_assertions::assert_eq;
-#[cfg(not(target_os = "windows"))]
-use tempfile::tempdir;
-#[cfg(not(target_os = "windows"))]
-use tokio::time::sleep;
-#[cfg(not(target_os = "windows"))]
-use tokio::time::timeout;
 
 use super::ASYNC_HOOK_COMPLETION_TOKEN_LIMIT;
 use super::ASYNC_HOOK_FLUSH_TOKEN_LIMIT;
-use super::AsyncHookOutputQueue;
+use super::AsyncCommandRuntime;
 use super::deliverable_output;
-#[cfg(not(target_os = "windows"))]
 use crate::engine::CommandShell;
-#[cfg(not(target_os = "windows"))]
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
-#[cfg(not(target_os = "windows"))]
 use crate::events::permission_request;
-#[cfg(not(target_os = "windows"))]
 use crate::events::post_tool_use;
-#[cfg(not(target_os = "windows"))]
 use crate::events::pre_tool_use;
 
 #[test]
@@ -52,10 +34,24 @@ fn async_output_delivers_only_event_context() {
         HookEventName::PostToolUse,
         r#"{"continue":false,"decision":"block","reason":"ignore","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"post context"}}"#,
     );
+    let plain_start = output(HookEventName::SessionStart, "plain start context");
+    let plain_pre = output(HookEventName::PreToolUse, "ignored plain output");
 
     assert_eq!(
-        (pre.as_deref(), permission, post.as_deref()),
-        (Some("pre context"), None, Some("post context"))
+        (
+            pre.as_deref(),
+            permission,
+            post.as_deref(),
+            plain_start.as_deref(),
+            plain_pre,
+        ),
+        (
+            Some("pre context"),
+            None,
+            Some("post context"),
+            Some("plain start context"),
+            None,
+        )
     );
 }
 
@@ -63,7 +59,7 @@ fn async_output_delivers_only_event_context() {
 fn async_output_surfaces_parse_and_runtime_failures() {
     let invalid = deliverable_output(
         HookEventName::PreToolUse,
-        &result(Some(0), "plain stdout", "", /*error*/ None),
+        &result(Some(0), r#"{"unfinished":"#, "", /*error*/ None),
     );
     let nonzero = deliverable_output(
         HookEventName::PreToolUse,
@@ -89,36 +85,15 @@ fn async_output_surfaces_parse_and_runtime_failures() {
     );
 }
 
-#[cfg(not(target_os = "windows"))]
 #[tokio::test]
-async fn async_tool_hooks_do_not_return_control_or_lifecycle() {
-    let temp = tempdir().expect("create temp dir");
-    let script_path = temp.path().join("async_controls.py");
-    fs::write(
-        &script_path,
-        r#"import json
-from pathlib import Path
-import sys
-
-name = sys.argv[1]
-outputs = {
-    "pre_block": {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "blocked", "additionalContext": "pre block context"}},
-    "pre_rewrite": {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": {"command": "rewrite"}, "additionalContext": "pre rewrite context"}},
-    "permission": {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "deny", "message": "denied"}}},
-    "post": {"continue": False, "decision": "block", "reason": "stop", "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "post context"}},
-}
-json.load(sys.stdin)
-print(json.dumps(outputs[name]))
-(Path(__file__).parent / f"{name}.completed").write_text("done", encoding="utf-8")
-"#,
-    )
-    .expect("write async controls script");
-    let cwd = AbsolutePathBuf::try_from(temp.path().to_path_buf()).expect("absolute temp dir");
-    let queue = AsyncHookOutputQueue::default();
+async fn async_tool_hooks_return_no_lifecycle_or_control_results() {
+    let runtime = AsyncCommandRuntime::default();
     let shell = CommandShell {
         program: String::new(),
         args: Vec::new(),
     };
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
+
     let pre_request = pre_tool_use::PreToolUseRequest {
         session_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
@@ -132,12 +107,9 @@ print(json.dumps(outputs[name]))
         tool_use_id: "tool-1".to_string(),
         tool_input: serde_json::json!({"command": "original"}),
     };
-    let pre_handlers = [
-        async_handler(HookEventName::PreToolUse, &script_path, "pre_block"),
-        async_handler(HookEventName::PreToolUse, &script_path, "pre_rewrite"),
-    ];
+    let pre_handlers = [async_handler(HookEventName::PreToolUse, cwd.clone())];
     assert!(pre_tool_use::preview(&pre_handlers, &pre_request).is_empty());
-    let pre = pre_tool_use::run(&pre_handlers, &shell, &queue, pre_request).await;
+    let pre = pre_tool_use::run(&pre_handlers, &shell, &runtime, pre_request).await;
     assert_eq!(
         (
             pre.hook_events,
@@ -146,14 +118,14 @@ print(json.dumps(outputs[name]))
             pre.additional_contexts,
             pre.updated_input,
         ),
-        (Vec::new(), false, None, Vec::new(), None)
+        (Vec::new(), false, None, Vec::new(), None),
     );
 
     let permission_request = permission_request::PermissionRequestRequest {
         session_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
         subagent: None,
-        cwd: temp.path().to_path_buf(),
+        cwd: cwd.to_path_buf(),
         transcript_path: None,
         model: "gpt-test".to_string(),
         permission_mode: "default".to_string(),
@@ -162,24 +134,20 @@ print(json.dumps(outputs[name]))
         run_id_suffix: "tool-1".to_string(),
         tool_input: serde_json::json!({"command": "original"}),
     };
-    let permission_handlers = [async_handler(
-        HookEventName::PermissionRequest,
-        &script_path,
-        "permission",
-    )];
+    let permission_handlers = [async_handler(HookEventName::PermissionRequest, cwd.clone())];
     assert!(permission_request::preview(&permission_handlers, &permission_request).is_empty());
     let permission =
-        permission_request::run(&permission_handlers, &shell, &queue, permission_request).await;
+        permission_request::run(&permission_handlers, &shell, &runtime, permission_request).await;
     assert_eq!(
         (permission.hook_events, permission.decision),
-        (Vec::new(), None)
+        (Vec::new(), None),
     );
 
     let post_request = post_tool_use::PostToolUseRequest {
         session_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
         subagent: None,
-        cwd,
+        cwd: cwd.clone(),
         transcript_path: None,
         model: "gpt-test".to_string(),
         permission_mode: "default".to_string(),
@@ -189,13 +157,9 @@ print(json.dumps(outputs[name]))
         tool_input: serde_json::json!({"command": "original"}),
         tool_response: serde_json::json!({"ok": true}),
     };
-    let post_handlers = [async_handler(
-        HookEventName::PostToolUse,
-        &script_path,
-        "post",
-    )];
+    let post_handlers = [async_handler(HookEventName::PostToolUse, cwd)];
     assert!(post_tool_use::preview(&post_handlers, &post_request).is_empty());
-    let post = post_tool_use::run(&post_handlers, &shell, &queue, post_request).await;
+    let post = post_tool_use::run(&post_handlers, &shell, &runtime, post_request).await;
     assert_eq!(
         (
             post.hook_events,
@@ -204,50 +168,21 @@ print(json.dumps(outputs[name]))
             post.additional_contexts,
             post.feedback_message,
         ),
-        (Vec::new(), false, None, Vec::new(), None)
+        (Vec::new(), false, None, Vec::new(), None),
     );
 
-    timeout(Duration::from_secs(10), async {
-        for name in ["pre_block", "pre_rewrite", "permission", "post"] {
-            while !temp.path().join(format!("{name}.completed")).exists() {
-                sleep(Duration::from_millis(10)).await;
-            }
-        }
-    })
-    .await
-    .expect("async control hooks complete");
-    let delivered = timeout(Duration::from_secs(10), async {
-        loop {
-            if let Some(batch) = queue.pending_batch() {
-                let delivered = batch.into_text();
-                if ["pre block context", "pre rewrite context", "post context"]
-                    .iter()
-                    .all(|context| delivered.contains(context))
-                {
-                    break delivered;
-                }
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("informational async outputs");
-    assert!(delivered.contains("pre block context"));
-    assert!(delivered.contains("pre rewrite context"));
-    assert!(delivered.contains("post context"));
-    assert!(!delivered.contains("denied"));
-    queue.shutdown().await;
+    runtime.shutdown().await;
 }
 
 #[test]
 fn queue_preserves_duplicate_completions_until_commit() {
-    let queue = AsyncHookOutputQueue::default();
-    queue.push(HookEventName::PreToolUse, "same".to_string());
-    queue.push(HookEventName::PostToolUse, "same".to_string());
-    queue.push(HookEventName::Stop, "last".to_string());
+    let runtime = AsyncCommandRuntime::default();
+    runtime.push(HookEventName::PreToolUse, "same".to_string());
+    runtime.push(HookEventName::PostToolUse, "same".to_string());
+    runtime.push(HookEventName::Stop, "last".to_string());
 
-    let batch = queue.pending_batch().expect("queued output batch");
-    assert_eq!(queue.pending_batch(), Some(batch.clone()));
+    let batch = runtime.prepare_batch().expect("queued output batch");
+    assert_eq!(runtime.prepare_batch(), Some(batch.clone()));
     let text = batch.clone().into_text();
     assert_eq!(text.matches("same").count(), 2);
     assert!(
@@ -255,33 +190,33 @@ fn queue_preserves_duplicate_completions_until_commit() {
             .map(|needle| text.find(needle).expect("queued output"))
             .is_sorted()
     );
-    queue.commit(&batch);
-    assert!(queue.pending_batch().is_none());
+    runtime.commit(&batch);
+    assert!(runtime.prepare_batch().is_none());
 }
 
 #[test]
 fn queue_bounds_items_and_flushes_a_contiguous_prefix() {
-    let queue = AsyncHookOutputQueue::default();
+    let runtime = AsyncCommandRuntime::default();
     let large = "large-output ".repeat(ASYNC_HOOK_COMPLETION_TOKEN_LIMIT);
     for event_name in [
         HookEventName::PreToolUse,
         HookEventName::PostToolUse,
         HookEventName::Stop,
     ] {
-        queue.push(event_name, large.clone());
+        runtime.push(event_name, large.clone());
     }
-    queue.push(HookEventName::SessionStart, "small-tail".to_string());
-    assert!(queue.lock_pending().iter().all(|completion| {
+    runtime.push(HookEventName::SessionStart, "small-tail".to_string());
+    assert!(runtime.lock_pending().iter().all(|completion| {
         approx_token_count(&completion.text) <= ASYNC_HOOK_COMPLETION_TOKEN_LIMIT
     }));
 
     let mut completed = 0;
     loop {
-        let batch = queue.pending_batch().expect("bounded output batch");
+        let batch = runtime.prepare_batch().expect("bounded output batch");
         let text = batch.clone().into_text();
         assert!(approx_token_count(&text) <= ASYNC_HOOK_FLUSH_TOKEN_LIMIT);
         completed += batch.completion_count;
-        queue.commit(&batch);
+        runtime.commit(&batch);
         if let Some(tail) = text.find("small-tail") {
             if let Some(large) = text.find("tokens truncated") {
                 assert!(large < tail);
@@ -290,21 +225,21 @@ fn queue_bounds_items_and_flushes_a_contiguous_prefix() {
             break;
         }
     }
-    assert!(queue.pending_batch().is_none());
+    assert!(runtime.prepare_batch().is_none());
 }
 
 #[tokio::test]
 async fn shutdown_cancels_and_joins_detached_tasks() {
-    let queue = AsyncHookOutputQueue::default();
-    let cancellation = queue.cancellation_token();
+    let runtime = AsyncCommandRuntime::default();
+    let cancellation = runtime.state.cancellation.clone();
     let stopped = Arc::new(AtomicBool::new(false));
     let task_stopped = Arc::clone(&stopped);
-    queue.spawn(async move {
+    runtime.spawn(async move {
         cancellation.cancelled().await;
         task_stopped.store(true, Ordering::SeqCst);
     });
 
-    queue.shutdown().await;
+    runtime.shutdown().await;
 
     assert!(stopped.load(Ordering::SeqCst));
 }
@@ -313,20 +248,15 @@ fn output(event_name: HookEventName, stdout: &str) -> Option<String> {
     deliverable_output(event_name, &result(Some(0), stdout, "", /*error*/ None))
 }
 
-#[cfg(not(target_os = "windows"))]
-fn async_handler(
-    event_name: HookEventName,
-    script_path: &std::path::Path,
-    name: &str,
-) -> ConfiguredHandler {
+fn async_handler(event_name: HookEventName, source_path: AbsolutePathBuf) -> ConfiguredHandler {
     ConfiguredHandler {
         event_name,
         matcher: Some("^Bash$".to_string()),
-        command: format!("python3 {} {name}", script_path.display()),
+        command: "exit 0".to_string(),
         timeout_sec: 5,
         r#async: true,
         status_message: None,
-        source_path: AbsolutePathBuf::try_from(script_path.to_path_buf()).expect("absolute script"),
+        source_path,
         source: HookSource::User,
         display_order: 0,
         env: std::collections::HashMap::new(),

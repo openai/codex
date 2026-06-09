@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
@@ -12,7 +13,10 @@ use codex_utils_output_truncation::truncate_text;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use super::CommandShell;
+use super::ConfiguredHandler;
 use super::command_runner::CommandRunResult;
+use super::command_runner::run_command;
 use super::output_parser;
 
 const ASYNC_HOOK_COMPLETION_TOKEN_LIMIT: usize = 500;
@@ -20,40 +24,66 @@ const ASYNC_HOOK_COMPLETION_TRUNCATION_TOKEN_LIMIT: usize = 450;
 const ASYNC_HOOK_FLUSH_TOKEN_LIMIT: usize = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct AsyncHookCompletion {
+struct AsyncCommandCompletion {
     event_name: HookEventName,
     text: String,
 }
 
-/// Session-scoped FIFO for informational output from detached command hooks.
 #[derive(Clone)]
-pub struct AsyncHookOutputQueue {
-    state: Arc<AsyncHookOutputState>,
+pub(crate) struct AsyncCommandRuntime {
+    state: Arc<AsyncCommandState>,
 }
 
-struct AsyncHookOutputState {
-    pending: Mutex<VecDeque<AsyncHookCompletion>>,
+struct AsyncCommandState {
+    pending: Mutex<VecDeque<AsyncCommandCompletion>>,
     cancellation: CancellationToken,
     tasks: TaskTracker,
 }
 
-/// A bounded prefix prepared for one accepted user turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AsyncHookOutputBatch {
+pub(crate) struct AsyncOutputBatch {
     completion_count: usize,
     text: String,
 }
 
-impl AsyncHookOutputBatch {
-    /// Returns the merged developer context for this batch.
-    pub fn into_text(self) -> String {
+impl AsyncOutputBatch {
+    pub(crate) fn into_text(self) -> String {
         self.text
     }
 }
 
-impl AsyncHookOutputQueue {
-    /// Records one completed hook's bounded informational output.
-    pub fn push(&self, event_name: HookEventName, text: String) {
+impl AsyncCommandRuntime {
+    pub(crate) fn spawn_handler(
+        &self,
+        shell: CommandShell,
+        handler: ConfiguredHandler,
+        input_json: Result<String, String>,
+        cwd: PathBuf,
+    ) {
+        let runtime = self.clone();
+        let cancellation = self.state.cancellation.clone();
+        self.spawn(async move {
+            let run_result = match input_json {
+                Ok(input_json) => {
+                    tokio::select! {
+                        _ = cancellation.cancelled() => return,
+                        run_result = run_command(&shell, &handler, &input_json, &cwd) => run_result,
+                    }
+                }
+                Err(error) => {
+                    if cancellation.is_cancelled() {
+                        return;
+                    }
+                    CommandRunResult::failed(error)
+                }
+            };
+            if let Some(output) = deliverable_output(handler.event_name, &run_result) {
+                runtime.push(handler.event_name, output);
+            }
+        });
+    }
+
+    pub(crate) fn push(&self, event_name: HookEventName, text: String) {
         if text.trim().is_empty() {
             return;
         }
@@ -70,49 +100,41 @@ impl AsyncHookOutputQueue {
             text
         };
         self.lock_pending()
-            .push_back(AsyncHookCompletion { event_name, text });
+            .push_back(AsyncCommandCompletion { event_name, text });
     }
 
-    /// Prepares a bounded FIFO prefix without removing it from the queue.
-    pub fn pending_batch(&self) -> Option<AsyncHookOutputBatch> {
+    pub(crate) fn prepare_batch(&self) -> Option<AsyncOutputBatch> {
         let pending = self.lock_pending();
         let mut selected = Vec::new();
         for completion in pending.iter() {
-            let mut candidate = selected.clone();
-            candidate.push(completion.clone());
-            let text = render_batch(&candidate);
+            selected.push(completion.clone());
+            let text = render_batch(&selected);
             if approx_token_count(&text) > ASYNC_HOOK_FLUSH_TOKEN_LIMIT {
+                selected.pop();
                 break;
             }
-            selected = candidate;
         }
-        (!selected.is_empty()).then(|| AsyncHookOutputBatch {
+        (!selected.is_empty()).then(|| AsyncOutputBatch {
             completion_count: selected.len(),
             text: render_batch(&selected),
         })
     }
 
-    /// Removes a previously prepared prefix after its user input is accepted.
-    pub fn commit(&self, batch: &AsyncHookOutputBatch) {
+    pub(crate) fn commit(&self, batch: &AsyncOutputBatch) {
         self.lock_pending().drain(..batch.completion_count);
     }
 
-    /// Cancels detached hook commands and waits for their tasks to stop.
-    pub async fn shutdown(&self) {
+    pub(crate) async fn shutdown(&self) {
         self.state.cancellation.cancel();
         self.state.tasks.close();
         self.state.tasks.wait().await;
     }
 
-    pub(crate) fn cancellation_token(&self) -> CancellationToken {
-        self.state.cancellation.clone()
-    }
-
-    pub(crate) fn spawn(&self, future: impl Future<Output = ()> + Send + 'static) {
+    fn spawn(&self, future: impl Future<Output = ()> + Send + 'static) {
         self.state.tasks.spawn(future);
     }
 
-    fn lock_pending(&self) -> MutexGuard<'_, VecDeque<AsyncHookCompletion>> {
+    fn lock_pending(&self) -> MutexGuard<'_, VecDeque<AsyncCommandCompletion>> {
         self.state
             .pending
             .lock()
@@ -120,10 +142,10 @@ impl AsyncHookOutputQueue {
     }
 }
 
-impl Default for AsyncHookOutputQueue {
+impl Default for AsyncCommandRuntime {
     fn default() -> Self {
         Self {
-            state: Arc::new(AsyncHookOutputState {
+            state: Arc::new(AsyncCommandState {
                 pending: Mutex::new(VecDeque::new()),
                 cancellation: CancellationToken::new(),
                 tasks: TaskTracker::new(),
@@ -132,7 +154,7 @@ impl Default for AsyncHookOutputQueue {
     }
 }
 
-fn render_batch(completions: &[AsyncHookCompletion]) -> String {
+fn render_batch(completions: &[AsyncCommandCompletion]) -> String {
     let outputs = completions
         .iter()
         .map(|completion| {
@@ -167,36 +189,78 @@ fn parse_stdout(event_name: HookEventName, stdout: &str) -> Option<String> {
         return None;
     }
 
-    let additional_context = match event_name {
-        HookEventName::SessionStart => {
-            output_parser::parse_session_start(trimmed).map(|output| output.additional_context)
-        }
-        HookEventName::SubagentStart => {
-            output_parser::parse_subagent_start(trimmed).map(|output| output.additional_context)
-        }
-        HookEventName::PreToolUse => {
-            output_parser::parse_pre_tool_use(trimmed).map(|output| output.additional_context)
-        }
-        HookEventName::PostToolUse => {
-            output_parser::parse_post_tool_use(trimmed).map(|output| output.additional_context)
-        }
-        HookEventName::UserPromptSubmit => {
-            output_parser::parse_user_prompt_submit(trimmed).map(|output| output.additional_context)
-        }
-        HookEventName::PermissionRequest => {
-            output_parser::parse_permission_request(trimmed).map(|_| None)
-        }
-        HookEventName::PreCompact => output_parser::parse_pre_compact(trimmed).map(|_| None),
-        HookEventName::PostCompact => output_parser::parse_post_compact(trimmed).map(|_| None),
-        HookEventName::SubagentStop => output_parser::parse_subagent_stop(trimmed).map(|_| None),
-        HookEventName::Stop => output_parser::parse_stop(trimmed).map(|_| None),
+    let (parsed, plain_text_output) = match event_name {
+        HookEventName::SessionStart => (
+            output_parser::parse_session_start(trimmed).map(|output| output.additional_context),
+            PlainTextOutput::Deliver,
+        ),
+        HookEventName::SubagentStart => (
+            output_parser::parse_subagent_start(trimmed).map(|output| output.additional_context),
+            PlainTextOutput::Deliver,
+        ),
+        HookEventName::PreToolUse => (
+            output_parser::parse_pre_tool_use(trimmed).map(|output| output.additional_context),
+            PlainTextOutput::Ignore,
+        ),
+        HookEventName::PostToolUse => (
+            output_parser::parse_post_tool_use(trimmed).map(|output| output.additional_context),
+            PlainTextOutput::Ignore,
+        ),
+        HookEventName::UserPromptSubmit => (
+            output_parser::parse_user_prompt_submit(trimmed)
+                .map(|output| output.additional_context),
+            PlainTextOutput::Deliver,
+        ),
+        HookEventName::PermissionRequest => (
+            output_parser::parse_permission_request(trimmed).map(|_| None),
+            PlainTextOutput::Ignore,
+        ),
+        HookEventName::PreCompact => (
+            output_parser::parse_pre_compact(trimmed).map(|_| None),
+            PlainTextOutput::Ignore,
+        ),
+        HookEventName::PostCompact => (
+            output_parser::parse_post_compact(trimmed).map(|_| None),
+            PlainTextOutput::Ignore,
+        ),
+        HookEventName::SubagentStop => (
+            output_parser::parse_subagent_stop(trimmed).map(|_| None),
+            PlainTextOutput::Invalid,
+        ),
+        HookEventName::Stop => (
+            output_parser::parse_stop(trimmed).map(|_| None),
+            PlainTextOutput::Invalid,
+        ),
     };
-    match additional_context {
-        Some(additional_context) => additional_context.filter(|context| !context.trim().is_empty()),
-        None => Some(format!(
-            "Async {event_name:?} hook returned invalid JSON output"
-        )),
+    parsed_context(event_name, trimmed, parsed, plain_text_output)
+}
+
+#[derive(Clone, Copy)]
+enum PlainTextOutput {
+    Deliver,
+    Ignore,
+    Invalid,
+}
+
+fn parsed_context(
+    event_name: HookEventName,
+    stdout: &str,
+    parsed: Option<Option<String>>,
+    plain_text_output: PlainTextOutput,
+) -> Option<String> {
+    match parsed {
+        Some(context) => context.filter(|context| !context.trim().is_empty()),
+        None if output_parser::looks_like_json(stdout) => Some(invalid_output_message(event_name)),
+        None => match plain_text_output {
+            PlainTextOutput::Deliver => Some(stdout.to_string()),
+            PlainTextOutput::Ignore => None,
+            PlainTextOutput::Invalid => Some(invalid_output_message(event_name)),
+        },
     }
+}
+
+fn invalid_output_message(event_name: HookEventName) -> String {
+    format!("Async {event_name:?} hook returned invalid JSON output")
 }
 
 #[cfg(test)]

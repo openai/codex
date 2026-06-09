@@ -625,7 +625,7 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
 
 async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-    sess.services.async_hook_output_queue.shutdown().await;
+    sess.hooks().shutdown().await;
     let _ = sess.conversation.shutdown().await;
     sess.services
         .unified_exec_manager

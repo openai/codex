@@ -13,7 +13,7 @@ use serde_json::Value;
 use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
-use crate::engine::async_output::AsyncHookOutputQueue;
+use crate::engine::async_output::AsyncCommandRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -72,7 +72,7 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
-    async_output_queue: &AsyncHookOutputQueue,
+    async_runtime: &AsyncCommandRuntime,
     request: PreToolUseRequest,
 ) -> PreToolUseOutcome {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
@@ -91,28 +91,12 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = match command_input_json(&request) {
-        Ok(input_json) => input_json,
-        Err(error) => {
-            let error_message = format!("failed to serialize pre tool use hook input: {error}");
-            let matched = dispatcher::synchronous_handlers_after_serialization_failure(
-                async_output_queue,
-                matched,
-                &error_message,
-            );
-            let hook_events = common::serialization_failure_hook_events_for_tool_use(
-                matched,
-                Some(request.turn_id.clone()),
-                error_message,
-                &request.tool_use_id,
-            );
-            return serialization_failure_outcome(hook_events);
-        }
-    };
+    let input_json = command_input_json(&request)
+        .map_err(|error| format!("failed to serialize pre tool use hook input: {error}"));
 
     let results = dispatcher::execute_handlers(
         shell,
-        async_output_queue,
+        async_runtime,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -308,16 +292,6 @@ fn parse_completed(
             updated_input,
         },
         completion_order: 0,
-    }
-}
-
-fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PreToolUseOutcome {
-    PreToolUseOutcome {
-        hook_events,
-        should_block: false,
-        block_reason: None,
-        additional_contexts: Vec::new(),
-        updated_input: None,
     }
 }
 
@@ -729,22 +703,6 @@ mod tests {
         let completed = common::hook_completed_for_tool_use(parsed.completed, &request.tool_use_id);
 
         assert_eq!(completed.run.id, runs[0].id);
-    }
-
-    #[test]
-    fn serialization_failure_run_ids_include_tool_use_id() {
-        let request = request_for_tool_use("tool-call-123");
-        let runs = preview(&[handler()], &request);
-
-        let completed = common::serialization_failure_hook_events_for_tool_use(
-            vec![handler()],
-            Some(request.turn_id.clone()),
-            "serialize failed".into(),
-            &request.tool_use_id,
-        );
-
-        assert_eq!(completed.len(), 1);
-        assert_eq!(completed[0].run.id, runs[0].id);
     }
 
     fn handler() -> ConfiguredHandler {

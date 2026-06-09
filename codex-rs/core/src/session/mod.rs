@@ -1510,13 +1510,13 @@ impl Session {
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.services.skills_manager.clear_cache();
         self.services.plugins_manager.clear_cache();
-        let hooks = build_hooks_for_config(
+        let hooks_config = build_hooks_config(
             config.as_ref(),
             self.services.plugins_manager.as_ref(),
             self.services.user_shell.as_ref(),
-            self.services.async_hook_output_queue.clone(),
         )
         .await;
+        let hooks = self.hooks().reconfigured(hooks_config);
 
         let state = self.state.lock().await;
         // A newer refresh may have updated the config while this hook build was in flight.
@@ -3399,13 +3399,12 @@ pub(crate) fn emit_subagent_session_started(
     });
 }
 
-/// Builds the hook engine for one config snapshot, including any enabled plugin hooks.
-async fn build_hooks_for_config(
+/// Builds the hook configuration for one config snapshot, including any enabled plugin hooks.
+async fn build_hooks_config(
     config: &Config,
     plugins_manager: &PluginsManager,
     user_shell: &crate::shell::Shell,
-    async_output_queue: codex_hooks::AsyncHookOutputQueue,
-) -> Hooks {
+) -> HooksConfig {
     let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();
@@ -3413,7 +3412,7 @@ async fn build_hooks_for_config(
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let plugin_hook_sources = plugin_outcome.effective_plugin_hook_sources();
     let plugin_hook_load_warnings = plugin_outcome.effective_plugin_hook_warnings();
-    Hooks::new(HooksConfig {
+    HooksConfig {
         legacy_notify_argv: config.notify.clone(),
         feature_enabled: config.features.enabled(Feature::CodexHooks),
         bypass_hook_trust: config.bypass_hook_trust,
@@ -3422,8 +3421,7 @@ async fn build_hooks_for_config(
         plugin_hook_load_warnings,
         shell_program: Some(hook_shell_program),
         shell_args: hook_shell_argv,
-        async_output_queue,
-    })
+    }
 }
 
 #[cfg(test)]
