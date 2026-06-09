@@ -550,6 +550,12 @@ struct RemotePluginInstalledResponse {
 struct RemotePluginMutationResponse {
     id: String,
     enabled: bool,
+    app_ids_needing_auth: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePluginInstallResult {
+    pub app_ids_needing_auth: Option<Vec<String>>,
 }
 
 pub async fn fetch_remote_marketplaces(
@@ -576,6 +582,25 @@ pub async fn fetch_remote_marketplaces(
         match source {
             RemoteMarketplaceSource::Global => {
                 let scope = RemotePluginScope::Global;
+                if let Some(codex_home) = global_catalog_cache_path
+                    && let Some(directory_plugins) =
+                        catalog_cache::load_cached_global_directory_plugins(
+                            codex_home, config, auth,
+                        )
+                {
+                    let installed_plugins =
+                        fetch_installed_plugins_for_scope(config, auth, scope).await?;
+                    if let Some(marketplace) = build_remote_marketplace(
+                        scope.marketplace_name(),
+                        scope.marketplace_display_name(),
+                        directory_plugins,
+                        installed_plugins,
+                        /*include_installed_only*/ true,
+                    )? {
+                        marketplaces.push(marketplace);
+                    }
+                    continue;
+                }
                 let (directory_plugins, installed_plugins) = tokio::try_join!(
                     fetch_directory_plugins_for_scope(config, auth, scope),
                     fetch_installed_plugins_for_scope(config, auth, scope),
@@ -690,6 +715,17 @@ pub async fn fetch_and_cache_global_remote_plugin_catalog(
         fetch_directory_plugins_for_scope(config, auth, RemotePluginScope::Global).await?;
     catalog_cache::write_cached_global_directory_plugins(codex_home, config, auth, &plugins);
     Ok(())
+}
+
+pub fn has_cached_global_remote_plugin_catalog(
+    codex_home: &Path,
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+) -> bool {
+    let Ok(auth) = ensure_chatgpt_auth(auth) else {
+        return false;
+    };
+    catalog_cache::load_cached_global_directory_plugins(codex_home, config, auth).is_some()
 }
 
 pub fn cached_global_remote_discoverable_plugins(
@@ -815,14 +851,12 @@ pub(crate) async fn fetch_remote_installed_plugins(
 
 pub fn group_remote_installed_plugins_by_marketplaces(
     plugins: &[RemoteInstalledPlugin],
-    visible_scopes: &[RemotePluginScope],
+    visible_marketplaces: &[&str],
 ) -> Vec<RemoteMarketplace> {
     let mut plugins_by_marketplace = BTreeMap::<String, Vec<RemotePluginSummary>>::new();
 
     for plugin in plugins {
-        if !RemotePluginScope::from_marketplace_name(&plugin.marketplace_name)
-            .is_some_and(|scope| visible_scopes.contains(&scope))
-        {
+        if !visible_marketplaces.contains(&plugin.marketplace_name.as_str()) {
             continue;
         }
         let Ok(plugin_id) = PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone())
@@ -1041,7 +1075,7 @@ pub async fn install_remote_plugin(
     auth: Option<&CodexAuth>,
     _marketplace_name: &str,
     plugin_id: &str,
-) -> Result<(), RemotePluginCatalogError> {
+) -> Result<RemotePluginInstallResult, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     // Remote plugin IDs uniquely identify remote plugins, so the caller-provided
     // marketplace name is not validated before sending the install mutation.
@@ -1049,7 +1083,12 @@ pub async fn install_remote_plugin(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}/install");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.post(&url), auth)?;
+    let request = authenticated_request(
+        client
+            .post(&url)
+            .query(&[("includeAppsNeedingAuth", "true")]),
+        auth,
+    )?;
     let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
     if response.id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
@@ -1065,7 +1104,9 @@ pub async fn install_remote_plugin(
         });
     }
 
-    Ok(())
+    Ok(RemotePluginInstallResult {
+        app_ids_needing_auth: response.app_ids_needing_auth,
+    })
 }
 
 pub async fn uninstall_remote_plugin(

@@ -6,8 +6,10 @@ use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use crate::marketplace::MarketplacePluginInstallPolicy;
+use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use crate::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
+use crate::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
-use crate::remote::RemotePluginScope;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
@@ -137,8 +139,15 @@ fn remote_installed_linear_plugin() -> RemoteInstalledPlugin {
 }
 
 fn remote_installed_plugin(name: &str) -> RemoteInstalledPlugin {
+    remote_installed_plugin_in_marketplace(name, REMOTE_GLOBAL_MARKETPLACE_NAME)
+}
+
+fn remote_installed_plugin_in_marketplace(
+    name: &str,
+    marketplace_name: &str,
+) -> RemoteInstalledPlugin {
     RemoteInstalledPlugin {
-        marketplace_name: "openai-curated-remote".to_string(),
+        marketplace_name: marketplace_name.to_string(),
         id: format!("plugins~Plugin_{name}"),
         name: name.to_string(),
         enabled: true,
@@ -484,7 +493,7 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
     manager.write_remote_installed_plugins_cache(vec![plugin]);
 
     let marketplaces = manager
-        .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Global])
+        .build_remote_installed_plugin_marketplaces_from_cache(&[REMOTE_GLOBAL_MARKETPLACE_NAME])
         .expect("remote installed cache should be present");
     assert_eq!(marketplaces.len(), 1);
     assert_eq!(marketplaces[0].name, "openai-curated-remote");
@@ -521,9 +530,42 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
     );
     assert_eq!(
         manager
-            .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Workspace])
+            .build_remote_installed_plugin_marketplaces_from_cache(&[
+                REMOTE_WORKSPACE_MARKETPLACE_NAME
+            ])
             .expect("remote installed cache should be present"),
         Vec::new()
+    );
+}
+
+#[tokio::test]
+async fn build_remote_installed_plugin_marketplaces_from_cache_filters_by_marketplace_name() {
+    let codex_home = TempDir::new().unwrap();
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![
+        remote_installed_plugin_in_marketplace(
+            "workspace-linear",
+            REMOTE_WORKSPACE_MARKETPLACE_NAME,
+        ),
+        remote_installed_plugin_in_marketplace(
+            "shared-linear",
+            REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+        ),
+    ]);
+
+    let marketplaces = manager
+        .build_remote_installed_plugin_marketplaces_from_cache(&[REMOTE_WORKSPACE_MARKETPLACE_NAME])
+        .expect("remote installed cache should be present");
+
+    assert_eq!(marketplaces.len(), 1);
+    assert_eq!(marketplaces[0].name, REMOTE_WORKSPACE_MARKETPLACE_NAME);
+    assert_eq!(
+        marketplaces[0]
+            .plugins
+            .iter()
+            .map(|plugin| plugin.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["workspace-linear@workspace-directory"]
     );
 }
 
@@ -3037,6 +3079,33 @@ fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_curren
             ))
             .is_dir()
     );
+}
+
+#[test]
+fn refresh_curated_plugin_cache_removes_cache_for_plugin_removed_from_marketplace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&curated_root, &[]);
+    let plugin_id = PluginId::new(
+        "google-sheets".to_string(),
+        OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
+    )
+    .unwrap();
+    let plugin_cache_root = tmp
+        .path()
+        .join("plugins/cache/openai-curated/google-sheets");
+    write_plugin(
+        &tmp.path().join("plugins/cache/openai-curated"),
+        &format!("google-sheets/{TEST_CURATED_PLUGIN_CACHE_VERSION}"),
+        "google-sheets",
+    );
+
+    assert!(
+        refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+            .expect("cache refresh should remove stale configured plugin")
+    );
+
+    assert!(!plugin_cache_root.exists());
 }
 
 #[test]

@@ -108,6 +108,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
+use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -3318,7 +3319,6 @@ fn turn_event_serializes_expected_shape() {
             status: Some(TurnStatus::Completed),
             turn_error: None,
             codex_error_kind: None,
-            codex_error_subreason: None,
             codex_error_http_status_code: None,
             steer_count: Some(0),
             total_tool_call_count: None,
@@ -3391,7 +3391,6 @@ fn turn_event_serializes_expected_shape() {
                 "status": "completed",
                 "turn_error": null,
                 "codex_error_kind": null,
-                "codex_error_subreason": null,
                 "codex_error_http_status_code": null,
                 "steer_count": 0,
                 "total_tool_call_count": null,
@@ -3796,6 +3795,12 @@ async fn turn_event_counts_completed_tool_items() {
             reasoning_effort: None,
             agents_states: Default::default(),
         },
+        ThreadItem::SubAgentActivity {
+            id: "sub-agent-activity-1".to_string(),
+            kind: SubAgentActivityKind::Interacted,
+            agent_thread_id: "thread-child".to_string(),
+            agent_path: "/root/child".to_string(),
+        },
         ThreadItem::WebSearch {
             id: "web-1".to_string(),
             query: "codex".to_string(),
@@ -3843,14 +3848,14 @@ async fn turn_event_counts_completed_tool_items() {
         .find(|event| matches!(event, TrackEventRequest::TurnEvent(_)))
         .expect("turn event should be emitted");
     let payload = serde_json::to_value(turn_event).expect("serialize turn event");
-    assert_eq!(payload["event_params"]["total_tool_call_count"], json!(7));
+    assert_eq!(payload["event_params"]["total_tool_call_count"], json!(8));
     assert_eq!(payload["event_params"]["shell_command_count"], json!(1));
     assert_eq!(payload["event_params"]["file_change_count"], json!(1));
     assert_eq!(payload["event_params"]["mcp_tool_call_count"], json!(1));
     assert_eq!(payload["event_params"]["dynamic_tool_call_count"], json!(1));
     assert_eq!(
         payload["event_params"]["subagent_tool_call_count"],
-        json!(1)
+        json!(2)
     );
     assert_eq!(payload["event_params"]["web_search_count"], json!(1));
     assert_eq!(payload["event_params"]["image_generation_count"], json!(1));
@@ -4097,10 +4102,6 @@ async fn turn_lifecycle_emits_failed_turn_event() {
     assert_eq!(
         payload["event_params"]["codex_error_kind"],
         json!("invalid_request")
-    );
-    assert_eq!(
-        payload["event_params"]["codex_error_subreason"],
-        json!("unknown turn environment id `env-2`")
     );
     assert_eq!(
         payload["event_params"]["codex_error_http_status_code"],

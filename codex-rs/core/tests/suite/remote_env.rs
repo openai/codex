@@ -41,6 +41,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
 use core_test_support::wait_for_event;
@@ -70,18 +71,21 @@ async fn submit_turn_with_approval_and_environments(
     prompt: &str,
     environments: Vec<TurnEnvironmentSelection>,
 ) -> Result<()> {
+    let turn_environment_selections = codex_protocol::protocol::TurnEnvironmentSelections::new(
+        test.config.cwd.clone(),
+        environments,
+    );
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
-            environments: Some(environments),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.clone()),
+                environments: Some(turn_environment_selections),
                 approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(SandboxPolicy::new_read_only_policy()),
@@ -284,10 +288,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     let test = unified_exec_test(&server).await?;
     let local_cwd = TempDir::new()?;
     fs::write(local_cwd.path().join("marker.txt"), "local-routing")?;
-    let local_selection = TurnEnvironmentSelection {
-        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: local_cwd.path().abs(),
-    };
+    let local_selection = local(local_cwd.path().abs());
     let remote_cwd = PathBuf::from(format!(
         "/tmp/codex-remote-routing-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
@@ -462,10 +463,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
         &test,
         "request permissions, then write in the remote environment",
         vec![
-            TurnEnvironmentSelection {
-                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: local_cwd.path().abs(),
-            },
+            local(local_cwd.path().abs()),
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: remote_cwd.clone(),
@@ -601,10 +599,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
     test.submit_turn_with_environments(
         "apply patch to remote environment",
         Some(vec![
-            TurnEnvironmentSelection {
-                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: local_cwd.path().abs(),
-            },
+            local(local_cwd.path().abs()),
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: remote_cwd.clone(),
@@ -682,10 +677,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         .await?;
 
     let environments = vec![
-        TurnEnvironmentSelection {
-            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-            cwd: local_cwd.path().abs(),
-        },
+        local(local_cwd.path().abs()),
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: remote_cwd.clone(),
@@ -882,10 +874,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
     test.submit_turn_with_environments(
         "apply patch through exec command to remote environment",
         Some(vec![
-            TurnEnvironmentSelection {
-                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: local_cwd.path().abs(),
-            },
+            local(local_cwd.path().abs()),
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: remote_cwd.clone(),

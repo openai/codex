@@ -14,7 +14,6 @@ use crate::PluginsConfigInput;
 use crate::PluginsManager;
 use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
-use crate::remote::RemotePluginScope;
 
 const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "github@openai-curated",
@@ -100,7 +99,9 @@ impl PluginsManager {
             .collect::<HashSet<_>>();
         installed_app_connector_ids.extend(input.loaded_plugin_app_connector_ids.iter().cloned());
         let remote_installed_marketplaces = if input.plugins.remote_plugin_enabled {
-            self.build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Global])
+            self.build_remote_installed_plugin_marketplaces_from_cache(&[
+                REMOTE_GLOBAL_MARKETPLACE_NAME,
+            ])
         } else {
             None
         };

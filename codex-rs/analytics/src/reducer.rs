@@ -360,7 +360,9 @@ impl TurnToolCounts {
             ThreadItem::FileChange { .. } => self.file_change += 1,
             ThreadItem::McpToolCall { .. } => self.mcp_tool_call += 1,
             ThreadItem::DynamicToolCall { .. } => self.dynamic_tool_call += 1,
-            ThreadItem::CollabAgentToolCall { .. } => self.subagent_tool_call += 1,
+            ThreadItem::CollabAgentToolCall { .. } | ThreadItem::SubAgentActivity { .. } => {
+                self.subagent_tool_call += 1;
+            }
             ThreadItem::WebSearch { .. } => self.web_search += 1,
             ThreadItem::ImageGeneration { .. } => self.image_generation += 1,
             ThreadItem::UserMessage { .. }
@@ -1091,6 +1093,18 @@ impl AnalyticsReducer {
                 );
             }
             ServerNotification::ItemCompleted(notification) => {
+                if matches!(notification.item, ThreadItem::SubAgentActivity { .. }) {
+                    let Some(turn_state) = self.turns.get_mut(&notification.turn_id) else {
+                        tracing::warn!(
+                            thread_id = %notification.thread_id,
+                            turn_id = %notification.turn_id,
+                            "dropping sub-agent activity tool count update: missing turn state"
+                        );
+                        return;
+                    };
+                    turn_state.tool_counts.record(&notification.item);
+                    return;
+                }
                 let Some(item_id) = tracked_tool_item_id(&notification.item) else {
                     return;
                 };
@@ -1562,6 +1576,7 @@ fn tracked_tool_item_id(item: &ThreadItem) -> Option<&str> {
         | ThreadItem::AgentMessage { .. }
         | ThreadItem::Plan { .. }
         | ThreadItem::Reasoning { .. }
+        | ThreadItem::SubAgentActivity { .. }
         | ThreadItem::ImageView { .. }
         | ThreadItem::EnteredReviewMode { .. }
         | ThreadItem::ExitedReviewMode { .. }
@@ -2470,7 +2485,6 @@ fn codex_turn_event_params(
         status: completed.status,
         turn_error: completed.turn_error,
         codex_error_kind: codex_error.map(|error| error.kind),
-        codex_error_subreason: codex_error.and_then(|error| error.subreason.clone()),
         codex_error_http_status_code: codex_error.and_then(|error| error.http_status_code),
         steer_count: Some(turn_state.steer_count),
         total_tool_call_count: Some(turn_state.tool_counts.total),
