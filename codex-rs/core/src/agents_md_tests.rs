@@ -1,6 +1,17 @@
 use super::*;
 use crate::config::ConfigBuilder;
+use async_trait::async_trait;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
+use codex_exec_server::CopyOptions;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::ReadDirectoryEntry;
+use codex_exec_server::RemoveOptions;
 use codex_extension_api::UserInstructions;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -9,11 +20,117 @@ use core_test_support::TempDirExt;
 use core_test_support::create_directory_symlink;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::io;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
+
+#[derive(Clone, Copy)]
+enum InjectedFailure {
+    Metadata(io::ErrorKind),
+    Read(io::ErrorKind),
+}
+
+struct FailingFileSystem {
+    path: AbsolutePathBuf,
+    failure: InjectedFailure,
+}
+
+#[async_trait]
+impl ExecutorFileSystem for FailingFileSystem {
+    async fn canonicalize(
+        &self,
+        _path: &AbsolutePathBuf,
+        _sandbox: Option<&FileSystemSandboxContext>,
+    ) -> io::Result<AbsolutePathBuf> {
+        unreachable!("canonicalize should not be called")
+    }
+
+    async fn join(
+        &self,
+        _base_path: &AbsolutePathBuf,
+        _path: &Path,
+    ) -> io::Result<AbsolutePathBuf> {
+        unreachable!("join should not be called")
+    }
+
+    async fn parent(&self, _path: &AbsolutePathBuf) -> io::Result<Option<AbsolutePathBuf>> {
+        unreachable!("parent should not be called")
+    }
+
+    async fn read_file(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> io::Result<Vec<u8>> {
+        if path == &self.path
+            && let InjectedFailure::Read(kind) = self.failure
+        {
+            return Err(io::Error::new(kind, "injected read failure"));
+        }
+        LOCAL_FS.read_file(path, sandbox).await
+    }
+
+    async fn write_file(
+        &self,
+        _path: &AbsolutePathBuf,
+        _contents: Vec<u8>,
+        _sandbox: Option<&FileSystemSandboxContext>,
+    ) -> io::Result<()> {
+        unreachable!("write_file should not be called")
+    }
+
+    async fn create_directory(
+        &self,
+        _path: &AbsolutePathBuf,
+        _create_directory_options: CreateDirectoryOptions,
+        _sandbox: Option<&FileSystemSandboxContext>,
+    ) -> io::Result<()> {
+        unreachable!("create_directory should not be called")
+    }
+
+    async fn get_metadata(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> io::Result<FileMetadata> {
+        if path == &self.path
+            && let InjectedFailure::Metadata(kind) = self.failure
+        {
+            return Err(io::Error::new(kind, "injected metadata failure"));
+        }
+        LOCAL_FS.get_metadata(path, sandbox).await
+    }
+
+    async fn read_directory(
+        &self,
+        _path: &AbsolutePathBuf,
+        _sandbox: Option<&FileSystemSandboxContext>,
+    ) -> io::Result<Vec<ReadDirectoryEntry>> {
+        unreachable!("read_directory should not be called")
+    }
+
+    async fn remove(
+        &self,
+        _path: &AbsolutePathBuf,
+        _remove_options: RemoveOptions,
+        _sandbox: Option<&FileSystemSandboxContext>,
+    ) -> io::Result<()> {
+        unreachable!("remove should not be called")
+    }
+
+    async fn copy(
+        &self,
+        _source_path: &AbsolutePathBuf,
+        _destination_path: &AbsolutePathBuf,
+        _copy_options: CopyOptions,
+        _sandbox: Option<&FileSystemSandboxContext>,
+    ) -> io::Result<()> {
+        unreachable!("copy should not be called")
+    }
+}
 
 struct TestConfig {
     config: Config,
@@ -42,13 +159,21 @@ async fn get_user_instructions(config: &TestConfig) -> Option<String> {
 }
 
 async fn load_agents_md(config: &TestConfig, warnings: &mut Vec<String>) -> Option<LoadedAgentsMd> {
-    load_project_instructions(
-        &config.config,
+    let mut core_config = config.config.clone();
+    let existing_warning_count = core_config.startup_warnings.len();
+    let loaded = load_project_instructions(
+        &mut core_config,
         config.user_instructions.clone(),
         Some(LOCAL_FS.as_ref()),
-        warnings,
     )
-    .await
+    .await;
+    warnings.extend(
+        core_config
+            .startup_warnings
+            .into_iter()
+            .skip(existing_warning_count),
+    );
+    loaded
 }
 
 async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<AbsolutePathBuf>> {
@@ -253,6 +378,92 @@ async fn doc_larger_than_limit_is_truncated() {
     assert_eq!(res, huge[..LIMIT]);
 }
 
+#[tokio::test]
+async fn total_byte_limit_truncates_later_project_docs() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    fs::write(repo.path().join(".git"), "").unwrap();
+    fs::write(repo.path().join("AGENTS.md"), "root").unwrap();
+    let nested = repo.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    fs::write(nested.join("AGENTS.md"), "abcdef").unwrap();
+
+    let mut config = make_config(&repo, /*limit*/ 7, /*instructions*/ None).await;
+    config.cwd = nested.abs();
+
+    let mut warnings = Vec::new();
+    let loaded = load_agents_md(&config, &mut warnings)
+        .await
+        .expect("project instructions");
+    let expected = LoadedAgentsMd {
+        user_instructions: None,
+        entries: vec![
+            InstructionEntry {
+                contents: "root".to_string(),
+                provenance: InstructionProvenance::Project(repo.path().join("AGENTS.md").abs()),
+            },
+            InstructionEntry {
+                contents: "abc".to_string(),
+                provenance: InstructionProvenance::Project(config.cwd.join("AGENTS.md")),
+            },
+        ],
+    };
+
+    assert_eq!(loaded, expected);
+    assert_eq!(loaded.text(), "root\n\nabc");
+    assert_eq!(warnings, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn read_agents_md_propagates_metadata_errors() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    let marker_path = config.cwd.join(".git");
+    let fs = FailingFileSystem {
+        path: marker_path,
+        failure: InjectedFailure::Metadata(io::ErrorKind::PermissionDenied),
+    };
+
+    let err = read_agents_md(&mut config.config, &fs)
+        .await
+        .expect_err("metadata error");
+
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[tokio::test]
+async fn read_agents_md_propagates_read_errors() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    let fs = FailingFileSystem {
+        path: config.cwd.join("AGENTS.md"),
+        failure: InjectedFailure::Read(io::ErrorKind::PermissionDenied),
+    };
+
+    let err = read_agents_md(&mut config.config, &fs)
+        .await
+        .expect_err("read error");
+
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[tokio::test]
+async fn read_agents_md_ignores_files_removed_after_discovery() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    let fs = FailingFileSystem {
+        path: config.cwd.join("AGENTS.md"),
+        failure: InjectedFailure::Read(io::ErrorKind::NotFound),
+    };
+
+    let loaded = read_agents_md(&mut config.config, &fs)
+        .await
+        .expect("removed file is recoverable");
+
+    assert_eq!(loaded, None);
+}
+
 /// When `cwd` is nested inside a repo, the search should locate AGENTS.md
 /// placed at the repository root (identified by `.git`).
 #[tokio::test]
@@ -293,17 +504,6 @@ async fn zero_byte_limit_disables_docs() {
         res.is_none(),
         "With limit 0 the function should return None"
     );
-}
-
-#[tokio::test]
-async fn zero_byte_limit_disables_discovery() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
-
-    let discovery = agents_md_paths(&make_config(&tmp, /*limit*/ 0, /*instructions*/ None).await)
-        .await
-        .expect("discover paths");
-    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
 /// When both system instructions and AGENTS.md docs are present the two
@@ -418,6 +618,51 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
 
     let res = get_user_instructions(&cfg).await.expect("doc expected");
     assert_eq!(res, "parent doc\n\nchild doc");
+}
+
+#[tokio::test]
+async fn project_layers_do_not_override_project_root_markers() {
+    let root = tempfile::tempdir().expect("tempdir");
+    fs::write(root.path().join(".git"), "").unwrap();
+    fs::write(root.path().join("AGENTS.md"), "root doc").unwrap();
+    let nested = root.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    fs::write(nested.join("AGENTS.md"), "nested doc").unwrap();
+
+    let mut config = make_config(&root, /*limit*/ 4096, /*instructions*/ None).await;
+    config.cwd = nested.abs();
+    let project_layer = |dot_codex_folder: AbsolutePathBuf, marker: &str| {
+        ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            TomlValue::Table(
+                [(
+                    "project_root_markers".to_string(),
+                    TomlValue::Array(vec![TomlValue::String(marker.to_string())]),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+        )
+    };
+    config.config_layer_stack = ConfigLayerStack::new(
+        vec![
+            project_layer(root.path().join(".codex").abs(), ".ignored-root-marker"),
+            project_layer(config.cwd.join(".codex"), ".ignored-nested-marker"),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid project layer ordering");
+
+    let discovery = agents_md_paths(&config).await.expect("discover paths");
+
+    assert_eq!(
+        discovery,
+        vec![
+            root.path().join("AGENTS.md").abs(),
+            config.cwd.join("AGENTS.md"),
+        ]
+    );
 }
 
 #[tokio::test]

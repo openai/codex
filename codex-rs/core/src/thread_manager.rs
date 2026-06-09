@@ -1101,14 +1101,19 @@ impl ThreadManagerState {
 
     /// Resolves the provider snapshot for a newly spawned runtime.
     ///
-    /// Root runtimes load a fresh snapshot so fresh threads, cold resumes, and
-    /// forks observe the provider's current state. Non-root agents inherit the
-    /// snapshot retained by their parent runtime instead, which keeps a
-    /// session internally consistent and avoids invoking the provider for
-    /// subagents. Provider warnings only apply to fresh loads; inherited
-    /// snapshots therefore carry no new warnings. If the parent runtime is no
-    /// longer available, the child starts without a provider snapshot rather
-    /// than performing an independent load.
+    /// Loads a fresh provider snapshot for:
+    /// - fresh root threads;
+    /// - cold resumes;
+    /// - root forks.
+    ///
+    /// Uses an existing snapshot for:
+    /// - subagents, which inherit from their parent without invoking the
+    ///   provider;
+    /// - running resumes and compaction paths, which retain the live session.
+    ///
+    /// Provider warnings only apply to fresh loads. If a parent runtime is no
+    /// longer available, its child starts without provider instructions rather
+    /// than loading independently.
     async fn user_instructions_for_spawn(
         &self,
         session_source: &SessionSource,

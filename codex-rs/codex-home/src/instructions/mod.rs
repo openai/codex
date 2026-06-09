@@ -25,10 +25,21 @@ impl CodexHomeUserInstructionsProvider {
         let mut warnings = Vec::new();
         for candidate in [LOCAL_AGENTS_MD_FILENAME, DEFAULT_AGENTS_MD_FILENAME] {
             let path = self.codex_home.join(candidate);
+            match tokio::fs::metadata(path.as_path()).await {
+                Ok(metadata) if !metadata.is_file() => continue,
+                Ok(_) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => {
+                    warnings.push(format!(
+                        "Failed to read global AGENTS.md instructions from `{}`: {err}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            }
             let data = match tokio::fs::read(path.as_path()).await {
                 Ok(data) => data,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-                Err(err) if err.kind() == io::ErrorKind::IsADirectory => continue,
                 Err(err) => {
                     warnings.push(format!(
                         "Failed to read global AGENTS.md instructions from `{}`: {err}",
