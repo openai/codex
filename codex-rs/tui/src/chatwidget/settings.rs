@@ -159,7 +159,7 @@ impl ChatWidget {
     /// so the footer reflects it without waiting for the next mode switch.
     /// Passing `None` resets to the Plan-mode preset default.
     pub(crate) fn set_plan_mode_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.config.plan_mode_reasoning_effort = effort;
+        self.config.plan_mode_reasoning_effort = effort.clone();
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
             && mask.mode == Some(ModeKind::Plan)
@@ -182,7 +182,7 @@ impl ChatWidget {
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             /*model*/ None,
-            Some(effort),
+            Some(effort.clone()),
             /*developer_instructions*/ None,
         );
         if self.collaboration_modes_enabled()
@@ -471,7 +471,7 @@ impl ChatWidget {
         let current_effort = self.current_collaboration_mode.reasoning_effort();
         self.active_collaboration_mask
             .as_ref()
-            .and_then(|mask| mask.reasoning_effort)
+            .and_then(|mask| mask.reasoning_effort.clone())
             .unwrap_or(current_effort)
     }
 
@@ -590,7 +590,7 @@ impl ChatWidget {
             name: mode_kind.display_name().to_string(),
             mode: Some(mode_kind),
             model: Some(settings.model.clone()),
-            reasoning_effort: Some(settings.reasoning_effort),
+            reasoning_effort: Some(settings.reasoning_effort.clone()),
             developer_instructions: Some(settings.developer_instructions),
         });
         self.update_collaboration_mode_indicator();
@@ -712,7 +712,7 @@ impl ChatWidget {
         let previous_model = self.current_model().to_string();
         let previous_effort = self.effective_reasoning_effort();
         if mask.mode == Some(ModeKind::Plan)
-            && let Some(effort) = self.config.plan_mode_reasoning_effort
+            && let Some(effort) = self.config.plan_mode_reasoning_effort.clone()
         {
             mask.reasoning_effort = Some(Some(effort));
         }
@@ -732,13 +732,9 @@ impl ChatWidget {
         {
             let mut message = format!("Model changed to {next_model}");
             if !next_model.starts_with("codex-auto-") {
-                let reasoning_label = match next_effort {
-                    Some(ReasoningEffortConfig::Minimal) => "minimal",
-                    Some(ReasoningEffortConfig::Low) => "low",
-                    Some(ReasoningEffortConfig::Medium) => "medium",
-                    Some(ReasoningEffortConfig::High) => "high",
-                    Some(ReasoningEffortConfig::XHigh) => "xhigh",
+                let reasoning_label = match next_effort.as_ref() {
                     None | Some(ReasoningEffortConfig::None) => "default",
+                    Some(effort) => effort.as_str(),
                 };
                 message.push(' ');
                 message.push_str(reasoning_label);

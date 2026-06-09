@@ -391,6 +391,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 eprintln!("Logged in using access token");
                 std::process::exit(0);
             }
+            AuthMode::PersonalAccessToken => {
+                eprintln!("Logged in using personal access token");
+                std::process::exit(0);
+            }
         },
         Ok(None) => {
             eprintln!("Not logged in");

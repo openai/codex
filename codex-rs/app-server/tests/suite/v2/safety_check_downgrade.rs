@@ -15,6 +15,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnModerationMetadataNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
@@ -303,6 +304,87 @@ async fn model_verification_emits_typed_notification_and_warning_v2() -> Result<
             thread_id: thread.id,
             turn_id: turn_start.turn.id,
             verifications: vec![ModelVerification::TrustedAccessForCyber],
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_moderation_metadata_emits_typed_notification_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        serde_json::json!({
+            "type": "response.metadata",
+            "sequence_number": 1,
+            "response_id": "resp-1",
+            "metadata": {
+                "openai_chatgpt_moderation_metadata": {
+                    "presentation": "inline"
+                }
+            }
+        }),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response = responses::sse_response(body);
+    let _response_mock = responses::mount_response_once(&server, response).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some(REQUESTED_MODEL.to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "trigger moderation metadata".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let turn_start: TurnStartResponse = to_response(turn_resp)?;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/moderationMetadata"),
+    )
+    .await??;
+    let metadata: TurnModerationMetadataNotification =
+        serde_json::from_value(notification.params.ok_or_else(|| {
+            anyhow::anyhow!("turn/moderationMetadata notifications must include params")
+        })?)?;
+    assert_eq!(
+        metadata,
+        TurnModerationMetadataNotification {
+            thread_id: thread.id,
+            turn_id: turn_start.turn.id,
+            metadata: serde_json::json!({"presentation": "inline"}),
         }
     );
 

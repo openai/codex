@@ -28,6 +28,32 @@ pub struct SkillInjection {
     pub contents: String,
 }
 
+/// Host skill prompts that have already been injected by an extension for this
+/// turn.
+///
+/// Core uses this to keep the legacy skill-injection path from sending the same
+/// host `SKILL.md` body again while the skills extension is being wired in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InjectedHostSkillPrompts {
+    paths: HashSet<String>,
+}
+
+impl InjectedHostSkillPrompts {
+    pub fn insert_path(&mut self, path: impl Into<String>) {
+        let path = path.into();
+        self.paths.insert(normalize_host_skill_path(&path));
+        self.paths.insert(path);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    pub fn contains_path(&self, path: &str) -> bool {
+        self.paths.contains(path) || self.paths.contains(&normalize_host_skill_path(path))
+    }
+}
+
 pub async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
     loaded_skills: Option<&SkillLoadOutcome>,
@@ -83,6 +109,10 @@ pub async fn build_skill_injections(
     analytics_client.track_skill_invocations(tracking, invocations);
 
     result
+}
+
+fn normalize_host_skill_path(path: &str) -> String {
+    normalize_skill_path(path).replace('\\', "/")
 }
 
 fn emit_skill_injected_metric(

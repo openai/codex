@@ -3,6 +3,7 @@ use codex_config::types::Personality;
 use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_tools::ToolSpec;
 use futures::Stream;
 use serde_json::Value;
@@ -53,7 +54,22 @@ impl Default for Prompt {
 
 impl Prompt {
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
-        self.input.clone()
+        self.input
+            .iter()
+            .cloned()
+            .map(|item| {
+                let ResponseItem::Message { role, content, .. } = &item else {
+                    return item;
+                };
+                if role != "assistant" {
+                    return item;
+                }
+                InterAgentCommunication::from_message_content(content)
+                    .filter(|communication| communication.encrypted_content.is_some())
+                    .map(|communication| communication.to_model_input_item())
+                    .unwrap_or(item)
+            })
+            .collect()
     }
 }
 

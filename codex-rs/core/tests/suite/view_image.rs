@@ -42,6 +42,8 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event_with_timeout;
@@ -74,12 +76,11 @@ fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) ->
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     Op::UserInput {
         items,
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(test.config.cwd.to_path_buf()),
+            environments: Some(local_selections(test.config.cwd.clone())),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -456,10 +457,7 @@ async fn view_image_routes_to_selected_local_environment() -> anyhow::Result<()>
 
     test.submit_turn_with_environments(
         "route local view image",
-        Some(vec![TurnEnvironmentSelection {
-            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-            cwd: test.config.cwd.clone(),
-        }]),
+        Some(vec![local(test.config.cwd.clone())]),
     )
     .await?;
 
@@ -572,10 +570,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     let test = builder.build_with_remote_and_local_env(&server).await?;
     let local_cwd = TempDir::new()?;
     fs::write(local_cwd.path().join("remote.png"), b"not a remote image")?;
-    let local_selection = TurnEnvironmentSelection {
-        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: local_cwd.path().abs(),
-    };
+    let local_selection = local(local_cwd.path().abs());
     let remote_cwd = PathBuf::from(format!(
         "/tmp/codex-view-image-routing-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
@@ -1355,6 +1350,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         input_modalities: vec![InputModality::Text],
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
         auto_review_model_override: None,
         tool_mode: None,
         multi_agent_version: None,

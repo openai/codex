@@ -77,6 +77,7 @@ mod thread_processor_behavior_tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::protocol::TurnEnvironmentSelections;
     use codex_state::ThreadMetadataBuilder;
     use codex_thread_store::StoredThread;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -393,6 +394,7 @@ mod thread_processor_behavior_tests {
             ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread");
         let stored_thread = StoredThread {
             thread_id,
+            extra_config: None,
             rollout_path: Some(PathBuf::from("/tmp/thread.jsonl")),
             forked_from_id: None,
             parent_thread_id: None,
@@ -685,7 +687,7 @@ mod thread_processor_behavior_tests {
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
             active_permission_profile: None,
-            cwd,
+            environments: TurnEnvironmentSelections::new(cwd, Vec::new()),
             workspace_roots: Vec::new(),
             profile_workspace_roots: Vec::new(),
             ephemeral: false,
@@ -701,6 +703,7 @@ mod thread_processor_behavior_tests {
                 },
             },
             session_source: SessionSource::Cli,
+            forked_from_thread_id: None,
             parent_thread_id: None,
             thread_source: None,
         };

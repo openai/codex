@@ -194,7 +194,7 @@ impl MemoryStartupContext {
                 prompt,
                 &context.model_info,
                 &context.session_telemetry,
-                context.reasoning_effort,
+                context.reasoning_effort.clone(),
                 context.reasoning_summary,
                 context.service_tier.clone(),
                 context.turn_metadata_header.as_deref(),
@@ -259,7 +259,6 @@ impl MemoryStartupContext {
             .thread
             .submit(Op::UserInput {
                 items: prompt,
-                environments: None,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
                 additional_context: Default::default(),

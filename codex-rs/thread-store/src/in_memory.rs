@@ -356,6 +356,7 @@ fn stored_thread_from_state(
 
     Ok(StoredThread {
         thread_id,
+        extra_config: created.extra_config.clone(),
         rollout_path: metadata
             .and_then(|metadata| metadata.rollout_path.clone())
             .or(rollout_path),
@@ -369,7 +370,7 @@ fn stored_thread_from_state(
             .and_then(|metadata| metadata.model_provider.clone())
             .unwrap_or_else(|| "test".to_string()),
         model: metadata.and_then(|metadata| metadata.model.clone()),
-        reasoning_effort: metadata.and_then(|metadata| metadata.reasoning_effort),
+        reasoning_effort: metadata.and_then(|metadata| metadata.reasoning_effort.clone()),
         created_at: metadata
             .and_then(|metadata| metadata.created_at)
             .unwrap_or_else(Utc::now),

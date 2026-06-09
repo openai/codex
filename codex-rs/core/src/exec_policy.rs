@@ -20,9 +20,9 @@ use codex_execpolicy::RuleMatch;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_execpolicy::blocking_append_network_rule;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
 use codex_shell_command::is_safe_command::is_known_safe_command;
@@ -121,8 +121,7 @@ pub(crate) enum ExecPolicyCommandOrigin {
 pub(crate) struct UnmatchedCommandContext<'a> {
     pub(crate) approval_policy: AskForApproval,
     pub(crate) permission_profile: &'a PermissionProfile,
-    pub(crate) file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
-    pub(crate) sandbox_cwd: &'a Path,
+    pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) used_complex_parsing: bool,
     pub(crate) command_origin: ExecPolicyCommandOrigin,
@@ -242,8 +241,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) command: &'a [String],
     pub(crate) approval_policy: AskForApproval,
     pub(crate) permission_profile: PermissionProfile,
-    pub(crate) file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
-    pub(crate) sandbox_cwd: &'a Path,
+    pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
 }
@@ -277,8 +275,7 @@ impl ExecPolicyManager {
             command,
             approval_policy,
             permission_profile,
-            file_system_sandbox_policy,
-            sandbox_cwd,
+            windows_sandbox_level,
             sandbox_permissions,
             prefix_rule,
         } = req;
@@ -298,8 +295,7 @@ impl ExecPolicyManager {
                 UnmatchedCommandContext {
                     approval_policy,
                     permission_profile: &permission_profile,
-                    file_system_sandbox_policy,
-                    sandbox_cwd,
+                    windows_sandbox_level,
                     sandbox_permissions,
                     used_complex_parsing,
                     command_origin,
@@ -636,12 +632,12 @@ pub(crate) fn render_decision_for_unmatched_command(
     let UnmatchedCommandContext {
         approval_policy,
         permission_profile,
-        file_system_sandbox_policy,
-        sandbox_cwd,
+        windows_sandbox_level,
         sandbox_permissions,
         used_complex_parsing,
         command_origin,
     } = context;
+    let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
     let is_known_safe = match command_origin {
         ExecPolicyCommandOrigin::Generic => is_known_safe_command(command),
         #[cfg(windows)]
@@ -650,19 +646,18 @@ pub(crate) fn render_decision_for_unmatched_command(
         }
     };
 
-    // On Windows, ReadOnly sandbox is not a real sandbox, so special-case it
-    // here.
-    let environment_lacks_sandbox_protections = cfg!(windows)
-        && profile_is_managed_read_only(
-            permission_profile,
-            file_system_sandbox_policy,
-            sandbox_cwd,
-        );
+    // When the Windows sandbox backend is disabled, managed filesystem
+    // restrictions are only a policy shape; there is no platform sandbox to
+    // enforce the boundary. Keep that legacy case conservative while still
+    // relying on the real Windows sandbox when it is enabled.
+    let windows_managed_fs_restrictions_without_sandbox_backend = cfg!(windows)
+        && windows_sandbox_level == WindowsSandboxLevel::Disabled
+        && profile_has_managed_filesystem_restrictions(permission_profile);
 
     if is_known_safe
         && !used_complex_parsing
         && (approval_policy == AskForApproval::UnlessTrusted
-            || environment_lacks_sandbox_protections)
+            || windows_managed_fs_restrictions_without_sandbox_backend)
     {
         return Decision::Allow;
     }
@@ -680,7 +675,7 @@ pub(crate) fn render_decision_for_unmatched_command(
             codex_shell_command::is_dangerous_command::is_dangerous_powershell_words(command)
         }
     };
-    if command_is_dangerous || environment_lacks_sandbox_protections {
+    if command_is_dangerous || windows_managed_fs_restrictions_without_sandbox_backend {
         return match approval_policy {
             AskForApproval::Never => {
                 let sandbox_is_explicitly_disabled = matches!(
@@ -749,20 +744,14 @@ pub(crate) fn render_decision_for_unmatched_command(
     }
 }
 
-fn profile_is_managed_read_only(
-    permission_profile: &PermissionProfile,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    sandbox_cwd: &Path,
-) -> bool {
+fn profile_has_managed_filesystem_restrictions(permission_profile: &PermissionProfile) -> bool {
+    let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
     matches!(permission_profile, PermissionProfile::Managed { .. })
         && matches!(
             file_system_sandbox_policy.kind,
             FileSystemSandboxKind::Restricted
         )
         && !file_system_sandbox_policy.has_full_disk_write_access()
-        && file_system_sandbox_policy
-            .get_writable_roots_with_cwd(sandbox_cwd)
-            .is_empty()
 }
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {
