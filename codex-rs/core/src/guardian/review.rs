@@ -60,11 +60,13 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
     "You may retry once, or ask the user for guidance or explicit approval.",
 );
 
-const GUARDIAN_RETRY_WARNING: &str = concat!(
+const GUARDIAN_AVAILABILITY_RETRY_WARNING: &str = concat!(
     "Automatic approval review is temporarily unavailable. ",
     "Retrying once before blocking the action.",
 );
+const GUARDIAN_TIMEOUT_RETRY_WARNING: &str = "Automatic approval review timed out. Retrying once.";
 const GUARDIAN_RETRY_MAX_DELAY: Duration = Duration::from_secs(3);
+const GUARDIAN_TIMEOUT_RETRY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -119,6 +121,13 @@ pub(super) enum GuardianReviewError {
     Cancelled,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct GuardianRetryPlan {
+    warning: &'static str,
+    max_delay: Duration,
+    timeout: Duration,
+}
+
 impl GuardianReviewError {
     fn prompt_build(err: anyhow::Error) -> Self {
         Self::PromptBuild {
@@ -148,11 +157,24 @@ impl GuardianReviewError {
         }
     }
 
-    fn is_retryable(&self) -> bool {
+    fn retry_plan(&self) -> Option<GuardianRetryPlan> {
         match self {
-            Self::Timeout => true,
-            Self::Session { message } => session_error_is_retryable(message),
-            Self::PromptBuild { .. } | Self::Parse { .. } | Self::Cancelled => false,
+            Self::Timeout => Some(GuardianRetryPlan {
+                warning: GUARDIAN_TIMEOUT_RETRY_WARNING,
+                max_delay: Duration::ZERO,
+                timeout: GUARDIAN_TIMEOUT_RETRY_TIMEOUT,
+            }),
+            Self::Session { message } if session_error_is_retryable(message) => {
+                Some(GuardianRetryPlan {
+                    warning: GUARDIAN_AVAILABILITY_RETRY_WARNING,
+                    max_delay: GUARDIAN_RETRY_MAX_DELAY,
+                    timeout: GUARDIAN_REVIEW_TIMEOUT,
+                })
+            }
+            Self::PromptBuild { .. }
+            | Self::Session { .. }
+            | Self::Parse { .. }
+            | Self::Cancelled => None,
         }
     }
 
@@ -660,6 +682,7 @@ async fn run_guardian_review_session_with_retry(
         request.clone(),
         retry_reason.clone(),
         schema.clone(),
+        GUARDIAN_REVIEW_TIMEOUT,
         external_cancel.clone(),
     ))
     .await;
@@ -667,10 +690,12 @@ async fn run_guardian_review_session_with_retry(
     let GuardianReviewOutcome::Error(error) = &first_outcome else {
         return (first_outcome, first_analytics_result);
     };
-    if !error.is_retryable()
-        || external_cancel
-            .as_ref()
-            .is_some_and(CancellationToken::is_cancelled)
+    let Some(retry_plan) = error.retry_plan() else {
+        return (first_outcome, first_analytics_result);
+    };
+    if external_cancel
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
     {
         return (first_outcome, first_analytics_result);
     }
@@ -679,26 +704,28 @@ async fn run_guardian_review_session_with_retry(
         .send_event(
             turn.as_ref(),
             EventMsg::GuardianWarning(WarningEvent {
-                message: GUARDIAN_RETRY_WARNING.to_string(),
+                message: retry_plan.warning.to_string(),
             }),
         )
         .await;
 
-    let retry_delay = Duration::from_millis(
-        rand::rng().random_range(0..=GUARDIAN_RETRY_MAX_DELAY.as_millis() as u64),
-    );
-    if let Some(external_cancel) = external_cancel.as_ref() {
-        tokio::select! {
-            () = tokio::time::sleep(retry_delay) => {}
-            () = external_cancel.cancelled() => {
-                return (
-                    GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
-                    first_analytics_result,
-                );
+    if !retry_plan.max_delay.is_zero() {
+        let retry_delay = Duration::from_millis(
+            rand::rng().random_range(0..=retry_plan.max_delay.as_millis() as u64),
+        );
+        if let Some(external_cancel) = external_cancel.as_ref() {
+            tokio::select! {
+                () = tokio::time::sleep(retry_delay) => {}
+                () = external_cancel.cancelled() => {
+                    return (
+                        GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
+                        first_analytics_result,
+                    );
+                }
             }
+        } else {
+            tokio::time::sleep(retry_delay).await;
         }
-    } else {
-        tokio::time::sleep(retry_delay).await;
     }
 
     let retry_reason = match retry_reason {
@@ -711,6 +738,7 @@ async fn run_guardian_review_session_with_retry(
         request,
         Some(retry_reason),
         schema,
+        retry_plan.timeout,
         external_cancel,
     )
     .await
@@ -811,6 +839,7 @@ pub(super) async fn run_guardian_review_session(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     schema: serde_json::Value,
+    review_timeout: Duration,
     external_cancel: Option<CancellationToken>,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
     let network_proxy = session.services.network_proxy.load_full();
@@ -900,6 +929,7 @@ pub(super) async fn run_guardian_review_session(
                 reasoning_effort: guardian_reasoning_effort,
                 reasoning_summary: turn.reasoning_summary,
                 personality: turn.personality,
+                review_timeout,
                 external_cancel,
             }),
     )
@@ -976,20 +1006,36 @@ mod review_tests {
     }
 
     #[test]
-    fn guardian_review_retries_only_availability_failures() {
-        assert!(GuardianReviewError::Timeout.is_retryable());
-        assert!(
+    fn guardian_review_retry_plans_match_failure_kind() {
+        assert_eq!(
+            GuardianReviewError::Timeout.retry_plan(),
+            Some(GuardianRetryPlan {
+                warning: GUARDIAN_TIMEOUT_RETRY_WARNING,
+                max_delay: Duration::ZERO,
+                timeout: GUARDIAN_TIMEOUT_RETRY_TIMEOUT,
+            })
+        );
+        assert_eq!(
             GuardianReviewError::session(anyhow::anyhow!(
                 "503 service unavailable: reviewer capacity exhausted"
             ))
-            .is_retryable()
+            .retry_plan(),
+            Some(GuardianRetryPlan {
+                warning: GUARDIAN_AVAILABILITY_RETRY_WARNING,
+                max_delay: GUARDIAN_RETRY_MAX_DELAY,
+                timeout: GUARDIAN_REVIEW_TIMEOUT,
+            })
         );
-        assert!(
-            !GuardianReviewError::session(anyhow::anyhow!(
+        assert_eq!(
+            GuardianReviewError::session(anyhow::anyhow!(
                 "invalid_request_error: malformed review prompt"
             ))
-            .is_retryable()
+            .retry_plan(),
+            None
         );
-        assert!(!GuardianReviewError::parse(anyhow::anyhow!("bad JSON")).is_retryable());
+        assert_eq!(
+            GuardianReviewError::parse(anyhow::anyhow!("bad JSON")).retry_plan(),
+            None
+        );
     }
 }

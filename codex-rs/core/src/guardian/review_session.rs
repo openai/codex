@@ -46,7 +46,6 @@ use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::prompt::GuardianPromptMode;
@@ -76,6 +75,7 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) personality: Option<Personality>,
+    pub(crate) review_timeout: Duration,
     pub(crate) external_cancel: Option<CancellationToken>,
 }
 
@@ -312,7 +312,7 @@ impl GuardianReviewSessionManager {
         &self,
         params: GuardianReviewSessionParams,
     ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
-        let deadline = tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
+        let deadline = tokio::time::Instant::now() + params.review_timeout;
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
         let mut stale_trunk_to_shutdown = None;
         let mut spawned_trunk = false;
@@ -1147,6 +1147,7 @@ mod tests {
             reasoning_effort,
             reasoning_summary,
             personality,
+            review_timeout: super::GUARDIAN_REVIEW_TIMEOUT,
             external_cancel: None,
         }
     }
