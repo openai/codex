@@ -162,6 +162,8 @@ pub(crate) fn guardian_agent_spawner(
 mod tests {
     use std::time::Duration;
 
+    use crate::outgoing_message::OutgoingEnvelope;
+    use crate::outgoing_message::OutgoingMessage;
     use codex_protocol::protocol::ThreadGoal as CoreThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
@@ -215,6 +217,52 @@ mod tests {
                 "cleared".to_string()
             ],
             observed
+        );
+    }
+
+    #[tokio::test]
+    async fn app_server_event_sink_sends_fallback_while_sender_is_alive() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(/*buffer*/ 4);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            AnalyticsEventsClient::disabled(),
+        ));
+        let sink =
+            app_server_extension_event_sink(Arc::clone(&outgoing), ThreadStateManager::new());
+        let thread_id = ThreadId::default();
+        let event = thread_goal_updated_event(thread_id, "turn-1");
+
+        sink.emit(event);
+
+        let envelope = timeout(Duration::from_secs(/*secs*/ 1), outgoing_rx.recv())
+            .await
+            .expect("timed out waiting for fallback notification")
+            .expect("outgoing channel closed unexpectedly");
+        let OutgoingEnvelope::Broadcast {
+            message:
+                OutgoingMessage::AppServerNotification(ServerNotification::ThreadGoalUpdated(
+                    notification,
+                )),
+        } = envelope
+        else {
+            panic!("expected a global thread goal update notification");
+        };
+        assert_eq!(
+            notification,
+            ThreadGoalUpdatedNotification {
+                thread_id: thread_id.to_string(),
+                turn_id: Some("turn-1".to_string()),
+                goal: ThreadGoal {
+                    thread_id: thread_id.to_string(),
+                    objective: "wire extension events".to_string(),
+                    status: codex_app_server_protocol::ThreadGoalStatus::Active,
+                    token_budget: Some(123),
+                    tokens_used: 45,
+                    time_used_seconds: 6,
+                    created_at: 7,
+                    updated_at: 8,
+                },
+            }
         );
     }
 
