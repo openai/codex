@@ -20,11 +20,11 @@
 
 use std::future::Future;
 use std::io;
-use std::mem::take;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use bytes::BytesMut;
 use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEvent;
@@ -32,6 +32,7 @@ use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ProcessOutputChunk;
 use codex_exec_server::WriteStatus;
+use memchr::memchr;
 use rmcp::service::RoleClient;
 use rmcp::service::RxJsonRpcMessage;
 use rmcp::service::TxJsonRpcMessage;
@@ -45,6 +46,42 @@ use tracing::info;
 use tracing::warn;
 
 static PROCESS_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
+#[derive(Default)]
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+struct LineBuffer {
+    bytes: BytesMut,
+    /// Prefix already scanned and known not to contain a newline.
+    scanned_len: usize,
+}
+
+impl LineBuffer {
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+    }
+
+    fn take_line(&mut self) -> Option<BytesMut> {
+        let Some(relative_index) = memchr(b'\n', &self.bytes[self.scanned_len..]) else {
+            self.scanned_len = self.bytes.len();
+            return None;
+        };
+
+        let newline_index = self.scanned_len + relative_index;
+        let mut line = self.bytes.split_to(newline_index + 1);
+        line.truncate(newline_index);
+        self.scanned_len = 0;
+        Some(line)
+    }
+
+    fn take_remaining(&mut self) -> Option<BytesMut> {
+        if self.bytes.is_empty() {
+            return None;
+        }
+
+        self.scanned_len = 0;
+        Some(self.bytes.split())
+    }
+}
 
 // Remote public implementation.
 
@@ -73,10 +110,10 @@ pub(super) struct ExecutorProcessTransport {
 
     /// Buffered child stdout bytes that have not yet formed a complete
     /// newline-delimited JSON-RPC message.
-    stdout: Vec<u8>,
+    stdout: LineBuffer,
 
     /// Buffered stderr bytes for diagnostic logging.
-    stderr: Vec<u8>,
+    stderr: LineBuffer,
 
     /// Whether the executor has reported process closure or a terminal
     /// subscription failure. Once closed, any remaining partial stdout line is
@@ -105,8 +142,8 @@ impl ExecutorProcessTransport {
             process,
             events,
             program_name,
-            stdout: Vec::new(),
-            stderr: Vec::new(),
+            stdout: LineBuffer::default(),
+            stderr: LineBuffer::default(),
             closed: false,
             terminated: false,
             last_seq: 0,
@@ -288,15 +325,10 @@ impl ExecutorProcessTransport {
         // so EOF after a complete JSON object behaves like local rmcp's
         // `decode_eof` handling.
         loop {
-            let line_end = self.stdout.iter().position(|byte| *byte == b'\n');
-            let line = match (line_end, allow_partial && !self.stdout.is_empty()) {
-                (Some(index), _) => {
-                    let mut line = self.stdout.drain(..=index).collect::<Vec<_>>();
-                    line.pop();
-                    line
-                }
-                (None, true) => self.stdout.drain(..).collect(),
-                (None, false) => return None,
+            let line = match self.stdout.take_line() {
+                Some(line) => line,
+                None if allow_partial => self.stdout.take_remaining()?,
+                None => return None,
             };
             let line = Self::trim_trailing_carriage_return(line);
             match from_slice::<RxJsonRpcMessage<RoleClient>>(&line) {
@@ -315,12 +347,8 @@ impl ExecutorProcessTransport {
         // Keep stderr line-oriented in logs so a chatty MCP server does not
         // produce one log record per byte chunk.
         self.stderr.extend_from_slice(bytes);
-        while let Some(index) = self.stderr.iter().position(|byte| *byte == b'\n') {
-            let mut line = self.stderr.drain(..=index).collect::<Vec<_>>();
-            line.pop();
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
+        while let Some(line) = self.stderr.take_line() {
+            let line = Self::trim_trailing_carriage_return(line);
             info!(
                 "MCP server stderr ({}): {}",
                 self.program_name,
@@ -330,10 +358,9 @@ impl ExecutorProcessTransport {
     }
 
     fn flush_stderr(&mut self) {
-        if self.stderr.is_empty() {
+        let Some(line) = self.stderr.take_remaining() else {
             return;
-        }
-        let line = take(&mut self.stderr);
+        };
         info!(
             "MCP server stderr ({}): {}",
             self.program_name,
@@ -341,13 +368,17 @@ impl ExecutorProcessTransport {
         );
     }
 
-    fn trim_trailing_carriage_return(mut line: Vec<u8>) -> Vec<u8> {
+    fn trim_trailing_carriage_return(mut line: BytesMut) -> BytesMut {
         if line.last() == Some(&b'\r') {
-            line.pop();
+            line.truncate(line.len() - 1);
         }
         line
     }
 }
+
+#[cfg(test)]
+#[path = "executor_process_transport_tests.rs"]
+mod tests;
 
 impl Drop for ExecutorProcessTransport {
     fn drop(&mut self) {

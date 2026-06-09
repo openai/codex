@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use codex_core::LoadedAgentsMd;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
@@ -517,7 +518,9 @@ async fn build_harness_inner(
             FIXED_CWD,
         ))
         .expect("fixed cwd should be absolute");
-        config.user_instructions = Some("PARITY_USER_INSTRUCTIONS".to_string());
+        config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+            "PARITY_USER_INSTRUCTIONS",
+        ));
         config.developer_instructions = Some("PARITY_DEVELOPER_INSTRUCTIONS".to_string());
         if settings.service_tier_fast {
             config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
@@ -602,7 +605,6 @@ async fn capture_from_requests(
 async fn submit_user_input(codex: &codex_core::CodexThread, items: Vec<UserInput>) -> Result<()> {
     codex
         .submit(Op::UserInput {
-            environments: None,
             items,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,

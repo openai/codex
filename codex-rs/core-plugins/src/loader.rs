@@ -5,6 +5,7 @@ use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::load_marketplace;
+use crate::marketplace::load_raw_marketplace_plugin_names;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
@@ -52,6 +53,21 @@ const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 const CONFIG_TOML_FILE: &str = "config.toml";
 const CURATED_PLUGIN_CACHE_VERSION_SHA_PREFIX_LEN: usize = 8;
+
+/// Hook declarations and warnings resolved without loading other plugin capabilities.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginHookLoadOutcome {
+    pub hook_sources: Vec<PluginHookSource>,
+    pub hook_load_warnings: Vec<String>,
+}
+
+enum PluginLoadScope<'a> {
+    AllCapabilities {
+        restriction_product: Option<Product>,
+        skill_config_rules: &'a SkillConfigRules,
+    },
+    HooksOnly,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NonCuratedCacheRefreshMode {
@@ -117,6 +133,26 @@ pub async fn load_plugins_from_layer_stack(
     prefer_remote_curated_conflicts: bool,
 ) -> PluginLoadOutcome<McpServerConfig> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
+    load_plugins_from_layer_stack_with_scope(
+        config_layer_stack,
+        extra_plugins,
+        store,
+        prefer_remote_curated_conflicts,
+        PluginLoadScope::AllCapabilities {
+            restriction_product,
+            skill_config_rules: &skill_config_rules,
+        },
+    )
+    .await
+}
+
+async fn load_plugins_from_layer_stack_with_scope(
+    config_layer_stack: &ConfigLayerStack,
+    extra_plugins: HashMap<String, PluginConfig>,
+    store: &PluginStore,
+    prefer_remote_curated_conflicts: bool,
+    scope: PluginLoadScope<'_>,
+) -> PluginLoadOutcome<McpServerConfig> {
     let configured_plugins = merge_configured_plugins_with_remote_installed(
         configured_plugins_from_stack(config_layer_stack),
         extra_plugins,
@@ -129,14 +165,7 @@ pub async fn load_plugins_from_layer_stack(
     let mut plugins = Vec::with_capacity(configured_plugins.len());
     let mut seen_mcp_server_names = HashMap::<String, String>::new();
     for (configured_name, plugin) in configured_plugins {
-        let loaded_plugin = load_plugin(
-            configured_name.clone(),
-            &plugin,
-            store,
-            restriction_product,
-            &skill_config_rules,
-        )
-        .await;
+        let loaded_plugin = load_plugin(configured_name.clone(), &plugin, store, &scope).await;
         for name in loaded_plugin.mcp_servers.keys() {
             if let Some(previous_plugin) =
                 seen_mcp_server_names.insert(name.clone(), configured_name.clone())
@@ -153,6 +182,27 @@ pub async fn load_plugins_from_layer_stack(
     }
 
     PluginLoadOutcome::from_plugins(plugins)
+}
+
+/// Load hooks from enabled plugins without loading their skills, MCP servers, or apps.
+pub async fn load_plugin_hooks_from_layer_stack(
+    config_layer_stack: &ConfigLayerStack,
+    extra_plugins: HashMap<String, PluginConfig>,
+    store: &PluginStore,
+    prefer_remote_curated_conflicts: bool,
+) -> PluginHookLoadOutcome {
+    let outcome = load_plugins_from_layer_stack_with_scope(
+        config_layer_stack,
+        extra_plugins,
+        store,
+        prefer_remote_curated_conflicts,
+        PluginLoadScope::HooksOnly,
+    )
+    .await;
+    PluginHookLoadOutcome {
+        hook_sources: outcome.effective_plugin_hook_sources(),
+        hook_load_warnings: outcome.effective_plugin_hook_warnings(),
+    }
 }
 
 fn merge_configured_plugins_with_remote_installed(
@@ -258,6 +308,10 @@ pub fn refresh_curated_plugin_cache(
             .join(".agents/plugins/marketplace.json"),
     )
     .map_err(|_| "local curated marketplace is not available".to_string())?;
+    let marketplace_plugin_names = load_raw_marketplace_plugin_names(&curated_marketplace_path)
+        .map_err(|err| {
+            format!("failed to load curated marketplace plugin names for cache refresh: {err}")
+        })?;
     let curated_marketplace = load_marketplace(&curated_marketplace_path)
         .map_err(|err| format!("failed to load curated marketplace for cache refresh: {err}"))?;
 
@@ -272,35 +326,39 @@ pub fn refresh_curated_plugin_cache(
             );
             continue;
         }
-        let source_path = match plugin.source {
-            MarketplacePluginSource::Local { path } => path,
-            MarketplacePluginSource::Git { .. } => {
-                warn!(
-                    plugin = plugin_name,
-                    marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
-                    "skipping remote curated plugin source during cache refresh"
-                );
-                continue;
-            }
-        };
-        plugin_sources.insert(plugin_name, source_path);
+        if let MarketplacePluginSource::Local { path } = plugin.source {
+            plugin_sources.insert(plugin_name, path);
+        }
     }
 
     let mut cache_refreshed = false;
     for plugin_id in configured_curated_plugin_ids {
-        if store.active_plugin_version(plugin_id).as_deref() == Some(cache_plugin_version.as_str())
-        {
-            continue;
-        }
-
-        let Some(source_path) = plugin_sources.get(&plugin_id.plugin_name).cloned() else {
+        if !marketplace_plugin_names.contains(&plugin_id.plugin_name) {
             warn!(
                 plugin = plugin_id.plugin_name,
                 marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
                 "configured curated plugin no longer exists in curated marketplace during cache refresh"
             );
+            if store.plugin_base_root(plugin_id).as_path().exists() {
+                store.uninstall(plugin_id).map_err(|err| {
+                    format!(
+                        "failed to remove stale curated plugin cache for {}: {err}",
+                        plugin_id.as_key()
+                    )
+                })?;
+                cache_refreshed = true;
+            }
+            continue;
+        }
+
+        let Some(source_path) = plugin_sources.get(&plugin_id.plugin_name).cloned() else {
             continue;
         };
+
+        if store.active_plugin_version(plugin_id).as_deref() == Some(cache_plugin_version.as_str())
+        {
+            continue;
+        }
 
         store
             .install_with_version(source_path, plugin_id.clone(), cache_plugin_version.clone())
@@ -557,8 +615,7 @@ async fn load_plugin(
     config_name: String,
     plugin: &PluginConfig,
     store: &PluginStore,
-    restriction_product: Option<Product>,
-    skill_config_rules: &SkillConfigRules,
+    scope: &PluginLoadScope<'_>,
 ) -> LoadedPlugin<McpServerConfig> {
     let plugin_id = PluginId::parse(&config_name);
     let active_plugin_root = plugin_id
@@ -616,46 +673,55 @@ async fn load_plugin(
     };
 
     let manifest_paths = &manifest.paths;
-    loaded_plugin.manifest_name = manifest
-        .interface
-        .as_ref()
-        .and_then(|interface| interface.display_name.as_deref())
-        .map(str::trim)
-        .filter(|display_name| !display_name.is_empty())
-        .map(str::to_string)
-        .or_else(|| Some(manifest.name.clone()));
-    loaded_plugin.manifest_description = manifest.description.clone();
-    loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
-    let resolved_skills = load_plugin_skills(
-        &plugin_root,
-        &loaded_plugin_id,
-        manifest_paths,
-        restriction_product,
-        skill_config_rules,
-    )
-    .await;
-    let has_enabled_skills = resolved_skills.has_enabled_skills();
-    loaded_plugin.disabled_skill_paths = resolved_skills.disabled_skill_paths;
-    loaded_plugin.has_enabled_skills = has_enabled_skills;
-    let mut mcp_servers = HashMap::new();
-    for mcp_config_path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
-        let plugin_mcp = load_mcp_servers_from_file(plugin_root.as_path(), &mcp_config_path).await;
-        for (name, mut config) in plugin_mcp.mcp_servers {
-            if let Some(policy) = plugin.mcp_servers.get(&name) {
-                apply_plugin_mcp_server_policy(&mut config, policy);
+    match scope {
+        PluginLoadScope::AllCapabilities {
+            restriction_product,
+            skill_config_rules,
+        } => {
+            loaded_plugin.manifest_name = manifest
+                .interface
+                .as_ref()
+                .and_then(|interface| interface.display_name.as_deref())
+                .map(str::trim)
+                .filter(|display_name| !display_name.is_empty())
+                .map(str::to_string)
+                .or_else(|| Some(manifest.name.clone()));
+            loaded_plugin.manifest_description = manifest.description.clone();
+            loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
+            let resolved_skills = load_plugin_skills(
+                &plugin_root,
+                &loaded_plugin_id,
+                manifest_paths,
+                *restriction_product,
+                skill_config_rules,
+            )
+            .await;
+            let has_enabled_skills = resolved_skills.has_enabled_skills();
+            loaded_plugin.disabled_skill_paths = resolved_skills.disabled_skill_paths;
+            loaded_plugin.has_enabled_skills = has_enabled_skills;
+            let mut mcp_servers = HashMap::new();
+            for mcp_config_path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
+                let plugin_mcp =
+                    load_mcp_servers_from_file(plugin_root.as_path(), &mcp_config_path).await;
+                for (name, mut config) in plugin_mcp.mcp_servers {
+                    if let Some(policy) = plugin.mcp_servers.get(&name) {
+                        apply_plugin_mcp_server_policy(&mut config, policy);
+                    }
+                    if mcp_servers.insert(name.clone(), config).is_some() {
+                        warn!(
+                            plugin = %plugin_root.display(),
+                            path = %mcp_config_path.display(),
+                            server = name,
+                            "plugin MCP file overwrote an earlier server definition"
+                        );
+                    }
+                }
             }
-            if mcp_servers.insert(name.clone(), config).is_some() {
-                warn!(
-                    plugin = %plugin_root.display(),
-                    path = %mcp_config_path.display(),
-                    server = name,
-                    "plugin MCP file overwrote an earlier server definition"
-                );
-            }
+            loaded_plugin.mcp_servers = mcp_servers;
+            loaded_plugin.apps = load_plugin_apps(plugin_root.as_path()).await;
         }
+        PluginLoadScope::HooksOnly => {}
     }
-    loaded_plugin.mcp_servers = mcp_servers;
-    loaded_plugin.apps = load_plugin_apps(plugin_root.as_path()).await;
     let (hook_sources, hook_load_warnings) = load_plugin_hooks(
         &plugin_root,
         &loaded_plugin_id,

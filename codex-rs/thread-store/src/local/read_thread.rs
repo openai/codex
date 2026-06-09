@@ -325,6 +325,7 @@ async fn stored_thread_from_sqlite_metadata(
         permission_profile_from_metadata_value(&metadata.sandbox_policy, metadata.cwd.as_path());
     StoredThread {
         thread_id: metadata.id,
+        extra_config: None,
         rollout_path: Some(rollout_path),
         forked_from_id,
         parent_thread_id,
@@ -390,6 +391,7 @@ fn stored_thread_from_meta_line(
     let rollout_path = codex_rollout::plain_rollout_path(path.as_path());
     StoredThread {
         thread_id: meta_line.meta.id,
+        extra_config: None,
         rollout_path: Some(rollout_path),
         forked_from_id: meta_line.meta.forked_from_id,
         parent_thread_id: meta_line.meta.parent_thread_id,

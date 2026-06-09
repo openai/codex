@@ -26,7 +26,7 @@ pub use login::run_logout;
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {
     /// Named permissions profile to apply from the active configuration stack.
-    #[arg(long = "permissions-profile", value_name = "NAME")]
+    #[arg(long = "permissions-profile", short = 'P', value_name = "NAME")]
     pub permissions_profile: Option<String>,
 
     /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
@@ -74,7 +74,7 @@ fn parse_allow_unix_socket_path(raw: &str) -> Result<AbsolutePathBuf, String> {
 #[derive(Debug, Parser)]
 pub struct LandlockCommand {
     /// Named permissions profile to apply from the active configuration stack.
-    #[arg(long = "permissions-profile", value_name = "NAME")]
+    #[arg(long = "permissions-profile", short = 'P', value_name = "NAME")]
     pub permissions_profile: Option<String>,
 
     /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
@@ -109,7 +109,7 @@ pub struct LandlockCommand {
 #[derive(Debug, Parser)]
 pub struct WindowsCommand {
     /// Named permissions profile to apply from the active configuration stack.
-    #[arg(long = "permissions-profile", value_name = "NAME")]
+    #[arg(long = "permissions-profile", short = 'P', value_name = "NAME")]
     pub permissions_profile: Option<String>,
 
     /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.

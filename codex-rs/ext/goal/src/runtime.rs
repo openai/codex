@@ -15,6 +15,8 @@ use crate::metrics::GoalMetrics;
 use crate::steering::continuation_steering_item;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
+use tokio::sync::Semaphore;
+use tokio::sync::SemaphorePermit;
 
 #[derive(Clone)]
 pub struct GoalRuntimeHandle {
@@ -26,6 +28,11 @@ pub(crate) struct GoalRuntimeConfig {
     pub(crate) tools_available_for_thread: bool,
 }
 
+pub(crate) enum ActiveGoalStopReason {
+    TurnError,
+    UsageLimit,
+}
+
 struct GoalRuntimeInner {
     thread_id: ThreadId,
     state_dbs: Arc<codex_state::StateRuntime>,
@@ -35,6 +42,7 @@ struct GoalRuntimeInner {
     accounting_state: Arc<GoalAccountingState>,
     enabled: AtomicBool,
     tools_available_for_thread: bool,
+    goal_state_lock: Semaphore,
 }
 
 pub(crate) struct AccountedGoalProgress {
@@ -85,6 +93,7 @@ impl GoalRuntimeHandle {
                 accounting_state,
                 enabled: AtomicBool::new(config.enabled),
                 tools_available_for_thread: config.tools_available_for_thread,
+                goal_state_lock: Semaphore::new(/*permits*/ 1),
             }),
         }
     }
@@ -107,6 +116,14 @@ impl GoalRuntimeHandle {
 
     pub(crate) fn accounting_state(&self) -> Arc<GoalAccountingState> {
         Arc::clone(&self.inner.accounting_state)
+    }
+
+    pub(crate) async fn goal_state_permit(&self) -> Result<SemaphorePermit<'_>, String> {
+        self.inner
+            .goal_state_lock
+            .acquire()
+            .await
+            .map_err(|err| err.to_string())
     }
 
     pub async fn prepare_external_goal_mutation(&self) -> Result<(), String> {
@@ -204,10 +221,23 @@ impl GoalRuntimeHandle {
     }
 
     pub async fn usage_limit_active_goal_for_turn(&self, turn_id: &str) -> Result<(), String> {
+        self.stop_active_goal_for_turn(turn_id, ActiveGoalStopReason::UsageLimit)
+            .await
+    }
+
+    /// Accounts the ending turn and stops its active goal after a terminal error.
+    pub(crate) async fn stop_active_goal_for_turn(
+        &self,
+        turn_id: &str,
+        reason: ActiveGoalStopReason,
+    ) -> Result<(), String> {
         if !self.is_enabled() {
             return Ok(());
         }
 
+        // Hold this through accounting and the status update so external goal
+        // mutations and idle continuation cannot interleave between them.
+        let _goal_state_permit = self.goal_state_permit().await?;
         if !self
             .inner
             .accounting_state
@@ -216,23 +246,54 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
-        let progress_event_id = format!("{turn_id}:usage-limit-progress");
+        let (event_name, status) = match reason {
+            ActiveGoalStopReason::TurnError => {
+                ("turn-error", codex_state::ThreadGoalStatus::Blocked)
+            }
+            ActiveGoalStopReason::UsageLimit => {
+                ("usage-limit", codex_state::ThreadGoalStatus::UsageLimited)
+            }
+        };
         self.account_active_goal_progress(
             turn_id,
-            progress_event_id.as_str(),
+            &format!("{turn_id}:{event_name}-progress"),
             codex_state::GoalAccountingMode::ActiveOnly,
             BudgetLimitedGoalDisposition::ClearActive,
         )
         .await?;
 
-        let previous_status = self
-            .current_goal_status_for_metrics(/*expected_goal_id*/ None)
-            .await?;
+        let Some(active_goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        };
+        let can_stop = active_goal.status == codex_state::ThreadGoalStatus::Active
+            || (active_goal.status == codex_state::ThreadGoalStatus::BudgetLimited
+                && status == codex_state::ThreadGoalStatus::UsageLimited);
+        if !can_stop {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        }
+        let previous_status = Some(active_goal.status);
         let Some(goal) = self
             .inner
             .state_dbs
             .thread_goals()
-            .usage_limit_active_thread_goal(self.thread_id())
+            .update_thread_goal(
+                self.thread_id(),
+                codex_state::GoalUpdate {
+                    objective: None,
+                    status: Some(status),
+                    token_budget: None,
+                    expected_goal_id: Some(active_goal.goal_id),
+                },
+            )
             .await
             .map_err(|err| err.to_string())?
         else {
@@ -244,7 +305,7 @@ impl GoalRuntimeHandle {
         self.inner.accounting_state.clear_active_goal();
         let goal = protocol_goal_from_state(goal);
         self.inner.event_emitter.thread_goal_updated(
-            format!("{turn_id}:usage-limit"),
+            format!("{turn_id}:{event_name}"),
             Some(turn_id.to_string()),
             goal,
         );
@@ -280,6 +341,18 @@ impl GoalRuntimeHandle {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
         }
+        // Hold this through the read/start window so external set/clear cannot
+        // change the goal after we read it but before the continuation launches.
+        let _goal_state_permit = self.goal_state_permit().await?;
+
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            tracing::debug!("skipping goal continuation because thread manager is unavailable");
+            return Ok(());
+        };
+        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
+            tracing::debug!("skipping goal continuation because live thread is unavailable");
+            return Ok(());
+        };
 
         let Some(goal) = self
             .inner
@@ -296,19 +369,14 @@ impl GoalRuntimeHandle {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
         }
-
         let item = continuation_steering_item(&protocol_goal_from_state(goal));
-        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
-            tracing::debug!("skipping goal continuation because thread manager is unavailable");
-            return Ok(());
-        };
-        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
-            tracing::debug!("skipping goal continuation because live thread is unavailable");
-            return Ok(());
-        };
 
-        if thread.try_start_turn_if_idle(vec![item]).await.is_err() {
-            tracing::debug!("skipping goal continuation because the thread is no longer idle");
+        if let Err(err) = thread.try_start_turn_if_idle(vec![item]).await {
+            let reason = err.reason();
+            tracing::debug!(
+                ?reason,
+                "skipping goal continuation because automatic idle work was rejected"
+            );
         }
 
         let current_turn_is_goal_active = self

@@ -180,7 +180,6 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![codex_protocol::user_input::UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -261,7 +260,6 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![codex_protocol::user_input::UserInput::Mention {
                 name: "sample".into(),
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
@@ -345,7 +343,6 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![codex_protocol::user_input::UserInput::Mention {
                 name: "sample".into(),
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
@@ -388,6 +385,10 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["marketplace_name"], "test");
     assert_eq!(event["event_params"]["has_skills"], true);
     assert_eq!(event["event_params"]["mcp_server_count"], 0);
+    assert_eq!(
+        event["event_params"]["mcp_server_names"],
+        serde_json::json!([])
+    );
     assert_eq!(
         event["event_params"]["connector_ids"],
         serde_json::json!([])

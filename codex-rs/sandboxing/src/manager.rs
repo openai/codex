@@ -290,19 +290,18 @@ impl SandboxManager {
 
 pub fn compatibility_sandbox_policy_for_permission_profile(
     permissions: &PermissionProfile,
-    file_system_policy: &FileSystemSandboxPolicy,
-    network_policy: NetworkSandboxPolicy,
     cwd: &Path,
 ) -> SandboxPolicy {
     permissions
         .to_legacy_sandbox_policy(cwd)
         .unwrap_or_else(|_| {
+            let (file_system_policy, network_policy) = permissions.to_runtime_permissions();
             compatibility_workspace_write_policy(file_system_policy, network_policy, cwd)
         })
 }
 
 fn compatibility_workspace_write_policy(
-    file_system_policy: &FileSystemSandboxPolicy,
+    file_system_policy: FileSystemSandboxPolicy,
     network_policy: NetworkSandboxPolicy,
     cwd: &Path,
 ) -> SandboxPolicy {
@@ -339,8 +338,8 @@ fn ensure_linux_bubblewrap_is_supported(
     allow_network_for_proxy: bool,
     is_wsl1: bool,
 ) -> Result<(), SandboxTransformError> {
-    let requires_bubblewrap = !use_legacy_landlock
-        && (!file_system_sandbox_policy.has_full_disk_write_access() || allow_network_for_proxy);
+    let requires_bubblewrap = allow_network_for_proxy
+        || (!use_legacy_landlock && !file_system_sandbox_policy.has_full_disk_write_access());
     if is_wsl1 && requires_bubblewrap {
         return Err(SandboxTransformError::Wsl1UnsupportedForBubblewrap);
     }

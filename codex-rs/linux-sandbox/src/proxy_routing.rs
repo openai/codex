@@ -14,6 +14,7 @@ use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::os::fd::FromRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
@@ -43,6 +44,8 @@ const PROXY_ENV_KEYS: &[&str] = &[
 const PROXY_SOCKET_DIR_PREFIX: &str = "codex-linux-sandbox-proxy-";
 const HOST_BRIDGE_READY: u8 = 1;
 const LOOPBACK_INTERFACE_NAME: &[u8] = b"lo";
+// Linux sockaddr_un.sun_path allows 108 bytes, including the trailing NUL.
+const UNIX_SOCKET_PATH_MAX_BYTES: usize = 107;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ProxyRouteSpec {
@@ -278,8 +281,9 @@ fn rewrite_proxy_env_value(proxy_url: &str, local_port: u16) -> Option<String> {
 fn create_proxy_socket_dir() -> io::Result<PathBuf> {
     let temp_dir = proxy_socket_parent_dir();
     let pid = std::process::id();
+    let uid = unsafe { libc::geteuid() };
     for attempt in 0..128 {
-        let candidate = temp_dir.join(format!("{PROXY_SOCKET_DIR_PREFIX}{pid}-{attempt}"));
+        let candidate = temp_dir.join(format!("{PROXY_SOCKET_DIR_PREFIX}{pid}-{uid}-{attempt}"));
         // The bridge UDS paths live under a shared temp root, so the per-run
         // directory should not be traversable by other processes.
         let mut dir_builder = DirBuilder::new();
@@ -302,11 +306,29 @@ fn create_proxy_socket_dir() -> io::Result<PathBuf> {
 fn proxy_socket_parent_dir() -> PathBuf {
     if let Some(codex_home) = std::env::var_os("CODEX_HOME") {
         let candidate = PathBuf::from(codex_home).join("tmp");
-        if ensure_private_proxy_socket_parent_dir(candidate.as_path()).is_ok() {
+        if proxy_socket_paths_fit(candidate.as_path())
+            && ensure_private_proxy_socket_parent_dir(candidate.as_path()).is_ok()
+        {
             return candidate;
         }
     }
-    std::env::temp_dir()
+    let temp_dir = std::env::temp_dir();
+    if proxy_socket_paths_fit(temp_dir.as_path()) {
+        temp_dir
+    } else {
+        PathBuf::from("/tmp")
+    }
+}
+
+fn proxy_socket_paths_fit(parent: &Path) -> bool {
+    let socket_path = parent
+        .join(format!(
+            "{PROXY_SOCKET_DIR_PREFIX}{}-{}-127",
+            u32::MAX,
+            libc::uid_t::MAX
+        ))
+        .join(format!("proxy-route-{}.sock", usize::MAX));
+    socket_path.as_os_str().as_bytes().len() <= UNIX_SOCKET_PATH_MAX_BYTES
 }
 
 fn ensure_private_proxy_socket_parent_dir(path: &Path) -> io::Result<()> {
@@ -661,6 +683,7 @@ mod tests {
     use super::parse_loopback_proxy_endpoint;
     use super::parse_proxy_socket_dir_owner_pid;
     use super::plan_proxy_routes;
+    use super::proxy_socket_paths_fit;
     use super::rewrite_proxy_env_value;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -736,6 +759,18 @@ mod tests {
     }
 
     #[test]
+    fn proxy_socket_paths_enforce_linux_path_limit() {
+        assert_eq!(
+            proxy_socket_paths_fit(PathBuf::from("/tmp").as_path()),
+            true
+        );
+        assert_eq!(
+            proxy_socket_paths_fit(PathBuf::from(format!("/tmp/{}", "a".repeat(96))).as_path()),
+            false
+        );
+    }
+
+    #[test]
     fn cleanup_proxy_socket_dir_removes_bridge_artifacts() {
         let root = tempfile::tempdir().expect("tempdir should create");
         let socket_dir = root.path().join("codex-linux-sandbox-proxy-test");
@@ -768,6 +803,10 @@ mod tests {
     fn parse_proxy_socket_dir_owner_pid_reads_owner_pid() {
         assert_eq!(
             parse_proxy_socket_dir_owner_pid("codex-linux-sandbox-proxy-1234-0"),
+            Some(1234)
+        );
+        assert_eq!(
+            parse_proxy_socket_dir_owner_pid("codex-linux-sandbox-proxy-1234-1000-0"),
             Some(1234)
         );
         assert_eq!(

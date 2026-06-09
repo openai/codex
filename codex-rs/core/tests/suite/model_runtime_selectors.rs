@@ -127,7 +127,6 @@ async fn response_body_for_remote_model(
                 text: "list tools".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
@@ -190,6 +189,7 @@ async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
     let mut v2_model = remote_model("test-multi-agent-v2");
     v2_model.multi_agent_version = Some(MultiAgentVersion::V2);
     let v2_body = response_body_for_remote_model(v2_model, |config| {
+        config.agent_max_threads = Some(3);
         config
             .features
             .enable(Feature::Collab)
@@ -276,7 +276,6 @@ async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> 
                 text: ROOT_PROMPT.into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
