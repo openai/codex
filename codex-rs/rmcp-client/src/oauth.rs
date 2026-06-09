@@ -21,9 +21,9 @@ use anyhow::Error;
 use anyhow::Result;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_secrets::LocalSecretsNamespace;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
-use codex_secrets::SecretsBackendKind;
 use codex_secrets::SecretsManager;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
@@ -220,10 +220,10 @@ fn load_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     url: &str,
 ) -> Result<Option<StoredOAuthTokens>> {
     let codex_home = find_codex_home()?;
-    let manager = SecretsManager::new_with_keyring_store(
+    let manager = SecretsManager::new_local_with_keyring_store(
         codex_home.to_path_buf(),
-        SecretsBackendKind::Local,
         Arc::new(keyring_store.clone()),
+        LocalSecretsNamespace::McpOAuth,
     );
     let secret_name = compute_secret_name(server_name, url)?;
     match manager
@@ -313,10 +313,10 @@ fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
 ) -> Result<()> {
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
     let codex_home = find_codex_home()?;
-    let manager = SecretsManager::new_with_keyring_store(
+    let manager = SecretsManager::new_local_with_keyring_store(
         codex_home.to_path_buf(),
-        SecretsBackendKind::Local,
         Arc::new(keyring_store.clone()),
+        LocalSecretsNamespace::McpOAuth,
     );
     let secret_name = compute_secret_name(server_name, &tokens.url)?;
     manager
@@ -428,10 +428,10 @@ fn delete_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     url: &str,
 ) -> Result<bool> {
     let codex_home = find_codex_home()?;
-    let manager = SecretsManager::new_with_keyring_store(
+    let manager = SecretsManager::new_local_with_keyring_store(
         codex_home.to_path_buf(),
-        SecretsBackendKind::Local,
         Arc::new(keyring_store.clone()),
+        LocalSecretsNamespace::McpOAuth,
     );
     let secret_name = compute_secret_name(server_name, url)?;
     let secrets_removed = manager
@@ -991,10 +991,10 @@ mod tests {
             &tokens,
         )?;
 
-        let manager = SecretsManager::new_with_keyring_store(
+        let manager = SecretsManager::new_local_with_keyring_store(
             env.path().to_path_buf(),
-            SecretsBackendKind::Local,
             Arc::new(store.clone()),
+            LocalSecretsNamespace::McpOAuth,
         );
         let secret_name = super::compute_secret_name(&tokens.server_name, &tokens.url)?;
         let stored = manager
@@ -1002,6 +1002,8 @@ mod tests {
             .expect("tokens should be saved to encrypted storage");
         assert_eq!(serde_json::from_str::<StoredOAuthTokens>(&stored)?, tokens);
         assert_eq!(store.saved_value(&key), Some(serialized));
+        assert!(env.path().join("secrets").join("mcp_oauth.age").exists());
+        assert!(!env.path().join("secrets").join("local.age").exists());
         assert!(!super::fallback_file_path()?.exists());
         Ok(())
     }
@@ -1100,15 +1102,15 @@ mod tests {
             &tokens.url,
         )?;
 
-        let manager = SecretsManager::new_with_keyring_store(
+        let manager = SecretsManager::new_local_with_keyring_store(
             env.path().to_path_buf(),
-            SecretsBackendKind::Local,
             Arc::new(store.clone()),
+            LocalSecretsNamespace::McpOAuth,
         );
         let secret_name = super::compute_secret_name(&tokens.server_name, &tokens.url)?;
         assert!(removed);
         assert!(manager.get(&SecretScope::Global, &secret_name)?.is_none());
-        assert_eq!(store.saved_value(&key), Some(serialized));
+        assert!(store.saved_value(&key).is_none());
         assert!(!super::fallback_file_path()?.exists());
         Ok(())
     }

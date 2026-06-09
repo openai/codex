@@ -27,9 +27,9 @@ pub use codex_config::types::AuthKeyringBackendKind;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use codex_protocol::account::PlanType as AccountPlanType;
+use codex_secrets::LocalSecretsNamespace;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
-use codex_secrets::SecretsBackendKind;
 use codex_secrets::SecretsManager;
 use once_cell::sync::Lazy;
 
@@ -278,10 +278,10 @@ impl SecretsKeyringAuthStorage {
     fn new(codex_home: PathBuf, keyring_store: Arc<dyn KeyringStore>) -> Self {
         let direct_storage =
             DirectKeyringAuthStorage::new(codex_home.clone(), Arc::clone(&keyring_store));
-        let secrets_manager = SecretsManager::new_with_keyring_store(
+        let secrets_manager = SecretsManager::new_local_with_keyring_store(
             codex_home.clone(),
-            SecretsBackendKind::Local,
             keyring_store,
+            LocalSecretsNamespace::CliAuth,
         );
         Self {
             codex_home,

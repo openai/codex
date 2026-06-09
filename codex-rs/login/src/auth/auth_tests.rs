@@ -156,6 +156,7 @@ async fn login_with_access_token_writes_only_personal_access_token() {
         "at-login-test",
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await
     .expect("personal access token login should succeed");
@@ -200,6 +201,7 @@ async fn login_with_access_token_rejects_invalid_personal_access_token() {
         "at-invalid-login",
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await
     .expect_err("invalid personal access token should fail");
@@ -896,6 +898,7 @@ async fn load_auth_reads_personal_access_token_from_env() {
             /*enable_codex_api_key_env*/ false,
             auth_credentials_store_mode,
             /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
         )
         .await
         .expect("env auth should load")
@@ -946,6 +949,7 @@ async fn personal_access_token_does_not_offer_unauthorized_recovery() {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
         )
         .await,
     );
