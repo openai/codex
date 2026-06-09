@@ -396,15 +396,19 @@ async fn windows_unified_exec_managed_network_enforces_deny_read() -> anyhow::Re
         WindowsSandboxLevel::RestrictedToken
     );
 
-    std::fs::write(
-        test.config.cwd.join("secret.env"),
-        "managed network secret\n",
-    )?;
-    std::fs::write(test.config.cwd.join("public.txt"), "public ok\n")?;
+    let secret_path = test.config.cwd.join("secret.env");
+    let public_path = test.config.cwd.join("public.txt");
+    std::fs::write(&secret_path, "managed network secret\n")?;
+    std::fs::write(&public_path, "public ok\n")?;
 
     let call_id = "windows-unified-exec-managed-network-deny-read";
+    let command = format!(
+        r#"cmd.exe /D /C "(type "{}" 1>NUL 2>NUL && echo SECRET-READ || echo SECRET-DENIED) & type "{}""#,
+        secret_path.display(),
+        public_path.display()
+    );
     let args = json!({
-        "cmd": "cmd.exe /D /C \"(type secret.env 1>NUL 2>NUL && echo SECRET-READ || echo SECRET-DENIED) & type public.txt\"",
+        "cmd": command,
         "yield_time_ms": 10_000,
     });
     let mock = mount_sse_sequence(
