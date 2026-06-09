@@ -377,11 +377,13 @@ def run_and_tee(invocation: Invocation) -> tuple[int, Path]:
             env=invocation.child_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            encoding="utf-8",
+            errors="replace",
             text=True,
         )
         assert process.stdout is not None
         for line in process.stdout:
-            print(line, end="")
+            print(line, end="", flush=True)
             console_log.write(line)
         return process.wait(), Path(console_log.name)
 

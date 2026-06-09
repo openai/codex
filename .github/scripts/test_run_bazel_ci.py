@@ -232,6 +232,39 @@ class RunBazelCiTest(unittest.TestCase):
                 ],
             )
 
+    def test_main_replaces_invalid_utf8_and_preserves_exit_status(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            fake_bazel = Path(temp_dir) / "fake-bazel"
+            fake_bazel.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "os.write(1, b'failure: \\xff\\n')\n"
+                "raise SystemExit(37)\n",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(fake_bazel.stat().st_mode | stat.S_IXUSR)
+            env = os.environ.copy()
+            env["CODEX_BAZEL_BIN"] = str(fake_bazel)
+            env.pop("BUILDBUDDY_API_KEY", None)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(run_bazel_ci.__file__)),
+                    "--",
+                    "build",
+                    "--",
+                    "//codex-rs/cli:codex",
+                ],
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 37, result.stderr)
+            self.assertIn("failure: \ufffd\n", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
