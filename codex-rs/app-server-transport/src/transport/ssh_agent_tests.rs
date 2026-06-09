@@ -1,4 +1,4 @@
-use super::normalize_ssh_auth_sock_from_path;
+use super::prepare_ssh_auth_sock_from_path;
 use super::refresh_ssh_auth_sock_from_path;
 use super::stable_ssh_auth_sock_path;
 use pretty_assertions::assert_eq;
@@ -45,16 +45,18 @@ fn refresh_retargets_stable_agent_symlink() {
 }
 
 #[test]
-fn normalize_keeps_missing_agent_path_repairable() {
+fn prepared_missing_agent_path_is_published_later() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let control_socket_path = temp_dir.path().join("app-server.sock");
     let missing_agent_path = temp_dir.path().join("missing-agent.sock");
 
-    let stable_path =
-        normalize_ssh_auth_sock_from_path(&control_socket_path, missing_agent_path.as_os_str())
-            .expect("normalize missing agent")
+    let prepared =
+        prepare_ssh_auth_sock_from_path(&control_socket_path, missing_agent_path.as_os_str())
+            .expect("prepare missing agent")
             .expect("missing agent should remain repairable");
-
+    let stable_path = stable_ssh_auth_sock_path(&control_socket_path);
+    assert!(fs::symlink_metadata(&stable_path).is_err());
+    prepared.publish().expect("publish missing agent");
     assert_eq!(
         fs::read_link(&stable_path).expect("read stable agent symlink"),
         missing_agent_path
@@ -73,14 +75,14 @@ fn normalize_keeps_missing_agent_path_repairable() {
 }
 
 #[test]
-fn normalize_ignores_non_socket_agent_path() {
+fn prepare_ignores_non_socket_agent_path() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let control_socket_path = temp_dir.path().join("app-server.sock");
     let regular_file_path = temp_dir.path().join("not-an-agent");
     fs::write(&regular_file_path, "not a socket").expect("write regular file");
 
     assert_eq!(
-        normalize_ssh_auth_sock_from_path(&control_socket_path, regular_file_path.as_os_str())
+        prepare_ssh_auth_sock_from_path(&control_socket_path, regular_file_path.as_os_str())
             .expect("ignore regular file"),
         None
     );
@@ -107,15 +109,15 @@ fn refresh_refuses_to_replace_non_symlink_path() {
 }
 
 #[test]
-fn normalize_preserves_inherited_stable_path_while_agent_is_disconnected() {
+fn prepare_preserves_inherited_stable_path_while_agent_is_disconnected() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let control_socket_path = temp_dir.path().join("app-server.sock");
     let stable_path = stable_ssh_auth_sock_path(&control_socket_path);
 
     assert_eq!(
-        normalize_ssh_auth_sock_from_path(&control_socket_path, stable_path.as_os_str())
+        prepare_ssh_auth_sock_from_path(&control_socket_path, stable_path.as_os_str())
             .expect("preserve stable path"),
-        Some(stable_path)
+        None
     );
 }
 

@@ -3,9 +3,9 @@ use codex_app_server::AppServerRuntimeOptions;
 use codex_app_server::AppServerTransport;
 use codex_app_server::AppServerWebsocketAuthArgs;
 use codex_app_server::PluginStartupTasks;
+use codex_app_server::PreparedSshAgentForwarding;
 use codex_app_server::normalize_ssh_auth_sock_before_runtime;
 use codex_app_server::run_main_with_transport_options;
-use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else_with_pre_runtime;
 use codex_config::LoaderOverrides;
 use codex_protocol::protocol::SessionSource;
@@ -61,7 +61,7 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
-    let main_fn = |arg0_paths: Arg0DispatchPaths| async move {
+    let main_fn = |arg0_paths, prepared_ssh_agent_forwarding| async move {
         let AppServerArgs {
             config_overrides,
             listen,
@@ -87,6 +87,7 @@ fn main() -> anyhow::Result<()> {
             runtime_options.plugin_startup_tasks = PluginStartupTasks::Skip;
         }
         runtime_options.remote_control_enabled = remote_control;
+        runtime_options.prepared_ssh_agent_forwarding = prepared_ssh_agent_forwarding;
 
         run_main_with_transport_options(
             arg0_paths,
@@ -105,17 +106,20 @@ fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else_with_pre_runtime(prepare_ssh_agent_forwarding, main_fn)
 }
 
-fn prepare_ssh_agent_forwarding() -> anyhow::Result<()> {
+fn prepare_ssh_agent_forwarding() -> anyhow::Result<Option<PreparedSshAgentForwarding>> {
     let Ok(args) = AppServerArgs::try_parse() else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(control_socket_path) = app_server_control_socket_for_ssh_agent(&args) else {
-        return Ok(());
+        return Ok(None);
     };
-    if let Err(err) = normalize_ssh_auth_sock_before_runtime(control_socket_path) {
-        eprintln!("WARNING: failed to prepare SSH agent forwarding: {err}");
+    match normalize_ssh_auth_sock_before_runtime(control_socket_path) {
+        Ok(prepared) => Ok(prepared),
+        Err(err) => {
+            eprintln!("WARNING: failed to prepare SSH agent forwarding: {err}");
+            Ok(None)
+        }
     }
-    Ok(())
 }
 
 fn app_server_control_socket_for_ssh_agent(args: &AppServerArgs) -> Option<&Path> {

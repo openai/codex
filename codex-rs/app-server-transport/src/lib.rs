@@ -11,6 +11,7 @@ pub use transport::AppServerTransport;
 pub use transport::AppServerTransportParseError;
 pub use transport::CHANNEL_CAPACITY;
 pub use transport::ConnectionOrigin;
+pub use transport::PreparedSshAgentForwarding;
 pub use transport::RemoteControlHandle;
 pub use transport::RemoteControlStartConfig;
 pub use transport::RemoteControlUnavailable;

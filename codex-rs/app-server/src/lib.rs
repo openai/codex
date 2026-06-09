@@ -106,6 +106,7 @@ mod transport;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;
+pub use crate::transport::PreparedSshAgentForwarding;
 pub use crate::transport::app_server_control_socket_path;
 pub use crate::transport::auth::AppServerWebsocketAuthArgs;
 pub use crate::transport::auth::AppServerWebsocketAuthSettings;
@@ -403,11 +404,12 @@ pub enum PluginStartupTasks {
     Skip,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
     pub remote_control_enabled: bool,
     pub install_shutdown_signal_handler: bool,
+    pub prepared_ssh_agent_forwarding: Option<PreparedSshAgentForwarding>,
 }
 
 impl Default for AppServerRuntimeOptions {
@@ -416,6 +418,7 @@ impl Default for AppServerRuntimeOptions {
             plugin_startup_tasks: PluginStartupTasks::Start,
             remote_control_enabled: false,
             install_shutdown_signal_handler: true,
+            prepared_ssh_agent_forwarding: None,
         }
     }
 }
@@ -687,6 +690,11 @@ pub async fn run_main_with_transport_options(
                 transport_shutdown_token.clone(),
             )
             .await?;
+            if let Some(prepared) = &runtime_options.prepared_ssh_agent_forwarding
+                && let Err(err) = prepared.publish()
+            {
+                warn!(%err, "failed to publish initial SSH agent forwarding path");
+            }
             transport_accept_handles.push(accept_handle);
         }
         AppServerTransport::WebSocket { bind_address } => {

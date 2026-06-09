@@ -22,20 +22,50 @@ const SSH_AUTH_SOCK_ENV_VAR: &str = "SSH_AUTH_SOCK";
 #[cfg(unix)]
 const SOCKET_DIR_MODE: u32 = 0o700;
 
-/// Replaces the app server's inherited SSH agent path with a stable symlink.
+/// A stable SSH agent path and its initial target, prepared before runtime
+/// startup and published only after the app server owns its control socket.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedSshAgentForwarding {
+    #[cfg(unix)]
+    stable_path: PathBuf,
+    #[cfg(unix)]
+    agent_socket_path: PathBuf,
+}
+
+impl PreparedSshAgentForwarding {
+    /// Publishes the initial agent target at the stable path.
+    pub fn publish(&self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            if let Some(parent) = self.stable_path.parent() {
+                ensure_socket_directory_exists(parent)?;
+            }
+            replace_symlink(&self.stable_path, &self.agent_socket_path)
+        }
+
+        #[cfg(not(unix))]
+        {
+            Ok(())
+        }
+    }
+}
+
+/// Replaces the app server's inherited SSH agent environment value with a
+/// stable path and returns the initial symlink update for later publication.
 ///
 /// This must run before the process starts any threads because it changes the
-/// process environment.
+/// process environment. The caller must publish the returned update only after
+/// the app server has successfully bound its control socket.
 pub fn normalize_ssh_auth_sock_before_runtime(
     control_socket_path: &Path,
-) -> io::Result<Option<PathBuf>> {
+) -> io::Result<Option<PreparedSshAgentForwarding>> {
     #[cfg(unix)]
     {
         let Some(agent_socket_path) = std::env::var_os(SSH_AUTH_SOCK_ENV_VAR) else {
             return Ok(None);
         };
-        let Some(stable_path) =
-            normalize_ssh_auth_sock_from_path(control_socket_path, &agent_socket_path)?
+        let Some(prepared) =
+            prepare_ssh_auth_sock_from_path(control_socket_path, &agent_socket_path)?
         else {
             return Ok(None);
         };
@@ -43,9 +73,9 @@ pub fn normalize_ssh_auth_sock_before_runtime(
         // Safety: callers run this before creating any threads or Tokio
         // runtime, so no other thread can concurrently access the environment.
         unsafe {
-            std::env::set_var(SSH_AUTH_SOCK_ENV_VAR, &stable_path);
+            std::env::set_var(SSH_AUTH_SOCK_ENV_VAR, &prepared.stable_path);
         }
-        Ok(Some(stable_path))
+        Ok(Some(prepared))
     }
 
     #[cfg(not(unix))]
@@ -74,15 +104,27 @@ pub fn refresh_ssh_auth_sock_for_proxy(control_socket_path: &Path) -> io::Result
 }
 
 #[cfg(unix)]
-fn normalize_ssh_auth_sock_from_path(
+fn prepare_ssh_auth_sock_from_path(
     control_socket_path: &Path,
     agent_socket_path: &OsStr,
-) -> io::Result<Option<PathBuf>> {
-    update_ssh_auth_sock_from_path(
-        control_socket_path,
-        agent_socket_path,
+) -> io::Result<Option<PreparedSshAgentForwarding>> {
+    let stable_path = stable_ssh_auth_sock_path(control_socket_path);
+    let agent_socket_path = absolute_agent_socket_path(agent_socket_path)?;
+    if agent_socket_path == stable_path {
+        ensure_symlink_or_missing(&stable_path)?;
+        return Ok(None);
+    }
+    if !agent_socket_matches_policy(
+        &agent_socket_path,
         MissingAgentSocket::CreateDanglingSymlink,
-    )
+    )? {
+        return Ok(None);
+    }
+    ensure_symlink_or_missing(&stable_path)?;
+    Ok(Some(PreparedSshAgentForwarding {
+        stable_path,
+        agent_socket_path,
+    }))
 }
 
 #[cfg(unix)]
@@ -90,11 +132,21 @@ fn refresh_ssh_auth_sock_from_path(
     control_socket_path: &Path,
     agent_socket_path: &OsStr,
 ) -> io::Result<Option<PathBuf>> {
-    update_ssh_auth_sock_from_path(
-        control_socket_path,
+    let stable_path = stable_ssh_auth_sock_path(control_socket_path);
+    let agent_socket_path = absolute_agent_socket_path(agent_socket_path)?;
+    if agent_socket_path == stable_path {
+        ensure_symlink_or_missing(&stable_path)?;
+        return Ok(Some(stable_path));
+    }
+    if !agent_socket_matches_policy(&agent_socket_path, MissingAgentSocket::Ignore)? {
+        return Ok(None);
+    }
+    PreparedSshAgentForwarding {
+        stable_path: stable_path.clone(),
         agent_socket_path,
-        MissingAgentSocket::Ignore,
-    )
+    }
+    .publish()?;
+    Ok(Some(stable_path))
 }
 
 #[cfg(unix)]
@@ -105,46 +157,29 @@ enum MissingAgentSocket {
 }
 
 #[cfg(unix)]
-fn update_ssh_auth_sock_from_path(
-    control_socket_path: &Path,
-    agent_socket_path: &OsStr,
-    missing_agent_socket: MissingAgentSocket,
-) -> io::Result<Option<PathBuf>> {
-    let stable_path = stable_ssh_auth_sock_path(control_socket_path);
+fn absolute_agent_socket_path(agent_socket_path: &OsStr) -> io::Result<PathBuf> {
     let agent_socket_path = Path::new(agent_socket_path);
-
-    if agent_socket_path == stable_path {
-        if let Some(parent) = stable_path.parent() {
-            ensure_socket_directory_exists(parent)?;
-        }
-        ensure_symlink_or_missing(&stable_path)?;
-        return Ok(Some(stable_path));
-    }
-
-    let agent_socket_path = if agent_socket_path.is_absolute() {
-        agent_socket_path.to_path_buf()
+    if agent_socket_path.is_absolute() {
+        Ok(agent_socket_path.to_path_buf())
     } else {
-        std::env::current_dir()?.join(agent_socket_path)
-    };
-    let agent_socket_metadata = match fs::metadata(&agent_socket_path) {
-        Ok(metadata) => Some(metadata),
+        Ok(std::env::current_dir()?.join(agent_socket_path))
+    }
+}
+
+#[cfg(unix)]
+fn agent_socket_matches_policy(
+    agent_socket_path: &Path,
+    missing_agent_socket: MissingAgentSocket,
+) -> io::Result<bool> {
+    let agent_socket_metadata = match fs::metadata(agent_socket_path) {
+        Ok(metadata) => metadata,
         Err(err) if err.kind() == io::ErrorKind::NotFound => match missing_agent_socket {
-            MissingAgentSocket::CreateDanglingSymlink => None,
-            MissingAgentSocket::Ignore => return Ok(None),
+            MissingAgentSocket::CreateDanglingSymlink => return Ok(true),
+            MissingAgentSocket::Ignore => return Ok(false),
         },
         Err(err) => return Err(err),
     };
-    if let Some(agent_socket_metadata) = agent_socket_metadata
-        && !agent_socket_metadata.file_type().is_socket()
-    {
-        return Ok(None);
-    }
-
-    if let Some(parent) = stable_path.parent() {
-        ensure_socket_directory_exists(parent)?;
-    }
-    replace_symlink(&stable_path, &agent_socket_path)?;
-    Ok(Some(stable_path))
+    Ok(agent_socket_metadata.file_type().is_socket())
 }
 
 #[cfg(unix)]

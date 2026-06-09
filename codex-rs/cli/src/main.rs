@@ -3,6 +3,7 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
+use codex_app_server::PreparedSshAgentForwarding;
 use codex_app_server_daemon::BootstrapOptions as AppServerBootstrapOptions;
 use codex_app_server_daemon::LifecycleCommand as AppServerLifecycleCommand;
 use codex_app_server_daemon::RemoteControlMode as AppServerRemoteControlMode;
@@ -922,25 +923,27 @@ fn stage_str(stage: Stage) -> &'static str {
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else_with_pre_runtime(
         prepare_ssh_agent_forwarding,
-        |arg0_paths: Arg0DispatchPaths| async move {
-            cli_main(arg0_paths).await?;
+        |arg0_paths: Arg0DispatchPaths, prepared_ssh_agent_forwarding| async move {
+            cli_main(arg0_paths, prepared_ssh_agent_forwarding).await?;
             Ok(())
         },
     )
 }
 
-fn prepare_ssh_agent_forwarding() -> anyhow::Result<()> {
+fn prepare_ssh_agent_forwarding() -> anyhow::Result<Option<PreparedSshAgentForwarding>> {
     let Ok(cli) = MultitoolCli::try_parse() else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(control_socket_path) = app_server_control_socket_for_ssh_agent(&cli) else {
-        return Ok(());
+        return Ok(None);
     };
-    if let Err(err) = codex_app_server::normalize_ssh_auth_sock_before_runtime(control_socket_path)
-    {
-        eprintln!("WARNING: failed to prepare SSH agent forwarding: {err}");
+    match codex_app_server::normalize_ssh_auth_sock_before_runtime(control_socket_path) {
+        Ok(prepared) => Ok(prepared),
+        Err(err) => {
+            eprintln!("WARNING: failed to prepare SSH agent forwarding: {err}");
+            Ok(None)
+        }
     }
-    Ok(())
 }
 
 fn app_server_control_socket_for_ssh_agent(cli: &MultitoolCli) -> Option<&Path> {
@@ -955,7 +958,10 @@ fn app_server_control_socket_for_ssh_agent(cli: &MultitoolCli) -> Option<&Path> 
     }
 }
 
-async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+async fn cli_main(
+    arg0_paths: Arg0DispatchPaths,
+    prepared_ssh_agent_forwarding: Option<PreparedSshAgentForwarding>,
+) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
@@ -1115,6 +1121,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     let auth = auth.try_into_settings()?;
                     let runtime_options = codex_app_server::AppServerRuntimeOptions {
                         remote_control_enabled: remote_control,
+                        prepared_ssh_agent_forwarding,
                         ..Default::default()
                     };
                     codex_app_server::run_main_with_transport_options(
@@ -1173,12 +1180,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                             codex_app_server::app_server_control_socket_path(&codex_home)?
                         }
                     };
+                    let stream = codex_stdio_to_uds::connect(socket_path.as_path()).await?;
                     if let Err(err) =
                         codex_app_server::refresh_ssh_auth_sock_for_proxy(socket_path.as_path())
                     {
                         eprintln!("WARNING: failed to refresh SSH agent forwarding: {err}");
                     }
-                    codex_stdio_to_uds::run(socket_path.as_path()).await?;
+                    codex_stdio_to_uds::relay(stream).await?;
                 }
                 Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
                     let options = codex_app_server_protocol::GenerateTsOptions {

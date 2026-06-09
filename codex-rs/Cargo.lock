@@ -2302,6 +2302,7 @@ dependencies = [
  "clap_complete",
  "codex-api",
  "codex-app-server",
+ "codex-app-server-client",
  "codex-app-server-daemon",
  "codex-app-server-protocol",
  "codex-app-server-test-client",

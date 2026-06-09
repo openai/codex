@@ -9,6 +9,24 @@ use anyhow::Context;
 #[cfg(unix)]
 use anyhow::bail;
 #[cfg(unix)]
+use codex_app_server_client::RemoteAppServerClient;
+#[cfg(unix)]
+use codex_app_server_client::RemoteAppServerConnectArgs;
+#[cfg(unix)]
+use codex_app_server_client::RemoteAppServerEndpoint;
+#[cfg(unix)]
+use codex_app_server_protocol::ClientRequest;
+#[cfg(unix)]
+use codex_app_server_protocol::CommandExecParams;
+#[cfg(unix)]
+use codex_app_server_protocol::CommandExecResponse;
+#[cfg(unix)]
+use codex_app_server_protocol::RequestId;
+#[cfg(unix)]
+use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(unix)]
+use pretty_assertions::assert_eq;
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 #[cfg(unix)]
 use std::process::Stdio;
@@ -50,7 +68,7 @@ foo = "bar"
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ssh_agent_proxy_repairs_missing_bootstrap_socket() -> Result<()> {
+async fn ssh_agent_handoff_survives_duplicate_startup_and_reaches_commands() -> Result<()> {
     let root = TempDir::new()?;
     let codex_home = root.path().join("home");
     std::fs::create_dir(&codex_home)?;
@@ -83,6 +101,28 @@ async fn ssh_agent_proxy_repairs_missing_bootstrap_socket() -> Result<()> {
     })
     .await?;
 
+    let duplicate_output = timeout(
+        Duration::from_secs(10),
+        Command::new(&codex_bin)
+            .args([
+                "app-server",
+                "--listen",
+                &format!("unix://{}", control_socket_path.display()),
+            ])
+            .current_dir(root.path())
+            .env("CODEX_HOME", &codex_home)
+            .env("SSH_AUTH_SOCK", root.path().join("duplicate-agent.sock"))
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await
+    .context("duplicate app server did not exit")??;
+    assert!(!duplicate_output.status.success());
+    assert_eq!(
+        std::fs::read_link(&stable_agent_path)?,
+        missing_bootstrap_agent_path
+    );
+
     let mut proxy = Command::new(&codex_bin)
         .args(["app-server", "proxy", "--sock"])
         .arg(&control_socket_path)
@@ -99,6 +139,54 @@ async fn ssh_agent_proxy_repairs_missing_bootstrap_socket() -> Result<()> {
         std::fs::read_link(&stable_agent_path).is_ok_and(|target| target == current_agent_path)
     })
     .await?;
+
+    let app_server_client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+        endpoint: RemoteAppServerEndpoint::UnixSocket {
+            socket_path: AbsolutePathBuf::from_absolute_path(&control_socket_path)?,
+        },
+        client_name: "ssh-agent-handoff-test".to_string(),
+        client_version: "0.0.0-test".to_string(),
+        experimental_api: false,
+        opt_out_notification_methods: Vec::new(),
+        channel_capacity: 8,
+    })
+    .await?;
+    let response: CommandExecResponse = app_server_client
+        .request_typed(ClientRequest::OneOffCommandExec {
+            request_id: RequestId::Integer(1),
+            params: CommandExecParams {
+                command: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "printf '%s|' \"$SSH_AUTH_SOCK\"; test -S \"$SSH_AUTH_SOCK\" \
+                     && printf socket || printf missing"
+                        .to_string(),
+                ],
+                process_id: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                disable_output_cap: false,
+                disable_timeout: false,
+                timeout_ms: None,
+                cwd: Some(root.path().to_path_buf()),
+                env: None,
+                size: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            },
+        })
+        .await?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: format!("{}|socket", stable_agent_path.display()),
+            stderr: String::new(),
+        }
+    );
+    app_server_client.shutdown().await?;
 
     drop(proxy.stdin.take());
     timeout(Duration::from_secs(5), proxy.wait())

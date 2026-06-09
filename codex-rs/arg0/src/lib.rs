@@ -203,28 +203,31 @@ where
     F: FnOnce(Arg0DispatchPaths) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<()>>,
 {
-    arg0_dispatch_or_else_with_pre_runtime(|| Ok(()), main_fn)
+    arg0_dispatch_or_else_with_pre_runtime(|| Ok(()), |arg0_paths, ()| main_fn(arg0_paths))
 }
 
 /// Runs a synchronous callback after arg0 environment setup and before any
 /// threads or Tokio runtime are created, then invokes the async entry point.
 ///
 /// Use this when a binary must make a process-wide environment change that
-/// would be unsafe after other threads start.
-pub fn arg0_dispatch_or_else_with_pre_runtime<P, F, Fut>(
+/// would be unsafe after other threads start. The callback's output is passed
+/// to the async entry point so startup work can be completed after the runtime
+/// begins.
+pub fn arg0_dispatch_or_else_with_pre_runtime<P, T, F, Fut>(
     pre_runtime: P,
     main_fn: F,
 ) -> anyhow::Result<()>
 where
-    P: FnOnce() -> anyhow::Result<()>,
-    F: FnOnce(Arg0DispatchPaths) -> Fut + Send + 'static,
+    P: FnOnce() -> anyhow::Result<T>,
+    T: Send + 'static,
+    F: FnOnce(Arg0DispatchPaths, T) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<()>>,
 {
     // Retain the TempDir so it exists for the lifetime of the invocation of
     // this executable. Admittedly, we could invoke `keep()` on it, but it
     // would be nice to avoid leaving temporary directories behind, if possible.
     let path_entry_guard = arg0_dispatch();
-    pre_runtime()?;
+    let pre_runtime_output = pre_runtime()?;
     let current_exe = std::env::current_exe().ok();
 
     // Regular invocation. Run the async entry point on a thread with the same
@@ -238,6 +241,7 @@ where
             runtime.block_on(run_main_with_arg0_guard(
                 path_entry_guard,
                 current_exe,
+                pre_runtime_output,
                 main_fn,
             ))
         })?;
@@ -247,13 +251,14 @@ where
     }
 }
 
-async fn run_main_with_arg0_guard<F, Fut>(
+async fn run_main_with_arg0_guard<T, F, Fut>(
     path_entry_guard: Option<Arg0PathEntryGuard>,
     current_exe: Option<PathBuf>,
+    pre_runtime_output: T,
     main_fn: F,
 ) -> anyhow::Result<()>
 where
-    F: FnOnce(Arg0DispatchPaths) -> Fut,
+    F: FnOnce(Arg0DispatchPaths, T) -> Fut,
     Fut: Future<Output = anyhow::Result<()>>,
 {
     let paths = Arg0DispatchPaths {
@@ -268,7 +273,7 @@ where
             .and_then(|path_entry| path_entry.paths().main_execve_wrapper_exe.clone()),
     };
 
-    let result = main_fn(paths).await;
+    let result = main_fn(paths, pre_runtime_output).await;
     // Keep the arg0 tempdir guard alive until the async entry point finishes;
     // runtime paths above can point at aliases inside that directory.
     drop(path_entry_guard);
@@ -692,7 +697,8 @@ mod tests {
         super::build_runtime()?.block_on(run_main_with_arg0_guard(
             /*path_entry_guard*/ Some(path_entry),
             Some(PathBuf::from("/usr/bin/codex")),
-            |paths| async move {
+            (),
+            |paths, ()| async move {
                 let alias_path = paths
                     .codex_linux_sandbox_exe
                     .or(paths.main_execve_wrapper_exe)

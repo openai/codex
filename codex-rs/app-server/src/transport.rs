@@ -17,6 +17,7 @@ pub(crate) use codex_app_server_transport::CHANNEL_CAPACITY;
 pub(crate) use codex_app_server_transport::ConnectionId;
 pub(crate) use codex_app_server_transport::ConnectionOrigin;
 pub(crate) use codex_app_server_transport::OutgoingMessage;
+pub use codex_app_server_transport::PreparedSshAgentForwarding;
 pub(crate) use codex_app_server_transport::QueuedOutgoingMessage;
 pub(crate) use codex_app_server_transport::RemoteControlHandle;
 pub(crate) use codex_app_server_transport::RemoteControlStartConfig;

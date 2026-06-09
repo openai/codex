@@ -10,9 +10,19 @@ use tokio::io::AsyncWriteExt;
 /// Connects to the Unix Domain Socket at `socket_path` and relays data between
 /// standard input/output and the socket.
 pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect(socket_path).await?;
+    relay(stream).await
+}
+
+/// Connects to the Unix Domain Socket at `socket_path`.
+pub async fn connect(socket_path: &Path) -> anyhow::Result<UnixStream> {
+    UnixStream::connect(socket_path)
         .await
-        .with_context(|| format!("failed to connect to socket at {}", socket_path.display()))?;
+        .with_context(|| format!("failed to connect to socket at {}", socket_path.display()))
+}
+
+/// Relays data between standard input/output and an established socket.
+pub async fn relay(stream: UnixStream) -> anyhow::Result<()> {
     let (mut socket_reader, mut socket_writer) = tokio::io::split(stream);
 
     let copy_socket_to_stdout = async {
