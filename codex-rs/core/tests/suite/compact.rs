@@ -1,4 +1,6 @@
 #![allow(clippy::expect_used)]
+use anyhow::Result;
+use anyhow::anyhow;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
@@ -23,14 +25,17 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::hooks::trust_discovered_hooks;
+use core_test_support::responses;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::test_path_buf;
@@ -56,6 +61,8 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use tempfile::TempDir;
 use wiremock::MockServer;
 // --- Test helpers -----------------------------------------------------------
 
@@ -77,6 +84,11 @@ const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
+const GLOBAL_AGENTS_FILENAME: &str = "AGENTS.md";
+const GLOBAL_AGENTS_OVERRIDE_FILENAME: &str = "AGENTS.override.md";
+const NEW_GLOBAL_INSTRUCTIONS: &str = "new global instructions";
+const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
+const REMOTE_V2_SUMMARY: &str = "global-instructions-remote-v2-summary";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
 
@@ -96,12 +108,11 @@ fn disabled_permission_user_turn(text: impl Into<String>, cwd: PathBuf, model: S
             text: text.into(),
             text_elements: Vec::new(),
         }],
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(cwd.abs()),
+            environments: Some(local_selections(cwd.abs())),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -267,6 +278,92 @@ fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
     provider
 }
 
+fn write_global_file(
+    home: &TempDir,
+    filename: &str,
+    contents: impl AsRef<[u8]>,
+) -> Result<AbsolutePathBuf> {
+    let path = home.path().join(filename);
+    std::fs::write(&path, contents)?;
+    Ok(path.abs())
+}
+
+fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
+    request
+        .message_input_texts("user")
+        .into_iter()
+        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .collect()
+}
+
+fn instruction_fragments_in_items(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("role").and_then(Value::as_str) == Some("user")
+        })
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|span| span.get("text").and_then(Value::as_str))
+        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .map(str::to_string)
+        .collect()
+}
+
+fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> String {
+    let cwd = cwd.as_path().display();
+    format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
+}
+
+fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
+    assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
+}
+
+fn replacement_history_from_rollout(path: &Path) -> Result<Vec<Value>> {
+    let rollout_text = fs::read_to_string(path)?;
+    let mut replacement_history = None;
+    for line in rollout_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let entry: RolloutLine = serde_json::from_str(line)?;
+        if let RolloutItem::Compacted(compacted) = entry.item
+            && let Some(items) = compacted.replacement_history
+        {
+            replacement_history = Some(
+                items
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            );
+        }
+    }
+    replacement_history.ok_or_else(|| anyhow!("expected rollout replacement history"))
+}
+
+fn remote_v2_compaction_response() -> String {
+    responses::sse(vec![
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "compaction",
+                "encrypted_content": REMOTE_V2_SUMMARY,
+            }
+        }),
+        responses::ev_completed("remote-v2-compact-response"),
+    ])
+}
+
+fn local_compaction_provider(server: &wiremock::MockServer) -> ModelProviderInfo {
+    let mut provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    provider.name = "OpenAI-compatible test provider".to_string();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
+    provider
+}
+
 fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo {
     let models_response = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
@@ -404,7 +501,6 @@ async fn summarize_context_three_requests_and_instructions() {
     // 1) Normal user input – should hit server once.
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello world".into(),
                 text_elements: Vec::new(),
@@ -430,7 +526,6 @@ async fn summarize_context_three_requests_and_instructions() {
     // 3) Next user input – third hit; history should include only the summary.
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: THIRD_USER_MSG.into(),
                 text_elements: Vec::new(),
@@ -606,7 +701,6 @@ async fn manual_pre_compact_block_decision_does_not_block_compaction() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello before blocked compact".to_string(),
                 text_elements: Vec::new(),
@@ -680,7 +774,6 @@ async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello before matched compact".to_string(),
                 text_elements: Vec::new(),
@@ -751,7 +844,6 @@ async fn manual_compact_uses_custom_prompt() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
@@ -899,7 +991,6 @@ async fn manual_compact_emits_context_compaction_items() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "manual compact".into(),
                 text_elements: Vec::new(),
@@ -1066,7 +1157,6 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     // Start the conversation with the user message
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: user_message.into(),
                 text_elements: Vec::new(),
@@ -1539,7 +1629,6 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -1556,7 +1645,6 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -1573,7 +1661,6 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
@@ -1745,7 +1832,6 @@ async fn auto_compact_emits_context_compaction_items() {
     for user in [FIRST_AUTO_MSG, SECOND_AUTO_MSG, POST_AUTO_USER_MSG] {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
@@ -1827,7 +1913,6 @@ async fn auto_compact_starts_after_turn_started() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -1843,7 +1928,6 @@ async fn auto_compact_starts_after_turn_started() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -1859,7 +1943,6 @@ async fn auto_compact_starts_after_turn_started() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
@@ -2388,7 +2471,6 @@ async fn auto_compact_persists_rollout_entries() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -2404,7 +2486,6 @@ async fn auto_compact_persists_rollout_entries() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
@@ -2420,7 +2501,6 @@ async fn auto_compact_persists_rollout_entries() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
@@ -2510,7 +2590,6 @@ async fn manual_compact_retries_after_context_window_error() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
@@ -2615,7 +2694,6 @@ async fn manual_compact_non_context_failure_retries_then_emits_task_error() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
@@ -2711,7 +2789,6 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: first_user_message.into(),
                 text_elements: Vec::new(),
@@ -2730,7 +2807,6 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: second_user_message.into(),
                 text_elements: Vec::new(),
@@ -2749,7 +2825,6 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: final_user_message.into(),
                 text_elements: Vec::new(),
@@ -2961,7 +3036,6 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
@@ -3067,7 +3141,6 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: FUNCTION_CALL_LIMIT_MSG.into(),
                 text_elements: Vec::new(),
@@ -3499,7 +3572,6 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
@@ -3619,7 +3691,6 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
     for user in [first_user, second_user, third_user] {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
@@ -3682,7 +3753,6 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     for user in ["USER_ONE", "USER_TWO"] {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: user.to_string(),
                     text_elements: Vec::new(),
@@ -3699,7 +3769,9 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     core_test_support::submit_thread_settings(
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs()),
+            environments: Some(local_selections(
+                test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs(),
+            )),
             ..Default::default()
         },
     )
@@ -3709,7 +3781,6 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         .to_string();
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![
                 UserInput::Image {
                     image_url: image_url.clone(),
@@ -3905,7 +3976,6 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
@@ -3921,7 +3991,6 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "USER_TWO".to_string(),
                 text_elements: Vec::new(),
@@ -3995,7 +4064,6 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "AFTER_MANUAL_EMPTY_COMPACT".to_string(),
                 text_elements: Vec::new(),
@@ -4026,4 +4094,291 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
             ]
         )
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Result<()> {
+    // Set up an initial turn, a manual compaction response, and a post-compaction turn.
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("first-response"),
+                responses::ev_completed("first-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("compact-response"),
+                responses::ev_assistant_message("compact-message", "summary"),
+                responses::ev_completed("compact-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("follow-up-response"),
+                responses::ev_completed("follow-up-response"),
+            ]),
+        ],
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let source = write_global_file(
+        home.as_ref(),
+        GLOBAL_AGENTS_FILENAME,
+        OLD_GLOBAL_INSTRUCTIONS,
+    )?;
+    let provider = local_compaction_provider(&server);
+
+    // Create the thread with the old global source loaded into its instruction snapshot.
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(move |config| {
+            config.model_provider = provider;
+        });
+    let test = builder.build(&server).await?;
+
+    // Assert the pre-compaction source list points at the creation-time file.
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source.clone()],
+        "thread reports the creation-time global source before compaction"
+    );
+
+    // Materialize the old snapshot, rewrite the selected file in place, and manually compact.
+    test.submit_turn("first turn").await?;
+    let rewritten_source = write_global_file(
+        home.as_ref(),
+        GLOBAL_AGENTS_FILENAME,
+        NEW_GLOBAL_INSTRUCTIONS,
+    )?;
+    assert_eq!(source, rewritten_source);
+
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("after compact").await?;
+
+    // Assert ordinary and compact turns keep the old rendering even though the reported source
+    // path now contains new text.
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let expected_fragment =
+        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &expected_fragment);
+    assert_single_instruction_fragment(&requests[1], &expected_fragment);
+    assert_single_instruction_fragment(&requests[2], &expected_fragment);
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source],
+        "thread retains the creation-time global source after compaction"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Result<()> {
+    // Set up a turn that crosses the auto-compaction limit and a post-compaction response.
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_function_call("call-1", "unsupported_tool", "{}"),
+                responses::ev_completed_with_tokens("first-response", /*total_tokens*/ 96),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("compact-message", "summary"),
+                responses::ev_completed_with_tokens("compact-response", /*total_tokens*/ 10),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("final-message", "done"),
+                responses::ev_completed_with_tokens("follow-up-response", /*total_tokens*/ 10),
+            ]),
+        ],
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let source = write_global_file(
+        home.as_ref(),
+        GLOBAL_AGENTS_FILENAME,
+        OLD_GLOBAL_INSTRUCTIONS,
+    )?;
+    let provider = local_compaction_provider(&server);
+
+    // Create the thread with the old global source loaded into its instruction snapshot.
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(move |config| {
+            config.model_provider = provider;
+            config.model_context_window = Some(100);
+            config.model_auto_compact_token_limit = Some(90);
+        });
+    let test = builder.build(&server).await?;
+
+    // Assert the pre-compaction source list points at the creation-time file.
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source.clone()],
+        "thread reports the creation-time global source before mid-turn compaction"
+    );
+
+    // Add a preferred override before the turn triggers automatic mid-turn compaction.
+    let new_source = write_global_file(
+        home.as_ref(),
+        GLOBAL_AGENTS_OVERRIDE_FILENAME,
+        NEW_GLOBAL_INSTRUCTIONS,
+    )?;
+    assert_ne!(source, new_source);
+    test.submit_turn("trigger mid-turn compaction").await?;
+
+    // Assert the initial, compact, and resumed requests all keep the old snapshot and source.
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let expected_fragment =
+        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &expected_fragment);
+    assert_single_instruction_fragment(&requests[1], &expected_fragment);
+    assert_single_instruction_fragment(&requests[2], &expected_fragment);
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source],
+        "thread retains the creation-time global source after mid-turn compaction"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_mutation()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Set up an ordinary turn, a remote-v2 compact response, and a post-compaction turn.
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("remote-v2-initial-response"),
+                responses::ev_completed("remote-v2-initial-response"),
+            ]),
+            remote_v2_compaction_response(),
+            responses::sse(vec![
+                responses::ev_response_created("remote-v2-follow-up-response"),
+                responses::ev_completed("remote-v2-follow-up-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("remote-v2-resumed-response"),
+                responses::ev_completed("remote-v2-resumed-response"),
+            ]),
+        ],
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let source = write_global_file(
+        home.as_ref(),
+        GLOBAL_AGENTS_FILENAME,
+        OLD_GLOBAL_INSTRUCTIONS,
+    )?;
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        });
+    let test = builder.build(&server).await?;
+
+    // Materialize the old snapshot, rewrite the selected file in place, and compact remotely.
+    test.submit_turn("before remote v2 compaction").await?;
+    let rewritten_source = write_global_file(
+        home.as_ref(),
+        GLOBAL_AGENTS_FILENAME,
+        NEW_GLOBAL_INSTRUCTIONS,
+    )?;
+    assert_eq!(source, rewritten_source);
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("after remote v2 compaction").await?;
+    test.codex.flush_rollout().await?;
+
+    // Assert the compact request, installed replacement history, and follow-up all keep the
+    // creation-time item despite the file-backed source now containing new text.
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let old_fragment = expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &old_fragment);
+    assert_single_instruction_fragment(&requests[1], &old_fragment);
+    assert_single_instruction_fragment(&requests[2], &old_fragment);
+    assert_eq!(
+        requests[1].input().last(),
+        Some(&json!({"type": "compaction_trigger"})),
+        "remote-v2 compact request should append exactly one compaction trigger"
+    );
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let replacement_history = replacement_history_from_rollout(&rollout_path)?;
+    assert_eq!(
+        instruction_fragments_in_items(&replacement_history),
+        Vec::<String>::new(),
+        "remote-v2 replacement history currently omits the global-instruction fragment"
+    );
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source.clone()],
+        "running thread retains the selected same-path source"
+    );
+    assert_eq!(
+        fs::read_to_string(source.as_path())?,
+        NEW_GLOBAL_INSTRUCTIONS,
+        "the selected source path should contain the rewritten text"
+    );
+
+    // Cold-resume the persisted replacement history with freshly loaded same-path configuration.
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+    let resumed_cwd = test.config.cwd.clone();
+    let mut resume_builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.cwd = resumed_cwd;
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        });
+    let resumed = resume_builder
+        .resume(&server, Arc::clone(&home), rollout_path)
+        .await?;
+    resumed
+        .submit_turn("after remote v2 compaction cold resume")
+        .await?;
+
+    // Modern replacement-history resume replays the persisted checkpoint and its later old-context
+    // suffix even though the same source path now contains new text.
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert_single_instruction_fragment(&requests[3], &old_fragment);
+    let resumed_input = requests[3].input();
+    assert_eq!(
+        resumed_input.get(..replacement_history.len()),
+        Some(replacement_history.as_slice()),
+        "remote-v2 cold resume should replay persisted replacement history verbatim"
+    );
+    let post_compact_input = requests[2].input();
+    assert_eq!(
+        resumed_input.get(..post_compact_input.len()),
+        Some(post_compact_input.as_slice()),
+        "remote-v2 cold resume should replay the complete post-compaction structured prefix"
+    );
+    assert_eq!(
+        resumed.codex.instruction_sources().await,
+        vec![source],
+        "cold-resumed thread reports the same rewritten source path"
+    );
+
+    Ok(())
 }

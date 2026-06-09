@@ -1,5 +1,7 @@
 use super::*;
 use crate::error_code::method_not_found;
+use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_extension_api::ExtensionDataInit;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
@@ -47,11 +49,11 @@ fn collect_resume_override_mismatches(
     }
     if let Some(requested_cwd) = request.cwd.as_deref() {
         let requested_cwd_path = std::path::PathBuf::from(requested_cwd);
-        if requested_cwd_path != config_snapshot.cwd.as_path() {
+        if requested_cwd_path != config_snapshot.cwd().as_path() {
             mismatch_details.push(format!(
                 "cwd requested={} active={}",
                 requested_cwd_path.display(),
-                config_snapshot.cwd.display()
+                config_snapshot.cwd().display()
             ));
         }
     }
@@ -325,6 +327,17 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) state_db: Option<StateDbHandle>,
     pub(super) background_tasks: TaskTracker,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
+}
+
+/// Outcome of trying to satisfy a resume request from an already loaded thread.
+enum RunningThreadResumeResult {
+    /// The request was delegated to the loaded thread.
+    Handled,
+    /// No loaded thread handled the request.
+    ///
+    /// The optional stored thread contains the history-bearing probe that cold
+    /// resume can reuse instead of reading the rollout again.
+    NotRunning(Option<Box<StoredThread>>),
 }
 
 impl ThreadRequestProcessor {
@@ -822,6 +835,7 @@ impl ThreadRequestProcessor {
             base_instructions,
             developer_instructions,
             dynamic_tools,
+            selected_capability_roots,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
             personality,
@@ -877,6 +891,7 @@ impl ThreadRequestProcessor {
                 config,
                 typesafe_overrides,
                 dynamic_tools,
+                selected_capability_roots.unwrap_or_default(),
                 session_start_source,
                 thread_source.map(Into::into),
                 environment_selections,
@@ -949,6 +964,7 @@ impl ThreadRequestProcessor {
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
+        selected_capability_roots: Vec<SelectedCapabilityRoot>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
@@ -1050,6 +1066,10 @@ impl ThreadRequestProcessor {
                 .collect()
         };
         let core_dynamic_tool_count = core_dynamic_tools.len();
+        let mut thread_extension_init = ExtensionDataInit::new();
+        if !selected_capability_roots.is_empty() {
+            thread_extension_init.insert(selected_capability_roots);
+        }
         let create_thread_started_at = std::time::Instant::now();
         let NewThread {
             thread_id,
@@ -1072,6 +1092,7 @@ impl ThreadRequestProcessor {
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments,
+                thread_extension_init,
             })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
@@ -1154,8 +1175,9 @@ impl ThreadRequestProcessor {
 
         let sandbox = thread_response_sandbox_policy(
             &config_snapshot.permission_profile,
-            config_snapshot.cwd.as_path(),
+            config_snapshot.cwd().as_path(),
         );
+        let cwd = config_snapshot.cwd().clone();
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
 
@@ -1164,7 +1186,7 @@ impl ThreadRequestProcessor {
             model: config_snapshot.model,
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
-            cwd: config_snapshot.cwd,
+            cwd,
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
             approval_policy: config_snapshot.approval_policy.into(),
@@ -2418,7 +2440,7 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
-        match self
+        let stored_thread_from_running_probe = match self
             .resume_running_thread(
                 &request_id,
                 &params,
@@ -2427,13 +2449,13 @@ impl ThreadRequestProcessor {
             )
             .await
         {
-            Ok(true) => return Ok(()),
-            Ok(false) => {}
+            Ok(RunningThreadResumeResult::Handled) => return Ok(()),
+            Ok(RunningThreadResumeResult::NotRunning(stored_thread)) => stored_thread,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return Ok(());
             }
-        }
+        };
 
         let ThreadResumeParams {
             thread_id,
@@ -2457,15 +2479,20 @@ impl ThreadRequestProcessor {
         } = params;
         let include_turns = !exclude_turns;
 
-        let (thread_history, resume_source_thread) = match if let Some(history) = history {
+        let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
                 .await
                 .map(|thread_history| (thread_history, None))
+        } else if let Some(stored_thread) = stored_thread_from_running_probe {
+            self.stored_thread_to_initial_history(&stored_thread)
+                .await
+                .map(|thread_history| (thread_history, Some(*stored_thread)))
         } else {
             self.resume_thread_from_rollout(&thread_id, path.as_ref())
                 .await
                 .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
-        } {
+        };
+        let (thread_history, resume_source_thread) = match resume_result {
             Ok(value) => value,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -2601,7 +2628,7 @@ impl ThreadRequestProcessor {
                 let config_snapshot = codex_thread.config_snapshot().await;
                 let sandbox = thread_response_sandbox_policy(
                     &config_snapshot.permission_profile,
-                    config_snapshot.cwd.as_path(),
+                    config_snapshot.cwd().as_path(),
                 );
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
@@ -2706,7 +2733,7 @@ impl ThreadRequestProcessor {
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<bool, JSONRPCErrorError> {
+    ) -> Result<RunningThreadResumeResult, JSONRPCErrorError> {
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
                 && self
@@ -2742,7 +2769,11 @@ impl ThreadRequestProcessor {
             let existing_thread_id = source_thread.thread_id;
             match self.thread_manager.get_thread(existing_thread_id).await {
                 Ok(existing_thread) => Some((existing_thread_id, existing_thread, source_thread)),
-                Err(_) => None,
+                Err(_) => {
+                    return Ok(RunningThreadResumeResult::NotRunning(Some(Box::new(
+                        source_thread,
+                    ))));
+                }
             }
         };
 
@@ -2783,7 +2814,9 @@ impl ThreadRequestProcessor {
                         ThreadShutdownResult::Complete => {
                             self.thread_manager.remove_thread(&existing_thread_id).await;
                             self.finalize_thread_teardown(existing_thread_id).await;
-                            return Ok(false);
+                            // Shutdown can flush newer rollout items, so reload the
+                            // stored thread before starting the replacement session.
+                            return Ok(RunningThreadResumeResult::NotRunning(None));
                         }
                         ThreadShutdownResult::SubmitFailed => {
                             warn!("failed to submit Shutdown to thread {existing_thread_id}");
@@ -2875,9 +2908,9 @@ impl ThreadRequestProcessor {
                     "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
                 )));
             }
-            return Ok(true);
+            return Ok(RunningThreadResumeResult::Handled);
         }
-        Ok(false)
+        Ok(RunningThreadResumeResult::NotRunning(None))
     }
 
     async fn resume_thread_from_history(
@@ -3335,7 +3368,7 @@ impl ThreadRequestProcessor {
         let config_snapshot = forked_thread.config_snapshot().await;
         let sandbox = thread_response_sandbox_policy(
             &config_snapshot.permission_profile,
-            config_snapshot.cwd.as_path(),
+            config_snapshot.cwd().as_path(),
         );
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
@@ -4121,7 +4154,7 @@ fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummar
         metadata.cwd.clone(),
         metadata.cli_version.clone(),
         metadata.source.clone(),
-        metadata.thread_source,
+        metadata.thread_source.clone(),
         metadata.agent_nickname.clone(),
         metadata.agent_role.clone(),
         metadata.git_sha.clone(),
@@ -4205,12 +4238,12 @@ fn build_thread_from_snapshot(
         updated_at: now,
         status: ThreadStatus::NotLoaded,
         path,
-        cwd: config_snapshot.cwd.clone(),
+        cwd: config_snapshot.cwd().clone(),
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
         agent_nickname: config_snapshot.session_source.get_nickname(),
         agent_role: config_snapshot.session_source.get_agent_role(),
         source: config_snapshot.session_source.clone().into(),
-        thread_source: config_snapshot.thread_source.map(Into::into),
+        thread_source: config_snapshot.thread_source.clone().map(Into::into),
         git_info: None,
         name: None,
         turns: Vec::new(),

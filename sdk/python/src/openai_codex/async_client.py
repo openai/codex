@@ -6,6 +6,7 @@ from typing import AsyncIterator, Callable, ParamSpec, TypeVar
 
 from pydantic import BaseModel
 
+from ._goal import _GoalOperationState
 from .client import CodexClient, CodexConfig
 from .generated.v2_all import (
     AccountLoginCompletedNotification,
@@ -21,6 +22,9 @@ from .generated.v2_all import (
     ThreadCompactStartResponse,
     ThreadForkParams as V2ThreadForkParams,
     ThreadForkResponse,
+    ThreadGoalClearResponse,
+    ThreadGoalSetResponse,
+    ThreadGoalStatus,
     ThreadListParams as V2ThreadListParams,
     ThreadListResponse,
     ThreadReadResponse,
@@ -107,6 +111,14 @@ class AsyncCodexClient:
         """Unregister a turn notification queue on the wrapped sync client."""
         self._sync.unregister_turn_notifications(turn_id)
 
+    def register_goal_operation(self, thread_id: str) -> _GoalOperationState:
+        """Register a logical goal route on the wrapped sync client."""
+        return self._sync.register_goal_operation(thread_id)
+
+    def unregister_goal_operation(self, state: _GoalOperationState) -> None:
+        """Release one logical goal route."""
+        self._sync.unregister_goal_operation(state)
+
     async def request(
         self,
         method: str,
@@ -192,6 +204,29 @@ class AsyncCodexClient:
         """Start thread compaction using the wrapped sync client."""
         return await self._call_sync(self._sync.thread_compact, thread_id)
 
+    async def thread_goal_clear(self, thread_id: str) -> ThreadGoalClearResponse:
+        """Clear the persisted goal through the wrapped sync client."""
+        return await self._call_sync(self._sync.thread_goal_clear, thread_id)
+
+    async def thread_goal_set(
+        self,
+        thread_id: str,
+        *,
+        objective: str | None = None,
+        status: ThreadGoalStatus | None = None,
+    ) -> ThreadGoalSetResponse:
+        """Create or update a persisted goal through the wrapped sync client."""
+        return await self._call_sync(
+            self._sync.thread_goal_set,
+            thread_id,
+            objective=objective,
+            status=status,
+        )
+
+    async def pause_goal(self, thread_id: str) -> ThreadGoalSetResponse:
+        """Pause the active goal through the wrapped sync client."""
+        return await self._call_sync(self._sync.pause_goal, thread_id)
+
     async def turn_start(
         self,
         thread_id: str,
@@ -255,6 +290,10 @@ class AsyncCodexClient:
     async def next_turn_notification(self, turn_id: str) -> Notification:
         """Wait for the next notification routed to one turn."""
         return await self._call_sync(self._sync.next_turn_notification, turn_id)
+
+    async def next_goal_notification(self, state: _GoalOperationState) -> Notification:
+        """Wait for the next notification in a logical goal turn."""
+        return await self._call_sync(self._sync.next_goal_notification, state)
 
     async def wait_for_login_completed(
         self,

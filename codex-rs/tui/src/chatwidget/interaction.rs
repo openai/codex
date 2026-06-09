@@ -112,6 +112,20 @@ impl ChatWidget {
             return;
         }
 
+        const REVIEW_STEER_UNAVAILABLE_MESSAGE: &str = "Steer messages aren't supported during /review. Press Ctrl+C now to cancel the review.";
+
+        if self.chat_keymap.interrupt_turn.is_pressed(key_event)
+            && self.review.is_review_mode
+            && (!self.input_queue.pending_steers.is_empty()
+                || !self.input_queue.rejected_steers_queue.is_empty())
+            && self.bottom_pane.is_task_running()
+            && self.bottom_pane.no_modal_or_popup_active()
+            && !self.should_handle_vim_insert_escape(key_event)
+        {
+            self.add_warning_message(REVIEW_STEER_UNAVAILABLE_MESSAGE.to_string());
+            return;
+        }
+
         if self.chat_keymap.interrupt_turn.is_pressed(key_event)
             && !self.input_queue.pending_steers.is_empty()
             && self.bottom_pane.is_task_running()
@@ -288,7 +302,7 @@ impl ChatWidget {
             /*initial_text*/ existing_name.unwrap_or_default().to_string(),
             /*context_label*/ None,
             Box::new(move |name: String| {
-                let Some(name) = crate::legacy_core::util::normalize_thread_name(&name) else {
+                let Some(name) = normalize_thread_name(&name) else {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
                         history_cell::new_error_event("Thread name cannot be empty.".to_string()),
                     )));

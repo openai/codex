@@ -45,6 +45,12 @@ const METER_NAME: &str = "codex";
 const DURATION_UNIT: &str = "ms";
 const DURATION_DESCRIPTION: &str = "Duration in milliseconds.";
 
+#[derive(Debug, Eq, Hash, PartialEq)]
+struct InstrumentKey {
+    name: String,
+    description: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 struct SharedManualReader {
     inner: Arc<ManualReader>,
@@ -82,7 +88,7 @@ impl MetricReader for SharedManualReader {
 struct MetricsClientInner {
     meter_provider: SdkMeterProvider,
     meter: Meter,
-    counters: Mutex<HashMap<String, Counter<u64>>>,
+    counters: Mutex<HashMap<InstrumentKey, Counter<u64>>>,
     histograms: Mutex<HashMap<String, Histogram<f64>>>,
     duration_histograms: Mutex<HashMap<String, Histogram<f64>>>,
     runtime_reader: Option<Arc<ManualReader>>,
@@ -90,7 +96,13 @@ struct MetricsClientInner {
 }
 
 impl MetricsClientInner {
-    fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
+    fn counter(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        inc: i64,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
         validate_metric_name(name)?;
         if inc < 0 {
             return Err(MetricsError::NegativeCounterIncrement {
@@ -104,9 +116,17 @@ impl MetricsClientInner {
             .counters
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let counter = counters
-            .entry(name.to_string())
-            .or_insert_with(|| self.meter.u64_counter(name.to_string()).build());
+        let key = InstrumentKey {
+            name: name.to_string(),
+            description: description.map(str::to_string),
+        };
+        let counter = counters.entry(key).or_insert_with(|| {
+            let builder = self.meter.u64_counter(name.to_string());
+            match description {
+                Some(description) => builder.with_description(description.to_string()).build(),
+                None => builder.build(),
+            }
+        });
         counter.add(inc as u64, &attributes);
         Ok(())
     }
@@ -242,7 +262,18 @@ impl MetricsClient {
 
     /// Send a single counter increment.
     pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
-        self.0.counter(name, inc, tags)
+        self.0.counter(name, /*description*/ None, inc, tags)
+    }
+
+    /// Send a single counter increment with an instrument description.
+    pub fn counter_with_description(
+        &self,
+        name: &str,
+        description: &str,
+        inc: i64,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
+        self.0.counter(name, Some(description), inc, tags)
     }
 
     /// Send a single histogram sample.
