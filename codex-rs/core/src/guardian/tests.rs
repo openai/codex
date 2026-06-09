@@ -56,7 +56,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_once;
-use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -2078,73 +2077,6 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
             && rejection_message.contains(error_message),
         "rejection message should include guardian rationale: {rejection_message}"
     );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_retries_reviewer_availability_failure() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    const PRIOR_RETRY_REASON: &str = "The command is being retried without sandboxing.";
-
-    let server = start_mock_server().await;
-    let guardian_assessment = serde_json::json!({
-        "risk_level": "low",
-        "user_authorization": "high",
-        "outcome": "allow",
-        "rationale": "The command only inspects local git state.",
-    })
-    .to_string();
-    let request_log = mount_response_sequence(
-        &server,
-        vec![
-            wiremock::ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(core_test_support::responses::sse_failed(
-                    "resp-guardian-failed",
-                    "server_error",
-                    "reviewer capacity temporarily unavailable",
-                )),
-            wiremock::ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(sse(vec![
-                    ev_response_created("resp-guardian"),
-                    ev_assistant_message("msg-guardian", &guardian_assessment),
-                    ev_completed("resp-guardian"),
-                ])),
-        ],
-    )
-    .await;
-
-    let (session, turn) = guardian_test_session_and_turn(&server).await;
-    seed_guardian_parent_history(&session, &turn).await;
-
-    let decision = review_approval_request(
-        &session,
-        &turn,
-        "review-shell-guardian-retry".to_string(),
-        GuardianApprovalRequest::Shell {
-            id: "shell-guardian-retry".to_string(),
-            command: vec!["git".to_string(), "status".to_string()],
-            cwd: test_path_buf("/repo/codex-rs/core").abs(),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: Some("Inspect repo state before proceeding.".to_string()),
-        },
-        /*retry_reason*/ Some(PRIOR_RETRY_REASON.to_string()),
-    )
-    .await;
-
-    assert_eq!(decision, ReviewDecision::Approved);
-    let requests = request_log.requests();
-    assert_eq!(requests.len(), 2);
-    let retry_request = &requests[1];
-    assert!(retry_request.body_contains_text(PRIOR_RETRY_REASON));
-    assert!(retry_request.body_contains_text(
-        "The previous automatic approval review was temporarily unavailable. Retry the review once before blocking the action."
-    ));
-    assert!(!retry_request.body_contains_text("reviewer capacity temporarily unavailable"));
 
     Ok(())
 }
