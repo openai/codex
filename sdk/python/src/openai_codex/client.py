@@ -10,6 +10,7 @@ from typing import Callable, Iterator, TypeVar
 
 from pydantic import BaseModel
 
+from ._goal import _GoalOperationState
 from ._message_router import MessageRouter
 from ._version import __version__ as SDK_VERSION
 from .errors import CodexError, TransportClosedError
@@ -30,6 +31,9 @@ from .generated.v2_all import (
     ThreadCompactStartResponse,
     ThreadForkParams as V2ThreadForkParams,
     ThreadForkResponse,
+    ThreadGoalClearResponse,
+    ThreadGoalSetResponse,
+    ThreadGoalStatus,
     ThreadListParams as V2ThreadListParams,
     ThreadListResponse,
     ThreadReadResponse,
@@ -352,6 +356,18 @@ class CodexClient:
         """Return the next routed notification for the requested turn id."""
         return self._router.next_turn_notification(turn_id)
 
+    def register_goal_operation(self, thread_id: str) -> _GoalOperationState:
+        """Register a private thread-scoped route for a logical goal turn."""
+        return self._router.register_goal(thread_id)
+
+    def unregister_goal_operation(self, state: _GoalOperationState) -> None:
+        """Release routing state for one logical goal turn."""
+        self._router.unregister_goal(state)
+
+    def next_goal_notification(self, state: _GoalOperationState) -> Notification:
+        """Wait for the next notification in a logical goal turn."""
+        return state.next_notification()
+
     def account_login_start(
         self,
         params: V2LoginAccountParams | JsonObject,
@@ -451,6 +467,37 @@ class CodexClient:
             {"threadId": thread_id},
             response_model=ThreadCompactStartResponse,
         )
+
+    def thread_goal_clear(self, thread_id: str) -> ThreadGoalClearResponse:
+        """Clear the persisted goal for a thread before replacing it."""
+        return self.request(
+            "thread/goal/clear",
+            {"threadId": thread_id},
+            response_model=ThreadGoalClearResponse,
+        )
+
+    def thread_goal_set(
+        self,
+        thread_id: str,
+        *,
+        objective: str | None = None,
+        status: ThreadGoalStatus | None = None,
+    ) -> ThreadGoalSetResponse:
+        """Create or update the persisted goal for a thread."""
+        payload: JsonObject = {"threadId": thread_id}
+        if objective is not None:
+            payload["objective"] = objective
+        if status is not None:
+            payload["status"] = status.value
+        return self.request(
+            "thread/goal/set",
+            payload,
+            response_model=ThreadGoalSetResponse,
+        )
+
+    def pause_goal(self, thread_id: str) -> ThreadGoalSetResponse:
+        """Pause the active goal used by a logical goal turn."""
+        return self.thread_goal_set(thread_id, status=ThreadGoalStatus.paused)
 
     def turn_start(
         self,
