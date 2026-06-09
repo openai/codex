@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
+use axum::body::to_bytes;
 use axum::extract::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -48,6 +49,7 @@ use rmcp::transport::StreamableHttpServerConfig;
 use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde::Deserialize;
+use serde_json::Value;
 use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::task;
@@ -64,18 +66,32 @@ const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
 const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
+const INITIALIZE_POST_FAILURE_CONTROL_PATH: &str = "/test/control/initialize-post-failure";
+const INITIALIZED_NOTIFICATION_POST_FAILURE_CONTROL_PATH: &str =
+    "/test/control/initialized-notification-post-failure";
+const MAX_MCP_POST_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Default)]
-struct SessionFailureState {
+struct PostFailureState {
     armed_failure: Arc<Mutex<Option<ArmedFailure>>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ArmedFailureTarget {
+    Initialize,
+    InitializedNotification,
+    Session,
 }
 
 #[derive(Clone, Debug)]
 struct ArmedFailure {
+    target: ArmedFailureTarget,
     status: StatusCode,
     remaining: usize,
     /// Raw `WWW-Authenticate` challenge header field values returned with the failure.
     www_authenticate_headers: Vec<HeaderValue>,
+    content_type: Option<HeaderValue>,
+    body: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +101,8 @@ struct ArmSessionPostFailureRequest {
     /// Raw `WWW-Authenticate` challenge header field values to add to the failure.
     #[serde(default)]
     www_authenticate_headers: Vec<String>,
+    content_type: Option<String>,
+    body: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -97,7 +115,7 @@ struct EchoArgs {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = parse_bind_addr()?;
-    let session_failure_state = SessionFailureState::default();
+    let post_failure_state = PostFailureState::default();
     const MAX_BIND_RETRIES: u32 = 20;
     const BIND_RETRY_DELAY: Duration = Duration::from_millis(50);
 
@@ -128,6 +146,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             SESSION_POST_FAILURE_CONTROL_PATH,
             post(arm_session_post_failure),
+        )
+        .route(
+            INITIALIZE_POST_FAILURE_CONTROL_PATH,
+            post(arm_initialize_post_failure),
+        )
+        .route(
+            INITIALIZED_NOTIFICATION_POST_FAILURE_CONTROL_PATH,
+            post(arm_initialized_notification_post_failure),
         )
         .route(
             "/.well-known/oauth-authorization-server/mcp",
@@ -162,10 +188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         )
         .layer(middleware::from_fn_with_state(
-            session_failure_state.clone(),
-            fail_session_post_when_armed,
+            post_failure_state.clone(),
+            fail_mcp_post_when_armed,
         ))
-        .with_state(session_failure_state);
+        .with_state(post_failure_state);
 
     let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
         let expected = Arc::new(format!("Bearer {token}"));
@@ -404,8 +430,30 @@ async fn require_bearer(
 }
 
 async fn arm_session_post_failure(
-    State(state): State<SessionFailureState>,
+    State(state): State<PostFailureState>,
     Json(request): Json<ArmSessionPostFailureRequest>,
+) -> Result<StatusCode, StatusCode> {
+    arm_post_failure(state, request, ArmedFailureTarget::Session).await
+}
+
+async fn arm_initialize_post_failure(
+    State(state): State<PostFailureState>,
+    Json(request): Json<ArmSessionPostFailureRequest>,
+) -> Result<StatusCode, StatusCode> {
+    arm_post_failure(state, request, ArmedFailureTarget::Initialize).await
+}
+
+async fn arm_initialized_notification_post_failure(
+    State(state): State<PostFailureState>,
+    Json(request): Json<ArmSessionPostFailureRequest>,
+) -> Result<StatusCode, StatusCode> {
+    arm_post_failure(state, request, ArmedFailureTarget::InitializedNotification).await
+}
+
+async fn arm_post_failure(
+    state: PostFailureState,
+    request: ArmSessionPostFailureRequest,
+    target: ArmedFailureTarget,
 ) -> Result<StatusCode, StatusCode> {
     let status = StatusCode::from_u16(request.status).map_err(|_| StatusCode::BAD_REQUEST)?;
     let www_authenticate_headers = request
@@ -413,46 +461,76 @@ async fn arm_session_post_failure(
         .into_iter()
         .map(|value| HeaderValue::from_str(&value).map_err(|_| StatusCode::BAD_REQUEST))
         .collect::<Result<Vec<_>, _>>()?;
+    let content_type = request
+        .content_type
+        .map(|value| HeaderValue::from_str(&value).map_err(|_| StatusCode::BAD_REQUEST))
+        .transpose()?;
     let armed_failure = if request.remaining == 0 {
         None
     } else {
         Some(ArmedFailure {
+            target,
             status,
             remaining: request.remaining,
             www_authenticate_headers,
+            content_type,
+            body: request.body,
         })
     };
     *state.armed_failure.lock().await = armed_failure;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn fail_session_post_when_armed(
-    State(state): State<SessionFailureState>,
+async fn fail_mcp_post_when_armed(
+    State(state): State<PostFailureState>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if request.uri().path() != "/mcp"
-        || request.method() != Method::POST
-        || !request.headers().contains_key(MCP_SESSION_ID_HEADER)
-    {
+    if request.uri().path() != "/mcp" || request.method() != Method::POST {
         return next.run(request).await;
     }
+    let (parts, body) = request.into_parts();
+    let body_bytes = match to_bytes(body, MAX_MCP_POST_BODY_BYTES).await {
+        Ok(body_bytes) => body_bytes,
+        Err(_) => {
+            let mut response = Response::new(Body::from("failed to read request body"));
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return response;
+        }
+    };
+    let has_session_id = parts.headers.contains_key(MCP_SESSION_ID_HEADER);
+    let mcp_method = request_mcp_method(&body_bytes);
 
     {
         let mut armed_failure = state.armed_failure.lock().await;
         if let Some(failure) = armed_failure.as_mut()
             && failure.remaining > 0
+            && match failure.target {
+                ArmedFailureTarget::Initialize => !has_session_id,
+                ArmedFailureTarget::InitializedNotification => {
+                    has_session_id && mcp_method.as_deref() == Some("notifications/initialized")
+                }
+                ArmedFailureTarget::Session => {
+                    has_session_id && mcp_method.as_deref() != Some("notifications/initialized")
+                }
+            }
         {
             failure.remaining -= 1;
             let status = failure.status;
             let www_authenticate_headers = failure.www_authenticate_headers.clone();
+            let content_type = failure.content_type.clone();
+            let body = failure
+                .body
+                .clone()
+                .unwrap_or_else(|| format!("forced session failure with status {status}"));
             if failure.remaining == 0 {
                 *armed_failure = None;
             }
-            let mut response = Response::new(Body::from(format!(
-                "forced session failure with status {status}"
-            )));
+            let mut response = Response::new(Body::from(body));
             *response.status_mut() = status;
+            if let Some(content_type) = content_type {
+                response.headers_mut().insert(CONTENT_TYPE, content_type);
+            }
             for www_authenticate_header in www_authenticate_headers {
                 response
                     .headers_mut()
@@ -462,5 +540,14 @@ async fn fail_session_post_when_armed(
         }
     }
 
-    next.run(request).await
+    next.run(Request::from_parts(parts, Body::from(body_bytes)))
+        .await
+}
+
+fn request_mcp_method(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<Value>(body)
+        .ok()?
+        .get("method")?
+        .as_str()
+        .map(ToString::to_string)
 }

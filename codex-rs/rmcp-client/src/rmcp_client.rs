@@ -74,6 +74,13 @@ use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
+#[path = "streamable_http_retry.rs"]
+mod streamable_http_retry;
+
+use self::streamable_http_retry::HandshakeError;
+use self::streamable_http_retry::STREAMABLE_HTTP_RETRY_DELAYS_MS;
+use self::streamable_http_retry::sleep_with_retry_deadline;
+
 enum PendingTransport {
     InProcess {
         transport: tokio::io::DuplexStream,
@@ -221,6 +228,25 @@ enum ClientOperationError {
     Service(#[from] rmcp::service::ServiceError),
     #[error("timed out awaiting {label} after {duration:?}")]
     Timeout { label: String, duration: Duration },
+}
+
+fn remaining_operation_timeout(
+    label: &str,
+    timeout: Option<Duration>,
+    deadline: Option<Instant>,
+) -> std::result::Result<Option<Duration>, ClientOperationError> {
+    let Some(deadline) = deadline else {
+        return Ok(None);
+    };
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        Err(ClientOperationError::Timeout {
+            label: label.to_string(),
+            duration: timeout.unwrap_or(remaining),
+        })
+    } else {
+        Ok(Some(remaining))
+    }
 }
 
 pub type Elicitation = CreateElicitationRequestParams;
@@ -396,9 +422,13 @@ impl RmcpClient {
             }
         };
 
-        let (service, oauth_persistor) =
-            Self::connect_pending_transport(pending_transport, client_service.clone(), timeout)
-                .await?;
+        let (service, oauth_persistor) = self
+            .connect_pending_transport_with_initialize_retries(
+                pending_transport,
+                client_service.clone(),
+                timeout,
+            )
+            .await?;
 
         let initialize_result_rmcp = service
             .peer()
@@ -845,14 +875,31 @@ impl RmcpClient {
             ),
         };
 
-        let service = match timeout {
-            Some(duration) => time::timeout(duration, transport)
-                .await
-                .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
+        let service_result = match timeout {
+            Some(duration) => match time::timeout(duration, transport).await {
+                Ok(result) => {
+                    result.map_err(|source| anyhow::Error::from(HandshakeError { source }))
+                }
+                Err(_elapsed) => Err(anyhow!(
+                    "timed out handshaking with MCP server after {duration:?}"
+                )),
+            },
             None => transport
                 .await
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
+                .map_err(|source| anyhow::Error::from(HandshakeError { source })),
+        };
+        let service = match service_result {
+            Ok(service) => service,
+            Err(error) => {
+                if let Some(runtime) = oauth_persistor.as_ref()
+                    && let Err(persist_error) = runtime.persist_if_needed().await
+                {
+                    warn!(
+                        "failed to persist OAuth tokens after failed initialize: {persist_error}"
+                    );
+                }
+                return Err(error);
+            }
         };
 
         Ok((Arc::new(service), oauth_persistor))
@@ -869,7 +916,7 @@ impl RmcpClient {
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
         let service = self.service().await?;
-        match Self::run_service_operation_once(
+        match Self::run_service_operation_with_transient_retries(
             Arc::clone(&service),
             label,
             timeout,
@@ -882,7 +929,7 @@ impl RmcpClient {
             Err(error) if Self::is_session_expired_404(&error) => {
                 self.reinitialize_after_session_expiry(&service).await?;
                 let recovered_service = self.service().await?;
-                Self::run_service_operation_once(
+                Self::run_service_operation_with_transient_retries(
                     recovered_service,
                     label,
                     timeout,
@@ -894,6 +941,62 @@ impl RmcpClient {
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    async fn run_service_operation_with_transient_retries<T, F, Fut>(
+        service: Arc<RunningService<RoleClient, ElicitationClientService>>,
+        label: &str,
+        timeout: Option<Duration>,
+        pause_state: ElicitationPauseState,
+        operation: &F,
+    ) -> std::result::Result<T, ClientOperationError>
+    where
+        F: Fn(Arc<RunningService<RoleClient, ElicitationClientService>>) -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
+    {
+        let retry_deadline = timeout.map(|duration| Instant::now() + duration);
+        for (attempt, retry_delay_ms) in STREAMABLE_HTTP_RETRY_DELAYS_MS
+            .iter()
+            .copied()
+            .map(Some)
+            .chain(std::iter::once(None))
+            .enumerate()
+        {
+            let attempt_timeout = remaining_operation_timeout(label, timeout, retry_deadline)?;
+            match Self::run_service_operation_once(
+                Arc::clone(&service),
+                label,
+                attempt_timeout,
+                pause_state.clone(),
+                operation,
+            )
+            .await
+            {
+                Ok(result) => return Ok(result),
+                Err(error) if Self::is_retryable_tools_list_error(label, &error) => {
+                    let Some(retry_delay_ms) = retry_delay_ms else {
+                        return Err(error);
+                    };
+                    let delay = Duration::from_millis(retry_delay_ms);
+                    warn!(
+                        attempt = attempt + 1,
+                        max_attempts = STREAMABLE_HTTP_RETRY_DELAYS_MS.len() + 1,
+                        delay_ms = delay.as_millis(),
+                        error = %error,
+                        "streamable HTTP MCP tools/list failed with a retryable error; retrying"
+                    );
+                    if !sleep_with_retry_deadline(delay, retry_deadline).await {
+                        return Err(ClientOperationError::Timeout {
+                            label: label.to_string(),
+                            duration: timeout.unwrap_or(delay),
+                        });
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        unreachable!("service operation retry loop should return on success or final error")
     }
 
     async fn run_service_operation_once<T, F, Fut>(
@@ -919,6 +1022,22 @@ impl RmcpClient {
             }
             None => operation(service).await.map_err(ClientOperationError::from),
         }
+    }
+
+    fn is_retryable_tools_list_error(label: &str, error: &ClientOperationError) -> bool {
+        if label != "tools/list" {
+            return false;
+        }
+        let ClientOperationError::Service(rmcp::service::ServiceError::TransportSend(error)) =
+            error
+        else {
+            return false;
+        };
+
+        error
+            .error
+            .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
+            .is_some_and(Self::is_retryable_streamable_http_error)
     }
 
     fn is_session_expired_404(error: &ClientOperationError) -> bool {
@@ -974,12 +1093,13 @@ impl RmcpClient {
             .clone()
             .ok_or_else(|| anyhow!("MCP client cannot recover before initialize succeeds"))?;
         let pending_transport = Self::create_pending_transport(&self.transport_recipe).await?;
-        let (service, oauth_persistor) = Self::connect_pending_transport(
-            pending_transport,
-            initialize_context.client_service,
-            initialize_context.timeout,
-        )
-        .await?;
+        let (service, oauth_persistor) = self
+            .connect_pending_transport_with_initialize_retries(
+                pending_transport,
+                initialize_context.client_service,
+                initialize_context.timeout,
+            )
+            .await?;
 
         {
             let mut guard = self.state.lock().await;
