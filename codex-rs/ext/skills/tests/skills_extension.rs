@@ -207,7 +207,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         vec![(
             SkillAuthority::new(SkillSourceKind::Executor, "env-1"),
             SkillPackageId("executor/lint-fix".to_string()),
-            SkillResourceId("lint-fix/SKILL.md".to_string()),
+            SkillResourceId::new("lint-fix/SKILL.md"),
         )],
         read_request_keys(&read_requests)
     );
@@ -235,6 +235,78 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         .await;
 
     assert!(next_fragments.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> TestResult {
+    let read_requests = Arc::new(Mutex::new(Vec::new()));
+    let root_a_locator = "skill://root-a/shared/lint-fix/SKILL.md";
+    let root_b_locator = "skill://root-b/shared/lint-fix/SKILL.md";
+    let executor_provider = Arc::new(StaticSkillProvider {
+        catalog: SkillCatalog {
+            entries: [("root-a", root_a_locator), ("root-b", root_b_locator)]
+                .into_iter()
+                .map(|(root_id, locator)| {
+                    SkillCatalogEntry::new(
+                        SkillPackageId(locator.to_string()),
+                        SkillAuthority::new(SkillSourceKind::Executor, root_id),
+                        "lint-fix",
+                        "Fix lint errors.",
+                        SkillResourceId::new(locator),
+                    )
+                    .with_display_path(locator)
+                })
+                .collect(),
+            warnings: Vec::new(),
+        },
+        read_requests: Arc::clone(&read_requests),
+    });
+    let providers = SkillProviders::new().with_executor_provider(executor_provider);
+    let mut builder = ExtensionRegistryBuilder::new();
+    install_with_providers(&mut builder, providers);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let session_source = SessionSource::Cli;
+    let config = default_config().await?;
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let fragments = registry.turn_input_contributors()[0]
+        .contribute(
+            TurnInputContext {
+                turn_id: "turn-1".to_string(),
+                user_input: vec![UserInput::Mention {
+                    name: "lint-fix".to_string(),
+                    path: root_b_locator.to_string(),
+                }],
+                environments: Vec::new(),
+            },
+            &session_store,
+            &thread_store,
+            &ExtensionData::new("turn-1"),
+        )
+        .await;
+
+    assert_eq!(1, fragments.len());
+    assert!(fragments[0].render().contains(root_b_locator));
+    assert_eq!(
+        vec![(
+            SkillAuthority::new(SkillSourceKind::Executor, "root-b"),
+            SkillPackageId(root_b_locator.to_string()),
+            SkillResourceId::new(root_b_locator),
+        )],
+        read_request_keys(&read_requests)
+    );
 
     Ok(())
 }
@@ -305,7 +377,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         vec![(
             SkillAuthority::new(SkillSourceKind::Host, "host"),
             SkillPackageId("host/hidden-skill".to_string()),
-            SkillResourceId("hidden-skill/SKILL.md".to_string()),
+            SkillResourceId::new("hidden-skill/SKILL.md"),
         )],
         read_request_keys(&read_requests)
     );
@@ -356,7 +428,7 @@ fn test_entry(
         SkillAuthority::new(kind, authority_id),
         name,
         "Fix lint errors.",
-        SkillResourceId(main_prompt.to_string()),
+        SkillResourceId::new(main_prompt),
     )
     .with_display_path(format!("skill://{package_id}/SKILL.md"))
 }

@@ -179,7 +179,7 @@ impl TurnInputContributor for SkillsExtension {
                     fragments.push(Box::new(SkillInstructions::from(&injection)));
                     main_prompts_injected = true;
                     if entry.authority.kind == SkillSourceKind::Host {
-                        injected_host_skill_prompts.insert_path(entry.main_prompt.0.clone());
+                        injected_host_skill_prompts.insert_path(entry.main_prompt.as_str());
                     }
                 }
                 Err(message) => {

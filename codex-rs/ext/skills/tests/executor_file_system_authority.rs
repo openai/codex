@@ -1,6 +1,8 @@
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use codex_core_skills::HostLoadedSkills;
@@ -8,18 +10,27 @@ use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemResult;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::SkillScope;
+use codex_skills_extension::ExecutorSkillProvider;
+use codex_skills_extension::catalog::SkillReadResult;
+use codex_skills_extension::provider::SkillListQuery;
+use codex_skills_extension::provider::SkillProvider;
+use codex_skills_extension::provider::SkillReadRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 
 const SKILL_CONTENTS: &str =
     "---\nname: synthetic\ndescription: Synthetic executor skill.\n---\n\nEXECUTOR_ONLY_BODY\n";
+static NEXT_TEST_ROOT_ID: AtomicUsize = AtomicUsize::new(0);
 
 struct SyntheticFileSystem {
     alias_root: AbsolutePathBuf,
@@ -189,4 +200,136 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
         loaded.read_skill_text(&skill).await.expect("skill body"),
         SKILL_CONTENTS
     );
+}
+
+#[tokio::test]
+async fn executor_provider_reads_from_the_environment_instance_used_for_listing() {
+    let test_root = create_local_skill_root("bound-instance");
+    let root_path = test_root.to_string_lossy().into_owned();
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let provider = ExecutorSkillProvider::new_with_restriction_product(
+        Arc::clone(&environment_manager),
+        /*restriction_product*/ None,
+    );
+    let catalog = provider
+        .list(SkillListQuery {
+            turn_id: "turn-1".to_string(),
+            executor_roots: vec![SelectedCapabilityRoot {
+                id: "root-a".to_string(),
+                location: CapabilityRootLocation::Environment {
+                    environment_id: "local".to_string(),
+                    path: root_path,
+                },
+            }],
+            host: None,
+            include_host_skills: false,
+            include_bundled_skills: true,
+            include_remote_skills: false,
+        })
+        .await
+        .expect("list executor skills");
+    let entry = catalog
+        .entries
+        .into_iter()
+        .next()
+        .expect("listed executor skill");
+    let resource = entry.main_prompt.clone();
+
+    environment_manager
+        .upsert_environment("local".to_string(), "http://127.0.0.1:1".to_string())
+        .expect("replace environment");
+
+    assert_eq!(
+        provider
+            .read(SkillReadRequest {
+                authority: entry.authority,
+                package: entry.id,
+                resource: resource.clone(),
+                host: None,
+            })
+            .await
+            .expect("read bound executor skill"),
+        SkillReadResult {
+            resource,
+            contents: SKILL_CONTENTS.to_string(),
+        }
+    );
+
+    std::fs::remove_dir_all(test_root).expect("remove skill directory");
+}
+
+#[tokio::test]
+async fn selected_root_id_distinguishes_identical_executor_paths() {
+    let test_root = create_local_skill_root("root-identity");
+    let root_path = test_root.to_string_lossy().into_owned();
+    let canonical_root = std::fs::canonicalize(&test_root)
+        .expect("canonicalize skill root")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let provider = ExecutorSkillProvider::new_with_restriction_product(
+        Arc::new(EnvironmentManager::default_for_tests()),
+        /*restriction_product*/ None,
+    );
+
+    let catalog = provider
+        .list(SkillListQuery {
+            turn_id: "turn-1".to_string(),
+            executor_roots: ["root-a", "root-b"]
+                .into_iter()
+                .map(|id| SelectedCapabilityRoot {
+                    id: id.to_string(),
+                    location: CapabilityRootLocation::Environment {
+                        environment_id: "local".to_string(),
+                        path: root_path.clone(),
+                    },
+                })
+                .collect(),
+            host: None,
+            include_host_skills: false,
+            include_bundled_skills: true,
+            include_remote_skills: false,
+        })
+        .await
+        .expect("list executor skills");
+
+    assert_eq!(
+        catalog
+            .entries
+            .iter()
+            .map(|entry| (
+                entry.authority.id.clone(),
+                entry.display_path.clone().expect("display path"),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "root-a".to_string(),
+                format!(
+                    "skill://root-a/{}/skill/SKILL.md",
+                    canonical_root.trim_start_matches('/')
+                ),
+            ),
+            (
+                "root-b".to_string(),
+                format!(
+                    "skill://root-b/{}/skill/SKILL.md",
+                    canonical_root.trim_start_matches('/')
+                ),
+            ),
+        ]
+    );
+
+    std::fs::remove_dir_all(test_root).expect("remove skill directory");
+}
+
+fn create_local_skill_root(label: &str) -> std::path::PathBuf {
+    let id = NEXT_TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed);
+    let test_root = std::env::temp_dir().join(format!(
+        "codex-executor-skill-{label}-{}-{id}",
+        std::process::id()
+    ));
+    let skill_dir = test_root.join("skill");
+    std::fs::create_dir_all(&skill_dir).expect("create skill directory");
+    std::fs::write(skill_dir.join("SKILL.md"), SKILL_CONTENTS).expect("write skill");
+    test_root
 }
