@@ -33,6 +33,9 @@ async fn mcp_startup_ignores_status_for_other_thread() {
     let parent_thread_id = ThreadId::new();
     let child_thread_id = ThreadId::new();
     chat.thread_id = Some(parent_thread_id);
+    chat.on_stream_error("Connection interrupted, retrying".to_string(), None);
+    let status_before = chat.status_state.current_status.clone();
+    let retry_status_header_before = chat.status_state.retry_status_header.clone();
 
     for status in [
         McpServerStartupState::Starting,
@@ -53,6 +56,11 @@ async fn mcp_startup_ignores_status_for_other_thread() {
     assert!(drain_insert_history(&mut rx).is_empty());
     assert!(!chat.bottom_pane.is_task_running());
     assert!(chat.mcp_startup_status.is_none());
+    assert_eq!(chat.status_state.current_status, status_before);
+    assert_eq!(
+        chat.status_state.retry_status_header,
+        retry_status_header_before
+    );
 }
 
 #[tokio::test]
