@@ -7,6 +7,7 @@ use codex_analytics::GuardianReviewTrackContext;
 use codex_analytics::GuardianReviewedAction;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentEvent;
@@ -101,10 +102,16 @@ pub(super) enum GuardianReviewOutcome {
 
 #[derive(Debug)]
 pub(super) enum GuardianReviewError {
-    PromptBuild { message: String },
-    TransientSession { message: String },
-    Session { message: String },
-    Parse { message: String },
+    PromptBuild {
+        message: String,
+    },
+    Session {
+        message: String,
+        error_info: Option<CodexErrorInfo>,
+    },
+    Parse {
+        message: String,
+    },
     Timeout,
     Cancelled,
 }
@@ -119,12 +126,14 @@ impl GuardianReviewError {
     fn session(err: anyhow::Error) -> Self {
         Self::Session {
             message: err.to_string(),
+            error_info: None,
         }
     }
 
-    fn transient_session(err: anyhow::Error) -> Self {
-        Self::TransientSession {
+    fn session_with_error_info(err: anyhow::Error, error_info: CodexErrorInfo) -> Self {
+        Self::Session {
             message: err.to_string(),
+            error_info: Some(error_info),
         }
     }
 
@@ -137,9 +146,7 @@ impl GuardianReviewError {
     fn failure_reason(&self) -> GuardianReviewFailureReason {
         match self {
             Self::PromptBuild { .. } => GuardianReviewFailureReason::PromptBuildError,
-            Self::TransientSession { .. } | Self::Session { .. } => {
-                GuardianReviewFailureReason::SessionError
-            }
+            Self::Session { .. } => GuardianReviewFailureReason::SessionError,
             Self::Parse { .. } => GuardianReviewFailureReason::ParseError,
             Self::Timeout => GuardianReviewFailureReason::Timeout,
             Self::Cancelled => GuardianReviewFailureReason::Cancelled,
@@ -476,13 +483,11 @@ async fn run_guardian_review(
                 return ReviewDecision::Abort;
             }
             GuardianReviewError::PromptBuild { .. }
-            | GuardianReviewError::TransientSession { .. }
             | GuardianReviewError::Session { .. }
             | GuardianReviewError::Parse { .. } => {
                 let message = match &error {
                     GuardianReviewError::PromptBuild { message }
-                    | GuardianReviewError::TransientSession { message }
-                    | GuardianReviewError::Session { message }
+                    | GuardianReviewError::Session { message, .. }
                     | GuardianReviewError::Parse { message } => message,
                     GuardianReviewError::Timeout | GuardianReviewError::Cancelled => {
                         "guardian review failed"
@@ -807,14 +812,16 @@ async fn run_guardian_review_session_before_deadline(
             GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
             session_analytics_result,
         ),
-        GuardianReviewSessionOutcome::TransientSessionFailed(err) => (
-            GuardianReviewOutcome::Error(GuardianReviewError::transient_session(err)),
-            session_analytics_result,
-        ),
-        GuardianReviewSessionOutcome::SessionFailed(err) => (
-            GuardianReviewOutcome::Error(GuardianReviewError::session(err)),
-            session_analytics_result,
-        ),
+        GuardianReviewSessionOutcome::SessionFailed { error, error_info } => {
+            let error = match error_info {
+                Some(error_info) => GuardianReviewError::session_with_error_info(error, error_info),
+                None => GuardianReviewError::session(error),
+            };
+            (
+                GuardianReviewOutcome::Error(error),
+                session_analytics_result,
+            )
+        }
         GuardianReviewSessionOutcome::TimedOut => (
             GuardianReviewOutcome::Error(GuardianReviewError::Timeout),
             session_analytics_result,
@@ -896,7 +903,16 @@ fn should_retry_guardian_review(
         && matches!(
             outcome,
             GuardianReviewOutcome::Error(
-                GuardianReviewError::TransientSession { .. } | GuardianReviewError::Parse { .. }
+                GuardianReviewError::Session {
+                    error_info: Some(
+                        CodexErrorInfo::ServerOverloaded
+                            | CodexErrorInfo::HttpConnectionFailed { .. }
+                            | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
+                            | CodexErrorInfo::InternalServerError
+                            | CodexErrorInfo::ResponseStreamDisconnected { .. }
+                    ),
+                    ..
+                } | GuardianReviewError::Parse { .. }
             )
         )
 }
@@ -911,8 +927,10 @@ mod review_tests {
         let prompt_error = GuardianReviewError::prompt_build(anyhow::anyhow!("bad prompt/config"));
         let session_error =
             GuardianReviewError::session(anyhow::anyhow!("guardian runtime failed"));
-        let transient_session_error =
-            GuardianReviewError::transient_session(anyhow::anyhow!("temporary guardian failure"));
+        let structured_session_error = GuardianReviewError::session_with_error_info(
+            anyhow::anyhow!("temporary guardian failure"),
+            CodexErrorInfo::ServerOverloaded,
+        );
 
         assert!(matches!(
             parse_error.failure_reason(),
@@ -927,20 +945,45 @@ mod review_tests {
             GuardianReviewFailureReason::SessionError
         ));
         assert!(matches!(
-            transient_session_error.failure_reason(),
+            structured_session_error.failure_reason(),
             GuardianReviewFailureReason::SessionError
         ));
     }
 
     #[test]
-    fn guardian_review_retry_only_retries_session_and_parse_errors_twice() {
+    fn guardian_review_retry_only_retries_transient_session_and_parse_errors() {
         let assessment = GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             user_authorization: GuardianUserAuthorization::Unknown,
             outcome: GuardianAssessmentOutcome::Deny,
             rationale: "deny".to_string(),
         };
-        let outcomes = [
+        let transient_error_info = [
+            CodexErrorInfo::ServerOverloaded,
+            CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: Some(502),
+            },
+            CodexErrorInfo::ResponseStreamConnectionFailed {
+                http_status_code: Some(503),
+            },
+            CodexErrorInfo::InternalServerError,
+            CodexErrorInfo::ResponseStreamDisconnected {
+                http_status_code: None,
+            },
+        ];
+        let mut outcomes = transient_error_info
+            .into_iter()
+            .map(|error_info| {
+                (
+                    GuardianReviewOutcome::Error(GuardianReviewError::session_with_error_info(
+                        anyhow::anyhow!("transient session"),
+                        error_info,
+                    )),
+                    true,
+                )
+            })
+            .collect::<Vec<_>>();
+        outcomes.extend([
             (GuardianReviewOutcome::Completed(assessment), false),
             (
                 GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(anyhow::anyhow!(
@@ -949,15 +992,16 @@ mod review_tests {
                 false,
             ),
             (
-                GuardianReviewOutcome::Error(GuardianReviewError::transient_session(
-                    anyhow::anyhow!("transient session"),
-                )),
-                true,
-            ),
-            (
                 GuardianReviewOutcome::Error(GuardianReviewError::session(anyhow::anyhow!(
                     "session"
                 ))),
+                false,
+            ),
+            (
+                GuardianReviewOutcome::Error(GuardianReviewError::session_with_error_info(
+                    anyhow::anyhow!("bad request"),
+                    CodexErrorInfo::BadRequest,
+                )),
                 false,
             ),
             (
@@ -972,7 +1016,7 @@ mod review_tests {
                 GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
                 false,
             ),
-        ];
+        ]);
 
         for (outcome, expected) in outcomes {
             assert_eq!(

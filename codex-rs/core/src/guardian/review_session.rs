@@ -61,8 +61,10 @@ const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) enum GuardianReviewSessionOutcome {
     Completed(anyhow::Result<Option<String>>),
     PromptBuildFailed(anyhow::Error),
-    TransientSessionFailed(anyhow::Error),
-    SessionFailed(anyhow::Error),
+    SessionFailed {
+        error: anyhow::Error,
+        error_info: Option<CodexErrorInfo>,
+    },
     TimedOut,
     Aborted,
 }
@@ -763,7 +765,10 @@ async fn run_review_on_session(
         Ok(Ok(child_turn_id)) => child_turn_id,
         Ok(Err(err)) => {
             return (
-                GuardianReviewSessionOutcome::SessionFailed(err.into()),
+                GuardianReviewSessionOutcome::SessionFailed {
+                    error: err.into(),
+                    error_info: None,
+                },
                 false,
                 analytics_result,
             );
@@ -863,15 +868,11 @@ async fn wait_for_guardian_review(
                             if turn_complete.last_agent_message.is_none()
                                 && let Some(error) = last_error
                             {
-                                let is_transient = is_transient_guardian_session_error(&error);
-                                let message = error.message;
-                                let outcome = if is_transient {
-                                    GuardianReviewSessionOutcome::TransientSessionFailed(anyhow!(message))
-                                } else {
-                                    GuardianReviewSessionOutcome::Completed(Err(anyhow!(message)))
-                                };
                                 return (
-                                    outcome,
+                                    GuardianReviewSessionOutcome::SessionFailed {
+                                        error: anyhow!(error.message),
+                                        error_info: error.codex_error_info,
+                                    },
                                     true,
                                     true,
                                 );
@@ -901,19 +902,6 @@ async fn wait_for_guardian_review(
             }
         }
     }
-}
-
-fn is_transient_guardian_session_error(error: &ErrorEvent) -> bool {
-    matches!(
-        error.codex_error_info,
-        Some(
-            CodexErrorInfo::ServerOverloaded
-                | CodexErrorInfo::HttpConnectionFailed { .. }
-                | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
-                | CodexErrorInfo::InternalServerError
-                | CodexErrorInfo::ResponseStreamDisconnected { .. }
-        )
-    )
 }
 
 fn event_matches_turn(event: &Event, expected_turn_id: &str) -> bool {
@@ -1588,45 +1576,45 @@ mod tests {
         assert!(capture_token_usage);
     }
 
-    #[test]
-    fn guardian_session_error_classification_is_conservative() {
-        let transient_errors = [
-            CodexErrorInfo::ServerOverloaded,
-            CodexErrorInfo::HttpConnectionFailed {
-                http_status_code: None,
-            },
-            CodexErrorInfo::ResponseStreamConnectionFailed {
-                http_status_code: Some(503),
-            },
-            CodexErrorInfo::InternalServerError,
-            CodexErrorInfo::ResponseStreamDisconnected {
-                http_status_code: None,
-            },
-        ];
-        for codex_error_info in transient_errors {
-            assert!(is_transient_guardian_session_error(&ErrorEvent {
-                message: "temporary failure".to_string(),
-                codex_error_info: Some(codex_error_info),
-            }));
-        }
+    #[tokio::test]
+    async fn wait_for_guardian_review_preserves_structured_session_error() {
+        let (review_session, tx_event, _rx_sub) = test_review_session().await;
+        tx_event
+            .send(Event {
+                id: "current-turn".to_string(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "temporary failure".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
+                }),
+            })
+            .await
+            .expect("queue guardian error");
+        tx_event
+            .send(turn_complete_event(
+                "current-turn",
+                /*last_agent_message*/ None,
+                Some(42),
+            ))
+            .await
+            .expect("queue current turn completion");
 
-        let non_transient_errors = [
-            None,
-            Some(CodexErrorInfo::BadRequest),
-            Some(CodexErrorInfo::Unauthorized),
-            Some(CodexErrorInfo::UsageLimitExceeded),
-            Some(CodexErrorInfo::CyberPolicy),
-            Some(CodexErrorInfo::ResponseTooManyFailedAttempts {
-                http_status_code: Some(503),
-            }),
-            Some(CodexErrorInfo::Other),
-        ];
-        for codex_error_info in non_transient_errors {
-            assert!(!is_transient_guardian_session_error(&ErrorEvent {
-                message: "non-transient failure".to_string(),
-                codex_error_info,
-            }));
-        }
+        let mut analytics_result = GuardianReviewAnalyticsResult::without_session();
+        let (outcome, keep_review_session, capture_token_usage) = wait_for_guardian_review(
+            &review_session,
+            "current-turn",
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            /*external_cancel*/ None,
+            &mut analytics_result,
+        )
+        .await;
+
+        let GuardianReviewSessionOutcome::SessionFailed { error, error_info } = outcome else {
+            panic!("expected structured session failure");
+        };
+        assert_eq!(error.to_string(), "temporary failure");
+        assert_eq!(error_info, Some(CodexErrorInfo::ServerOverloaded));
+        assert!(keep_review_session);
+        assert!(capture_token_usage);
     }
 
     #[tokio::test]
