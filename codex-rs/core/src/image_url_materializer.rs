@@ -5,8 +5,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use anyhow::bail;
-use codex_login::default_client::build_reqwest_client;
+use codex_client::BuildCustomCaTransportError;
+use codex_client::build_reqwest_client_with_custom_ca;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
@@ -17,12 +19,13 @@ use reqwest::Response;
 use tracing::warn;
 use url::Url;
 
-const IMAGE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_IMAGE_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
+const IMAGE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_IMAGE_DOWNLOAD_BYTES: u64 = 32 * 1024 * 1024;
 const IMAGE_MATERIALIZATION_ERROR_PLACEHOLDER: &str =
     "image content omitted because it could not be downloaded or processed";
 
-static IMAGE_URL_CLIENT: LazyLock<Client> = LazyLock::new(build_reqwest_client);
+static IMAGE_URL_CLIENT: LazyLock<Result<Client, BuildCustomCaTransportError>> =
+    LazyLock::new(|| build_reqwest_client_with_custom_ca(Client::builder()));
 
 /// Materializes HTTP(S) image URLs in a newly recorded batch.
 ///
@@ -140,7 +143,10 @@ async fn materialize_image_url(image_url: &mut String) -> Result<()> {
     let Some(url) = parse_http_url(image_url) else {
         return Ok(());
     };
-    let response = IMAGE_URL_CLIENT
+    let client = IMAGE_URL_CLIENT
+        .as_ref()
+        .map_err(|error| anyhow!("failed to build image download client: {error}"))?;
+    let response = client
         .get(url)
         .timeout(IMAGE_DOWNLOAD_TIMEOUT)
         .send()
