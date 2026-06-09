@@ -41,7 +41,10 @@ require_count() {
 }
 
 require_platform_constraint local_windows "@llvm//constraints/windows_abi:gnullvm"
-require_platform_constraint local_windows_msvc "@llvm//constraints/windows_abi:msvc"
+require_platform_constraint local_windows_msvc "@llvm//constraints/windows_abi:gnullvm"
+require_platform_constraint local_windows_msvc "@platforms//cpu:x86_64"
+require_platform_constraint local_windows_msvc "@platforms//os:windows"
+require_platform_constraint local_windows_msvc "@rules_rs//rs/experimental/platforms/constraints:windows_msvc"
 require_platform_constraint windows_x86_64_gnullvm "@llvm//constraints/windows_abi:gnullvm"
 require_platform_constraint windows_x86_64_msvc "@llvm//constraints/windows_abi:msvc"
 require_platform_constraint release_windows_arm64 "@llvm//constraints/windows_abi:gnullvm"

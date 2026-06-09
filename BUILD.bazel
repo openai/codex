@@ -27,10 +27,13 @@ platform(
 platform(
     name = "local_windows_msvc",
     constraint_values = [
-        "@llvm//constraints/windows_abi:msvc",
+        # Rust exec tools use the MSVC ABI, while C/C++ actions still use the
+        # hermetic llvm-mingw toolchain.
+        "@llvm//constraints/windows_abi:gnullvm",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
         "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
     ],
-    parents = ["@platforms//host"],
 )
 
 # The hermetic LLVM Windows toolchain is llvm-mingw and therefore gnullvm.
