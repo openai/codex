@@ -169,8 +169,8 @@ where
     let mut file_systems_by_skill_path: HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>> =
         HashMap::new();
     for root in roots {
-        let root_path = canonicalize_for_skill_identity(&root.path);
         let fs = root.file_system;
+        let root_path = canonicalize_for_skill_identity(fs.as_ref(), &root.path).await;
         let skills_before_root = outcome.skills.len();
         discover_skills_under_root(
             fs.as_ref(),
@@ -471,8 +471,13 @@ fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
     roots.retain(|root| seen.insert(root.path.clone()));
 }
 
-fn canonicalize_for_skill_identity(path: &AbsolutePathBuf) -> AbsolutePathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.clone())
+async fn canonicalize_for_skill_identity(
+    fs: &dyn ExecutorFileSystem,
+    path: &AbsolutePathBuf,
+) -> AbsolutePathBuf {
+    fs.canonicalize(path, /*sandbox*/ None)
+        .await
+        .unwrap_or_else(|_| path.clone())
 }
 
 async fn discover_skills_under_root(
@@ -483,8 +488,11 @@ async fn discover_skills_under_root(
     plugin_root: Option<&AbsolutePathBuf>,
     outcome: &mut SkillLoadOutcome,
 ) {
-    let root = canonicalize_for_skill_identity(root);
-    let plugin_root = plugin_root.map(canonicalize_for_skill_identity);
+    let root = root.clone();
+    let plugin_root = match plugin_root {
+        Some(plugin_root) => Some(canonicalize_for_skill_identity(fs, plugin_root).await),
+        None => None,
+    };
 
     match fs.get_metadata(&root, /*sandbox*/ None).await {
         Ok(metadata) if metadata.is_directory => {}
@@ -557,7 +565,7 @@ async fn discover_skills_under_root(
                 }
                 match fs.read_directory(&path, /*sandbox*/ None).await {
                     Ok(_) => {
-                        let resolved_dir = canonicalize_for_skill_identity(&path);
+                        let resolved_dir = canonicalize_for_skill_identity(fs, &path).await;
                         enqueue_dir(
                             &mut queue,
                             &mut visited_dirs,
@@ -582,7 +590,7 @@ async fn discover_skills_under_root(
             }
 
             if metadata.is_directory {
-                let resolved_dir = canonicalize_for_skill_identity(&path);
+                let resolved_dir = canonicalize_for_skill_identity(fs, &path).await;
                 enqueue_dir(
                     &mut queue,
                     &mut visited_dirs,
@@ -672,7 +680,7 @@ async fn parse_skill_file(
         )?;
     }
 
-    let resolved_path = canonicalize_for_skill_identity(path);
+    let resolved_path = canonicalize_for_skill_identity(fs, path).await;
 
     Ok(SkillMetadata {
         name,

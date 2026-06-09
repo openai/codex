@@ -5,8 +5,10 @@ use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 
 use crate::catalog::SkillCatalog;
 
-const MAX_AVAILABLE_SKILLS_CHARS: usize = 8_000;
-const MAX_MAIN_PROMPT_CHARS: usize = 40_000;
+const MAX_AVAILABLE_SKILLS_BYTES: usize = 8_000;
+const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
+pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
+pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AvailableSkillsFragment {
@@ -32,7 +34,7 @@ impl ContextualUserFragment for AvailableSkillsFragment {
 }
 
 pub(crate) fn available_skills_fragment(catalog: &SkillCatalog) -> Option<AvailableSkillsFragment> {
-    let mut total_chars = 0usize;
+    let mut total_bytes = 0usize;
     let mut omitted = 0usize;
     let mut skill_lines = Vec::new();
 
@@ -46,12 +48,12 @@ pub(crate) fn available_skills_fragment(catalog: &SkillCatalog) -> Option<Availa
             .as_deref()
             .unwrap_or(entry.description.as_str());
         let line = render_skill_line(entry.name.as_str(), description, entry.rendered_path());
-        let next_chars = total_chars.saturating_add(line.chars().count());
-        if next_chars > MAX_AVAILABLE_SKILLS_CHARS {
+        let next_bytes = total_bytes.saturating_add(line.len());
+        if next_bytes > MAX_AVAILABLE_SKILLS_BYTES {
             omitted = omitted.saturating_add(1);
             continue;
         }
-        total_chars = next_chars;
+        total_bytes = next_bytes;
         skill_lines.push(line);
     }
 
@@ -79,12 +81,17 @@ fn render_skill_line(name: &str, description: &str, path: &str) -> String {
 }
 
 pub(crate) fn truncate_main_prompt_contents(contents: &str) -> (String, bool) {
-    let mut chars = 0usize;
-    for (index, _) in contents.char_indices() {
-        if chars == MAX_MAIN_PROMPT_CHARS {
-            return (contents[..index].to_string(), true);
-        }
-        chars = chars.saturating_add(1);
+    truncate_utf8_to_bytes(contents, MAX_MAIN_PROMPT_BYTES)
+}
+
+pub(crate) fn truncate_utf8_to_bytes(contents: &str, max_bytes: usize) -> (String, bool) {
+    if contents.len() <= max_bytes {
+        return (contents.to_string(), false);
     }
-    (contents.to_string(), false)
+
+    let mut end = max_bytes;
+    while !contents.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    (contents[..end].to_string(), true)
 }

@@ -1994,6 +1994,7 @@ dependencies = [
  "codex-rollout",
  "codex-sandboxing",
  "codex-shell-command",
+ "codex-skills-extension",
  "codex-state",
  "codex-thread-store",
  "codex-tools",
@@ -3796,8 +3797,10 @@ dependencies = [
  "async-trait",
  "codex-core",
  "codex-core-skills",
+ "codex-exec-server",
  "codex-extension-api",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "pretty_assertions",
  "tokio",
 ]

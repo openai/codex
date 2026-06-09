@@ -251,6 +251,7 @@ impl MemoryStartupContext {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
+                thread_extension_init: Default::default(),
             })
             .await?;
 
