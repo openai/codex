@@ -9,8 +9,8 @@ use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
-use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
+use crate::tools::handlers::multi_agents_v2::InterruptAgentHandler;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
@@ -24,6 +24,7 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::BaseInstructions;
@@ -176,6 +177,11 @@ struct ListedAgentResult {
     agent_name: String,
     agent_status: serde_json::Value,
     last_task_message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InterruptAgentResult {
+    previous_status: AgentStatus,
 }
 
 #[tokio::test]
@@ -1745,6 +1751,82 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_list_agents_keeps_interrupted_resident_agents() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    set_turn_config(&mut turn, config);
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let spawn_output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "worker"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let _ = expect_text_output(spawn_output);
+
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+        .await
+        .expect("worker path should resolve");
+    let agent_path = session
+        .services
+        .agent_control
+        .get_agent_metadata(agent_id)
+        .expect("worker metadata should exist")
+        .agent_path
+        .expect("worker path should exist");
+    let interrupt_output = InterruptAgentHandler
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "interrupt_agent",
+            function_payload(json!({"target": "worker"})),
+        ))
+        .await
+        .expect("interrupt_agent should succeed");
+    let _ = expect_text_output(interrupt_output);
+
+    let output = ListAgentsHandlerV2
+        .handle(invocation(
+            session,
+            turn,
+            "list_agents",
+            function_payload(json!({})),
+        ))
+        .await
+        .expect("list_agents should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: ListAgentsResult =
+        serde_json::from_str(&content).expect("list_agents result should be json");
+
+    assert_eq!(result.agents.len(), 2);
+    assert_eq!(result.agents[0].agent_name, "/root");
+    assert_eq!(
+        result.agents[0].last_task_message.as_deref(),
+        Some("Main thread")
+    );
+    assert_eq!(result.agents[1].agent_name, agent_path.as_str());
+}
+
+#[tokio::test]
 async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
@@ -2250,6 +2332,9 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
+    let mut config = (*turn.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    set_turn_config(&mut turn, config);
     turn.permission_profile = expected_permission_profile.clone();
     assert_ne!(
         expected_permission_profile,
@@ -2289,6 +2374,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .await;
     assert_eq!(snapshot.sandbox_policy(), expected_sandbox);
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
+    assert_eq!(snapshot.approvals_reviewer, ApprovalsReviewer::AutoReview);
     assert_eq!(snapshot.permission_profile, expected_permission_profile);
     let child_thread = manager
         .get_thread(agent_id)
@@ -2590,7 +2676,6 @@ async fn send_input_accepts_structured_items() {
         .expect("send_input should succeed");
 
     let expected = Op::UserInput {
-        environments: None,
         items: vec![
             UserInput::Mention {
                 name: "drive".to_string(),
@@ -3699,7 +3784,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_close_agent_accepts_task_name_target() {
+async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -3736,29 +3821,77 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker path should resolve");
-
-    let output = CloseAgentHandlerV2
+    let worker_thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should be resident");
+    let worker_session = worker_thread.codex.session.clone();
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
-            session,
-            turn,
-            "close_agent",
+            worker_session.clone(),
+            worker_session.new_default_turn().await,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect a child task",
+                "task_name": "child"
+            })),
+        ))
+        .await
+        .expect("child spawn should succeed");
+    let child_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker/child")
+        .await
+        .expect("child path should resolve");
+
+    let output = InterruptAgentHandler
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "interrupt_agent",
             function_payload(json!({"target": "worker"})),
         ))
         .await
-        .expect("close_agent should succeed for v2 task names");
+        .expect("interrupt_agent should succeed for v2 task names");
     let (content, success) = expect_text_output(output);
-    let result: close_agent::CloseAgentResult =
-        serde_json::from_str(&content).expect("close_agent result should be json");
+    let result: InterruptAgentResult =
+        serde_json::from_str(&content).expect("interrupt_agent result should be json");
     assert_ne!(result.previous_status, AgentStatus::NotFound);
     assert_eq!(success, Some(true));
     assert_eq!(
-        manager.agent_control().get_status(agent_id).await,
-        AgentStatus::NotFound
+        session
+            .services
+            .agent_control
+            .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+            .await
+            .expect("worker path should remain resolvable"),
+        agent_id
+    );
+    manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker should remain resident");
+    manager
+        .get_thread(child_id)
+        .await
+        .expect("child should remain resident");
+    let ops = manager.captured_ops();
+    assert!(
+        ops.iter()
+            .any(|(thread_id, op)| *thread_id == agent_id && matches!(op, Op::Interrupt))
+    );
+    assert!(!ops.iter().any(|(thread_id, op)| {
+        (*thread_id == agent_id || *thread_id == child_id) && matches!(op, Op::Shutdown)
+    }));
+    assert!(
+        !ops.iter()
+            .any(|(thread_id, op)| *thread_id == child_id && matches!(op, Op::Interrupt))
     );
 }
 
 #[tokio::test]
-async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
+async fn multi_agent_v2_interrupt_agent_accepts_unloaded_task_name_target() {
     let (mut session, mut turn) = make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config.multi_agent_v2.max_concurrent_threads_per_session = 2;
@@ -3819,18 +3952,18 @@ async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
         .expect("removed worker thread should still accept shutdown");
     stale_thread.wait_until_terminated().await;
 
-    let output = CloseAgentHandlerV2
+    let output = InterruptAgentHandler
         .handle(invocation(
             session.clone(),
             turn.clone(),
-            "close_agent",
+            "interrupt_agent",
             function_payload(json!({"target": "worker"})),
         ))
         .await
-        .expect("close_agent should reap stale v2 task names");
+        .expect("interrupt_agent should accept unloaded v2 task names");
     let (content, success) = expect_text_output(output);
-    let result: close_agent::CloseAgentResult =
-        serde_json::from_str(&content).expect("close_agent result should be json");
+    let result: InterruptAgentResult =
+        serde_json::from_str(&content).expect("interrupt_agent result should be json");
     assert_eq!(result.previous_status, AgentStatus::NotFound);
     assert_eq!(success, Some(true));
 
@@ -3841,7 +3974,7 @@ async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
         )
         .await
         .expect("open children should load");
-    assert_eq!(open_children, Vec::<ThreadId>::new());
+    assert_eq!(open_children, vec![agent_id]);
     let closed_children = state_db
         .list_thread_spawn_children_with_status(
             root.thread_id,
@@ -3849,36 +3982,26 @@ async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
         )
         .await
         .expect("closed children should load");
-    assert_eq!(closed_children, vec![agent_id]);
+    assert_eq!(closed_children, Vec::<ThreadId>::new());
 
-    SpawnAgentHandlerV2::default()
+    let output = ListAgentsHandlerV2
         .handle(invocation(
             session.clone(),
             turn.clone(),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "inspect this repo again",
-                "task_name": "replacement"
-            })),
+            "list_agents",
+            function_payload(json!({})),
         ))
         .await
-        .expect("spawn_agent should succeed after stale close releases the slot");
-    let replacement_id = session
-        .services
-        .agent_control
-        .resolve_agent_reference(session.thread_id, &turn.session_source, "replacement")
-        .await
-        .expect("replacement path should resolve");
-    let _ = session
-        .services
-        .agent_control
-        .shutdown_live_agent(replacement_id)
-        .await
-        .expect("replacement should shut down");
+        .expect("list_agents should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: ListAgentsResult =
+        serde_json::from_str(&content).expect("list_agents result should be json");
+    assert_eq!(result.agents.len(), 1);
+    assert_eq!(result.agents[0].agent_name, "/root");
 }
 
 #[tokio::test]
-async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
+async fn multi_agent_v2_interrupt_agent_rejects_root_target_and_id() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -3896,31 +4019,31 @@ async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let root_path_error = CloseAgentHandlerV2
+    let root_path_error = InterruptAgentHandler
         .handle(invocation(
             session.clone(),
             turn.clone(),
-            "close_agent",
+            "interrupt_agent",
             function_payload(json!({"target": "/root"})),
         ))
         .await
         .err()
-        .expect("close_agent should reject the root path");
+        .expect("interrupt_agent should reject the root path");
     assert_eq!(
         root_path_error,
         FunctionCallError::RespondToModel("root is not a spawned agent".to_string())
     );
 
-    let root_id_error = CloseAgentHandlerV2
+    let root_id_error = InterruptAgentHandler
         .handle(invocation(
             session,
             turn,
-            "close_agent",
+            "interrupt_agent",
             function_payload(json!({"target": root.thread_id.to_string()})),
         ))
         .await
         .err()
-        .expect("close_agent should reject the root thread id");
+        .expect("interrupt_agent should reject the root thread id");
     assert_eq!(
         root_id_error,
         FunctionCallError::RespondToModel("root is not a spawned agent".to_string())
@@ -3928,7 +4051,7 @@ async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_close_agent_rejects_self_target_by_id() {
+async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_id() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let mut config = (*turn.config).clone();
@@ -3976,27 +4099,27 @@ async fn multi_agent_v2_close_agent_rejects_self_target_by_id() {
         agent_role: None,
     });
 
-    let err = CloseAgentHandlerV2
+    let err = InterruptAgentHandler
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
-            "close_agent",
+            "interrupt_agent",
             function_payload(json!({"target": child_thread_id.to_string()})),
         ))
         .await
         .err()
-        .expect("close_agent should reject self-target by id");
+        .expect("interrupt_agent should reject self-target by id");
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "an agent cannot close itself; return your result and let the parent close you if needed"
+            "an agent cannot interrupt itself; return your result and let the parent interrupt you if needed"
                 .to_string()
         )
     );
 }
 
 #[tokio::test]
-async fn multi_agent_v2_close_agent_rejects_self_target_by_task_name() {
+async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_task_name() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let mut config = (*turn.config).clone();
@@ -4044,20 +4167,20 @@ async fn multi_agent_v2_close_agent_rejects_self_target_by_task_name() {
         agent_role: None,
     });
 
-    let err = CloseAgentHandlerV2
+    let err = InterruptAgentHandler
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
-            "close_agent",
+            "interrupt_agent",
             function_payload(json!({"target": child_path.to_string()})),
         ))
         .await
         .err()
-        .expect("close_agent should reject self-target by task name");
+        .expect("interrupt_agent should reject self-target by task name");
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "an agent cannot close itself; return your result and let the parent close you if needed"
+            "an agent cannot interrupt itself; return your result and let the parent interrupt you if needed"
                 .to_string()
         )
     );

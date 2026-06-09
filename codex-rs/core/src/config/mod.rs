@@ -103,6 +103,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
+pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use rmcp::model::ElicitationCapability;
@@ -202,7 +203,7 @@ All agents in the team, including the agents that you can assign tasks to, are e
 You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent without triggering a turn.
 Child agents can also spawn their own sub-agents.
 You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.
-Use multi-agent capabilities only when there is a real reason to split the work; handle trivial or simple tasks directly.
+Default to doing the work yourself. Spawn sub-agents only for concrete, bounded subtasks that can run independently alongside useful local work and are likely to materially shorten completion time. Do not delegate simple tasks, small edits, routine searches, or work you can complete quickly yourself.
 
 You will receive messages in the analysis channel in the form:
 ```
@@ -219,7 +220,7 @@ You can spawn sub-agents to handle subtasks, and those sub-agents can spawn thei
 
 You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.
 Child agents can also spawn their own sub-agents.
-Use multi-agent capabilities only when there is a real reason to split the work; handle trivial or simple tasks directly.
+Default to doing the work yourself. Spawn sub-agents only for concrete, bounded subtasks that can run independently alongside useful local work and are likely to materially shorten completion time. Do not delegate simple tasks, small edits, routine searches, or work you can complete quickly yourself.
 
 When you provide a response in the final channel, that content is immediately delivered back to your parent agent.
 
@@ -869,6 +870,9 @@ pub struct Config {
 
     /// When true, session is not persisted on disk. Default to `false`
     pub ephemeral: bool,
+
+    /// Optional extra configuration fields for the thread.
+    pub extra_config: Option<ExtraConfig>,
 
     /// Whether enabled hooks should run without requiring persisted hook trust for this session.
     ///
@@ -3525,6 +3529,7 @@ impl Config {
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
+            extra_config: None,
             bypass_hook_trust,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_self_exe,

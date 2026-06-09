@@ -158,6 +158,10 @@ async fn responses_stream_includes_subagent_header_on_review() {
         request.body_json()["client_metadata"]["x-codex-installation-id"].as_str(),
         Some(TEST_INSTALLATION_ID)
     );
+    assert_eq!(
+        request.body_json()["client_metadata"]["x-codex-window-id"].as_str(),
+        Some(expected_window_id.as_str())
+    );
     assert_eq!(request.header("x-codex-sandbox"), None);
 }
 

@@ -3040,6 +3040,33 @@ fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_curren
 }
 
 #[test]
+fn refresh_curated_plugin_cache_removes_cache_for_plugin_removed_from_marketplace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&curated_root, &[]);
+    let plugin_id = PluginId::new(
+        "google-sheets".to_string(),
+        OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
+    )
+    .unwrap();
+    let plugin_cache_root = tmp
+        .path()
+        .join("plugins/cache/openai-curated/google-sheets");
+    write_plugin(
+        &tmp.path().join("plugins/cache/openai-curated"),
+        &format!("google-sheets/{TEST_CURATED_PLUGIN_CACHE_VERSION}"),
+        "google-sheets",
+    );
+
+    assert!(
+        refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+            .expect("cache refresh should remove stale configured plugin")
+    );
+
+    assert!(!plugin_cache_root.exists());
+}
+
+#[test]
 fn curated_plugin_ids_from_config_keys_reads_latest_codex_home_user_config() {
     let tmp = tempfile::tempdir().unwrap();
     write_file(

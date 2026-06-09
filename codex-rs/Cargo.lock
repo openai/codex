@@ -3106,6 +3106,7 @@ dependencies = [
  "codex-protocol",
  "codex-tools",
  "codex-utils-absolute-path",
+ "codex-utils-image",
  "http 1.4.0",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -4149,6 +4150,21 @@ dependencies = [
  "dunce",
  "pretty_assertions",
  "tempfile",
+]
+
+[[package]]
+name = "codex-utils-path-uri"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "ts-rs",
+ "url",
+ "urlencoding",
 ]
 
 [[package]]
