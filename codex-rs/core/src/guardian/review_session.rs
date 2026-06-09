@@ -73,6 +73,7 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) retry_reason: Option<String>,
     pub(crate) schema: Value,
     pub(crate) model: String,
+    pub(crate) responsesapi_client_metadata: Option<HashMap<String, String>>,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) personality: Option<Personality>,
@@ -735,7 +736,7 @@ async fn run_review_on_session(
         Box::pin(review_session.codex.submit(Op::UserInput {
             items: prompt_items.items,
             final_output_json_schema: Some(params.schema.clone()),
-            responsesapi_client_metadata: None,
+            responsesapi_client_metadata: params.responsesapi_client_metadata.clone(),
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
@@ -1144,6 +1145,7 @@ mod tests {
             retry_reason: None,
             schema: super::super::prompt::guardian_output_schema(),
             model,
+            responsesapi_client_metadata: None,
             reasoning_effort,
             reasoning_summary,
             personality,

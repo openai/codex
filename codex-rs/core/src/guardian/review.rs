@@ -17,6 +17,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -683,6 +684,7 @@ pub(super) async fn run_guardian_review_session(
         .models_manager
         .list_models(codex_models_manager::manager::RefreshStrategy::Offline)
         .await;
+    let default_review_model_id = turn.provider.approval_review_preferred_model();
     let preferred_reasoning_effort = |supports_low: bool, fallback| {
         if supports_low {
             Some(codex_protocol::openai_models::ReasoningEffort::Low)
@@ -691,11 +693,27 @@ pub(super) async fn run_guardian_review_session(
         }
     };
     let model_override = turn.model_info.auto_review_model_override.as_deref();
-    let review_model_id =
-        model_override.unwrap_or_else(|| turn.provider.approval_review_preferred_model());
+    let review_model_id = model_override.unwrap_or(default_review_model_id);
     let review_model = available_models
         .iter()
         .find(|preset| preset.model == review_model_id);
+    let responsesapi_client_metadata = HashMap::from([
+        (
+            "guardian_catalog_contains_auto_review".to_string(),
+            available_models
+                .iter()
+                .any(|preset| preset.model == default_review_model_id)
+                .to_string(),
+        ),
+        (
+            "guardian_catalog_contains_post_override_review_model".to_string(),
+            review_model.is_some().to_string(),
+        ),
+        (
+            "guardian_model_provider_id".to_string(),
+            turn.config.model_provider_id.clone(),
+        ),
+    ]);
     let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = review_model {
         let reasoning_effort = preferred_reasoning_effort(
             preset
@@ -749,6 +767,7 @@ pub(super) async fn run_guardian_review_session(
                 retry_reason,
                 schema,
                 model: guardian_model,
+                responsesapi_client_metadata: Some(responsesapi_client_metadata),
                 reasoning_effort: guardian_reasoning_effort,
                 reasoning_summary: turn.reasoning_summary,
                 personality: turn.personality,
