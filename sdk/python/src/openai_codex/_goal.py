@@ -4,13 +4,9 @@ import time
 from dataclasses import dataclass, field
 
 from .generated.v2_all import (
-    ItemCompletedNotification,
     ThreadGoalClearedNotification,
     ThreadGoalStatus,
     ThreadGoalUpdatedNotification,
-    ThreadItem,
-    ThreadTokenUsage,
-    ThreadTokenUsageUpdatedNotification,
     Turn,
     TurnCompletedNotification,
     TurnStartedNotification,
@@ -42,8 +38,6 @@ class _GoalOperationState:
     status: ThreadGoalStatus | None = None
     started_turn: Turn | None = None
     completed_turn: Turn | None = None
-    items: list[ThreadItem] = field(default_factory=list)
-    usage: ThreadTokenUsage | None = None
     interrupted: bool = False
     interrupt_requested: bool = False
     cleared: bool = False
@@ -71,10 +65,6 @@ class _GoalOperationState:
                     self.cleared = False
             elif isinstance(payload, ThreadGoalClearedNotification):
                 self.cleared = True
-            elif isinstance(payload, ItemCompletedNotification):
-                self.items.append(payload.item)
-            elif isinstance(payload, ThreadTokenUsageUpdatedNotification):
-                self.usage = payload.token_usage
             if (
                 self.current_turn_id is None
                 and self.completed_turn is not None
