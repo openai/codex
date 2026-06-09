@@ -27,9 +27,10 @@ pub use codex_config::types::AuthKeyringBackendKind;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use codex_protocol::account::PlanType as AccountPlanType;
-use codex_secrets::LocalSecretsBackend;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
+use codex_secrets::SecretsBackendKind;
+use codex_secrets::SecretsManager;
 use once_cell::sync::Lazy;
 
 /// Expected structure for $CODEX_HOME/auth.json.
@@ -258,18 +259,30 @@ impl AuthStorageBackend for DirectKeyringAuthStorage {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct SecretsKeyringAuthStorage {
     codex_home: PathBuf,
-    secrets_backend: LocalSecretsBackend,
+    secrets_manager: SecretsManager,
+}
+
+impl Debug for SecretsKeyringAuthStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretsKeyringAuthStorage")
+            .field("codex_home", &self.codex_home)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SecretsKeyringAuthStorage {
     fn new(codex_home: PathBuf, keyring_store: Arc<dyn KeyringStore>) -> Self {
-        let secrets_backend = LocalSecretsBackend::new(codex_home.clone(), keyring_store);
+        let secrets_manager = SecretsManager::new_with_keyring_store(
+            codex_home.clone(),
+            SecretsBackendKind::Local,
+            keyring_store,
+        );
         Self {
             codex_home,
-            secrets_backend,
+            secrets_manager,
         }
     }
 }
@@ -277,7 +290,7 @@ impl SecretsKeyringAuthStorage {
 impl AuthStorageBackend for SecretsKeyringAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         match self
-            .secrets_backend
+            .secrets_manager
             .get(&SecretScope::Global, &CLI_AUTH_SECRET_NAME)
             .map_err(|err| {
                 std::io::Error::other(format!(
@@ -295,7 +308,7 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
         let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
-        self.secrets_backend
+        self.secrets_manager
             .set(&SecretScope::Global, &CLI_AUTH_SECRET_NAME, &serialized)
             .map_err(|err| {
                 let message =
@@ -311,7 +324,7 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
 
     fn delete(&self) -> std::io::Result<bool> {
         let keyring_removed = self
-            .secrets_backend
+            .secrets_manager
             .delete(&SecretScope::Global, &CLI_AUTH_SECRET_NAME)
             .map_err(|err| {
                 std::io::Error::other(format!(

@@ -21,9 +21,10 @@ use anyhow::Error;
 use anyhow::Result;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
-use codex_secrets::LocalSecretsBackend;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
+use codex_secrets::SecretsBackendKind;
+use codex_secrets::SecretsManager;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
 use oauth2::Scope;
@@ -219,10 +220,13 @@ fn load_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     url: &str,
 ) -> Result<Option<StoredOAuthTokens>> {
     let codex_home = find_codex_home()?;
-    let backend =
-        LocalSecretsBackend::new(codex_home.to_path_buf(), Arc::new(keyring_store.clone()));
+    let manager = SecretsManager::new_with_keyring_store(
+        codex_home.to_path_buf(),
+        SecretsBackendKind::Local,
+        Arc::new(keyring_store.clone()),
+    );
     let secret_name = compute_secret_name(server_name, url)?;
-    match backend
+    match manager
         .get(&SecretScope::Global, &secret_name)
         .context("failed to load MCP OAuth tokens from encrypted storage")?
     {
@@ -309,10 +313,13 @@ fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
 ) -> Result<()> {
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
     let codex_home = find_codex_home()?;
-    let backend =
-        LocalSecretsBackend::new(codex_home.to_path_buf(), Arc::new(keyring_store.clone()));
+    let manager = SecretsManager::new_with_keyring_store(
+        codex_home.to_path_buf(),
+        SecretsBackendKind::Local,
+        Arc::new(keyring_store.clone()),
+    );
     let secret_name = compute_secret_name(server_name, &tokens.url)?;
-    backend
+    manager
         .set(&SecretScope::Global, &secret_name, &serialized)
         .context("failed to write OAuth tokens to encrypted storage")?;
 
@@ -417,10 +424,13 @@ fn delete_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     url: &str,
 ) -> Result<bool> {
     let codex_home = find_codex_home()?;
-    let backend =
-        LocalSecretsBackend::new(codex_home.to_path_buf(), Arc::new(keyring_store.clone()));
+    let manager = SecretsManager::new_with_keyring_store(
+        codex_home.to_path_buf(),
+        SecretsBackendKind::Local,
+        Arc::new(keyring_store.clone()),
+    );
     let secret_name = compute_secret_name(server_name, url)?;
-    let secrets_removed = backend
+    let secrets_removed = manager
         .delete(&SecretScope::Global, &secret_name)
         .context("failed to delete OAuth tokens from encrypted storage")?;
     Ok(secrets_removed)
@@ -977,9 +987,13 @@ mod tests {
             &tokens,
         )?;
 
-        let backend = LocalSecretsBackend::new(env.path().to_path_buf(), Arc::new(store.clone()));
+        let manager = SecretsManager::new_with_keyring_store(
+            env.path().to_path_buf(),
+            SecretsBackendKind::Local,
+            Arc::new(store.clone()),
+        );
         let secret_name = super::compute_secret_name(&tokens.server_name, &tokens.url)?;
-        let stored = backend
+        let stored = manager
             .get(&SecretScope::Global, &secret_name)?
             .expect("tokens should be saved to encrypted storage");
         assert_eq!(serde_json::from_str::<StoredOAuthTokens>(&stored)?, tokens);
@@ -1082,10 +1096,14 @@ mod tests {
             &tokens.url,
         )?;
 
-        let backend = LocalSecretsBackend::new(env.path().to_path_buf(), Arc::new(store.clone()));
+        let manager = SecretsManager::new_with_keyring_store(
+            env.path().to_path_buf(),
+            SecretsBackendKind::Local,
+            Arc::new(store.clone()),
+        );
         let secret_name = super::compute_secret_name(&tokens.server_name, &tokens.url)?;
         assert!(removed);
-        assert!(backend.get(&SecretScope::Global, &secret_name)?.is_none());
+        assert!(manager.get(&SecretScope::Global, &secret_name)?.is_none());
         assert_eq!(store.saved_value(&key), Some(serialized));
         assert!(!super::fallback_file_path()?.exists());
         Ok(())
