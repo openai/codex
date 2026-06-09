@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use arc_swap::ArcSwap;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_protocol::ThreadId;
@@ -54,6 +55,7 @@ use super::prompt::GuardianTranscriptCursor;
 use super::prompt::build_guardian_prompt_items_with_parent_turn;
 use super::prompt::guardian_policy_prompt;
 use super::prompt::guardian_policy_prompt_with_config;
+use super::task_owner::GuardianReviewActivity;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug)]
@@ -77,15 +79,20 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) personality: Option<Personality>,
     pub(crate) external_cancel: Option<CancellationToken>,
+    pub(crate) review_activity: GuardianReviewActivity,
 }
 
 #[derive(Default)]
 pub(crate) struct GuardianReviewSessionManager {
-    state: Arc<Mutex<GuardianReviewSessionState>>,
+    state: ArcSwap<Mutex<GuardianReviewSessionState>>,
 }
+
+#[derive(Clone)]
+pub(crate) struct GuardianReviewSessionGeneration(Arc<Mutex<GuardianReviewSessionState>>);
 
 #[derive(Default)]
 struct GuardianReviewSessionState {
+    closed: bool,
     trunk: Option<Arc<GuardianReviewSession>>,
     ephemeral_reviews: Vec<Arc<GuardianReviewSession>>,
 }
@@ -276,8 +283,31 @@ impl Drop for EphemeralReviewCleanup {
 }
 
 impl GuardianReviewSessionManager {
+    fn state(&self) -> Arc<Mutex<GuardianReviewSessionState>> {
+        self.state.load_full()
+    }
+
+    pub(crate) fn generation(&self) -> GuardianReviewSessionGeneration {
+        GuardianReviewSessionGeneration(self.state())
+    }
+
+    async fn take_review_sessions(
+        state: &Mutex<GuardianReviewSessionState>,
+    ) -> (
+        Option<Arc<GuardianReviewSession>>,
+        Vec<Arc<GuardianReviewSession>>,
+    ) {
+        let mut state = state.lock().await;
+        state.closed = true;
+        (
+            state.trunk.take(),
+            std::mem::take(&mut state.ephemeral_reviews),
+        )
+    }
+
     pub(crate) async fn trunk_rollout_path(&self) -> Option<PathBuf> {
-        let trunk = self.state.lock().await.trunk.clone()?;
+        let state = self.state();
+        let trunk = state.lock().await.trunk.clone()?;
         trunk.codex.session.ensure_rollout_materialized().await;
         match trunk.codex.session.current_rollout_path().await {
             Ok(path) => path,
@@ -289,13 +319,10 @@ impl GuardianReviewSessionManager {
     }
 
     pub(crate) async fn shutdown(&self) {
-        let (review_session, ephemeral_reviews) = {
-            let mut state = self.state.lock().await;
-            (
-                state.trunk.take(),
-                std::mem::take(&mut state.ephemeral_reviews),
-            )
-        };
+        let state = self
+            .state
+            .swap(Arc::new(Mutex::new(GuardianReviewSessionState::default())));
+        let (review_session, ephemeral_reviews) = Self::take_review_sessions(&state).await;
         if let Some(review_session) = review_session {
             review_session.shutdown().await;
         }
@@ -304,14 +331,53 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    pub(crate) fn shutdown_in_background(&self, runtime_handle: &tokio::runtime::Handle) {
+        self.shutdown_generation_in_background(self.generation(), runtime_handle);
+    }
+
+    pub(crate) fn shutdown_generation_in_background(
+        &self,
+        generation: GuardianReviewSessionGeneration,
+        runtime_handle: &tokio::runtime::Handle,
+    ) {
+        let previous = self.state.compare_and_swap(
+            &generation.0,
+            Arc::new(Mutex::new(GuardianReviewSessionState::default())),
+        );
+        let did_swap = Arc::ptr_eq(&*previous, &generation.0);
+        drop(previous);
+        if !did_swap {
+            return;
+        }
+        let state = generation.0;
+        drop(runtime_handle.spawn(async move {
+            let (review_session, ephemeral_reviews) =
+                GuardianReviewSessionManager::take_review_sessions(&state).await;
+            if let Some(review_session) = review_session {
+                review_session.shutdown().await;
+            }
+            for review_session in ephemeral_reviews {
+                review_session.shutdown().await;
+            }
+        }));
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "review session selection and trunk spawning must stay serialized"
     )]
     pub(super) async fn run_review(
         &self,
+        generation: GuardianReviewSessionGeneration,
         params: GuardianReviewSessionParams,
     ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
+        if params.review_activity.cancellation_token().is_cancelled() {
+            return (
+                GuardianReviewSessionOutcome::Aborted,
+                GuardianReviewAnalyticsResult::without_session(),
+            );
+        }
+        let state = generation.0;
         let deadline = tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
         let mut stale_trunk_to_shutdown = None;
@@ -319,11 +385,17 @@ impl GuardianReviewSessionManager {
         let trunk_candidate = match run_before_review_deadline(
             deadline,
             params.external_cancel.as_ref(),
-            self.state.lock(),
+            state.lock(),
         )
         .await
         {
             Ok(mut state) => {
+                if state.closed {
+                    return (
+                        GuardianReviewSessionOutcome::Aborted,
+                        GuardianReviewAnalyticsResult::without_session(),
+                    );
+                }
                 if let Some(trunk) = state.trunk.as_ref()
                     && trunk.reuse_key != next_reuse_key
                     && trunk.review_lock.try_acquire().is_ok()
@@ -382,6 +454,7 @@ impl GuardianReviewSessionManager {
 
         if trunk.reuse_key != next_reuse_key {
             return Box::pin(self.run_ephemeral_review(
+                Arc::clone(&state),
                 params,
                 next_reuse_key,
                 deadline,
@@ -394,6 +467,7 @@ impl GuardianReviewSessionManager {
             Ok(trunk_guard) => trunk_guard,
             Err(_) => {
                 return Box::pin(self.run_ephemeral_review(
+                    Arc::clone(&state),
                     params,
                     next_reuse_key,
                     deadline,
@@ -423,7 +497,7 @@ impl GuardianReviewSessionManager {
         if keep_review_session {
             (outcome, analytics_result)
         } else {
-            if let Some(review_session) = self.remove_trunk_if_current(&trunk).await {
+            if let Some(review_session) = Self::remove_trunk_if_current(&state, &trunk).await {
                 review_session.shutdown_in_background();
             }
             (outcome, analytics_result)
@@ -435,7 +509,8 @@ impl GuardianReviewSessionManager {
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
             codex.session.get_config().await.as_ref(),
         );
-        self.state.lock().await.trunk = Some(Arc::new(GuardianReviewSession {
+        let state = self.state();
+        state.lock().await.trunk = Some(Arc::new(GuardianReviewSession {
             reuse_key,
             codex,
             cancel_token: CancellationToken::new(),
@@ -453,7 +528,8 @@ impl GuardianReviewSessionManager {
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
             codex.session.get_config().await.as_ref(),
         );
-        self.state
+        let state = self.state();
+        state
             .lock()
             .await
             .ephemeral_reviews
@@ -472,7 +548,8 @@ impl GuardianReviewSessionManager {
 
     #[cfg(test)]
     pub(crate) async fn committed_fork_rollout_items_for_test(&self) -> Option<Vec<RolloutItem>> {
-        let trunk = self.state.lock().await.trunk.clone()?;
+        let manager_state = self.state();
+        let trunk = manager_state.lock().await.trunk.clone()?;
         let state = trunk.state.lock().await;
         let snapshot = state.last_committed_fork_snapshot.as_ref()?;
         match &snapshot.initial_history {
@@ -483,8 +560,8 @@ impl GuardianReviewSessionManager {
 
     #[cfg(test)]
     pub(crate) async fn send_trunk_event_raw_for_test(&self, event: Event) {
-        let trunk = self
-            .state
+        let state = self.state();
+        let trunk = state
             .lock()
             .await
             .trunk
@@ -494,10 +571,10 @@ impl GuardianReviewSessionManager {
     }
 
     async fn remove_trunk_if_current(
-        &self,
+        state: &Mutex<GuardianReviewSessionState>,
         trunk: &Arc<GuardianReviewSession>,
     ) -> Option<Arc<GuardianReviewSession>> {
-        let mut state = self.state.lock().await;
+        let mut state = state.lock().await;
         if state
             .trunk
             .as_ref()
@@ -509,19 +586,23 @@ impl GuardianReviewSessionManager {
         }
     }
 
-    async fn register_active_ephemeral(&self, review_session: Arc<GuardianReviewSession>) {
-        self.state
-            .lock()
-            .await
-            .ephemeral_reviews
-            .push(review_session);
+    async fn register_active_ephemeral(
+        state: &Mutex<GuardianReviewSessionState>,
+        review_session: Arc<GuardianReviewSession>,
+    ) -> bool {
+        let mut state = state.lock().await;
+        if state.closed {
+            return false;
+        }
+        state.ephemeral_reviews.push(review_session);
+        true
     }
 
     async fn take_active_ephemeral(
-        &self,
+        state: &Mutex<GuardianReviewSessionState>,
         review_session: &Arc<GuardianReviewSession>,
     ) -> Option<Arc<GuardianReviewSession>> {
-        let mut state = self.state.lock().await;
+        let mut state = state.lock().await;
         let ephemeral_review_index = state
             .ephemeral_reviews
             .iter()
@@ -531,6 +612,7 @@ impl GuardianReviewSessionManager {
 
     async fn run_ephemeral_review(
         &self,
+        state: Arc<Mutex<GuardianReviewSessionState>>,
         params: GuardianReviewSessionParams,
         reuse_key: GuardianReviewSessionReuseKey,
         deadline: tokio::time::Instant,
@@ -562,10 +644,15 @@ impl GuardianReviewSessionManager {
             }
             Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
         };
-        self.register_active_ephemeral(Arc::clone(&review_session))
-            .await;
+        if !Self::register_active_ephemeral(&state, Arc::clone(&review_session)).await {
+            review_session.shutdown_in_background();
+            return (
+                GuardianReviewSessionOutcome::Aborted,
+                GuardianReviewAnalyticsResult::without_session(),
+            );
+        }
         let mut cleanup =
-            EphemeralReviewCleanup::new(Arc::clone(&self.state), Arc::clone(&review_session));
+            EphemeralReviewCleanup::new(Arc::clone(&state), Arc::clone(&review_session));
 
         let (outcome, _, analytics_result) = Box::pin(run_review_on_session(
             review_session.as_ref(),
@@ -574,7 +661,7 @@ impl GuardianReviewSessionManager {
             deadline,
         ))
         .await;
-        if let Some(review_session) = self.take_active_ephemeral(&review_session).await {
+        if let Some(review_session) = Self::take_active_ephemeral(&state, &review_session).await {
             cleanup.disarm();
             review_session.shutdown_in_background();
         }
@@ -773,7 +860,7 @@ async fn run_review_on_session(
     };
     analytics_result.reviewed_action_truncated = reviewed_action_truncated;
 
-    let outcome = wait_for_guardian_review(
+    let (mut outcome, mut keep_review_session, should_commit_review) = wait_for_guardian_review(
         review_session,
         child_turn_id.as_str(),
         deadline,
@@ -781,10 +868,15 @@ async fn run_review_on_session(
         &mut analytics_result,
     )
     .await;
-    if matches!(outcome.0, GuardianReviewSessionOutcome::Completed(_)) {
-        if outcome.2
-            && let Some(total_token_usage) = review_session.codex.session.total_token_usage().await
-        {
+    if should_commit_review
+        && matches!(outcome, GuardianReviewSessionOutcome::Completed(_))
+        && !params.review_activity.try_commit()
+    {
+        outcome = GuardianReviewSessionOutcome::Aborted;
+        keep_review_session = false;
+    }
+    if should_commit_review && matches!(outcome, GuardianReviewSessionOutcome::Completed(_)) {
+        if let Some(total_token_usage) = review_session.codex.session.total_token_usage().await {
             analytics_result.token_usage = Some(token_usage_delta(
                 &token_usage_at_review_start,
                 &total_token_usage,
@@ -794,7 +886,7 @@ async fn run_review_on_session(
         state.prior_review_count = state.prior_review_count.saturating_add(1);
         state.last_reviewed_transcript_cursor = Some(transcript_cursor);
     }
-    (outcome.0, outcome.1, analytics_result)
+    (outcome, keep_review_session, analytics_result)
 }
 
 async fn append_guardian_followup_reminder(review_session: &GuardianReviewSession) {
@@ -845,13 +937,12 @@ async fn wait_for_guardian_review(
                     std::future::pending::<()>().await;
                 }
             } => {
-                let keep_review_session = interrupt_and_drain_turn(
+                let _ = interrupt_and_drain_turn(
                     &review_session.codex,
                     expected_turn_id,
                 )
-                .await
-                .is_ok();
-                return (GuardianReviewSessionOutcome::Aborted, keep_review_session, false);
+                .await;
+                return (GuardianReviewSessionOutcome::Aborted, false, false);
             }
             event = review_session.codex.next_event() => {
                 match event {
@@ -880,7 +971,7 @@ async fn wait_for_guardian_review(
                             last_error_message = Some(error.message);
                         }
                         EventMsg::TurnAborted(_) => {
-                            return (GuardianReviewSessionOutcome::Aborted, true, false);
+                            return (GuardianReviewSessionOutcome::Aborted, false, false);
                         }
                         _ => {}
                     },
@@ -1129,9 +1220,14 @@ mod tests {
         )
         .expect("guardian config");
 
+        let parent_turn = Arc::new(turn);
+        let review_activity = parent_turn
+            .guardian_reviews
+            .begin()
+            .expect("guardian review activity");
         GuardianReviewSessionParams {
             parent_session: Arc::new(session),
-            parent_turn: Arc::new(turn),
+            parent_turn,
             spawn_config,
             request: GuardianApprovalRequest::Shell {
                 id: "shell-1".to_string(),
@@ -1148,6 +1244,7 @@ mod tests {
             reasoning_summary,
             personality,
             external_cancel: None,
+            review_activity,
         }
     }
 
@@ -1181,6 +1278,52 @@ mod tests {
             cached_reuse_key,
             GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config)
         );
+    }
+
+    #[tokio::test]
+    async fn forced_shutdown_replaces_manager_state_without_waiting() {
+        let manager = GuardianReviewSessionManager::default();
+        let old_generation = manager.generation();
+        let old_state = Arc::clone(&old_generation.0);
+        let old_state_guard = old_state.lock().await;
+
+        manager.shutdown_generation_in_background(
+            old_generation.clone(),
+            &tokio::runtime::Handle::current(),
+        );
+
+        let new_state = manager.state();
+        assert!(!Arc::ptr_eq(&old_state, &new_state));
+        manager
+            .shutdown_generation_in_background(old_generation, &tokio::runtime::Handle::current());
+        assert!(Arc::ptr_eq(&new_state, &manager.state()));
+        drop(old_state_guard);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if old_state.lock().await.closed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("retired manager state should close");
+        assert!(!new_state.lock().await.closed);
+    }
+
+    #[tokio::test]
+    async fn cancelled_review_does_not_enter_manager_generation() {
+        let manager = GuardianReviewSessionManager::default();
+        let params = test_review_params().await;
+        assert!(params.review_activity.cancel());
+
+        let (outcome, _) = manager.run_review(manager.generation(), params).await;
+
+        assert!(matches!(outcome, GuardianReviewSessionOutcome::Aborted));
+        let state = manager.state();
+        let state = state.lock().await;
+        assert!(state.trunk.is_none());
+        assert!(state.ephemeral_reviews.is_empty());
     }
 
     #[tokio::test]
@@ -1474,6 +1617,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_review_on_session_does_not_commit_cancelled_activity() {
+        let (review_session, tx_event, rx_sub) = test_review_session().await;
+        let mut params = test_review_params().await;
+        params.review_activity = params
+            .parent_turn
+            .guardian_reviews
+            .begin()
+            .expect("guardian review activity");
+        let review_activity = params.review_activity.clone();
+
+        let review = tokio::spawn(async move {
+            let outcome = run_review_on_session(
+                &review_session,
+                &params,
+                GuardianReviewSessionKind::TrunkReused,
+                tokio::time::Instant::now() + Duration::from_secs(1),
+            )
+            .await;
+            let state = review_session.state.lock().await;
+            (
+                outcome,
+                state.prior_review_count,
+                state.last_reviewed_transcript_cursor,
+            )
+        });
+        let submission = rx_sub.recv().await.expect("guardian submission");
+        assert!(review_activity.cancel());
+        tx_event
+            .send(turn_complete_event(
+                submission.id.as_str(),
+                Some("completed after cancellation"),
+                Some(42),
+            ))
+            .await
+            .expect("queue submitted turn completion");
+
+        let ((outcome, keep_review_session, _), prior_review_count, transcript_cursor) =
+            review.await.expect("review task should complete");
+        assert!(matches!(outcome, GuardianReviewSessionOutcome::Aborted));
+        assert!(!keep_review_session);
+        assert_eq!(prior_review_count, 0);
+        assert!(transcript_cursor.is_none());
+    }
+
+    #[tokio::test]
     async fn wait_for_guardian_review_ignores_prior_turn_completion() {
         let (review_session, tx_event, _rx_sub) = test_review_session().await;
         tx_event
@@ -1644,7 +1832,7 @@ mod tests {
             .await
             .expect("interrupt response task should complete");
         assert!(matches!(outcome, GuardianReviewSessionOutcome::Aborted));
-        assert!(keep_review_session);
+        assert!(!keep_review_session);
         assert!(!capture_token_usage);
     }
 

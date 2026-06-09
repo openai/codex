@@ -47,3 +47,25 @@ async fn forced_drain_aborts_review_task() {
         Err(oneshot::error::TryRecvError::Closed)
     );
 }
+
+#[test]
+fn commit_is_linearized_against_cancellation() {
+    let committed_owner = Arc::new(GuardianReviewTaskOwner::default());
+    let committed = committed_owner.begin().expect("review should start");
+    assert!(committed.try_commit());
+    let _drain = committed_owner.close();
+    assert!(committed.try_commit());
+
+    let interrupted_owner = Arc::new(GuardianReviewTaskOwner::default());
+    let interrupted = interrupted_owner
+        .begin()
+        .expect("review should start before interruption");
+    let _drain = interrupted_owner.close();
+    assert!(!interrupted.try_commit());
+    assert!(interrupted_owner.begin().is_none());
+
+    let cancelled_owner = Arc::new(GuardianReviewTaskOwner::default());
+    let cancelled = cancelled_owner.begin().expect("review should start");
+    assert!(cancelled.cancel());
+    assert!(!cancelled.try_commit());
+}

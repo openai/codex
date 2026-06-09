@@ -18,6 +18,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -40,9 +41,11 @@ use super::approval_request::guardian_reviewed_action;
 use super::metrics::emit_guardian_review_metrics;
 use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
+use super::review_session::GuardianReviewSessionGeneration;
 use super::review_session::GuardianReviewSessionOutcome;
 use super::review_session::GuardianReviewSessionParams;
 use super::review_session::build_guardian_review_session_config;
+use super::task_owner::GuardianReviewActivity;
 
 const GUARDIAN_REJECTION_INSTRUCTIONS: &str = concat!(
     "The agent must not attempt to achieve the same outcome via workaround, ",
@@ -57,6 +60,8 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
     "Do not assume the action is unsafe based on the timeout alone. ",
     "You may retry once, or ask the user for guidance or explicit approval.",
 );
+
+const GUARDIAN_REVIEW_CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -91,6 +96,12 @@ pub(crate) fn guardian_timeout_message() -> String {
 pub(super) enum GuardianReviewOutcome {
     Completed(GuardianAssessment),
     Error(GuardianReviewError),
+}
+
+#[derive(Clone)]
+pub(super) struct GuardianReviewRunContext {
+    pub(super) activity: GuardianReviewActivity,
+    pub(super) generation: GuardianReviewSessionGeneration,
 }
 
 #[derive(Debug)]
@@ -258,10 +269,11 @@ async fn run_guardian_review(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     approval_request_source: GuardianApprovalRequestSource,
-    external_cancel: Option<CancellationToken>,
+    review_context: GuardianReviewRunContext,
 ) -> ReviewDecision {
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
+    let cancellation_token = review_context.activity.cancellation_token();
     let action_summary = guardian_assessment_action(&request);
     let reviewed_action = guardian_reviewed_action(&request);
     let review_tracking = GuardianReviewTrackContext::new(
@@ -293,10 +305,7 @@ async fn run_guardian_review(
         )
         .await;
 
-    if external_cancel
-        .as_ref()
-        .is_some_and(CancellationToken::is_cancelled)
-    {
+    if cancellation_token.is_cancelled() {
         let completed_at_ms = now_unix_timestamp_ms();
         track_guardian_review(
             session.as_ref(),
@@ -335,15 +344,42 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let (outcome, analytics_result) = Box::pin(run_guardian_review_session(
+    let reset_generation = review_context.generation.clone();
+    let mut session_review = Box::pin(run_guardian_review_session(
         session.clone(),
         turn.clone(),
+        review_context.clone(),
         request,
         retry_reason.clone(),
         schema,
-        external_cancel,
-    ))
-    .await;
+        Some(cancellation_token.clone()),
+    ));
+    let (outcome, analytics_result) = tokio::select! {
+        biased;
+        _ = cancellation_token.cancelled() => {
+            if review_context.activity.is_committed() {
+                session_review.await
+            } else {
+                let analytics_result = match tokio::time::timeout(
+                    GUARDIAN_REVIEW_CANCEL_DRAIN_TIMEOUT,
+                    &mut session_review,
+                )
+                .await
+                {
+                    Ok((_, analytics_result)) => analytics_result,
+                    Err(_) => {
+                        session.guardian_review_session.shutdown_generation_in_background(
+                            reset_generation,
+                            &session.services.runtime_handle,
+                        );
+                        GuardianReviewAnalyticsResult::without_session()
+                    }
+                };
+                (GuardianReviewOutcome::Error(GuardianReviewError::Cancelled), analytics_result)
+            }
+        }
+        result = &mut session_review => result,
+    };
 
     let completed_at_ms = now_unix_timestamp_ms();
     let (assessment, count_denial_for_circuit_breaker) = match outcome {
@@ -554,7 +590,6 @@ async fn run_guardian_review(
             }),
         )
         .await;
-
     if count_denial_for_circuit_breaker {
         record_guardian_denial(&session, &turn, &assessment_turn_id).await;
     } else {
@@ -583,6 +618,7 @@ async fn run_guardian_review_in_task(
     let cancel_activity = review_activity.clone();
     let request_cancel = owner_cancel.clone();
     let runtime_handle = session.services.runtime_handle.clone();
+    let review_generation = session.guardian_review_session.generation();
     let review = run_guardian_review(
         session,
         Arc::clone(&turn),
@@ -590,7 +626,10 @@ async fn run_guardian_review_in_task(
         request,
         retry_reason,
         approval_request_source,
-        Some(review_activity.cancellation_token()),
+        GuardianReviewRunContext {
+            activity: review_activity.clone(),
+            generation: review_generation,
+        },
     );
     let Some(review) = turn.guardian_reviews.spawn(&runtime_handle, async move {
         tokio::pin!(review);
@@ -702,6 +741,7 @@ pub(crate) fn spawn_approval_request_review(
 pub(super) async fn run_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    review_context: GuardianReviewRunContext,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     schema: serde_json::Value,
@@ -780,10 +820,10 @@ pub(super) async fn run_guardian_review_session(
         }
     };
 
-    let (session_outcome, session_analytics_result) = Box::pin(
-        session
-            .guardian_review_session
-            .run_review(GuardianReviewSessionParams {
+    let (session_outcome, session_analytics_result) =
+        Box::pin(session.guardian_review_session.run_review(
+            review_context.generation,
+            GuardianReviewSessionParams {
                 parent_session: Arc::clone(&session),
                 parent_turn: turn.clone(),
                 spawn_config: guardian_config,
@@ -795,9 +835,15 @@ pub(super) async fn run_guardian_review_session(
                 reasoning_summary: turn.reasoning_summary,
                 personality: turn.personality,
                 external_cancel,
-            }),
-    )
-    .await;
+                review_activity: review_context.activity.clone(),
+            },
+        ))
+        .await;
+    let session_outcome = match session_outcome {
+        GuardianReviewSessionOutcome::Aborted => GuardianReviewSessionOutcome::Aborted,
+        outcome if review_context.activity.try_commit() => outcome,
+        _ => GuardianReviewSessionOutcome::Aborted,
+    };
 
     match session_outcome {
         GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)) => match last_agent_message

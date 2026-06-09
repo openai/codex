@@ -79,6 +79,37 @@ fn fixed_guardian_parent_session_id() -> ThreadId {
         .expect("fixed parent session id should be a valid UUID")
 }
 
+async fn run_guardian_review_session_for_test(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    schema: serde_json::Value,
+    external_cancel: Option<CancellationToken>,
+) -> (
+    GuardianReviewOutcome,
+    codex_analytics::GuardianReviewAnalyticsResult,
+) {
+    let review_activity = turn
+        .guardian_reviews
+        .begin()
+        .expect("guardian review activity");
+    let review_generation = session.guardian_review_session.generation();
+    super::review::run_guardian_review_session(
+        session,
+        turn,
+        super::review::GuardianReviewRunContext {
+            activity: review_activity,
+            generation: review_generation,
+        },
+        request,
+        retry_reason,
+        schema,
+        external_cancel,
+    )
+    .await
+}
+
 #[test]
 fn guardian_rejection_circuit_breaker_interrupts_after_three_consecutive_denials() {
     let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();

@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use tokio::runtime::Handle;
@@ -53,7 +55,9 @@ impl GuardianReviewTaskOwner {
             return None;
         }
         Some(GuardianReviewActivity {
+            owner: Arc::clone(self),
             cancellation_token: self.cancellation_token.child_token(),
+            committed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -97,7 +101,9 @@ impl GuardianReviewTaskOwner {
 
 #[derive(Clone)]
 pub(crate) struct GuardianReviewActivity {
+    owner: Arc<GuardianReviewTaskOwner>,
     cancellation_token: CancellationToken,
+    committed: Arc<AtomicBool>,
 }
 
 impl GuardianReviewActivity {
@@ -105,8 +111,35 @@ impl GuardianReviewActivity {
         self.cancellation_token.clone()
     }
 
-    pub(crate) fn cancel(&self) {
+    pub(crate) fn cancel(&self) -> bool {
+        if self.committed.load(Ordering::Acquire) {
+            return false;
+        }
+        let _state = self.owner.lock_state();
+        if self.committed.load(Ordering::Acquire) {
+            return false;
+        }
         self.cancellation_token.cancel();
+        true
+    }
+
+    pub(crate) fn is_committed(&self) -> bool {
+        self.committed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn try_commit(&self) -> bool {
+        if self.committed.load(Ordering::Acquire) {
+            return true;
+        }
+        let state = self.owner.lock_state();
+        if self.committed.load(Ordering::Acquire) {
+            return true;
+        }
+        let can_commit = state.closed_at.is_none() && !self.cancellation_token.is_cancelled();
+        if can_commit {
+            self.committed.store(true, Ordering::Release);
+        }
+        can_commit
     }
 }
 

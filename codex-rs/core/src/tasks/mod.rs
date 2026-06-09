@@ -552,7 +552,8 @@ impl Session {
 
     async fn drain_guardian_reviews(&self, drain: crate::guardian::GuardianReviewDrain) {
         if drain.drain().await == crate::guardian::GuardianReviewDrainOutcome::Forced {
-            self.guardian_review_session.shutdown().await;
+            self.guardian_review_session
+                .shutdown_in_background(&self.services.runtime_handle);
         }
     }
 
