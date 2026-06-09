@@ -23,9 +23,9 @@ use super::endpoint_url;
 use crate::ExecServerError;
 use crate::NoiseChannelIdentity;
 use crate::NoiseChannelPublicKey;
-use crate::noise_relay::HarnessKeyValidator;
+use crate::noise_relay::environment::HarnessKeyValidator;
+use crate::noise_relay::environment::run_noise_multiplexed_environment;
 use crate::noise_relay::noise_relay_websocket_config;
-use crate::noise_relay::run_noise_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 
 const ENVIRONMENT_REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
