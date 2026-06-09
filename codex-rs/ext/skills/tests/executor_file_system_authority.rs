@@ -262,7 +262,9 @@ async fn executor_provider_reads_from_the_environment_instance_used_for_listing(
 async fn selected_root_id_distinguishes_identical_executor_paths() {
     let test_root = create_local_skill_root("root-identity").expect("create local skill root");
     let root_path = test_root.to_string_lossy().into_owned();
-    let canonical_root = std::fs::canonicalize(&test_root)
+    let canonical_root = AbsolutePathBuf::from_absolute_path_checked(&test_root)
+        .expect("absolute skill root")
+        .canonicalize()
         .expect("canonicalize skill root")
         .to_string_lossy()
         .replace('\\', "/");
