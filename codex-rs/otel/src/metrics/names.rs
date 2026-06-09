@@ -29,6 +29,7 @@ pub const TURN_MEMORY_METRIC: &str = "codex.turn.memory";
 pub const TURN_TOOL_CALL_METRIC: &str = "codex.turn.tool.call";
 pub const TURN_TOKEN_USAGE_METRIC: &str = "codex.turn.token_usage";
 pub const GUARDIAN_REVIEW_COUNT_METRIC: &str = "codex.guardian.review";
+pub const GUARDIAN_REVIEW_CLEANUP_COUNT_METRIC: &str = "codex.guardian.review.cleanup";
 pub const GUARDIAN_REVIEW_DURATION_METRIC: &str = "codex.guardian.review.duration_ms";
 pub const GUARDIAN_REVIEW_TTFT_DURATION_METRIC: &str = "codex.guardian.review.ttft.duration_ms";
 pub const GUARDIAN_REVIEW_TOKEN_USAGE_METRIC: &str = "codex.guardian.review.token_usage";

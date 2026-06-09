@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use super::GuardianReviewCleanupReason;
 use super::GuardianReviewDrainOutcome;
 use super::GuardianReviewTaskOwner;
 
@@ -72,7 +73,10 @@ async fn forced_drain_aborts_review_task() {
     drain.deadline = Instant::now();
     assert_eq!(
         drain.drain().await,
-        GuardianReviewDrainOutcome::Forced(vec![forced_abort])
+        GuardianReviewDrainOutcome::Forced {
+            events: vec![forced_abort],
+            reason: GuardianReviewCleanupReason::DrainTimeout,
+        }
     );
     assert_eq!(
         drop_rx.try_recv(),
@@ -95,7 +99,10 @@ async fn panicked_review_returns_fallback_after_draining() {
 
     assert_eq!(
         owner.close().drain().await,
-        GuardianReviewDrainOutcome::Forced(vec![forced_abort])
+        GuardianReviewDrainOutcome::Forced {
+            events: vec![forced_abort],
+            reason: GuardianReviewCleanupReason::MissingTerminal,
+        }
     );
 }
 
@@ -115,7 +122,10 @@ async fn fallback_requires_started_nonterminal_review() {
     drain.deadline = Instant::now();
     assert_eq!(
         drain.drain().await,
-        GuardianReviewDrainOutcome::Forced(Vec::new())
+        GuardianReviewDrainOutcome::Forced {
+            events: Vec::new(),
+            reason: GuardianReviewCleanupReason::DrainTimeout,
+        }
     );
 
     let owner = Arc::new(GuardianReviewTaskOwner::default());
@@ -134,7 +144,10 @@ async fn fallback_requires_started_nonterminal_review() {
     drain.deadline = Instant::now();
     assert_eq!(
         drain.drain().await,
-        GuardianReviewDrainOutcome::Forced(Vec::new())
+        GuardianReviewDrainOutcome::Forced {
+            events: Vec::new(),
+            reason: GuardianReviewCleanupReason::DrainTimeout,
+        }
     );
 }
 

@@ -19,7 +19,16 @@ const GUARDIAN_REVIEW_DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
 #[derive(Debug, PartialEq)]
 pub(crate) enum GuardianReviewDrainOutcome {
     Drained,
-    Forced(Vec<GuardianAssessmentEvent>),
+    Forced {
+        events: Vec<GuardianAssessmentEvent>,
+        reason: GuardianReviewCleanupReason,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GuardianReviewCleanupReason {
+    DrainTimeout,
+    MissingTerminal,
 }
 
 #[derive(Debug)]
@@ -211,8 +220,16 @@ impl GuardianReviewDrain {
             .into_iter()
             .filter_map(|review| review.lifecycle.take_fallback())
             .collect();
-        if timed_out || !forced_aborts.is_empty() {
-            GuardianReviewDrainOutcome::Forced(forced_aborts)
+        if timed_out {
+            GuardianReviewDrainOutcome::Forced {
+                events: forced_aborts,
+                reason: GuardianReviewCleanupReason::DrainTimeout,
+            }
+        } else if !forced_aborts.is_empty() {
+            GuardianReviewDrainOutcome::Forced {
+                events: forced_aborts,
+                reason: GuardianReviewCleanupReason::MissingTerminal,
+            }
         } else {
             GuardianReviewDrainOutcome::Drained
         }

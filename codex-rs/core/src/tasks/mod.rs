@@ -555,15 +555,22 @@ impl Session {
         turn_context: &TurnContext,
         drain: crate::guardian::GuardianReviewDrain,
     ) {
-        let crate::guardian::GuardianReviewDrainOutcome::Forced(events) = drain.drain().await
+        let crate::guardian::GuardianReviewDrainOutcome::Forced { events, reason } =
+            drain.drain().await
         else {
             return;
         };
+        let fallback_emitted = !events.is_empty();
         for mut event in events {
             event.completed_at_ms = Some(crate::turn_timing::now_unix_timestamp_ms());
             self.send_event(turn_context, EventMsg::GuardianAssessment(event))
                 .await;
         }
+        crate::guardian::emit_guardian_review_cleanup_metric(
+            &self.services.session_telemetry,
+            reason,
+            fallback_emitted,
+        );
         self.guardian_review_session
             .shutdown_in_background(&self.services.runtime_handle);
     }

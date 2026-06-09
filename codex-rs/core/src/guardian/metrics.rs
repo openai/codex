@@ -7,6 +7,7 @@ use codex_analytics::GuardianReviewFailureReason;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_analytics::GuardianReviewTerminalStatus;
 use codex_analytics::GuardianReviewedAction;
+use codex_otel::GUARDIAN_REVIEW_CLEANUP_COUNT_METRIC;
 use codex_otel::GUARDIAN_REVIEW_COUNT_METRIC;
 use codex_otel::GUARDIAN_REVIEW_DURATION_METRIC;
 use codex_otel::GUARDIAN_REVIEW_TOKEN_USAGE_METRIC;
@@ -17,6 +18,27 @@ use codex_protocol::protocol::GuardianAssessmentOutcome;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::TokenUsage;
+
+use super::task_owner::GuardianReviewCleanupReason;
+
+pub(crate) fn emit_guardian_review_cleanup_metric(
+    session_telemetry: &SessionTelemetry,
+    reason: GuardianReviewCleanupReason,
+    fallback_emitted: bool,
+) {
+    let reason = match reason {
+        GuardianReviewCleanupReason::DrainTimeout => "drain_timeout",
+        GuardianReviewCleanupReason::MissingTerminal => "missing_terminal",
+    };
+    session_telemetry.counter(
+        GUARDIAN_REVIEW_CLEANUP_COUNT_METRIC,
+        /*inc*/ 1,
+        &[
+            ("reason", reason),
+            ("fallback_emitted", bool_tag(fallback_emitted)),
+        ],
+    );
+}
 
 pub(crate) fn emit_guardian_review_metrics(
     session_telemetry: &SessionTelemetry,
@@ -414,5 +436,39 @@ mod tests {
             histogram_sums(&snapshot, GUARDIAN_REVIEW_TTFT_DURATION_METRIC),
             BTreeMap::from([("sample".to_string(), 123)])
         );
+    }
+
+    #[test]
+    fn guardian_review_cleanup_metric_records_bounded_tags() {
+        for (reason, fallback_emitted, expected_reason) in [
+            (
+                GuardianReviewCleanupReason::DrainTimeout,
+                false,
+                "drain_timeout",
+            ),
+            (
+                GuardianReviewCleanupReason::MissingTerminal,
+                true,
+                "missing_terminal",
+            ),
+        ] {
+            let session_telemetry = test_session_telemetry();
+
+            emit_guardian_review_cleanup_metric(&session_telemetry, reason, fallback_emitted);
+
+            let snapshot = session_telemetry
+                .snapshot_metrics()
+                .expect("runtime metrics snapshot");
+            let (attrs, value) = counter_point(&snapshot, GUARDIAN_REVIEW_CLEANUP_COUNT_METRIC);
+
+            assert_eq!(value, 1);
+            assert_eq!(
+                attrs,
+                BTreeMap::from([
+                    ("fallback_emitted".to_string(), fallback_emitted.to_string()),
+                    ("reason".to_string(), expected_reason.to_string()),
+                ])
+            );
+        }
     }
 }
