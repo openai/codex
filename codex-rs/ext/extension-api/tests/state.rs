@@ -31,6 +31,8 @@ fn typed_values_can_be_inserted_replaced_and_removed() {
 
 #[test]
 fn get_or_init_initializes_once_and_returns_shared_value() {
+    const CALLER_COUNT: usize = 8;
+
     #[derive(Debug, PartialEq, Eq)]
     struct SharedValue(usize);
 
@@ -38,7 +40,7 @@ fn get_or_init_initializes_once_and_returns_shared_value() {
     let callers_started = Arc::new(AtomicUsize::new(0));
     let initialization_count = Arc::new(AtomicUsize::new(0));
 
-    let handles: [_; 8] = std::array::from_fn(|_| {
+    let handles: [_; CALLER_COUNT] = std::array::from_fn(|_| {
         let data = Arc::clone(&data);
         let callers_started = Arc::clone(&callers_started);
         let initialization_count = Arc::clone(&initialization_count);
@@ -48,7 +50,7 @@ fn get_or_init_initializes_once_and_returns_shared_value() {
                 initialization_count.fetch_add(1, Ordering::SeqCst);
                 // Keep the first initializer active until every worker has attempted
                 // get_or_init, forcing callers to overlap on the same missing entry.
-                while callers_started.load(Ordering::SeqCst) < 8 {
+                while callers_started.load(Ordering::SeqCst) < CALLER_COUNT {
                     std::thread::yield_now();
                 }
                 SharedValue(7)
@@ -63,7 +65,7 @@ fn get_or_init_initializes_once_and_returns_shared_value() {
     assert_eq!(initialization_count.load(Ordering::SeqCst), 1);
     assert_eq!(
         values.iter().map(Arc::as_ref).collect::<Vec<_>>(),
-        vec![&SharedValue(7); 8]
+        vec![&SharedValue(7); CALLER_COUNT]
     );
     assert!(
         values
@@ -75,14 +77,14 @@ fn get_or_init_initializes_once_and_returns_shared_value() {
 
 #[test]
 fn stores_are_isolated_and_preserve_level_id() {
-    let session_data = ExtensionData::new("session-1");
-    let thread_data = ExtensionData::new("thread-1");
+    let session_data = ExtensionData::new("root-1");
+    let thread_data = ExtensionData::new("root-1");
 
     session_data.insert(/*value*/ 17_u32);
     thread_data.insert("thread value".to_string());
 
-    assert_eq!(session_data.level_id(), "session-1");
-    assert_eq!(thread_data.level_id(), "thread-1");
+    assert_eq!(session_data.level_id(), "root-1");
+    assert_eq!(thread_data.level_id(), "root-1");
     assert_eq!(session_data.get::<u32>().as_deref(), Some(&17));
     assert_eq!(session_data.get::<String>(), None);
     assert_eq!(thread_data.get::<u32>(), None);

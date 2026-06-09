@@ -2,7 +2,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::PoisonError;
 
 use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ConfigContributor;
@@ -169,7 +168,7 @@ impl TurnItemContributor for RecordingTurnItemContributor {
     ) -> Result<(), String> {
         self.calls
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or_else(|error| panic!("turn item calls lock poisoned: {error}"))
             .push(self.name);
         Ok(())
     }
@@ -192,15 +191,9 @@ async fn contributors_preserve_registration_order() {
     let thread_store = ExtensionData::new("thread");
     let turn_store = ExtensionData::new("turn");
 
-    let mut texts = Vec::new();
+    let mut fragments = Vec::new();
     for contributor in registry.context_contributors() {
-        texts.extend(
-            contributor
-                .contribute(&session_store, &thread_store)
-                .await
-                .into_iter()
-                .map(|fragment| fragment.text().to_string()),
-        );
+        fragments.extend(contributor.contribute(&session_store, &thread_store).await);
     }
     let mut item = TurnItem::HookPrompt(HookPromptItem {
         id: "item".to_string(),
@@ -213,7 +206,13 @@ async fn contributors_preserve_registration_order() {
             .expect("turn item contribution should succeed");
     }
 
-    assert_eq!(texts, vec!["first".to_string(), "second".to_string()]);
+    assert_eq!(
+        fragments,
+        vec![
+            PromptFragment::developer_policy("first"),
+            PromptFragment::developer_policy("second"),
+        ]
+    );
     assert_eq!(
         turn_item_calls
             .lock()
@@ -247,7 +246,7 @@ impl ApprovalReviewContributor for RecordingApprovalContributor {
     ) -> Option<ReviewDecision> {
         self.calls
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or_else(|error| panic!("approval calls lock poisoned: {error}"))
             .push(ApprovalCall {
                 contributor: self.name,
                 session_id: session_store.level_id().to_string(),
@@ -315,7 +314,7 @@ impl ExtensionEventSink for RecordingEventSink {
         };
         self.events
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or_else(|error| panic!("recording event sink lock poisoned: {error}"))
             .push((event.id, warning.message));
     }
 }
