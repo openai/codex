@@ -1134,8 +1134,8 @@ impl ThreadManagerState {
             _ => parent_thread_id.or(forked_from_thread_id),
         };
         let instructions = match inherited_thread_id {
-            // FIXME(anp): Factor this so the spawn path does not have to look
-            // the parent thread back up to inherit user instructions.
+            // The spawn path retains only thread IDs, so look up the live
+            // runtime again here to inherit its user instructions.
             Some(thread_id) => match self.get_thread(thread_id).await {
                 Ok(thread) => thread.codex.session.user_instructions().await,
                 Err(_) => None,
