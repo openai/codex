@@ -404,6 +404,63 @@ async fn explicit_plugin_mentions_route_guidance_to_mcp_for_api_key_auth() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_plugin_mentions_filter_app_tools_for_api_key_auth() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let rmcp_test_server_bin = match stdio_server_bin() {
+        Ok(bin) => bin,
+        Err(err) => {
+            eprintln!("test_stdio_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
+    write_plugin_skill_plugin(codex_home.as_ref());
+    write_plugin_mcp_plugin(codex_home.as_ref(), &rmcp_test_server_bin);
+    write_plugin_app_plugin(codex_home.as_ref());
+
+    let test_codex = build_api_key_plugin_test_codex(&server, codex_home).await?;
+    let codex = Arc::clone(&test_codex.codex);
+    wait_for_mcp_server(&codex, "sample").await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![codex_protocol::user_input::UserInput::Mention {
+                name: "sample".into(),
+                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = mock.single_request();
+    assert!(
+        request.tool_by_name("mcp__sample", "echo").is_some(),
+        "expected plugin MCP tool to be model-visible: {:?}",
+        request.body_json()["tools"]
+    );
+    assert!(
+        request
+            .tool_by_name("mcp__codex_apps__google_calendar", "_create_event")
+            .is_none(),
+        "did not expect plugin app tool to be model-visible for API-key auth: {:?}",
+        request.body_json()["tools"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;

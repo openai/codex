@@ -35,6 +35,7 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
+use crate::plugins::filter_model_visible_tools_for_plugin_routes;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
@@ -1159,8 +1160,14 @@ pub(crate) async fn built_tools(
         None
     };
 
-    let mcp_tool_exposure = build_mcp_tool_exposure(
+    let route_filtered_mcp_tools = filter_model_visible_tools_for_plugin_routes(
         &all_mcp_tools,
+        loaded_plugins.capability_summaries(),
+        sess.services.auth_manager.auth_mode(),
+    );
+
+    let mcp_tool_exposure = build_mcp_tool_exposure(
+        &route_filtered_mcp_tools,
         connectors.as_deref(),
         &turn_context.config,
         search_tool_enabled(turn_context),

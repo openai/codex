@@ -11,6 +11,7 @@ pub(crate) use codex_plugin::PluginCapabilitySummary;
 pub(crate) use discoverable::list_tool_suggest_discoverable_plugins;
 pub(crate) use injection::build_plugin_injections;
 pub(crate) use render::render_explicit_plugin_instructions;
+pub(crate) use routing::filter_model_visible_tools_for_plugin_routes;
 
 pub(crate) use mentions::build_connector_slug_counts;
 pub(crate) use mentions::build_skill_name_counts;
