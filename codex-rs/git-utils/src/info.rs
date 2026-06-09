@@ -12,8 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::process::Command;
 use tokio::time::Duration as TokioDuration;
-use tokio::time::Instant as TokioInstant;
-use tokio::time::timeout_at;
+use tokio::time::timeout;
 use ts_rs::TS;
 
 use crate::GitSha;
@@ -281,16 +280,9 @@ fn trim_git_suffix(value: &str) -> &str {
 
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
     let git = Path::new("git");
-    let deadline = TokioInstant::now() + GIT_COMMAND_TIMEOUT;
-    let fsmonitor = detect_local_fsmonitor_override(git, cwd, deadline).await;
-    let output = run_git_command_with_deadline_from(
-        git,
-        &["status", "--porcelain"],
-        cwd,
-        fsmonitor,
-        deadline,
-    )
-    .await?;
+    let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
+    let output =
+        run_git_command_with_timeout_from(git, &["status", "--porcelain"], cwd, fsmonitor).await?;
     if !output.status.success() {
         return None;
     }
@@ -403,12 +395,11 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
     // These callers only inspect repository metadata. Worktree workflows probe
     // once and pass their override directly to the lower-level runner.
-    run_git_command_with_deadline_from(
+    run_git_command_with_timeout_from(
         Path::new("git"),
         args,
         cwd,
         crate::FsmonitorOverride::Disabled,
-        TokioInstant::now() + GIT_COMMAND_TIMEOUT,
     )
     .await
 }
@@ -416,35 +407,31 @@ async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::
 struct LocalFsmonitorProbeRunner<'a> {
     git: &'a Path,
     cwd: &'a Path,
-    deadline: TokioInstant,
 }
 
 impl crate::FsmonitorProbeRunner for LocalFsmonitorProbeRunner<'_> {
     async fn run_probe(&mut self, args: &[&str]) -> Option<Vec<u8>> {
+        // Both probes are fast, bounded metadata queries that do not inspect the
+        // worktree or index, so do not reduce the requested command's timeout.
         let mut command = Command::new(self.git);
         command.args(args).current_dir(self.cwd).kill_on_drop(true);
-        match timeout_at(self.deadline, command.output()).await {
+        match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
             Ok(Ok(output)) if output.status.success() => Some(output.stdout),
             _ => None,
         }
     }
 }
 
-async fn detect_local_fsmonitor_override(
-    git: &Path,
-    cwd: &Path,
-    deadline: TokioInstant,
-) -> crate::FsmonitorOverride {
-    let mut runner = LocalFsmonitorProbeRunner { git, cwd, deadline };
+async fn detect_local_fsmonitor_override(git: &Path, cwd: &Path) -> crate::FsmonitorOverride {
+    let mut runner = LocalFsmonitorProbeRunner { git, cwd };
     crate::detect_fsmonitor_override(&mut runner).await
 }
 
-async fn run_git_command_with_deadline_from(
+async fn run_git_command_with_timeout_from(
     git: &Path,
     args: &[&str],
     cwd: &Path,
     fsmonitor: crate::FsmonitorOverride,
-    deadline: TokioInstant,
 ) -> Option<std::process::Output> {
     let mut command = Command::new(git);
     command
@@ -456,7 +443,7 @@ async fn run_git_command_with_deadline_from(
         .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
-    let result = timeout_at(deadline, command.output()).await;
+    let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
 
     match result {
         Ok(Ok(output)) => Some(output),
@@ -742,14 +729,12 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 
 async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     let git = Path::new("git");
-    let deadline = TokioInstant::now() + GIT_COMMAND_TIMEOUT;
-    let fsmonitor = detect_local_fsmonitor_override(git, cwd, deadline).await;
-    let output = run_git_command_with_deadline_from(
+    let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
+    let output = run_git_command_with_timeout_from(
         git,
         &["diff", "--no-textconv", "--no-ext-diff", &sha.0],
         cwd,
         fsmonitor,
-        deadline,
     )
     .await?;
     // 0 is success and no diff.
@@ -760,12 +745,11 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     }
     let mut diff = String::from_utf8(output.stdout).ok()?;
 
-    if let Some(untracked_output) = run_git_command_with_deadline_from(
+    if let Some(untracked_output) = run_git_command_with_timeout_from(
         git,
         &["ls-files", "--others", "--exclude-standard"],
         cwd,
         fsmonitor,
-        deadline,
     )
     .await
         && untracked_output.status.success()
@@ -793,7 +777,7 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
                     null_device,
                     &file_owned,
                 ];
-                run_git_command_with_deadline_from(git, &args_vec, cwd, fsmonitor, deadline).await
+                run_git_command_with_timeout_from(git, &args_vec, cwd, fsmonitor).await
             });
             let results = join_all(futures_iter).await;
             for extra in results.into_iter().flatten() {
@@ -985,14 +969,12 @@ mod tests {
         // The config response mirrors:
         // git -c core.fsmonitor=/tmp/fsmonitor-helper \
         //   config --null --get core.fsmonitor
-        let deadline = TokioInstant::now() + GIT_COMMAND_TIMEOUT;
-        let fsmonitor = detect_local_fsmonitor_override(&git, temp_dir.path(), deadline).await;
-        let output = run_git_command_with_deadline_from(
+        let fsmonitor = detect_local_fsmonitor_override(&git, temp_dir.path()).await;
+        let output = run_git_command_with_timeout_from(
             &git,
             &["status", "--porcelain"],
             temp_dir.path(),
             fsmonitor,
-            deadline,
         )
         .await
         .expect("run fake Git");
@@ -1078,14 +1060,12 @@ mod tests {
             "write local built-in fsmonitor config"
         );
 
-        let deadline = TokioInstant::now() + GIT_COMMAND_TIMEOUT;
-        let fsmonitor = detect_local_fsmonitor_override(&git, repo.as_path(), deadline).await;
-        let output = run_git_command_with_deadline_from(
+        let fsmonitor = detect_local_fsmonitor_override(&git, repo.as_path()).await;
+        let output = run_git_command_with_timeout_from(
             &git,
             &["status", "--porcelain"],
             repo.as_path(),
             fsmonitor,
-            deadline,
         )
         .await
         .expect("run Git with layered config");
