@@ -49,7 +49,6 @@ async fn guardian_retries_a_transient_reviewer_failure() -> Result<()> {
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config.model_provider.stream_max_retries = Some(0);
         config
             .set_legacy_sandbox_policy(sandbox_policy_for_config)
             .expect("set sandbox policy");

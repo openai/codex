@@ -697,7 +697,10 @@ async fn run_guardian_review_session_with_retry(
         .as_ref()
         .is_some_and(CancellationToken::is_cancelled)
     {
-        return (first_outcome, first_analytics_result);
+        return (
+            GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
+            first_analytics_result,
+        );
     }
 
     session
