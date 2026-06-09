@@ -1,4 +1,15 @@
+// This stack lands the executor-side relay runtime one layer before the remote
+// registration path calls it. Keep this intermediate PR lint-clean without
+// hiding dead code once the production call site arrives in the next layer.
+#[expect(
+    dead_code,
+    reason = "used by the remote Noise opt-in in the next stacked change"
+)]
 pub(crate) mod environment;
+#[expect(
+    dead_code,
+    reason = "used by the remote Noise opt-in in the next stacked change"
+)]
 mod executor_stream;
 mod harness;
 mod message_framing;
@@ -13,6 +24,10 @@ pub(crate) use harness::noise_harness_connection_from_websocket;
 
 // This value is already part of the relay wire contract. Keep it stable even
 // though the source module now uses the more precise Noise terminology.
+#[expect(
+    dead_code,
+    reason = "used by the remote Noise opt-in in the next stacked change"
+)]
 const NOISE_RELAY_RESET_REASON: &str = "secure_relay_protocol_error";
 
 // This bounds allocation in tungstenite before protobuf and Noise record
