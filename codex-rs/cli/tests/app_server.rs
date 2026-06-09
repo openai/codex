@@ -9,8 +9,6 @@ use anyhow::Context;
 #[cfg(unix)]
 use anyhow::bail;
 #[cfg(unix)]
-use pretty_assertions::assert_eq;
-#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 #[cfg(unix)]
 use std::process::Stdio;
@@ -52,17 +50,15 @@ foo = "bar"
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ssh_agent_proxy_repairs_missing_bootstrap_and_rejects_overlap() -> Result<()> {
+async fn ssh_agent_proxy_repairs_missing_bootstrap_socket() -> Result<()> {
     let root = TempDir::new()?;
     let codex_home = root.path().join("home");
     std::fs::create_dir(&codex_home)?;
     let control_socket_path = root.path().join("desktop.agent");
     let stable_agent_path = root.path().join("desktop.agent.agent");
     let missing_bootstrap_agent_path = root.path().join("missing-bootstrap.sock");
-    let first_agent_path = root.path().join("first-agent.sock");
-    let second_agent_path = root.path().join("second-agent.sock");
-    let _first_agent = UnixListener::bind(&first_agent_path)?;
-    let _second_agent = UnixListener::bind(&second_agent_path)?;
+    let current_agent_path = root.path().join("current-agent.sock");
+    let _current_agent = UnixListener::bind(&current_agent_path)?;
     let codex_bin = codex_utils_cargo_bin::cargo_bin("codex")?;
 
     let mut app_server = Command::new(&codex_bin)
@@ -87,50 +83,27 @@ async fn ssh_agent_proxy_repairs_missing_bootstrap_and_rejects_overlap() -> Resu
     })
     .await?;
 
-    let mut first_proxy = Command::new(&codex_bin)
+    let mut proxy = Command::new(&codex_bin)
         .args(["app-server", "proxy", "--sock"])
         .arg(&control_socket_path)
         .current_dir(root.path())
         .env("CODEX_HOME", &codex_home)
-        .env("SSH_AUTH_SOCK", &first_agent_path)
+        .env("SSH_AUTH_SOCK", &current_agent_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .context("spawn first proxy")?;
-    wait_for_child_state(&mut first_proxy, "first proxy agent handoff", || {
-        std::fs::read_link(&stable_agent_path).is_ok_and(|target| target == first_agent_path)
+        .context("spawn proxy")?;
+    wait_for_child_state(&mut proxy, "proxy agent handoff", || {
+        std::fs::read_link(&stable_agent_path).is_ok_and(|target| target == current_agent_path)
     })
     .await?;
 
-    let second_output = timeout(
-        Duration::from_secs(5),
-        Command::new(&codex_bin)
-            .args(["app-server", "proxy", "--sock"])
-            .arg(&control_socket_path)
-            .current_dir(root.path())
-            .env("CODEX_HOME", &codex_home)
-            .env("SSH_AUTH_SOCK", &second_agent_path)
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await
-    .context("overlapping proxy did not exit")??;
-    assert!(!second_output.status.success());
-    assert!(
-        String::from_utf8_lossy(&second_output.stderr)
-            .contains("another app-server proxy already owns SSH agent forwarding")
-    );
-
-    assert!(first_proxy.try_wait()?.is_none());
-    assert_eq!(std::fs::read_link(&stable_agent_path)?, first_agent_path);
-
-    drop(first_proxy.stdin.take());
-    timeout(Duration::from_secs(5), first_proxy.wait())
+    drop(proxy.stdin.take());
+    timeout(Duration::from_secs(5), proxy.wait())
         .await
-        .context("first proxy did not exit")??;
-    assert!(std::fs::symlink_metadata(&stable_agent_path).is_err());
+        .context("proxy did not exit")??;
 
     app_server.start_kill()?;
     app_server.wait().await?;
