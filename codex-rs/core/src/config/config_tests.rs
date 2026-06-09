@@ -6,8 +6,13 @@ use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
+use codex_config::FeatureRequirementsToml;
 use codex_config::ProfileV2Name;
 use codex_config::RequirementSource;
+use codex_config::Sourced;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::AutoReviewToml;
@@ -5108,7 +5113,8 @@ async fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
 }
 
 #[test]
-fn auth_keyring_backend_kind_from_config_toml_uses_secret_auth_storage_feature() {
+fn resolve_bootstrap_auth_keyring_backend_kind_uses_secret_auth_storage_feature()
+-> std::io::Result<()> {
     let config_toml = ConfigToml {
         features: Some(FeaturesToml::from(BTreeMap::from([(
             "secret_auth_storage".to_string(),
@@ -5117,7 +5123,10 @@ fn auth_keyring_backend_kind_from_config_toml_uses_secret_auth_storage_feature()
         ..Default::default()
     };
     assert_eq!(
-        auth_keyring_backend_kind_from_config_toml(&config_toml),
+        resolve_bootstrap_auth_keyring_backend_kind(&config_toml_load_result(
+            config_toml,
+            /*feature_requirements*/ None,
+        )?)?,
         AuthKeyringBackendKind::Secrets
     );
 
@@ -5129,9 +5138,44 @@ fn auth_keyring_backend_kind_from_config_toml_uses_secret_auth_storage_feature()
         ..Default::default()
     };
     assert_eq!(
-        auth_keyring_backend_kind_from_config_toml(&config_toml),
+        resolve_bootstrap_auth_keyring_backend_kind(&config_toml_load_result(
+            config_toml.clone(),
+            /*feature_requirements*/ None,
+        )?)?,
         AuthKeyringBackendKind::Direct
     );
+
+    let requirements = Sourced::new(
+        FeatureRequirementsToml {
+            entries: BTreeMap::from([("secret_auth_storage".to_string(), true)]),
+        },
+        RequirementSource::Unknown,
+    );
+    assert_eq!(
+        resolve_bootstrap_auth_keyring_backend_kind(&config_toml_load_result(
+            config_toml,
+            Some(requirements),
+        )?)?,
+        AuthKeyringBackendKind::Secrets
+    );
+
+    Ok(())
+}
+
+fn config_toml_load_result(
+    config_toml: ConfigToml,
+    feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<ConfigTomlLoadResult> {
+    let mut requirements = ConfigRequirements::default();
+    requirements.feature_requirements = feature_requirements;
+    Ok(ConfigTomlLoadResult {
+        config_toml,
+        config_layer_stack: ConfigLayerStack::new(
+            Vec::new(),
+            requirements,
+            ConfigRequirementsToml::default(),
+        )?,
+    })
 }
 
 #[tokio::test]

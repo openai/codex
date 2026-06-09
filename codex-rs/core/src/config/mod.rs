@@ -1624,20 +1624,31 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
 ) -> std::io::Result<ConfigToml> {
-    load_config_as_toml_with_cli_and_load_options(codex_home, cwd, cli_overrides, loader_overrides)
+    load_config_toml_with_layer_stack(codex_home, cwd, cli_overrides, loader_overrides)
         .await
+        .map(|result| result.config_toml)
+}
+
+/// Partially loaded config plus the layer stack used to derive it.
+///
+/// This is intended for startup paths that must inspect raw config before a
+/// full [`Config`] can be constructed, but still need access to managed
+/// requirements loaded with the config layers.
+pub struct ConfigTomlLoadResult {
+    pub config_toml: ConfigToml,
+    pub config_layer_stack: ConfigLayerStack,
 }
 
 /// DEPRECATED for most callers: prefer [Config::load_with_cli_overrides()] or
 /// [ConfigBuilder] because working with [ConfigToml] directly means
 /// [ConfigRequirements] have not been applied yet, which risks skipping
 /// required constraints.
-pub async fn load_config_as_toml_with_cli_and_load_options(
+pub async fn load_config_toml_with_layer_stack(
     codex_home: &Path,
     cwd: Option<&AbsolutePathBuf>,
     cli_overrides: Vec<(String, TomlValue)>,
     options: impl Into<ConfigLoadOptions>,
-) -> std::io::Result<ConfigToml> {
+) -> std::io::Result<ConfigTomlLoadResult> {
     let config_layer_stack = load_config_layers_state(
         LOCAL_FS.as_ref(),
         codex_home,
@@ -1654,16 +1665,20 @@ pub async fn load_config_as_toml_with_cli_and_load_options(
         e
     })?;
 
-    Ok(cfg)
+    Ok(ConfigTomlLoadResult {
+        config_toml: cfg,
+        config_layer_stack,
+    })
 }
 
-/// Resolve the auth keyring backend from a partially loaded config.
+/// Resolve the auth keyring backend from a partially loaded bootstrap config.
 ///
 /// This is intended for startup paths that must read auth before managed cloud
 /// requirements can be loaded and before a full [`Config`] exists.
-pub fn auth_keyring_backend_kind_from_config_toml(
-    config_toml: &ConfigToml,
-) -> AuthKeyringBackendKind {
+pub fn resolve_bootstrap_auth_keyring_backend_kind(
+    bootstrap_config: &ConfigTomlLoadResult,
+) -> std::io::Result<AuthKeyringBackendKind> {
+    let config_toml = &bootstrap_config.config_toml;
     let features = Features::from_sources(
         FeatureConfigSource {
             features: config_toml.features.as_ref(),
@@ -1672,7 +1687,17 @@ pub fn auth_keyring_backend_kind_from_config_toml(
         FeatureConfigSource::default(),
         FeatureOverrides::default(),
     );
-    auth_keyring_backend_kind_from_secret_auth_storage(features.enabled(Feature::SecretAuthStorage))
+    let managed_features = ManagedFeatures::from_configured(
+        features,
+        bootstrap_config
+            .config_layer_stack
+            .requirements()
+            .feature_requirements
+            .clone(),
+    )?;
+    Ok(auth_keyring_backend_kind_from_secret_auth_storage(
+        managed_features.enabled(Feature::SecretAuthStorage),
+    ))
 }
 
 fn auth_keyring_backend_kind_from_secret_auth_storage(

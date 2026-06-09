@@ -9,8 +9,8 @@ use crate::Cli;
 use crate::app_server_session::AppServerSession;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
-use crate::legacy_core::config::auth_keyring_backend_kind_from_config_toml;
-use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
+use crate::legacy_core::config::load_config_toml_with_layer_stack;
+use crate::legacy_core::config::resolve_bootstrap_auth_keyring_backend_kind;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use codex_app_server_protocol::Thread as AppServerThread;
@@ -246,7 +246,7 @@ async fn start_app_server_for_archive_command(
         loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
 
-    let config_toml = load_config_as_toml_with_cli_and_load_options(
+    let bootstrap_config = load_config_toml_with_layer_stack(
         codex_home.as_path(),
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),
@@ -258,6 +258,7 @@ async fn start_app_server_for_archive_command(
     )
     .await
     .wrap_err("failed to load config.toml")?;
+    let config_toml = &bootstrap_config.config_toml;
     let chatgpt_base_url = config_toml
         .chatgpt_base_url
         .clone()
@@ -266,7 +267,7 @@ async fn start_app_server_for_archive_command(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
-        auth_keyring_backend_kind_from_config_toml(&config_toml),
+        resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
         chatgpt_base_url,
     )
     .await;
