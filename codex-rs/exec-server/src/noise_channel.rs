@@ -72,7 +72,10 @@ impl NoiseChannelPublicKey {
         }
     }
 
-    fn from_raw(dh: &<X25519 as Dh>::PubKey, kem: &MlKem768PublicKey) -> Self {
+    pub(crate) fn from_raw(
+        dh: &<X25519 as Dh>::PubKey,
+        kem: &MlKem768PublicKey,
+    ) -> Self {
         Self {
             suite: NOISE_CHANNEL_SUITE.to_string(),
             x25519_public_key: STANDARD.encode(dh),

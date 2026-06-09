@@ -1,4 +1,4 @@
-mod environment;
+pub(crate) mod environment;
 mod executor_stream;
 mod harness;
 mod message_framing;
@@ -8,8 +8,6 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 use crate::ExecServerError;
 
-pub(crate) use environment::HarnessKeyValidator;
-pub(crate) use environment::run_noise_multiplexed_environment;
 pub(crate) use harness::NoiseHarnessConnectionArgs;
 pub(crate) use harness::noise_harness_connection_from_websocket;
 
