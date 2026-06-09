@@ -27,6 +27,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         apps_enabled: false,
+        legacy_apps_mcp_loader_enabled: true,
         prefix_mcp_tool_names: true,
         client_elicitation_capability: ElicitationCapability::default(),
         configured_mcp_servers: HashMap::new(),
@@ -203,16 +204,6 @@ fn codex_apps_mcp_url_for_base_url_keeps_existing_paths() {
             /*apps_mcp_path_override*/ None,
         ),
         "http://localhost:8080/api/codex/apps"
-    );
-}
-
-#[test]
-fn codex_apps_mcp_url_uses_legacy_codex_apps_path() {
-    let config = test_mcp_config(PathBuf::from("/tmp"));
-
-    assert_eq!(
-        codex_apps_mcp_url(&config),
-        "https://chatgpt.com/backend-api/wham/apps"
     );
 }
 

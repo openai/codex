@@ -94,6 +94,33 @@ where
     builder.build(server).await
 }
 
+pub async fn build_unified_exec_zsh_fork_test<F>(
+    server: &wiremock::MockServer,
+    runtime: ZshForkRuntime,
+    approval_policy: AskForApproval,
+    permission_profile: PermissionProfile,
+    pre_build_hook: F,
+) -> Result<TestCodex>
+where
+    F: FnOnce(&Path) + Send + 'static,
+{
+    let mut builder = test_codex()
+        .with_pre_build_hook(pre_build_hook)
+        .with_config(move |config| {
+            runtime.apply_to_config(config, approval_policy, permission_profile);
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExecZshFork)
+                .expect("test config should allow feature update");
+        });
+    builder.build(server).await
+}
+
 fn find_test_zsh_path() -> Result<Option<PathBuf>> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let dotslash_zsh = repo_root.join("codex-rs/app-server/tests/suite/zsh");

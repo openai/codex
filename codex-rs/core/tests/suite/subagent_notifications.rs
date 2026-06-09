@@ -17,6 +17,7 @@ use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
@@ -29,6 +30,7 @@ use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event_match;
@@ -755,6 +757,7 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            thread_extension_init: Default::default(),
         })
         .await?;
 
@@ -767,12 +770,11 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
                 text: INTERNAL_SUBAGENT_PROMPT.to_string(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.to_path_buf()),
+                environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -1022,6 +1024,80 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
         .expect("child request log should capture at least one request");
     assert!(child_request.body_contains_text("Parent developer instructions."));
     assert!(child_request.body_contains_text(CHILD_PROMPT));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result<()> {
+    let server = start_mock_server().await;
+    let encrypted_message = "opaque-encrypted-message";
+    let spawn_args = serde_json::to_string(&json!({
+        "message": encrypted_message,
+        "task_name": "worker",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-parent-1"),
+        ]),
+    )
+    .await;
+    let child_request_log = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, "\"type\":\"agent_message\""),
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "\"type\":\"agent_message\"")
+        },
+        sse(vec![
+            ev_response_created("resp-parent-2"),
+            ev_assistant_message("msg-parent-2", "done"),
+            ev_completed("resp-parent-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("koffing").with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let child_request = wait_for_requests(&child_request_log)
+        .await?
+        .pop()
+        .expect("child request");
+    assert_eq!(
+        child_request.inputs_of_type("agent_message"),
+        vec![json!({
+            "type": "agent_message",
+            "author": "/root",
+            "recipient": "/root/worker",
+            "content": [{
+                "type": "encrypted_content",
+                "encrypted_content": encrypted_message,
+            }],
+        })]
+    );
 
     Ok(())
 }

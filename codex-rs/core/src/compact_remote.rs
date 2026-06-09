@@ -3,12 +3,11 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::client::CompactConversationRequestSettings;
 use crate::compact::CompactionAnalyticsAttempt;
+use crate::compact::CompactionAnalyticsDetails;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
-use crate::context_manager::TotalTokenUsageBreakdown;
-use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -34,9 +33,7 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
-use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
-use tracing::error;
 use tracing::info;
 
 const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
@@ -100,6 +97,10 @@ async fn run_remote_compact_task_inner(
         CompactionImplementation::ResponsesCompact,
         phase,
     );
+    let mut analytics_details = CompactionAnalyticsDetails {
+        active_context_tokens_before: Some(sess.get_total_token_usage().await),
+        ..Default::default()
+    };
     let attempt = CompactionAnalyticsAttempt::begin(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -119,6 +120,7 @@ async fn run_remote_compact_task_inner(
                     sess.as_ref(),
                     codex_analytics::CompactionStatus::Interrupted,
                     Some(error),
+                    analytics_details,
                 )
                 .await;
             return Err(CodexErr::TurnAborted);
@@ -129,6 +131,7 @@ async fn run_remote_compact_task_inner(
         turn_context,
         initial_context_injection,
         compaction_metadata,
+        &mut analytics_details,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -136,11 +139,15 @@ async fn run_remote_compact_task_inner(
     if result.is_ok() {
         let post_compact_outcome = run_post_compact_hooks(sess, turn_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
-            attempt.track(sess.as_ref(), status, error).await;
+            attempt
+                .track(sess.as_ref(), status, error, analytics_details)
+                .await;
             return Err(CodexErr::TurnAborted);
         }
     }
-    attempt.track(sess.as_ref(), status, error.clone()).await;
+    attempt
+        .track(sess.as_ref(), status, error.clone(), analytics_details)
+        .await;
     if let Err(err) = result {
         sess.track_turn_codex_error(turn_context, &err);
         let event = EventMsg::Error(
@@ -157,6 +164,7 @@ async fn run_remote_compact_task_inner_impl(
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
+    analytics_details: &mut CompactionAnalyticsDetails,
 ) -> CodexResult<()> {
     let context_compaction_item = ContextCompactionItem::new();
     // Use the UI compaction item ID as the trace compaction ID so protocol lifecycle events,
@@ -172,17 +180,29 @@ async fn run_remote_compact_task_inner_impl(
         .await;
     let mut history = sess.clone_history().await;
     let base_instructions = sess.get_base_instructions().await;
-    let rewritten_outputs = trim_function_call_history_to_fit_context_window(
-        &mut history,
-        turn_context.as_ref(),
-        &base_instructions,
-    );
+    let (rewritten_outputs, estimated_deleted_tokens) =
+        trim_function_call_history_to_fit_context_window(
+            &mut history,
+            turn_context.as_ref(),
+            &base_instructions,
+        );
     if rewritten_outputs > 0 {
         info!(
             turn_id = %turn_context.sub_id,
             rewritten_outputs,
             "rewrote history outputs before remote compaction"
         );
+    }
+    if estimated_deleted_tokens > 0 {
+        let max_local_deleted_tokens = sess
+            .estimated_tokens_after_last_model_generated_item()
+            .await;
+        analytics_details.active_context_tokens_before = analytics_details
+            .active_context_tokens_before
+            .map(|active_context_tokens_before| {
+                active_context_tokens_before
+                    .saturating_sub(estimated_deleted_tokens.min(max_local_deleted_tokens))
+            });
     }
     // This is the history selected for remote compaction, after any output rewriting required to
     // fit the compact endpoint. The checkpoint below records it separately from the next sampling
@@ -215,7 +235,7 @@ async fn run_remote_compact_task_inner_impl(
             &prompt,
             &turn_context.model_info,
             CompactConversationRequestSettings {
-                effort: turn_context.reasoning_effort,
+                effort: turn_context.reasoning_effort.clone(),
                 summary: turn_context.reasoning_summary,
                 service_tier: if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
                     None
@@ -227,18 +247,6 @@ async fn run_remote_compact_task_inner_impl(
             &compaction_trace,
             turn_metadata_header.as_deref(),
         )
-        .or_else(|err| async {
-            let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
-            let compact_request_log_data =
-                build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
-            log_remote_compact_failure(
-                turn_context,
-                &compact_request_log_data,
-                total_usage_breakdown,
-                &err,
-            );
-            Err(err)
-        })
         .await?;
     new_history = process_compacted_history(
         sess.as_ref(),
@@ -321,6 +329,7 @@ pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         }
         ResponseItem::Message { role, .. } if role == "assistant" => true,
         ResponseItem::Message { .. } => false,
+        ResponseItem::AgentMessage { .. } => true,
         ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::CompactionTrigger => false,
         ResponseItem::Reasoning { .. }
@@ -337,63 +346,25 @@ pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct CompactRequestLogData {
-    failing_compaction_request_model_visible_bytes: i64,
-}
-
-pub(crate) fn build_compact_request_log_data(
-    input: &[ResponseItem],
-    instructions: &str,
-) -> CompactRequestLogData {
-    let failing_compaction_request_model_visible_bytes = input
-        .iter()
-        .map(estimate_response_item_model_visible_bytes)
-        .fold(
-            i64::try_from(instructions.len()).unwrap_or(i64::MAX),
-            i64::saturating_add,
-        );
-
-    CompactRequestLogData {
-        failing_compaction_request_model_visible_bytes,
-    }
-}
-
-pub(crate) fn log_remote_compact_failure(
-    turn_context: &TurnContext,
-    log_data: &CompactRequestLogData,
-    total_usage_breakdown: TotalTokenUsageBreakdown,
-    err: &CodexErr,
-) {
-    error!(
-        turn_id = %turn_context.sub_id,
-        last_api_response_total_tokens = total_usage_breakdown.last_api_response_total_tokens,
-        all_history_items_model_visible_bytes = total_usage_breakdown.all_history_items_model_visible_bytes,
-        estimated_tokens_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_tokens_of_items_added_since_last_successful_api_response,
-        estimated_bytes_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_bytes_of_items_added_since_last_successful_api_response,
-        model_context_window_tokens = ?turn_context.model_context_window(),
-        failing_compaction_request_model_visible_bytes = log_data.failing_compaction_request_model_visible_bytes,
-        compact_error = %err,
-        "remote compaction failed"
-    );
-}
-
 pub(crate) fn trim_function_call_history_to_fit_context_window(
     history: &mut ContextManager,
     turn_context: &TurnContext,
     base_instructions: &BaseInstructions,
-) -> usize {
+) -> (usize, i64) {
     let Some(context_window) = turn_context.model_context_window() else {
-        return 0;
+        return (0, 0);
     };
     let mut rewritten_outputs = 0usize;
+    let mut estimated_deleted_tokens = 0i64;
     let item_count = history.raw_items().len();
 
     for index in (0..item_count).rev() {
-        if history
-            .estimate_token_count_with_base_instructions(base_instructions)
-            .is_none_or(|estimated_tokens| estimated_tokens <= context_window)
-        {
+        let Some(estimated_tokens_before) =
+            history.estimate_token_count_with_base_instructions(base_instructions)
+        else {
+            break;
+        };
+        if estimated_tokens_before <= context_window {
             break;
         }
         let Some(rewritten_item) = history
@@ -406,10 +377,15 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
         let mut items = history.raw_items().to_vec();
         items[index] = rewritten_item;
         history.replace(items);
+        let estimated_tokens_after = history
+            .estimate_token_count_with_base_instructions(base_instructions)
+            .unwrap_or_default();
         rewritten_outputs += 1;
+        estimated_deleted_tokens = estimated_deleted_tokens
+            .saturating_add(estimated_tokens_before.saturating_sub(estimated_tokens_after));
     }
 
-    rewritten_outputs
+    (rewritten_outputs, estimated_deleted_tokens)
 }
 
 fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseItem> {

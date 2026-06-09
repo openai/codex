@@ -258,6 +258,9 @@ async fn run_command_under_sandbox(
     let network = network_proxy
         .as_ref()
         .map(codex_core::config::StartedNetworkProxy::proxy);
+    // Proxy containment depends on whether a proxy is active, not whether its
+    // policy came from managed requirements.
+    let enforce_managed_network = network.is_some();
     let managed_mitm_ca_trust_bundle_path = match network.as_ref() {
         Some(network) => network.managed_mitm_ca_trust_bundle_path(),
         None => None,
@@ -278,7 +281,7 @@ async fn run_command_under_sandbox(
                 file_system_sandbox_policy: &file_system_sandbox_policy,
                 network_sandbox_policy,
                 sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
-                enforce_managed_network: false,
+                enforce_managed_network,
                 network: network.as_ref(),
                 extra_allow_unix_sockets: allow_unix_sockets,
             });
@@ -311,7 +314,7 @@ async fn run_command_under_sandbox(
                 &runtime_permission_profile,
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
-                allow_network_for_proxy(managed_network_requirements_enabled),
+                allow_network_for_proxy(enforce_managed_network),
             );
             spawn_debug_sandbox_child(
                 codex_linux_sandbox_exe,

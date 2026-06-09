@@ -32,6 +32,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
 use crate::app_server_session::AppServerSession;
+use crate::config_update::format_config_error;
 use crate::config_update::write_trusted_project;
 use crate::key_hint::KeyBindingListExt;
 use crate::legacy_core::config::Config;
@@ -605,8 +606,9 @@ async fn persist_selected_trust(
     match result {
         Ok(()) => true,
         Err(error) => {
+            let error = format_config_error(&error);
             tracing::error!(
-                "failed to persist trusted project state for {}: {error:?}",
+                "failed to persist trusted project state for {}: {error}",
                 trust_target.display()
             );
             if let Step::TrustDirectory(widget) = &mut onboarding_screen.steps[trust_step_index] {

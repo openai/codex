@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
+use crate::connection_cleanup::ConnectionCleanupTasks;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -81,6 +82,7 @@ mod command_exec;
 mod config;
 mod config_manager;
 mod config_manager_service;
+mod connection_cleanup;
 mod connection_rpc_gate;
 mod dynamic_tools;
 mod error_code;
@@ -819,6 +821,7 @@ pub async fn run_main_with_transport_options(
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
+        let mut connection_cleanup_tasks = ConnectionCleanupTasks::new();
         let mut remote_control_status_rx = remote_control_handle.status_receiver();
         let mut remote_control_status = remote_control_status_rx.borrow().clone();
         let transport_shutdown_token = transport_shutdown_token.clone();
@@ -906,14 +909,20 @@ pub async fn run_main_with_transport_options(
                                 let Some(connection_state) = connections.remove(&connection_id) else {
                                     continue;
                                 };
-                                if outbound_control_tx
+                                connection_state.session.rpc_gate.close().await;
+                                let outbound_closed = outbound_control_tx
                                     .send(OutboundControlEvent::Closed { connection_id })
                                     .await
-                                    .is_err()
-                                {
+                                    .is_ok();
+                                let processor = Arc::clone(&processor);
+                                connection_cleanup_tasks.spawn(async move {
+                                    processor
+                                        .connection_closed(connection_id, &connection_state.session)
+                                        .await;
+                                });
+                                if !outbound_closed {
                                     break;
                                 }
-                                processor.connection_closed(connection_id, &connection_state.session).await;
                                 if shutdown_when_no_connections && connections.is_empty() {
                                     break;
                                 }
@@ -1010,6 +1019,7 @@ pub async fn run_main_with_transport_options(
                             }
                         }
                     }
+                    _ = connection_cleanup_tasks.reap_next() => {}
                     changed = remote_control_status_rx.changed() => {
                         if changed.is_err() {
                             continue;
@@ -1062,8 +1072,11 @@ pub async fn run_main_with_transport_options(
                         .map(|connection_state| connection_state.session.rpc_gate.shutdown()),
                 )
                 .await;
+                connection_cleanup_tasks.drain().await;
                 processor.drain_background_tasks().await;
                 processor.shutdown_threads().await;
+            } else {
+                connection_cleanup_tasks.abort();
             }
             info!("processor task exited (channel closed)");
         }

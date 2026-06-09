@@ -129,7 +129,7 @@ fn save_config_resolved_fields(
 ) -> anyhow::Result<()> {
     lock_config.web_search = Some(config.web_search_mode.value());
     lock_config.model_provider = Some(config.model_provider_id.clone());
-    lock_config.plan_mode_reasoning_effort = config.plan_mode_reasoning_effort;
+    lock_config.plan_mode_reasoning_effort = config.plan_mode_reasoning_effort.clone();
     lock_config.model_verbosity = config.model_verbosity;
     lock_config.include_permissions_instructions = Some(config.include_permissions_instructions);
     lock_config.include_apps_instructions = Some(config.include_apps_instructions);
@@ -251,6 +251,14 @@ mod tests {
                 spec.key
             );
         }
+        assert_eq!(
+            features.code_mode,
+            Some(FeatureToml::Enabled(
+                sc.original_config_do_not_use
+                    .features
+                    .enabled(Feature::CodeMode)
+            ))
+        );
 
         let multi_agent_v2 = features
             .multi_agent_v2

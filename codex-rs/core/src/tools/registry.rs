@@ -5,7 +5,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::function_tool::FunctionCallError;
-use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::PreToolUseHookResult;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
@@ -29,12 +28,12 @@ use codex_extension_api::ToolCallOutcome;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
+use codex_rollout::state_db;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
 use serde_json::Value;
-use tracing::warn;
 
 pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 
@@ -649,24 +648,12 @@ impl ToolRegistry {
                 handler_executed: true,
             },
         };
-        let finished = notify_tool_finish_if_unclaimed(
+        notify_tool_finish_if_unclaimed(
             &invocation,
             terminal_outcome_reached.as_deref(),
             lifecycle_outcome,
         )
         .await;
-
-        if finished
-            && let Err(err) = invocation
-                .session
-                .goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
-                    turn_context: invocation.turn.as_ref(),
-                    tool_name: tool_name.name.as_str(),
-                })
-                .await
-        {
-            warn!("failed to account thread goal progress after tool call: {err}");
-        }
 
         match result {
             Ok(_) => {
@@ -710,6 +697,16 @@ async fn handle_any_tool(
     let call_id = invocation.call_id.clone();
     let payload = invocation.payload.clone();
     let output = tool.handle(invocation.clone()).await?;
+    if output.contains_external_context()
+        && invocation.turn.config.memories.disable_on_external_context
+    {
+        state_db::mark_thread_memory_mode_polluted(
+            invocation.session.services.state_db.as_deref(),
+            invocation.session.thread_id,
+            "tool_output",
+        )
+        .await;
+    }
     let post_tool_use_payload =
         CoreToolRuntime::post_tool_use_payload(tool, &invocation, output.as_ref());
     Ok(AnyToolResult {

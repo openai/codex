@@ -384,6 +384,16 @@ async fn open_sqlite(
 pub(super) async fn ensure_backfill_state_row_in_pool(
     pool: &sqlx::SqlitePool,
 ) -> anyhow::Result<()> {
+    // Eagerly check if the operation would have no effect to avoid blocking waiting for a SQLite
+    // writer for no reason in the hot startup path.
+    if sqlx::query_scalar::<_, i64>("SELECT 1 FROM backfill_state WHERE id = 1")
+        .fetch_optional(pool)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+
     sqlx::query(
         r#"
 INSERT INTO backfill_state (id, status, last_watermark, last_success_at, updated_at)

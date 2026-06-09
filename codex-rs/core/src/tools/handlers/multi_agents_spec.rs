@@ -17,6 +17,7 @@ const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str =
     "Service tier override for the new agent. Omit unless explicitly requested.";
 const MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION: usize = 5;
+const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 
 #[derive(Debug, Clone, Default)]
 pub struct SpawnAgentToolOptions {
@@ -166,7 +167,8 @@ pub fn create_send_message_tool() -> ToolSpec {
             "message".to_string(),
             JsonSchema::string(Some(
                 "Message text to queue on the target agent.".to_string(),
-            )),
+            ))
+            .with_encrypted(),
         ),
     ]);
 
@@ -198,13 +200,14 @@ pub fn create_followup_task_tool() -> ToolSpec {
             "message".to_string(),
             JsonSchema::string(Some(
                 "Message text to send to the target agent.".to_string(),
-            )),
+            ))
+            .with_encrypted(),
         ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "followup_task".to_string(),
-        description: "Send a follow-up task to an existing non-root target agent and trigger a turn in that target. If the target is currently mid-turn, the message is queued and will be used to start the target's next turn, after the current turn completes."
+        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -299,26 +302,30 @@ pub fn create_close_agent_tool_v1() -> ToolSpec {
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-            output_schema: Some(close_agent_output_schema()),
+            output_schema: Some(agent_previous_status_output_schema(
+                "The agent status observed before shutdown was requested.",
+            )),
         })],
     })
 }
 
-pub fn create_close_agent_tool_v2() -> ToolSpec {
+pub fn create_interrupt_agent_tool_v2() -> ToolSpec {
     let properties = BTreeMap::from([(
         "target".to_string(),
         JsonSchema::string(Some(
-            "Agent id or canonical task name to close (from spawn_agent).".to_string(),
+            "Agent id or canonical task name to interrupt (from spawn_agent).".to_string(),
         )),
     )]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "close_agent".to_string(),
-        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Completed agents remain open and count toward the concurrency limit until closed. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        name: "interrupt_agent".to_string(),
+        description: "Interrupt an agent's current turn, if any, and return its previous status. The agent remains available for messages and follow-up tasks.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-        output_schema: Some(close_agent_output_schema()),
+        output_schema: Some(agent_previous_status_output_schema(
+            "The agent status observed before the interrupt request was handled.",
+        )),
     })
 }
 
@@ -498,12 +505,12 @@ fn wait_output_schema_v2() -> Value {
     })
 }
 
-fn close_agent_output_schema() -> Value {
+fn agent_previous_status_output_schema(previous_status_description: &str) -> Value {
     json!({
         "type": "object",
         "properties": {
             "previous_status": {
-                "description": "The agent status observed before shutdown was requested.",
+                "description": previous_status_description,
                 "allOf": [agent_status_output_schema()]
             }
         },
@@ -594,7 +601,10 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
     BTreeMap::from([
         (
             "message".to_string(),
-            JsonSchema::string(Some("Initial plain-text task for the new agent.".to_string())),
+            JsonSchema::string(Some(
+                "Initial plain-text task for the new agent.".to_string(),
+            ))
+            .with_encrypted(),
         ),
         (
             "agent_type".to_string(),
@@ -731,6 +741,7 @@ fn spawn_agent_tool_description_v2(
 You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`.
 The spawned agent will have the same tools as you and the ability to spawn its own subagents.
 {inherited_model_guidance}
+Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally.
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
 The new agent's canonical task name will be provided to it along with the message.
 {concurrency_guidance}"#
@@ -762,13 +773,20 @@ fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
     let model_descriptions = visible_models
         .into_iter()
         .map(|model| {
-            let default_reasoning_effort = model.default_reasoning_effort;
+            let default_reasoning_effort = &model.default_reasoning_effort;
             let efforts = model
                 .supported_reasoning_efforts
                 .iter()
                 .map(|preset| {
-                    let effort = preset.effort;
-                    if effort == default_reasoning_effort {
+                    let effort = preset.effort.as_str();
+                    let effort = match effort
+                        .char_indices()
+                        .nth(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
+                    {
+                        Some((index, _)) => &effort[..index],
+                        None => effort,
+                    };
+                    if &preset.effort == default_reasoning_effort {
                         format!("{effort} (default)")
                     } else {
                         effort.to_string()

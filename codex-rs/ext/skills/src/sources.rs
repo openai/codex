@@ -46,7 +46,7 @@ impl SkillProviderSource {
     fn should_list(&self, query: &SkillListQuery) -> bool {
         match &self.kind {
             SkillSourceKind::Host => query.include_host_skills,
-            SkillSourceKind::Executor => !query.executor_authorities.is_empty(),
+            SkillSourceKind::Executor => !query.executor_roots.is_empty(),
             SkillSourceKind::Remote => query.include_remote_skills,
             SkillSourceKind::Custom(_) => true,
         }

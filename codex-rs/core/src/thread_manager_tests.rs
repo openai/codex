@@ -8,7 +8,6 @@ use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
-use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -22,7 +21,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
-use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::responses::mount_models_once;
@@ -333,6 +331,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
                 environment_id: "local".to_string(),
                 cwd: config.cwd.clone(),
             }],
+            thread_extension_init: Default::default(),
         })
         .await;
     let err = match result {
@@ -342,99 +341,6 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
 
     assert_eq!(err.to_string(), "unknown turn environment id `local`");
     assert!(manager.list_thread_ids().await.is_empty());
-}
-
-#[tokio::test]
-async fn start_thread_uses_all_default_environments_from_codex_home() {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = config.codex_home.abs();
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-    std::fs::write(
-        config.codex_home.join("environments.toml"),
-        r#"
-default = "dev"
-
-[[environments]]
-id = "dev"
-program = "ssh"
-args = ["dev", "cd /tmp && true"]
-"#,
-    )
-    .expect("write environments.toml");
-
-    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
-        std::env::current_exe().expect("current exe path"),
-        /*codex_linux_sandbox_exe*/ None,
-    )
-    .expect("runtime paths");
-    let environment_manager = Arc::new(
-        codex_exec_server::EnvironmentManager::from_codex_home(
-            config.codex_home.clone(),
-            Some(runtime_paths),
-        )
-        .await
-        .expect("environment manager"),
-    );
-    assert_eq!(
-        environment_manager.default_environment_ids(),
-        vec!["dev".to_string(), "local".to_string()]
-    );
-
-    let manager = ThreadManager::with_models_provider_and_home_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        environment_manager,
-    );
-
-    let thread = manager
-        .start_thread(config)
-        .await
-        .expect("thread should start");
-
-    let prompt_items = crate::prompt_debug::build_prompt_input_from_session(
-        thread.thread.codex.session.as_ref(),
-        Vec::<UserInput>::new(),
-    )
-    .await
-    .expect("prompt input");
-    let environment_context = prompt_items
-        .iter()
-        .filter_map(|item| match item {
-            ResponseItem::Message { content, .. } => Some(content),
-            _ => None,
-        })
-        .flatten()
-        .find_map(|content| match content {
-            ContentItem::InputText { text } if text.contains("<environment_context>") => {
-                Some(text.as_str())
-            }
-            _ => None,
-        })
-        .expect("environment context prompt item");
-    assert!(environment_context.contains("<environments>"));
-    let cwd = thread.session_configured.cwd.display().to_string();
-    let dev_entry = format!(
-        r#"<environment id="dev">
-      <cwd>{cwd}</cwd>
-      <shell>"#
-    );
-    let local_entry = format!(
-        r#"<environment id="local">
-      <cwd>{cwd}</cwd>
-      <shell>"#
-    );
-    let dev_position = environment_context
-        .find(&dev_entry)
-        .expect("dev environment entry");
-    let local_position = environment_context
-        .find(&local_entry)
-        .expect("local environment entry");
-    assert!(dev_position < local_position);
-    assert!(!environment_context.contains("\n  <cwd>"));
-    assert!(!environment_context.contains("\n  <shell>"));
 }
 
 #[tokio::test]
@@ -463,6 +369,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            thread_extension_init: Default::default(),
         })
         .await
         .expect("internal thread should start");
@@ -477,6 +384,81 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     assert!(report.submit_failed.is_empty());
     assert!(report.timed_out.is_empty());
     assert!(manager.list_thread_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn start_thread_seeds_extension_data_before_lifecycle_contributors_run() {
+    struct InitialMarker(&'static str);
+
+    struct InitialDataRecorder {
+        observed: Arc<std::sync::Mutex<Option<(String, String)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::ThreadLifecycleContributor<Config> for InitialDataRecorder {
+        async fn on_thread_start(&self, input: codex_extension_api::ThreadStartInput<'_, Config>) {
+            let marker = input
+                .thread_store
+                .get::<InitialMarker>()
+                .expect("initial extension data should be available");
+            *self
+                .observed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((
+                input.thread_store.level_id().to_string(),
+                marker.0.to_string(),
+            ));
+        }
+    }
+
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(InitialDataRecorder {
+        observed: Arc::clone(&observed),
+    }));
+    let manager = ThreadManager::new(
+        &config,
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        Arc::new(extensions.build()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+    );
+    let mut thread_extension_init = codex_extension_api::ExtensionDataInit::new();
+    thread_extension_init.insert(InitialMarker("seeded"));
+
+    let thread = manager
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            thread_extension_init,
+        })
+        .await
+        .expect("start thread");
+
+    assert_eq!(
+        observed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone(),
+        Some((thread.thread_id.to_string(), "seeded".to_string()))
+    );
 }
 
 #[tokio::test]
@@ -518,6 +500,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             metrics_service_name: None,
             parent_trace: None,
             environments: environments.clone(),
+            thread_extension_init: Default::default(),
         })
         .await
         .expect("start source thread");
@@ -788,6 +771,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            thread_extension_init: Default::default(),
         })
         .await
         .expect("start source thread");
@@ -1500,104 +1484,4 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             .count(),
         1,
     );
-}
-
-#[tokio::test]
-async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = config.codex_home.abs();
-    config
-        .features
-        .enable(Feature::Goals)
-        .expect("goals should be enableable in tests");
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager.clone(),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        empty_extension_registry(),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, state_db.clone()),
-        state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-        /*attestation_provider*/ None,
-    );
-
-    let source = manager
-        .resume_thread_with_history(
-            config.clone(),
-            InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("keep working"))]),
-            auth_manager.clone(),
-            /*parent_trace*/ None,
-        )
-        .await
-        .expect("create source thread");
-    let source_path = source
-        .thread
-        .rollout_path()
-        .expect("source rollout path should exist");
-    source.thread.flush_rollout().await?;
-    let state_db = source
-        .thread
-        .state_db()
-        .expect("source thread should have a state db");
-    state_db
-        .thread_goals()
-        .replace_thread_goal(
-            source.thread_id,
-            "Keep working until the task is done",
-            codex_state::ThreadGoalStatus::Paused,
-            /*token_budget*/ None,
-        )
-        .await?;
-    source.thread.shutdown_and_wait().await?;
-    manager.remove_thread(&source.thread_id).await;
-
-    let resumed = manager
-        .resume_thread_from_rollout(
-            config.clone(),
-            source_path,
-            auth_manager,
-            /*parent_trace*/ None,
-        )
-        .await
-        .expect("resume source thread");
-    let goal = state_db
-        .thread_goals()
-        .get_thread_goal(resumed.thread_id)
-        .await?
-        .expect("goal should still exist after resume");
-    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
-    assert!(
-        resumed
-            .thread
-            .codex
-            .session
-            .active_turn
-            .lock()
-            .await
-            .is_none()
-    );
-
-    resumed.thread.continue_active_goal_if_idle().await?;
-    assert!(
-        resumed
-            .thread
-            .codex
-            .session
-            .active_turn
-            .lock()
-            .await
-            .is_none()
-    );
-
-    resumed.thread.shutdown_and_wait().await?;
-    Ok(())
 }

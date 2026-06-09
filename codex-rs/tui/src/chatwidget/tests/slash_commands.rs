@@ -565,35 +565,14 @@ async fn ctrl_d_with_modal_open_does_not_quit() {
 }
 
 #[tokio::test]
-async fn slash_init_skips_when_project_doc_exists() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let tempdir = tempdir().unwrap();
-    let existing_path = tempdir.path().join(DEFAULT_AGENTS_MD_FILENAME);
-    std::fs::write(&existing_path, "existing instructions").unwrap();
-    chat.config.cwd = tempdir.path().to_path_buf().abs();
+async fn slash_init_does_not_depend_on_loaded_instruction_sources() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.instruction_source_paths = vec![chat.config.cwd.join("project-instructions.md")];
 
     submit_composer_text(&mut chat, "/init");
 
-    match op_rx.try_recv() {
-        Err(TryRecvError::Empty) => {}
-        other => panic!("expected no Codex op to be sent, got {other:?}"),
-    }
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains(DEFAULT_AGENTS_MD_FILENAME),
-        "info message should mention the existing file: {rendered:?}"
-    );
-    assert!(
-        rendered.contains("Skipping /init"),
-        "info message should explain why /init was skipped: {rendered:?}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(existing_path).unwrap(),
-        "existing instructions"
-    );
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+    assert!(drain_insert_history(&mut rx).is_empty());
     assert_eq!(recall_latest_after_clearing(&mut chat), "/init");
 }
 
@@ -782,6 +761,21 @@ async fn goal_control_slash_commands_emit_goal_events() {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn goal_control_slash_command_without_thread_shows_full_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+
+    submit_composer_text(&mut chat, "/goal pause");
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected goal usage message");
+    insta::assert_snapshot!(
+        lines_to_single_string(&cells[0]),
+        @"• Usage: /goal [<objective>|clear|edit|pause|resume] The session must start before you can change a goal."
+    );
 }
 
 #[tokio::test]

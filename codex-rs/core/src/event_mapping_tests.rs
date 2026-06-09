@@ -324,8 +324,8 @@ fn internal_model_context_does_not_parse_as_visible_turn_item() {
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: InternalModelContextFragment::new(
-                InternalContextSource::from_static("goal"),
-                "Continue working toward the active thread goal.",
+                InternalContextSource::from_static("extension"),
+                "Internal steering.",
             )
             .render(),
         }],

@@ -10,12 +10,14 @@ use codex_tools::ToolExecutor;
 
 use crate::ExtensionData;
 
+mod mcp;
 mod prompt;
 mod thread_lifecycle;
 mod tool_lifecycle;
 mod turn_input;
 mod turn_lifecycle;
 
+pub use mcp::McpServerContribution;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
 pub use thread_lifecycle::ThreadIdleInput;
@@ -33,6 +35,18 @@ pub use turn_lifecycle::TurnAbortInput;
 pub use turn_lifecycle::TurnErrorInput;
 pub use turn_lifecycle::TurnStartInput;
 pub use turn_lifecycle::TurnStopInput;
+
+/// Extension contribution that resolves runtime MCP servers from host config.
+///
+/// Contributors run in registration order. Later contributions for the same
+/// name replace earlier ones. Implementations must contribute only names they
+/// own and must apply any source-specific policy before returning a server.
+/// Plugin-owned servers and their provenance continue to be resolved by the
+/// plugin manager until that ownership moves into an extension explicitly.
+#[async_trait::async_trait]
+pub trait McpServerContributor<C: Sync>: Send + Sync {
+    async fn contribute(&self, config: &C) -> Vec<McpServerContribution>;
+}
 
 /// Extension contribution that adds prompt fragments during prompt assembly.
 pub trait ContextContributor: Send + Sync {
@@ -89,7 +103,6 @@ pub trait TurnLifecycleContributor: Send + Sync {
     async fn on_turn_error(&self, _input: TurnErrorInput<'_>) {}
 }
 
-/// WARNING: DO NOT USE YET
 /// Extension contribution that can add turn-local model input.
 ///
 /// Implementations should resolve only the model-visible input they own and

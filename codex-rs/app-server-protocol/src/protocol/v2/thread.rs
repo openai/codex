@@ -11,6 +11,8 @@ use super::TurnEnvironmentParams;
 use super::TurnItemsView;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
+pub use codex_protocol::capabilities::CapabilityRootLocation;
+pub use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -107,11 +109,10 @@ pub struct ThreadStartParams {
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
+    /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/start.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
-    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
@@ -154,6 +155,10 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    /// Capability roots selected for this thread by the hosting platform.
+    #[experimental("thread/start.selectedCapabilityRoots")]
+    #[ts(optional = nullable)]
+    pub selected_capability_roots: Option<Vec<SelectedCapabilityRoot>>,
     /// Test-only experimental field used to validate experimental gating and
     /// schema filtering behavior in a stable way.
     #[experimental("thread/start.mockExperimentalField")]
@@ -358,11 +363,10 @@ pub struct ThreadResumeParams {
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
+    /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/resume.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
-    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
@@ -509,11 +513,10 @@ pub struct ThreadForkParams {
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
+    /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/fork.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
-    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,

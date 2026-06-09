@@ -1,3 +1,4 @@
+use core_test_support::test_codex::local_selections;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
@@ -16,6 +17,7 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::TempDirExt;
 use core_test_support::assert_regex_match;
 use core_test_support::managed_network_requirements_loader;
 use core_test_support::process::process_is_alive;
@@ -197,12 +199,11 @@ async fn submit_unified_exec_turn(
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.to_path_buf()),
+                environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -278,7 +279,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
 
     let test = harness.test();
     let codex = test.codex.clone();
-    let cwd = test.cwd_path().to_path_buf();
+    let cwd = test.config.cwd.clone();
     let session_model = test.session_configured.model.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, &cwd);
@@ -289,12 +290,11 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
                 text: "apply patch via unified exec".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd),
+                environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2135,9 +2135,9 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
     mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
-    let turn_cwd = cwd.path().to_path_buf();
+    let turn_cwd = cwd.abs();
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, &turn_cwd);
+        turn_permission_fields(PermissionProfile::Disabled, turn_cwd.as_path());
 
     codex
         .submit(Op::UserInput {
@@ -2145,12 +2145,11 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
                 text: "keep unified exec process after turn end".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(turn_cwd),
+                environments: Some(local_selections(turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2239,9 +2238,9 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
     mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
-    let turn_cwd = cwd.path().to_path_buf();
+    let turn_cwd = cwd.abs();
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, &turn_cwd);
+        turn_permission_fields(PermissionProfile::Disabled, turn_cwd.as_path());
 
     codex
         .submit(Op::UserInput {
@@ -2249,12 +2248,11 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
                 text: "interrupt long-running unified exec".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(turn_cwd),
+                environments: Some(local_selections(turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2802,9 +2800,9 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
-    let turn_cwd = cwd.path().to_path_buf();
+    let turn_cwd = cwd.abs();
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::read_only(), &turn_cwd);
+        turn_permission_fields(PermissionProfile::read_only(), turn_cwd.as_path());
 
     codex
         .submit(Op::UserInput {
@@ -2812,12 +2810,11 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
                 text: "summarize large output".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(turn_cwd),
+                environments: Some(local_selections(turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2926,21 +2923,20 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
     let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
-    let turn_cwd = cwd.path().to_path_buf();
+    let turn_cwd = cwd.abs();
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::read_only(), &turn_cwd);
+        turn_permission_fields(PermissionProfile::read_only(), turn_cwd.as_path());
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "read the fixture files".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(turn_cwd),
+                environments: Some(local_selections(turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -3064,9 +3060,9 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
-    let turn_cwd = cwd.path().to_path_buf();
+    let turn_cwd = cwd.abs();
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::read_only(), &turn_cwd);
+        turn_permission_fields(PermissionProfile::read_only(), turn_cwd.as_path());
 
     codex
         .submit(Op::UserInput {
@@ -3074,12 +3070,11 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
                 text: "start python under seatbelt".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(turn_cwd),
+                environments: Some(local_selections(turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

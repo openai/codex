@@ -113,6 +113,7 @@ impl App {
         self.initial_history_replay_buffer = None;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
+        self.skill_load_warnings.clear();
     }
 }
 
