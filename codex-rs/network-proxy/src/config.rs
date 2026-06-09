@@ -663,6 +663,7 @@ mod tests {
                     "socks_url": "http://127.0.0.1:8081",
                     "enable_socks5_udp": true,
                     "allow_upstream_proxy": true,
+                    "upstream_proxy_mode": "env",
                     "dangerously_allow_non_loopback_proxy": false,
                     "dangerously_allow_all_unix_sockets": false,
                     "mode": "full",
