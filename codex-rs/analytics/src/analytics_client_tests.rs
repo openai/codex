@@ -1943,6 +1943,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                     guardian_session_kind: None,
                     guardian_model: None,
                     guardian_reasoning_effort: None,
+                    guardian_default_review_model_id: Some("codex-auto-review".to_string()),
                     guardian_catalog_contains_auto_review: Some(false),
                     guardian_review_model_overridden: Some(false),
                     guardian_review_model_override: None,
@@ -2012,6 +2013,10 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
     assert_eq!(payload[0]["event_params"]["terminal_status"], "timed_out");
     assert_eq!(payload[0]["event_params"]["failure_reason"], "timeout");
     assert_eq!(payload[0]["event_params"]["review_timeout_ms"], 90_000);
+    assert_eq!(
+        payload[0]["event_params"]["guardian_default_review_model_id"],
+        "codex-auto-review"
+    );
     assert_eq!(
         payload[0]["event_params"]["guardian_catalog_contains_auto_review"],
         false

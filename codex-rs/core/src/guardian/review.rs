@@ -755,6 +755,7 @@ pub(super) async fn run_guardian_review_session(
                 schema,
                 model: guardian_model,
                 reasoning_effort: guardian_reasoning_effort,
+                guardian_default_review_model_id: default_review_model_id.to_string(),
                 guardian_catalog_contains_auto_review,
                 guardian_review_model_overridden,
                 guardian_review_model_override,

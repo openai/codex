@@ -1417,6 +1417,10 @@ async fn guardian_review_uses_model_catalog_override_when_preferred_review_model
         Some(true)
     );
     assert_eq!(
+        analytics_result.guardian_default_review_model_id.as_deref(),
+        Some(preferred_model.as_str())
+    );
+    assert_eq!(
         analytics_result.guardian_review_model_overridden,
         Some(true)
     );
@@ -1451,6 +1455,10 @@ async fn guardian_review_uses_preferred_review_model_without_model_catalog_overr
         Some(true)
     );
     assert_eq!(
+        analytics_result.guardian_default_review_model_id.as_deref(),
+        Some(preferred_model.as_str())
+    );
+    assert_eq!(
         analytics_result.guardian_review_model_overridden,
         Some(false)
     );
@@ -1483,6 +1491,10 @@ async fn guardian_review_records_missing_auto_review_model_in_analytics_metadata
     assert_eq!(
         analytics_result.guardian_catalog_contains_auto_review,
         Some(false)
+    );
+    assert_eq!(
+        analytics_result.guardian_default_review_model_id.as_deref(),
+        Some(preferred_model.as_str())
     );
     assert_eq!(
         analytics_result.guardian_review_model_overridden,
