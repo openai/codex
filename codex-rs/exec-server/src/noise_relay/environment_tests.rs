@@ -82,8 +82,7 @@ async fn pending_harness_key_validation_does_not_block_new_handshakes() -> Resul
     ));
 
     for stream_id in ["stream-1", "stream-2"] {
-        let prologue =
-            noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id)?;
+        let prologue = noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id)?;
         let (_handshake, request) = InitiatorHandshake::start(
             &harness_identity,
             &environment_identity.public_key(),

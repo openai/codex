@@ -141,10 +141,8 @@ async fn validate_harness_key_does_not_expose_error_body() {
 
 #[test]
 fn noise_environment_id_validation_rejects_path_injection() {
-    validate_environment_id(
-        "ccarenv_b64_Y2Fhcy1zdGFnaW5nLWV4ZWN1dG9yLWVudmlyb25tZW50LTE",
-    )
-    .expect("valid cloud environment id");
+    validate_environment_id("ccarenv_b64_Y2Fhcy1zdGFnaW5nLWV4ZWN1dG9yLWVudmlyb25tZW50LTE")
+        .expect("valid cloud environment id");
 
     let error = validate_environment_id("ccarenv_b64_valid/../../status")
         .expect_err("path delimiter must not reach an authenticated registry request");
