@@ -1142,12 +1142,20 @@ async fn handle_terminal_output(
     let terminal_output = terminal_output.context("terminal output channel closed")?;
 
     let (result, request_response) = match terminal_output {
-        RealtimeTerminalOutput::Direct { output_text } => (
-            writer
-                .send_conversation_developer_item_create(output_text)
-                .await,
-            true,
-        ),
+        RealtimeTerminalOutput::Direct { output_text } => {
+            let request_response = match event_parser {
+                RealtimeEventParser::V1 => false,
+                RealtimeEventParser::RealtimeV2 => true,
+            };
+            (
+                writer
+                    .send_conversation_developer_item_create(format!(
+                        "Speak the following text:\n{output_text}"
+                    ))
+                    .await,
+                request_response,
+            )
+        }
         RealtimeTerminalOutput::Handoff {
             handoff_id,
             output_text,

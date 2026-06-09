@@ -1351,13 +1351,13 @@ async fn webrtc_terminal_output_without_handoff_reaches_realtime() -> Result<()>
             ],
         ),
     ] {
-        let mut harness = RealtimeE2eHarness::new(
-            version,
-            main_loop_responses(vec![
-                create_final_assistant_message_sse_response(output_texts[0])?,
-                create_final_assistant_message_sse_response(output_texts[1])?,
-            ]),
-            realtime_sideband(vec![realtime_sideband_connection(vec![
+        let sideband_responses = match version {
+            RealtimeTestVersion::V1 => vec![
+                vec![session_updated("sess_terminal_output")],
+                vec![],
+                vec![],
+            ],
+            RealtimeTestVersion::V2 => vec![
                 vec![session_updated("sess_terminal_output")],
                 vec![],
                 vec![
@@ -1372,7 +1372,15 @@ async fn webrtc_terminal_output_without_handoff_reaches_realtime() -> Result<()>
                 ],
                 vec![],
                 vec![],
-            ])]),
+            ],
+        };
+        let mut harness = RealtimeE2eHarness::new(
+            version,
+            main_loop_responses(vec![
+                create_final_assistant_message_sse_response(output_texts[0])?,
+                create_final_assistant_message_sse_response(output_texts[1])?,
+            ]),
+            realtime_sideband(vec![realtime_sideband_connection(sideband_responses)]),
         )
         .await?;
 
@@ -1409,10 +1417,12 @@ async fn webrtc_terminal_output_without_handoff_reaches_realtime() -> Result<()>
                 .read_notification::<TurnCompletedNotification>("turn/completed")
                 .await?;
 
+            let request_index = match version {
+                RealtimeTestVersion::V1 => 1 + turn_index,
+                RealtimeTestVersion::V2 => 1 + turn_index * 2,
+            };
             assert_eq!(
-                harness
-                    .sideband_outbound_request(/*request_index*/ 1 + turn_index * 2)
-                    .await,
+                harness.sideband_outbound_request(request_index).await,
                 json!({
                     "type": "conversation.item.create",
                     "item": {
@@ -1420,16 +1430,19 @@ async fn webrtc_terminal_output_without_handoff_reaches_realtime() -> Result<()>
                         "role": "developer",
                         "content": [{
                             "type": "input_text",
-                            "text": output_text,
+                            "text": format!("Speak the following text:\n{output_text}"),
                         }],
                     },
                 })
             );
-            assert_v2_response_create(
-                &harness
-                    .sideband_outbound_request(/*request_index*/ 2 + turn_index * 2)
-                    .await,
-            );
+            match version {
+                RealtimeTestVersion::V1 => {}
+                RealtimeTestVersion::V2 => {
+                    assert_v2_response_create(
+                        &harness.sideband_outbound_request(request_index + 1).await,
+                    );
+                }
+            }
         }
 
         harness.shutdown().await;
