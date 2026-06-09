@@ -72,17 +72,6 @@ impl NoiseChannelPublicKey {
         }
     }
 
-    pub(crate) fn from_raw(
-        dh: &<X25519 as Dh>::PubKey,
-        kem: &MlKem768PublicKey,
-    ) -> Self {
-        Self {
-            suite: NOISE_CHANNEL_SUITE.to_string(),
-            x25519_public_key: STANDARD.encode(dh),
-            mlkem768_public_key: STANDARD.encode(kem.as_slice()),
-        }
-    }
-
     /// Validate the suite tag and decode both public components for Clatter.
     ///
     /// Registry JSON is an external boundary, so parsing rejects malformed
@@ -225,9 +214,14 @@ impl PendingResponderHandshake {
             .ok_or(NoiseChannelError::InvalidMessage(
                 "handshake request is missing initiator static key",
             ))?;
+        let initiator_public_key = NoiseChannelPublicKey {
+            suite: NOISE_CHANNEL_SUITE.to_string(),
+            x25519_public_key: STANDARD.encode(remote.dh()),
+            mlkem768_public_key: STANDARD.encode(remote.kem().as_slice()),
+        };
         Ok(Self {
             handshake,
-            initiator_public_key: NoiseChannelPublicKey::from_raw(remote.dh(), remote.kem()),
+            initiator_public_key,
             payload: payload[..payload_len].to_vec(),
         })
     }
