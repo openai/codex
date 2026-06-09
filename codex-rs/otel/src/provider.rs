@@ -83,8 +83,8 @@ impl OtelProvider {
     ///
     /// If the shutdown thread cannot be started, the provider is intentionally
     /// leaked so thread creation failure cannot restore foreground latency.
-    pub fn shutdown_in_background(self) {
-        self.shutdown_in_background_with(|shutdown| {
+    pub fn shutdown_on_process_exit(self) {
+        self.shutdown_on_process_exit_with(|shutdown| {
             std::thread::Builder::new()
                 .name("otel-shutdown".to_string())
                 .spawn(shutdown)
@@ -92,7 +92,7 @@ impl OtelProvider {
         });
     }
 
-    fn shutdown_in_background_with(
+    fn shutdown_on_process_exit_with(
         self,
         spawn: impl FnOnce(Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()>,
     ) {
@@ -586,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_in_background_does_not_wait_for_flush() {
+    fn shutdown_on_process_exit_does_not_wait_for_flush() {
         let (flush_started_tx, flush_started_rx) = mpsc::channel();
         let (flush_release_tx, flush_release_rx) = mpsc::channel();
         let (shutdown_finished_tx, shutdown_finished_rx) = mpsc::channel();
@@ -605,7 +605,7 @@ mod tests {
         };
         let (shutdown_returned_tx, shutdown_returned_rx) = mpsc::channel();
         let caller = std::thread::spawn(move || {
-            provider.shutdown_in_background();
+            provider.shutdown_on_process_exit();
             let _ = shutdown_returned_tx.send(());
         });
 
@@ -625,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_in_background_does_not_flush_when_thread_spawn_fails() {
+    fn shutdown_on_process_exit_does_not_flush_when_thread_spawn_fails() {
         let (flush_started_tx, flush_started_rx) = mpsc::channel();
         let (flush_release_tx, flush_release_rx) = mpsc::channel();
         let (shutdown_finished_tx, shutdown_finished_rx) = mpsc::channel();
@@ -643,7 +643,7 @@ mod tests {
             metrics: None,
         };
 
-        provider.shutdown_in_background_with(|shutdown| {
+        provider.shutdown_on_process_exit_with(|shutdown| {
             drop(shutdown);
             Err(std::io::Error::other("simulated thread spawn failure"))
         });

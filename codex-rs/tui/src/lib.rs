@@ -1327,7 +1327,7 @@ pub async fn run_main(
     .map_err(|err| std::io::Error::other(err.to_string()));
 
     if let Some(otel) = otel {
-        otel.shutdown_in_background();
+        otel.shutdown_on_process_exit();
     }
 
     app_result
