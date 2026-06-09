@@ -21,7 +21,6 @@ use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AppToolApproval;
-use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;

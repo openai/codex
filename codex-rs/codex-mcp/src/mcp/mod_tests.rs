@@ -1,7 +1,6 @@
 use super::*;
 use codex_config::Constrained;
 use codex_config::types::AppToolApproval;
-use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
