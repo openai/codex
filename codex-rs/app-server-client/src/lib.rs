@@ -1868,6 +1868,7 @@ mod tests {
                             is_secret: false,
                             options: Some(vec![]),
                         }],
+                        auto_resolution_ms: None,
                     })
                     .expect("params should serialize"),
                 ),
@@ -1929,6 +1930,7 @@ mod tests {
                                 is_secret: false,
                                 options: Some(vec![]),
                             }],
+                            auto_resolution_ms: None,
                         })
                         .expect("params should serialize"),
                     ),
