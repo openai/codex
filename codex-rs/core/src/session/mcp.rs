@@ -20,6 +20,7 @@ use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationAction;
 use rmcp::model::Meta;
 use serde_json::Map;
+use std::mem;
 
 const MCP_ELICITATION_DECLINE_MESSAGE_KEY: &str = "message";
 const TOOL_SUGGESTION_ACTION_INSTALL: &str = "install";
@@ -338,18 +339,20 @@ impl Session {
                 turn_context.cwd.to_path_buf(),
             ),
         };
-        {
+        let (mcp_startup_cancellation_token, previous_mcp_startup_cancellation_token) = {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-            guard.cancel();
-            *guard = CancellationToken::new();
-        }
-        let (refreshed_manager, cancel_token) = McpConnectionManager::new(
+            let cancel_token = CancellationToken::new();
+            let previous_cancel_token = mem::replace(&mut *guard, cancel_token.clone());
+            (cancel_token, previous_cancel_token)
+        };
+        let manager_result = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
             auth_statuses,
             &turn_context.approval_policy,
             turn_context.sub_id.clone(),
             self.get_tx_event(),
+            mcp_startup_cancellation_token,
             turn_context.permission_profile(),
             mcp_runtime_context,
             config.codex_home.to_path_buf(),
@@ -362,21 +365,22 @@ impl Session {
             elicitation_reviewer,
         )
         .await;
+        let refreshed_manager = match manager_result {
+            Ok(manager) => manager,
+            Err(err) => {
+                *self.services.mcp_startup_cancellation_token.lock().await =
+                    previous_mcp_startup_cancellation_token;
+                warn!("failed to refresh MCP servers: {err:#}");
+                return;
+            }
+        };
         {
             let current_manager = self.services.mcp_connection_manager.read().await;
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
         }
-        {
-            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-            if guard.is_cancelled() {
-                cancel_token.cancel();
-            }
-            *guard = cancel_token;
-        }
-
         let mut old_manager = {
             let mut manager = self.services.mcp_connection_manager.write().await;
-            std::mem::replace(&mut *manager, refreshed_manager)
+            mem::replace(&mut *manager, refreshed_manager)
         };
         old_manager.shutdown().await;
     }

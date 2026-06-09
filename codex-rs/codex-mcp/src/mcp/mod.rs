@@ -35,6 +35,7 @@ use rmcp::model::ElicitationCapability;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::codex_apps::codex_apps_tools_cache_key;
 use crate::connection_manager::McpConnectionManager;
@@ -293,13 +294,15 @@ pub async fn read_mcp_resource(
     .await;
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
-    let (manager, cancel_token) = McpConnectionManager::new(
+    let cancel_token = CancellationToken::new();
+    let manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_statuses,
         &config.approval_policy,
         String::new(),
         tx_event,
+        cancel_token.clone(),
         PermissionProfile::default(),
         runtime_context,
         config.codex_home.clone(),
@@ -311,7 +314,7 @@ pub async fn read_mcp_resource(
         auth,
         /*elicitation_reviewer*/ None,
     )
-    .await;
+    .await?;
 
     let result = manager
         .read_resource(server, ReadResourceRequestParams::new(uri))
@@ -336,19 +339,19 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     submit_id: String,
     runtime_context: McpRuntimeContext,
     detail: McpSnapshotDetail,
-) -> McpServerStatusSnapshot {
+) -> anyhow::Result<McpServerStatusSnapshot> {
     let mcp_servers = effective_mcp_servers(config, auth);
     let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(config, auth);
     let tool_plugin_provenance = tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
-        return McpServerStatusSnapshot {
+        return Ok(McpServerStatusSnapshot {
             server_infos: HashMap::new(),
             tools_by_server: HashMap::new(),
             resources: HashMap::new(),
             resource_templates: HashMap::new(),
             auth_statuses: HashMap::new(),
             server_names: Vec::new(),
-        };
+        });
     }
 
     let auth_status_entries = compute_auth_statuses(
@@ -363,13 +366,15 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+    let cancel_token = CancellationToken::new();
+    let mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries.clone(),
         &config.approval_policy,
         submit_id,
         tx_event,
+        cancel_token.clone(),
         PermissionProfile::default(),
         runtime_context,
         config.codex_home.clone(),
@@ -381,7 +386,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         auth,
         /*elicitation_reviewer*/ None,
     )
-    .await;
+    .await?;
 
     let snapshot = collect_mcp_server_status_snapshot_from_manager(
         &mcp_connection_manager,
@@ -393,7 +398,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
 
     cancel_token.cancel();
 
-    snapshot
+    Ok(snapshot)
 }
 
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.

@@ -68,6 +68,8 @@ use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
+use tracing::Span;
+use tracing::info_span;
 use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
@@ -121,6 +123,7 @@ impl McpConnectionManager {
         approval_policy: &Constrained<AskForApproval>,
         submit_id: String,
         tx_event: Sender<Event>,
+        startup_cancellation_token: CancellationToken,
         initial_permission_profile: PermissionProfile,
         runtime_context: McpRuntimeContext,
         codex_home: PathBuf,
@@ -131,8 +134,25 @@ impl McpConnectionManager {
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
-    ) -> (Self, CancellationToken) {
-        let cancel_token = CancellationToken::new();
+    ) -> Result<Self> {
+        let enabled_mcp_server_count = mcp_servers
+            .values()
+            .filter(|server| server.enabled())
+            .count();
+        let mut required_servers = mcp_servers
+            .iter()
+            .filter(|(_, server)| server.enabled() && server.required())
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        required_servers.sort();
+        Span::current().record(
+            "session_init.enabled_mcp_server_count",
+            enabled_mcp_server_count,
+        );
+        Span::current().record(
+            "session_init.required_mcp_server_count",
+            required_servers.len(),
+        );
         let mut clients = HashMap::new();
         let mut server_metadata = HashMap::new();
         let mut join_set = JoinSet::new();
@@ -152,7 +172,7 @@ impl McpConnectionManager {
             .filter(|(_, server)| server.enabled())
         {
             server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
-            let cancel_token = cancel_token.child_token();
+            let cancel_token = startup_cancellation_token.child_token();
             let _ = emit_update(
                 startup_submit_id.as_str(),
                 &tx_event,
@@ -241,7 +261,7 @@ impl McpConnectionManager {
             host_owned_codex_apps_enabled,
             prefix_mcp_tool_names,
             elicitation_requests: elicitation_requests.clone(),
-            startup_cancellation_token: cancel_token.clone(),
+            startup_cancellation_token: startup_cancellation_token.clone(),
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
@@ -265,7 +285,26 @@ impl McpConnectionManager {
                 })
                 .await;
         });
-        (manager, cancel_token)
+        let failures = manager
+            .required_startup_failures(&required_servers)
+            .instrument(info_span!(
+                "session_init.required_mcp_wait",
+                otel.name = "session_init.required_mcp_wait",
+                session_init.required_mcp_server_count = required_servers.len(),
+            ))
+            .await;
+        if !failures.is_empty() {
+            startup_cancellation_token.cancel();
+            let details = failures
+                .iter()
+                .map(|failure| format!("{}: {}", failure.server, failure.error))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(anyhow!(
+                "required MCP servers failed to initialize: {details}"
+            ));
+        }
+        Ok(manager)
     }
 
     pub fn new_uninitialized_with_permission_profile(
@@ -372,31 +411,6 @@ impl McpConnectionManager {
             Ok(Ok(_)) => true,
             Ok(Err(_)) | Err(_) => false,
         }
-    }
-
-    pub async fn required_startup_failures(
-        &self,
-        required_servers: &[String],
-    ) -> Vec<McpStartupFailure> {
-        let mut failures = Vec::new();
-        for server_name in required_servers {
-            let Some(async_managed_client) = self.clients.get(server_name).cloned() else {
-                failures.push(McpStartupFailure {
-                    server: server_name.clone(),
-                    error: format!("required MCP server `{server_name}` was not initialized"),
-                });
-                continue;
-            };
-
-            match async_managed_client.client().await {
-                Ok(_) => {}
-                Err(error) => failures.push(McpStartupFailure {
-                    server: server_name.clone(),
-                    error: startup_outcome_error_message(error),
-                }),
-            }
-        }
-        failures
     }
 
     /// Returns all tools with model-visible names normalized.
@@ -773,6 +787,31 @@ impl McpConnectionManager {
             .client()
             .await
             .context("failed to get client")
+    }
+
+    async fn required_startup_failures(
+        &self,
+        required_servers: &[String],
+    ) -> Vec<McpStartupFailure> {
+        let mut failures = Vec::new();
+        for server_name in required_servers {
+            let Some(async_managed_client) = self.clients.get(server_name).cloned() else {
+                failures.push(McpStartupFailure {
+                    server: server_name.clone(),
+                    error: format!("required MCP server `{server_name}` was not initialized"),
+                });
+                continue;
+            };
+
+            match async_managed_client.client().await {
+                Ok(_) => {}
+                Err(error) => failures.push(McpStartupFailure {
+                    server: server_name.clone(),
+                    error: startup_outcome_error_message(error),
+                }),
+            }
+        }
+        failures
     }
 
     #[cfg(test)]
