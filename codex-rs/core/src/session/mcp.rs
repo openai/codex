@@ -339,20 +339,15 @@ impl Session {
                 turn_context.cwd.to_path_buf(),
             ),
         };
-        let (mcp_startup_cancellation_token, previous_mcp_startup_cancellation_token) = {
-            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-            let cancel_token = CancellationToken::new();
-            let previous_cancel_token = mem::replace(&mut *guard, cancel_token.clone());
-            (cancel_token, previous_cancel_token)
-        };
-        let manager_result = McpConnectionManager::new(
+        let mcp_startup_cancellation_token = CancellationToken::new();
+        let refreshed_manager = match McpConnectionManager::new(
             &mcp_servers,
             store_mode,
             auth_statuses,
             &turn_context.approval_policy,
             turn_context.sub_id.clone(),
             self.get_tx_event(),
-            mcp_startup_cancellation_token,
+            mcp_startup_cancellation_token.clone(),
             turn_context.permission_profile(),
             mcp_runtime_context,
             config.codex_home.to_path_buf(),
@@ -364,12 +359,10 @@ impl Session {
             auth.as_ref(),
             elicitation_reviewer,
         )
-        .await;
-        let refreshed_manager = match manager_result {
+        .await
+        {
             Ok(manager) => manager,
             Err(err) => {
-                *self.services.mcp_startup_cancellation_token.lock().await =
-                    previous_mcp_startup_cancellation_token;
                 warn!("failed to refresh MCP servers: {err:#}");
                 return;
             }
@@ -379,6 +372,9 @@ impl Session {
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
         }
         let mut old_manager = {
+            let mut cancellation_token = self.services.mcp_startup_cancellation_token.lock().await;
+            cancellation_token.cancel();
+            *cancellation_token = mcp_startup_cancellation_token;
             let mut manager = self.services.mcp_connection_manager.write().await;
             mem::replace(&mut *manager, refreshed_manager)
         };
