@@ -7,7 +7,7 @@ use crate::plugins::test_support::write_plugins_feature_config;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsManager;
-use codex_core_plugins::remote::RemotePluginScope;
+use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_core_plugins::remote::fetch_and_cache_global_remote_plugin_catalog;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
@@ -362,7 +362,7 @@ remote_plugin = true
         .build_and_cache_remote_installed_plugin_marketplaces(
             &config.plugins_config_input(),
             Some(&auth),
-            &[RemotePluginScope::Global],
+            &[REMOTE_GLOBAL_MARKETPLACE_NAME],
             /*on_effective_plugins_changed*/ None,
         )
         .await

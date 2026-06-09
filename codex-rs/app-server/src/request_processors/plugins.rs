@@ -9,8 +9,11 @@ use codex_config::types::McpServerConfig;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginListBackgroundTaskOptions;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
 use codex_core_plugins::remote::RemoteAppTemplateUnavailableReason;
-use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
 use codex_mcp::McpOAuthLoginSupport;
@@ -149,15 +152,18 @@ fn convert_configured_marketplace_plugin_to_plugin_summary(
     }
 }
 
-fn remote_installed_plugin_visible_scopes(config: &Config) -> Vec<RemotePluginScope> {
-    let mut scopes = Vec::new();
+fn remote_installed_plugin_visible_marketplaces(config: &Config) -> Vec<&'static str> {
+    let mut marketplaces = Vec::new();
     if config.features.enabled(Feature::RemotePlugin) {
-        scopes.push(RemotePluginScope::Global);
+        marketplaces.push(REMOTE_GLOBAL_MARKETPLACE_NAME);
     }
+    marketplaces.push(REMOTE_WORKSPACE_MARKETPLACE_NAME);
     if config.features.enabled(Feature::PluginSharing) {
-        scopes.push(RemotePluginScope::Workspace);
+        marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME);
+        marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME);
+        marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME);
     }
-    scopes
+    marketplaces
 }
 
 fn filter_openai_curated_installed_conflicts(
@@ -776,8 +782,8 @@ impl PluginRequestProcessor {
         }
 
         let plugins_input = config.plugins_config_input();
-        let remote_installed_plugin_visible_scopes =
-            remote_installed_plugin_visible_scopes(&config);
+        let remote_installed_plugin_visible_marketplaces =
+            remote_installed_plugin_visible_marketplaces(&config);
         plugins_manager.maybe_start_remote_installed_plugin_bundle_sync(
             &plugins_input,
             auth.clone(),
@@ -798,7 +804,7 @@ impl PluginRequestProcessor {
             self.load_remote_installed_plugins(
                 plugins_manager,
                 &plugins_input,
-                &remote_installed_plugin_visible_scopes,
+                &remote_installed_plugin_visible_marketplaces,
                 auth.as_ref(),
             )
             .await,
@@ -898,11 +904,11 @@ impl PluginRequestProcessor {
         &self,
         plugins_manager: Arc<codex_core_plugins::PluginsManager>,
         plugins_input: &codex_core_plugins::PluginsConfigInput,
-        visible_scopes: &[RemotePluginScope],
+        visible_marketplaces: &[&str],
         auth: Option<&CodexAuth>,
     ) -> Vec<PluginMarketplaceEntry> {
-        let remote_marketplaces = if let Some(remote_marketplaces) =
-            plugins_manager.build_remote_installed_plugin_marketplaces_from_cache(visible_scopes)
+        let remote_marketplaces = if let Some(remote_marketplaces) = plugins_manager
+            .build_remote_installed_plugin_marketplaces_from_cache(visible_marketplaces)
         {
             Ok(remote_marketplaces)
         } else {
@@ -910,7 +916,7 @@ impl PluginRequestProcessor {
                 .build_and_cache_remote_installed_plugin_marketplaces(
                     plugins_input,
                     auth,
-                    visible_scopes,
+                    visible_marketplaces,
                     Some(self.effective_plugins_changed_callback()),
                 )
                 .await
