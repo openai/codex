@@ -76,7 +76,7 @@ fn call_output_content_and_success(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> {
-    request_user_input_round_trip_for_mode(ModeKind::Plan, None).await
+    request_user_input_round_trip_for_mode(ModeKind::Plan, /*auto_resolution_ms*/ None).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -460,7 +460,7 @@ async fn request_user_input_rejected_in_default_mode_by_default() -> anyhow::Res
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_round_trip_in_default_mode_with_feature() -> anyhow::Result<()> {
-    request_user_input_round_trip_for_mode(ModeKind::Default, None).await
+    request_user_input_round_trip_for_mode(ModeKind::Default, /*auto_resolution_ms*/ None).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
