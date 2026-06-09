@@ -269,6 +269,18 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
     let registry = builder.build();
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
+    thread_store.insert(
+        [("root-a", "/skills/root-a"), ("root-b", "/skills/root-b")]
+            .into_iter()
+            .map(|(id, path)| SelectedCapabilityRoot {
+                id: id.to_string(),
+                location: CapabilityRootLocation::Environment {
+                    environment_id: "env-1".to_string(),
+                    path: path.to_string(),
+                },
+            })
+            .collect::<Vec<_>>(),
+    );
     let session_source = SessionSource::Cli;
     let config = default_config().await?;
     registry.thread_lifecycle_contributors()[0]
