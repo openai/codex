@@ -3362,7 +3362,8 @@ mod tests {
                     event_id: "activity-1".to_string(),
                     occurred_at_ms: 42,
                     agent_thread_id: child_thread_id,
-                    agent_path: AgentPath::try_from("/root/worker")?,
+                    agent_path: AgentPath::try_from("/root/worker")
+                        .expect("agent path should parse"),
                     kind: SubAgentActivityKind::Interrupted,
                 }),
             },
