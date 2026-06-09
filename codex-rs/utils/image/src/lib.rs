@@ -40,9 +40,14 @@ pub struct EncodedImage {
 
 impl EncodedImage {
     pub fn into_data_url(self) -> String {
-        let encoded = BASE64_STANDARD.encode(&self.bytes);
-        format!("data:{};base64,{encoded}", self.mime)
+        data_url_from_bytes(&self.mime, &self.bytes)
     }
+}
+
+/// Wraps image bytes in a data URL without decoding or validating them.
+pub fn data_url_from_bytes(mime: &str, bytes: &[u8]) -> String {
+    let encoded = BASE64_STANDARD.encode(bytes);
+    format!("data:{mime};base64,{encoded}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
