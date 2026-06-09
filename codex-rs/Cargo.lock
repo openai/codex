@@ -1982,6 +1982,7 @@ dependencies = [
  "codex-image-generation-extension",
  "codex-login",
  "codex-mcp",
+ "codex-mcp-extension",
  "codex-memories-extension",
  "codex-memories-write",
  "codex-model-provider",
@@ -1994,6 +1995,7 @@ dependencies = [
  "codex-rollout",
  "codex-sandboxing",
  "codex-shell-command",
+ "codex-skills-extension",
  "codex-state",
  "codex-thread-store",
  "codex-tools",
@@ -2919,9 +2921,12 @@ name = "codex-extension-api"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "codex-config",
  "codex-context-fragments",
  "codex-protocol",
  "codex-tools",
+ "pretty_assertions",
+ "tokio",
 ]
 
 [[package]]
@@ -3242,6 +3247,23 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "codex-mcp-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-config",
+ "codex-core",
+ "codex-core-plugins",
+ "codex-extension-api",
+ "codex-features",
+ "codex-login",
+ "codex-mcp",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -3796,8 +3818,11 @@ dependencies = [
  "async-trait",
  "codex-core",
  "codex-core-skills",
+ "codex-exec-server",
  "codex-extension-api",
  "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-string",
  "pretty_assertions",
  "tokio",
 ]

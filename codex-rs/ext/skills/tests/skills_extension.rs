@@ -14,7 +14,8 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnInputContext;
-use codex_extension_api::TurnInputEnvironment;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
@@ -112,6 +113,7 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
         .await;
 
     assert_eq!(2, fragments.len());
+    assert_eq!("developer", fragments[0].role());
     assert!(fragments[0].render().contains("demo"));
     assert!(fragments[0].render().contains(&skill_prompt_path));
     assert_eq!("user", fragments[1].role());
@@ -128,42 +130,35 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
 }
 
 #[tokio::test]
-async fn installed_extension_injects_available_catalog_and_selected_entrypoint() -> TestResult {
-    let host_read_requests = Arc::new(Mutex::new(Vec::new()));
-    let remote_read_requests = Arc::new(Mutex::new(Vec::new()));
-    let host_provider = Arc::new(StaticSkillProvider {
+async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_input() -> TestResult
+{
+    let read_requests = Arc::new(Mutex::new(Vec::new()));
+    let executor_provider = Arc::new(StaticSkillProvider {
         catalog: SkillCatalog {
             entries: vec![test_entry(
-                SkillSourceKind::Host,
-                "host",
-                "host/lint-fix",
+                SkillSourceKind::Executor,
+                "env-1",
+                "executor/lint-fix",
                 "lint-fix/SKILL.md",
             )],
             warnings: Vec::new(),
         },
-        read_requests: Arc::clone(&host_read_requests),
+        read_requests: Arc::clone(&read_requests),
     });
-    let remote_provider = Arc::new(StaticSkillProvider {
-        catalog: SkillCatalog {
-            entries: vec![test_entry(
-                SkillSourceKind::Remote,
-                "remote",
-                "remote/lint-fix",
-                "lint-fix/SKILL.md",
-            )],
-            warnings: Vec::new(),
-        },
-        read_requests: Arc::clone(&remote_read_requests),
-    });
-    let providers = SkillProviders::new()
-        .with_host_provider(host_provider)
-        .with_remote_provider(remote_provider);
+    let providers = SkillProviders::new().with_executor_provider(executor_provider);
     let mut builder = ExtensionRegistryBuilder::new();
     install_with_providers(&mut builder, providers);
     let registry = builder.build();
 
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
+    thread_store.insert(vec![SelectedCapabilityRoot {
+        id: "lint-fix".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "env-1".to_string(),
+            path: "/skills/lint-fix".to_string(),
+        },
+    }]);
     let session_source = SessionSource::Cli;
     let config = default_config().await?;
     registry.thread_lifecycle_contributors()[0]
@@ -176,6 +171,17 @@ async fn installed_extension_injects_available_catalog_and_selected_entrypoint()
         })
         .await;
 
+    let prompt_fragments = registry.context_contributors()[0]
+        .contribute(&session_store, &thread_store)
+        .await;
+    assert_eq!(1, prompt_fragments.len());
+    assert!(
+        prompt_fragments[0]
+            .text()
+            .starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
+    );
+    assert!(prompt_fragments[0].text().contains("lint-fix"));
+
     let turn_store = ExtensionData::new("turn-1");
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
@@ -185,11 +191,7 @@ async fn installed_extension_injects_available_catalog_and_selected_entrypoint()
                     text: "$lint-fix please".to_string(),
                     text_elements: Vec::new(),
                 }],
-                environments: vec![TurnInputEnvironment {
-                    environment_id: "env-1".to_string(),
-                    cwd: std::env::temp_dir(),
-                    is_primary: true,
-                }],
+                environments: Vec::new(),
             },
             &session_store,
             &thread_store,
@@ -197,31 +199,23 @@ async fn installed_extension_injects_available_catalog_and_selected_entrypoint()
         )
         .await;
 
-    assert_eq!(2, fragments.len());
-    assert_eq!("developer", fragments[0].role());
-    assert!(
-        fragments[0]
-            .render()
-            .starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
-    );
-    assert!(fragments[0].render().contains("lint-fix"));
-    assert_eq!("user", fragments[1].role());
-    assert!(fragments[1].render().contains("<name>lint-fix</name>"));
-    assert!(fragments[1].render().contains("# Lint Fix"));
+    assert_eq!(1, fragments.len());
+    assert_eq!("user", fragments[0].role());
+    assert!(fragments[0].render().contains("<name>lint-fix</name>"));
+    assert!(fragments[0].render().contains("# Lint Fix"));
     assert_eq!(
         vec![(
-            SkillAuthority::new(SkillSourceKind::Host, "host"),
-            SkillPackageId("host/lint-fix".to_string()),
-            SkillResourceId("lint-fix/SKILL.md".to_string()),
+            SkillAuthority::new(SkillSourceKind::Executor, "env-1"),
+            SkillPackageId("executor/lint-fix".to_string()),
+            SkillResourceId::new("lint-fix/SKILL.md"),
         )],
-        read_request_keys(&host_read_requests)
+        read_request_keys(&read_requests)
     );
-    assert!(
-        remote_read_requests
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty()
-    );
+    let rebuilt_prompt_fragments = registry.context_contributors()[0]
+        .contribute(&session_store, &thread_store)
+        .await;
+    assert_eq!(1, rebuilt_prompt_fragments.len());
+    assert!(rebuilt_prompt_fragments[0].text().contains("lint-fix"));
 
     let next_turn_store = ExtensionData::new("turn-2");
     let next_fragments = registry.turn_input_contributors()[0]
@@ -240,9 +234,91 @@ async fn installed_extension_injects_available_catalog_and_selected_entrypoint()
         )
         .await;
 
-    assert_eq!(1, next_fragments.len());
-    assert_eq!("developer", next_fragments[0].role());
-    assert!(next_fragments[0].render().contains("lint-fix"));
+    assert!(next_fragments.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> TestResult {
+    let read_requests = Arc::new(Mutex::new(Vec::new()));
+    let root_a_locator = "skill://root-a/shared/lint-fix/SKILL.md";
+    let root_b_locator = "skill://root-b/shared/lint-fix/SKILL.md";
+    let executor_provider = Arc::new(StaticSkillProvider {
+        catalog: SkillCatalog {
+            entries: [("root-a", root_a_locator), ("root-b", root_b_locator)]
+                .into_iter()
+                .map(|(root_id, locator)| {
+                    SkillCatalogEntry::new(
+                        SkillPackageId(locator.to_string()),
+                        SkillAuthority::new(SkillSourceKind::Executor, root_id),
+                        "lint-fix",
+                        "Fix lint errors.",
+                        SkillResourceId::new(locator),
+                    )
+                    .with_display_path(locator)
+                })
+                .collect(),
+            warnings: Vec::new(),
+        },
+        read_requests: Arc::clone(&read_requests),
+    });
+    let providers = SkillProviders::new().with_executor_provider(executor_provider);
+    let mut builder = ExtensionRegistryBuilder::new();
+    install_with_providers(&mut builder, providers);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    thread_store.insert(
+        [("root-a", "/skills/root-a"), ("root-b", "/skills/root-b")]
+            .into_iter()
+            .map(|(id, path)| SelectedCapabilityRoot {
+                id: id.to_string(),
+                location: CapabilityRootLocation::Environment {
+                    environment_id: "env-1".to_string(),
+                    path: path.to_string(),
+                },
+            })
+            .collect::<Vec<_>>(),
+    );
+    let session_source = SessionSource::Cli;
+    let config = default_config().await?;
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let fragments = registry.turn_input_contributors()[0]
+        .contribute(
+            TurnInputContext {
+                turn_id: "turn-1".to_string(),
+                user_input: vec![UserInput::Mention {
+                    name: "lint-fix".to_string(),
+                    path: root_b_locator.to_string(),
+                }],
+                environments: Vec::new(),
+            },
+            &session_store,
+            &thread_store,
+            &ExtensionData::new("turn-1"),
+        )
+        .await;
+
+    assert_eq!(1, fragments.len());
+    assert!(fragments[0].render().contains(root_b_locator));
+    assert_eq!(
+        vec![(
+            SkillAuthority::new(SkillSourceKind::Executor, "root-b"),
+            SkillPackageId(root_b_locator.to_string()),
+            SkillResourceId::new(root_b_locator),
+        )],
+        read_request_keys(&read_requests)
+    );
 
     Ok(())
 }
@@ -306,15 +382,14 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         .await;
 
     assert_eq!(2, fragments.len());
-    let catalog_fragment = fragments[0].render();
-    assert!(catalog_fragment.contains("visible-skill"));
-    assert!(!catalog_fragment.contains("hidden-skill"));
+    assert!(fragments[0].render().contains("visible-skill"));
+    assert!(!fragments[0].render().contains("hidden-skill"));
     assert!(fragments[1].render().contains("<name>hidden-skill</name>"));
     assert_eq!(
         vec![(
             SkillAuthority::new(SkillSourceKind::Host, "host"),
             SkillPackageId("host/hidden-skill".to_string()),
-            SkillResourceId("hidden-skill/SKILL.md".to_string()),
+            SkillResourceId::new("hidden-skill/SKILL.md"),
         )],
         read_request_keys(&read_requests)
     );
@@ -329,13 +404,9 @@ struct StaticSkillProvider {
 }
 
 impl SkillProvider for StaticSkillProvider {
-    fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+    fn list(&self, _query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
         let catalog = self.catalog.clone();
-        Box::pin(async move {
-            assert!(query.include_host_skills);
-            assert!(query.include_bundled_skills);
-            Ok(catalog)
-        })
+        Box::pin(async move { Ok(catalog) })
     }
 
     fn read(&self, request: SkillReadRequest) -> SkillProviderFuture<'_, SkillReadResult> {
@@ -369,7 +440,7 @@ fn test_entry(
         SkillAuthority::new(kind, authority_id),
         name,
         "Fix lint errors.",
-        SkillResourceId(main_prompt.to_string()),
+        SkillResourceId::new(main_prompt),
     )
     .with_display_path(format!("skill://{package_id}/SKILL.md"))
 }

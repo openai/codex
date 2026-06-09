@@ -127,7 +127,6 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadRollbackResponse;
-use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -698,6 +697,25 @@ fn archived_session_guidance(err: &color_eyre::eyre::Report) -> Option<String> {
         .split_once(" (code ")
         .map_or(message, |(message, _)| message);
     Some(message.to_string())
+}
+
+fn active_turn_interrupt_race(error: &TypedRequestError) -> Option<String> {
+    let TypedRequestError::Server { method, source } = error else {
+        return None;
+    };
+    if method != "turn/interrupt" {
+        return None;
+    }
+    let mismatch_prefix = "expected active turn id ";
+    let mismatch_separator = " but found ";
+    Some(
+        source
+            .message
+            .strip_prefix(mismatch_prefix)?
+            .split_once(mismatch_separator)?
+            .1
+            .to_string(),
+    )
 }
 
 impl App {

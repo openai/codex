@@ -6765,6 +6765,36 @@
         ],
         "type": "string"
       },
+      "CapabilityRootLocation": {
+        "description": "Location used to resolve a selected capability root.",
+        "oneOf": [
+          {
+            "description": "A path owned by an execution environment.",
+            "properties": {
+              "environmentId": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "environment"
+                ],
+                "title": "EnvironmentCapabilityRootLocationType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "environmentId",
+              "path",
+              "type"
+            ],
+            "title": "EnvironmentCapabilityRootLocation",
+            "type": "object"
+          }
+        ]
+      },
       "CodexErrorInfo": {
         "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
         "oneOf": [
@@ -15061,6 +15091,28 @@
         },
         "type": "object"
       },
+      "SelectedCapabilityRoot": {
+        "description": "A user-selected root that can expose one or more runtime capabilities.",
+        "properties": {
+          "id": {
+            "description": "Stable identifier supplied by the capability selection platform.",
+            "type": "string"
+          },
+          "location": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/CapabilityRootLocation"
+              }
+            ],
+            "description": "Where the selected root can be resolved."
+          }
+        },
+        "required": [
+          "id",
+          "location"
+        ],
+        "type": "object"
+      },
       "SendAddCreditsNudgeEmailParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -18061,11 +18113,6 @@
         "type": "string"
       },
       "ThreadSource": {
-        "enum": [
-          "user",
-          "subagent",
-          "memory_consolidation"
-        ],
         "type": "string"
       },
       "ThreadSourceKind": {

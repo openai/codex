@@ -4,6 +4,7 @@ use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
+use codex_extension_api::ExtensionDataInit;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
@@ -192,7 +193,7 @@ impl SessionConfiguration {
             session_source: self.session_source.clone(),
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
-            thread_source: self.thread_source,
+            thread_source: self.thread_source.clone(),
         }
     }
 
@@ -487,6 +488,7 @@ impl Session {
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
+        thread_extension_init: ExtensionDataInit,
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
@@ -547,7 +549,7 @@ impl Session {
                                 forked_from_id,
                                 parent_thread_id,
                                 source: session_source,
-                                thread_source: session_configuration.thread_source,
+                                thread_source: session_configuration.thread_source.clone(),
                                 base_instructions: BaseInstructions {
                                     text: session_configuration.base_instructions.clone(),
                                 },
@@ -961,8 +963,10 @@ impl Session {
             );
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
-            let thread_extension_data =
-                codex_extension_api::ExtensionData::new(thread_id.to_string());
+            let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
+                thread_id.to_string(),
+                thread_extension_init,
+            );
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
@@ -1085,7 +1089,7 @@ impl Session {
                     thread_id,
                     forked_from_id,
                     parent_thread_id,
-                    thread_source: session_configuration.thread_source,
+                    thread_source: session_configuration.thread_source.clone(),
                     thread_name: session_configuration.thread_name.clone(),
                     model: session_configuration.collaboration_mode.model().to_string(),
                     model_provider_id: config.model_provider_id.clone(),

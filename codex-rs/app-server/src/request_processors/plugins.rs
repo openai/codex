@@ -1036,6 +1036,7 @@ impl PluginRequestProcessor {
                     &config,
                     &outcome.plugin.apps,
                     Arc::clone(&environment_manager),
+                    self.thread_manager.mcp_manager(),
                 )
                 .await;
                 let visible_skills = outcome
@@ -1118,6 +1119,7 @@ impl PluginRequestProcessor {
                     &config,
                     &plugin_apps,
                     Arc::clone(&environment_manager),
+                    self.thread_manager.mcp_manager(),
                 )
                 .await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
@@ -1611,10 +1613,11 @@ impl PluginRequestProcessor {
         let environment_manager = self.thread_manager.environment_manager();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
             connectors::list_all_connectors_with_options(config, /*force_refetch*/ false),
-            connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+            connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 config,
                 /*force_refetch*/ true,
-                Arc::clone(&environment_manager)
+                Arc::clone(&environment_manager),
+                self.thread_manager.mcp_manager(),
             ),
         );
 
@@ -1881,6 +1884,7 @@ async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[codex_plugin::AppConnectorId],
     environment_manager: Arc<EnvironmentManager>,
+    mcp_manager: Arc<McpManager>,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
@@ -1900,10 +1904,11 @@ async fn load_plugin_app_summaries(
     let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
 
     let accessible_connectors =
-        match connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+        match connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
             config,
             /*force_refetch*/ false,
             environment_manager,
+            mcp_manager,
         )
         .await
         {

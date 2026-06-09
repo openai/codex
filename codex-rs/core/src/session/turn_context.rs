@@ -239,7 +239,7 @@ impl TurnContext {
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
             parent_thread_id: self.parent_thread_id,
-            thread_source: self.thread_source,
+            thread_source: self.thread_source.clone(),
             environments: self.environments.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.clone(),
@@ -514,7 +514,7 @@ impl Session {
             session_configuration.forked_from_thread_id,
             session_configuration.parent_thread_id,
             &session_configuration.session_source,
-            session_configuration.thread_source,
+            session_configuration.thread_source.clone(),
             sub_id.clone(),
             cwd.clone(),
             &session_configuration.permission_profile(),
@@ -538,7 +538,7 @@ impl Session {
             reasoning_summary,
             session_source,
             parent_thread_id: session_configuration.parent_thread_id,
-            thread_source: session_configuration.thread_source,
+            thread_source: session_configuration.thread_source.clone(),
             environments,
             #[allow(deprecated)]
             cwd,

@@ -100,6 +100,7 @@ async fn multi_agent_version_override_omits_multi_agent_tools_from_requests() ->
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            thread_extension_init: Default::default(),
         })
         .await?;
     assert_eq!(
