@@ -476,7 +476,7 @@ impl AppServerSession {
         self.thread_params_mode
     }
 
-    fn session_config_with_effective_service_tier(&self, config: &Config) -> Config {
+    pub(crate) fn session_config_with_effective_service_tier(&self, config: &Config) -> Config {
         let Some(model) = config.model.as_deref().or(self.default_model.as_deref()) else {
             return config.clone();
         };
@@ -1423,7 +1423,7 @@ fn thread_start_params_from_config(
     }
 }
 
-fn thread_resume_params_from_config(
+pub(crate) fn thread_resume_params_from_config(
     config: Config,
     thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
@@ -1525,7 +1525,7 @@ async fn started_thread_from_start_response(
     })
 }
 
-async fn started_thread_from_resume_response(
+pub(crate) async fn started_thread_from_resume_response(
     response: ThreadResumeResponse,
     config: &Config,
     thread_params_mode: ThreadParamsMode,

@@ -1287,6 +1287,22 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
 
+        if self
+            .pending_app_server_requests
+            .agent_thread_selection
+            .is_some()
+            && !matches!(event, TuiEvent::Draw | TuiEvent::Resize)
+        {
+            if let TuiEvent::Key(key_event) = &event
+                && key_event.code == KeyCode::Esc
+                && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            {
+                self.cancel_pending_agent_selection();
+                tui.frame_requester().schedule_frame();
+            }
+            return Ok(AppRunControl::Continue);
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {

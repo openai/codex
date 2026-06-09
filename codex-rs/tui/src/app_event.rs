@@ -25,12 +25,14 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
+use uuid::Uuid;
 
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
@@ -72,6 +74,13 @@ pub(crate) struct HistoryLookupResponse {
     pub(crate) offset: usize,
     pub(crate) log_id: u64,
     pub(crate) entry: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) enum PreparedAgentThread {
+    Resumed(AppServerStartedThread),
+    Replay(Thread),
+    Unavailable,
 }
 
 impl RealtimeAudioDeviceKind {
@@ -140,6 +149,14 @@ pub(crate) enum AppEvent {
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
+    /// Deliver the result of preparing an agent thread for selection.
+    AgentThreadSelectionPrepared {
+        request_id: Uuid,
+        thread_id: ThreadId,
+        attaching: bool,
+        result: Result<PreparedAgentThread, String>,
+    },
+    AgentThreadSelectionCleanupFinished(ThreadId, Result<(), String>),
 
     /// Fork the current thread into a transient side conversation.
     StartSide {

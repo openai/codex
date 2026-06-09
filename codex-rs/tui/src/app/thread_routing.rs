@@ -1177,35 +1177,6 @@ impl App {
         Ok(())
     }
 
-    pub(super) async fn refresh_snapshot_session_if_needed(
-        &mut self,
-        app_server: &mut AppServerSession,
-        thread_id: ThreadId,
-        is_replay_only: bool,
-        snapshot: &mut ThreadEventSnapshot,
-    ) {
-        if !self.should_refresh_snapshot_session(thread_id, is_replay_only, snapshot) {
-            return;
-        }
-
-        match app_server
-            .resume_thread(self.config.clone(), thread_id)
-            .await
-        {
-            Ok(started) => {
-                self.apply_refreshed_snapshot_thread(thread_id, started, snapshot)
-                    .await
-            }
-            Err(err) => {
-                tracing::warn!(
-                    thread_id = %thread_id,
-                    error = %err,
-                    "failed to refresh inferred thread session before replay"
-                );
-            }
-        }
-    }
-
     pub(super) fn should_refresh_snapshot_session(
         &self,
         thread_id: ThreadId,

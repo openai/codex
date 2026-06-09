@@ -12,6 +12,8 @@ use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_protocol::ThreadId;
+use uuid::Uuid;
 
 impl App {
     pub(super) async fn reject_app_server_request(
@@ -73,6 +75,8 @@ pub(super) struct PendingAppServerRequests {
     permissions_approvals: HashMap<String, AppServerRequestId>,
     user_inputs: HashMap<String, VecDeque<PendingUserInputRequest>>,
     mcp_requests: HashMap<McpRequestKey, AppServerRequestId>,
+    pub(super) agent_thread_selection: Option<(Uuid, ThreadId)>,
+    pub(super) prepared_agent_thread_selection: Option<bool>,
 }
 
 impl PendingAppServerRequests {
@@ -82,6 +86,8 @@ impl PendingAppServerRequests {
         self.permissions_approvals.clear();
         self.user_inputs.clear();
         self.mcp_requests.clear();
+        self.agent_thread_selection = None;
+        self.prepared_agent_thread_selection = None;
     }
 
     pub(super) fn note_server_request(

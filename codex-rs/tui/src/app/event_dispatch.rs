@@ -1716,6 +1716,26 @@ impl App {
                 self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await?;
             }
+            AppEvent::AgentThreadSelectionPrepared {
+                request_id,
+                thread_id,
+                attaching,
+                result,
+            } => {
+                if self
+                    .handle_agent_thread_selection_prepared(
+                        app_server, request_id, thread_id, attaching, result,
+                    )
+                    .await
+                {
+                    self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
+                        .await?;
+                }
+            }
+            AppEvent::AgentThreadSelectionCleanupFinished(thread_id, result) => {
+                self.handle_agent_thread_selection_cleanup_finished(thread_id, result)
+                    .await;
+            }
             AppEvent::StartSide {
                 parent_thread_id,
                 user_message,

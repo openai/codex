@@ -8,6 +8,7 @@ use super::*;
 use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::user_count;
+use crate::app_event::PreparedAgentThread;
 
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::create_initial_user_message;
@@ -1207,7 +1208,7 @@ async fn collab_receiver_notification_does_not_cache_not_found_thread() {
 }
 
 #[tokio::test]
-async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
+async fn open_agent_picker_uses_cached_navigation_without_backend_reads() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
@@ -1215,23 +1216,13 @@ async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
     .await
     .expect("embedded app server");
     let thread_id = ThreadId::new();
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+    app.agent_navigation.upsert(
+        thread_id, /*agent_nickname*/ None, /*agent_role*/ None, /*is_closed*/ false,
+    );
 
     Box::pin(app.open_agent_picker(&mut app_server)).await;
 
-    assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: None,
-            agent_role: None,
-            agent_path: None,
-            is_running: false,
-            is_closed: true,
-        })
-    );
-    assert_eq!(app.agent_navigation.ordered_thread_ids(), vec![thread_id]);
+    assert!(app.chat_widget.has_active_view());
     Ok(())
 }
 
@@ -1312,7 +1303,7 @@ async fn open_agent_picker_clears_completed_path_backed_agent_running_state() ->
 }
 
 #[tokio::test]
-async fn open_agent_picker_refreshes_replay_only_path_backed_liveness() -> Result<()> {
+async fn open_agent_picker_clears_replay_only_path_backed_running_hint() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
@@ -1343,65 +1334,69 @@ async fn open_agent_picker_refreshes_replay_only_path_backed_liveness() -> Resul
             agent_role: None,
             agent_path: Some("/root/child".to_string()),
             is_running: false,
-            is_closed: true,
+            is_closed: false,
         })
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
+async fn selecting_uncached_agent_keeps_event_processing_available() -> Result<()> {
+    let mut app = make_test_app().await;
+    let app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
     let thread_id = ThreadId::new();
     app.agent_navigation.upsert(
         thread_id,
-        Some("Ghost".to_string()),
+        Some("Scout".to_string()),
         Some("worker".to_string()),
         /*is_closed*/ false,
     );
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
-
-    assert_eq!(app.agent_navigation.get(&thread_id), None);
-    assert!(app.agent_navigation.is_empty());
+    assert!(
+        !app.begin_agent_thread_selection(&app_server, thread_id)
+            .await
+    );
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        turn_started_notification(ThreadId::new(), "turn-1"),
+    ));
+    assert!(app.chat_widget.is_task_running_for_test());
     Ok(())
 }
 
 #[tokio::test]
-async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
+async fn escape_cancels_pending_agent_selection_and_ignores_late_result() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
     let thread_id = ThreadId::new();
+    let request_id = Uuid::new_v4();
+    app.pending_app_server_requests.agent_thread_selection = Some((request_id, thread_id));
+    app.cancel_pending_agent_selection();
+    assert_eq!(app.pending_app_server_requests.agent_thread_selection, None);
+
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
     app.agent_navigation.upsert(
-        thread_id,
-        Some("Robie".to_string()),
-        Some("explorer".to_string()),
-        /*is_closed*/ false,
+        thread_id, /*agent_nickname*/ None, /*agent_role*/ None, /*is_closed*/ false,
     );
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
-
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: Some("Robie".to_string()),
-            agent_role: Some("explorer".to_string()),
-            agent_path: None,
-            is_running: false,
-            is_closed: true,
-        })
+    assert!(
+        !app.handle_agent_thread_selection_prepared(
+            &mut app_server,
+            request_id,
+            thread_id,
+            /*attaching*/ true,
+            Ok(PreparedAgentThread::Unavailable),
+        )
+        .await
     );
+
+    app.handle_agent_thread_selection_cleanup_finished(thread_id, Ok(()))
+        .await;
+
+    assert!(!app.thread_event_channels.contains_key(&thread_id));
+    assert!(app.agent_navigation.get(&thread_id).is_some());
     Ok(())
 }
 
@@ -1429,6 +1424,10 @@ fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
         let thread_id = started.session.thread_id;
         app.thread_event_channels
             .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+        app.agent_navigation.upsert(
+            thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
 
         Box::pin(app.open_agent_picker(&mut app_server)).await;
 
@@ -1447,7 +1446,7 @@ fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
 }
 
 #[test]
-fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads() -> Result<()> {
+fn agent_selection_rejects_empty_non_ephemeral_fallback_threads() -> Result<()> {
     const WORKER_THREADS: usize = 1;
     const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -1458,55 +1457,12 @@ fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads
         .build()?;
 
     runtime.block_on(async {
-        let config = {
-            let app = make_test_app().await;
-            app.chat_widget.config_ref().clone()
-        };
-        let mut app_server = crate::start_embedded_app_server_for_picker(&config)
-            .await
-            .expect("embedded app server");
-        let started = app_server.start_thread(&config).await?;
-        let thread_id = started.session.thread_id;
-        let mut app = make_test_app().await;
-        app.agent_navigation.upsert(
-            thread_id,
-            Some("Scout".to_string()),
-            Some("worker".to_string()),
-            /*is_closed*/ false,
-        );
-
-        let err = app
-            .attach_live_thread_for_selection(&mut app_server, thread_id)
-            .await
-            .expect_err("empty fallback should not attach as a blank replay-only thread");
-
-        assert_eq!(
-            err.to_string(),
-            format!("Agent thread {thread_id} is not yet available for replay or live attach.")
-        );
-        assert!(!app.thread_event_channels.contains_key(&thread_id));
-        Ok(())
-    })
-}
-
-#[test]
-fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() -> Result<()> {
-    const WORKER_THREADS: usize = 1;
-    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(WORKER_THREADS)
-        .thread_stack_size(TEST_STACK_SIZE_BYTES)
-        .enable_all()
-        .build()?;
-
-    runtime.block_on(async {
-        let mut app = make_test_app().await;
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let mut app_server =
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-        let mut ephemeral_config = app.chat_widget.config_ref().clone();
-        ephemeral_config.ephemeral = true;
-        let started = app_server.start_thread(&ephemeral_config).await?;
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
         let thread_id = started.session.thread_id;
         app.agent_navigation.upsert(
             thread_id,
@@ -1515,13 +1471,19 @@ fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() ->
             /*is_closed*/ false,
         );
 
-        let err = app
-            .attach_live_thread_for_selection(&mut app_server, thread_id)
-            .await
-            .expect_err("ephemeral fallback should not attach as a blank live thread");
+        assert!(
+            !app.begin_agent_thread_selection(&app_server, thread_id)
+                .await
+        );
+        let err = match app_event_rx.recv().await {
+            Some(AppEvent::AgentThreadSelectionPrepared {
+                result: Err(err), ..
+            }) => err,
+            other => panic!("expected failed agent preparation, got {other:?}"),
+        };
 
         assert_eq!(
-            err.to_string(),
+            err,
             format!("Agent thread {thread_id} is not yet available for replay or live attach.")
         );
         assert!(!app.thread_event_channels.contains_key(&thread_id));
@@ -1556,27 +1518,30 @@ async fn should_attach_live_thread_for_selection_skips_closed_metadata_only_thre
 }
 
 #[tokio::test]
-async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
+async fn local_agent_selection_needs_no_backend_preparation() -> Result<()> {
+    let mut app = make_test_app().await;
+    let app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
     let thread_id = ThreadId::new();
+    let mut session = test_thread_session(thread_id, test_path_buf("/tmp/agent"));
+    session.rollout_path = Some(test_path_buf("/tmp/agent-rollout.jsonl"));
+    app.thread_event_channels.insert(
+        thread_id,
+        ThreadEventChannel::new_with_session(/*capacity*/ 1, session, Vec::new()),
+    );
     app.agent_navigation.upsert(
         thread_id,
-        Some("Ghost".to_string()),
+        Some("Scout".to_string()),
         Some("worker".to_string()),
         /*is_closed*/ false,
     );
 
-    let is_available =
-        Box::pin(app.refresh_agent_picker_thread_liveness(&mut app_server, thread_id)).await;
+    assert!(
+        app.begin_agent_thread_selection(&app_server, thread_id)
+            .await
+    );
 
-    assert!(!is_available);
-    assert_eq!(app.agent_navigation.get(&thread_id), None);
-    assert!(!app.thread_event_channels.contains_key(&thread_id));
+    assert_eq!(app.pending_app_server_requests.agent_thread_selection, None);
     Ok(())
 }
 
@@ -2160,6 +2125,9 @@ async fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disable
     let thread_id = ThreadId::new();
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+    app.agent_navigation.upsert(
+        thread_id, /*agent_nickname*/ None, /*agent_role*/ None, /*is_closed*/ false,
+    );
 
     Box::pin(app.open_agent_picker(&mut app_server)).await;
     app.chat_widget

@@ -5,13 +5,22 @@
 //! cache used for multi-agent navigation.
 
 use super::*;
+use crate::app_event::PreparedAgentThread;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadUnsubscribeParams;
+use codex_app_server_protocol::ThreadUnsubscribeResponse;
+
+fn agent_request_id(operation: &str) -> RequestId {
+    RequestId::String(format!("agent-thread-{operation}-{}", Uuid::new_v4()))
+}
 
 impl App {
-    pub(super) async fn open_agent_picker(&mut self, app_server: &mut AppServerSession) {
-        self.backfill_loaded_subagent_threads(app_server).await;
-        // V2 subagents are identified by canonical paths observed from activity events or loaded
-        // thread metadata. Prefer local buffered turn state for liveness, and fall back to
-        // thread/read only when no local event channel exists.
+    pub(super) async fn open_agent_picker(&mut self, _app_server: &mut AppServerSession) {
         let path_backed_thread_ids: Vec<_> = self
             .agent_navigation
             .ordered_path_backed_subagent_threads(self.primary_thread_id)
@@ -25,8 +34,8 @@ impl App {
                 let is_running = channel.store.lock().await.active_turn_id().is_some();
                 self.agent_navigation.set_running(thread_id, is_running);
             } else {
-                self.refresh_agent_picker_thread_liveness(app_server, thread_id)
-                    .await;
+                self.agent_navigation
+                    .set_running(thread_id, /*is_running*/ false);
             }
         }
         let path_backed_threads = self
@@ -61,25 +70,6 @@ impl App {
                 ));
             return;
         }
-
-        let mut thread_ids = self.agent_navigation.tracked_thread_ids();
-        for thread_id in self.thread_event_channels.keys().copied() {
-            if !thread_ids.contains(&thread_id) {
-                thread_ids.push(thread_id);
-            }
-        }
-        for thread_id in thread_ids {
-            if self.side_threads.contains_key(&thread_id) {
-                continue;
-            }
-            if !self
-                .refresh_agent_picker_thread_liveness(app_server, thread_id)
-                .await
-            {
-                continue;
-            }
-        }
-
         let has_non_primary_agent_thread = self
             .agent_navigation
             .has_non_primary_thread(self.primary_thread_id);
@@ -97,33 +87,34 @@ impl App {
         let mut initial_selected_idx = None;
         let items: Vec<SelectionItem> = self
             .agent_navigation
-            .ordered_threads()
-            .into_iter()
+            .tracked_thread_ids()
+            .iter()
             .enumerate()
-            .map(|(idx, (thread_id, entry))| {
-                if self.active_thread_id == Some(thread_id) {
+            .filter_map(|(idx, thread_id)| {
+                let entry = self.agent_navigation.get(thread_id)?;
+                if self.active_thread_id == Some(*thread_id) {
                     initial_selected_idx = Some(idx);
                 }
-                let id = thread_id;
-                let is_primary = self.primary_thread_id == Some(thread_id);
+                let id = *thread_id;
+                let is_primary = self.primary_thread_id == Some(*thread_id);
                 let name = format_agent_picker_item_name(
                     entry.agent_nickname.as_deref(),
                     entry.agent_role.as_deref(),
                     is_primary,
                 );
                 let uuid = thread_id.to_string();
-                SelectionItem {
+                Some(SelectionItem {
                     name: name.clone(),
                     name_prefix_spans: agent_picker_status_dot_spans(entry.is_closed),
                     description: Some(uuid.clone()),
-                    is_current: self.active_thread_id == Some(thread_id),
+                    is_current: self.active_thread_id == Some(*thread_id),
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::SelectAgentThread(id));
                     })],
                     dismiss_on_select: true,
                     search_value: Some(format!("{name} {uuid}")),
                     ..Default::default()
-                }
+                })
             })
             .collect();
 
@@ -187,135 +178,291 @@ impl App {
         self.sync_active_agent_label();
     }
 
-    pub(super) async fn refresh_agent_picker_thread_liveness(
+    pub(super) async fn begin_agent_thread_selection(
         &mut self,
-        app_server: &mut AppServerSession,
+        app_server: &AppServerSession,
         thread_id: ThreadId,
     ) -> bool {
-        let existing_entry = self.agent_navigation.get(&thread_id).cloned();
-        let has_replay_channel = self.thread_event_channels.contains_key(&thread_id);
-        match app_server
-            .thread_read(thread_id, /*include_turns*/ false)
-            .await
+        if self.active_thread_id == Some(thread_id)
+            || self
+                .pending_app_server_requests
+                .agent_thread_selection
+                .is_some()
         {
-            Ok(thread) => {
-                let is_running = matches!(
-                    thread.status,
-                    codex_app_server_protocol::ThreadStatus::Active { .. }
-                );
-                let is_closed = matches!(
-                    thread.status,
-                    codex_app_server_protocol::ThreadStatus::NotLoaded
-                );
-                self.upsert_agent_picker_thread(
-                    thread_id,
-                    thread.agent_nickname.or_else(|| {
-                        existing_entry
-                            .as_ref()
-                            .and_then(|entry| entry.agent_nickname.clone())
-                    }),
-                    thread.agent_role.or_else(|| {
-                        existing_entry
-                            .as_ref()
-                            .and_then(|entry| entry.agent_role.clone())
-                    }),
-                    is_closed,
-                );
-                self.agent_navigation.set_running(thread_id, is_running);
-                true
+            return false;
+        }
+
+        let is_replay_only = self
+            .agent_navigation
+            .get(&thread_id)
+            .is_some_and(|entry| entry.is_closed);
+        let attaching = if self.should_attach_live_thread_for_selection(thread_id) {
+            true
+        } else if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+            let snapshot = channel.store.lock().await.snapshot();
+            if !self.should_refresh_snapshot_session(thread_id, is_replay_only, &snapshot) {
+                return true;
             }
-            Err(err) => {
-                if Self::is_terminal_thread_read_error(&err) && !has_replay_channel {
-                    self.agent_navigation.remove(thread_id);
-                    return false;
-                }
-                let is_closed = Self::closed_state_for_thread_read_error(
-                    &err,
-                    existing_entry.as_ref().map(|entry| entry.is_closed),
-                );
-                if let Some(entry) = existing_entry {
-                    self.upsert_agent_picker_thread(
-                        thread_id,
-                        entry.agent_nickname,
-                        entry.agent_role,
-                        is_closed,
-                    );
-                } else {
-                    self.upsert_agent_picker_thread(
-                        thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
-                        is_closed,
-                    );
-                }
-                self.agent_navigation
-                    .set_running(thread_id, /*is_running*/ false);
-                true
+            false
+        } else {
+            return true;
+        };
+
+        let request_id = Uuid::new_v4();
+        self.pending_app_server_requests.agent_thread_selection = Some((request_id, thread_id));
+
+        let request_handle = app_server.request_handle();
+        let config = self.config.clone();
+        let thread_params_mode = app_server.thread_params_mode();
+        let resume_params = crate::app_server_session::thread_resume_params_from_config(
+            app_server.session_config_with_effective_service_tier(&config),
+            thread_id,
+            thread_params_mode,
+            app_server.remote_cwd_override(),
+        );
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = Self::prepare_agent_thread_selection(
+                request_handle,
+                config,
+                thread_params_mode,
+                resume_params,
+                thread_id,
+                attaching,
+            )
+            .await;
+            app_event_tx.send(AppEvent::AgentThreadSelectionPrepared {
+                request_id,
+                thread_id,
+                attaching,
+                result,
+            });
+        });
+        false
+    }
+
+    async fn prepare_agent_thread_selection(
+        request_handle: AppServerRequestHandle,
+        config: Config,
+        thread_params_mode: crate::app_server_session::ThreadParamsMode,
+        resume_params: ThreadResumeParams,
+        thread_id: ThreadId,
+        attaching: bool,
+    ) -> std::result::Result<PreparedAgentThread, String> {
+        let resume: Result<AppServerStartedThread> = async {
+            let response: ThreadResumeResponse = request_handle
+                .request_typed(ClientRequest::ThreadResume {
+                    request_id: agent_request_id("resume"),
+                    params: resume_params,
+                })
+                .await
+                .map_err(|err| {
+                    color_eyre::eyre::eyre!("thread/resume failed during TUI bootstrap: {err}")
+                })?;
+            let mut started = crate::app_server_session::started_thread_from_resume_response(
+                response,
+                &config,
+                thread_params_mode,
+            )
+            .await?;
+            if let Some(fork_parent_id) = started.session.forked_from_id {
+                started.session.fork_parent_title = Self::request_agent_thread_read(
+                    &request_handle,
+                    fork_parent_id,
+                    /*include_turns*/ false,
+                )
+                .await
+                .ok()
+                .and_then(|thread| thread.name);
             }
+            Ok(started)
+        }
+        .await;
+        let resume_err = match resume {
+            Ok(started) => return Ok(PreparedAgentThread::Resumed(started)),
+            Err(err) => err,
+        };
+        if !attaching {
+            tracing::warn!(
+                thread_id = %thread_id,
+                error = %resume_err,
+                "failed to refresh inferred thread session before replay"
+            );
+            return Err(format!("{resume_err:#}"));
+        }
+
+        tracing::warn!(
+            thread_id = %thread_id,
+            error = %resume_err,
+            "failed to resume live thread for selection; falling back to thread/read"
+        );
+        let thread = match Self::request_agent_thread_read(
+            &request_handle,
+            thread_id,
+            /*include_turns*/ true,
+        )
+        .await
+        {
+            Ok(thread) => thread,
+            Err(err)
+                if Self::closed_state_for_thread_read_error(
+                    &err, /*existing_is_closed*/ None,
+                ) =>
+            {
+                return Ok(PreparedAgentThread::Unavailable);
+            }
+            Err(err) if Self::can_fallback_from_include_turns_error(&err) => {
+                return Err(format!(
+                    "Agent thread {thread_id} is not yet available for replay or live attach."
+                ));
+            }
+            Err(err) => return Err(format!("{err:#}")),
+        };
+        if thread.turns.is_empty() {
+            Err(format!(
+                "Agent thread {thread_id} is not yet available for replay or live attach."
+            ))
+        } else {
+            Ok(PreparedAgentThread::Replay(thread))
         }
     }
 
-    /// Materializes a live thread into local replay state when the picker knows about it but the
-    /// TUI has not cached a local event channel yet.
-    ///
-    /// Resume-time backfill intentionally avoids creating empty placeholder channels, because those
-    /// placeholders make stale `/agent` entries open blank transcripts. When a user later selects a
-    /// still-live discovered thread, attach it on demand with a real resumed snapshot.
-    pub(super) async fn attach_live_thread_for_selection(
+    async fn request_agent_thread_read(
+        request_handle: &AppServerRequestHandle,
+        thread_id: ThreadId,
+        include_turns: bool,
+    ) -> Result<Thread> {
+        let response: ThreadReadResponse = request_handle
+            .request_typed(ClientRequest::ThreadRead {
+                request_id: agent_request_id("read"),
+                params: ThreadReadParams {
+                    thread_id: thread_id.to_string(),
+                    include_turns,
+                },
+            })
+            .await
+            .wrap_err("thread/read failed during TUI session lookup")?;
+        Ok(response.thread)
+    }
+
+    pub(super) fn cancel_pending_agent_selection(&mut self) {
+        self.pending_app_server_requests.agent_thread_selection = None;
+    }
+
+    pub(super) async fn handle_agent_thread_selection_prepared(
         &mut self,
         app_server: &mut AppServerSession,
+        request_id: Uuid,
         thread_id: ThreadId,
-    ) -> Result<bool> {
-        if self.thread_event_channels.contains_key(&thread_id) {
-            return Ok(true);
+        attaching: bool,
+        result: std::result::Result<PreparedAgentThread, String>,
+    ) -> bool {
+        if self.pending_app_server_requests.agent_thread_selection != Some((request_id, thread_id))
+        {
+            self.cleanup_agent_thread_subscription(app_server, thread_id, attaching);
+            return false;
         }
 
-        let (session, turns, live_attached) = match app_server
-            .resume_thread(self.config.clone(), thread_id)
-            .await
-        {
-            Ok(started) => (started.session, started.turns, true),
-            Err(resume_err) => {
-                tracing::warn!(
-                    thread_id = %thread_id,
-                    error = %resume_err,
-                    "failed to resume live thread for selection; falling back to thread/read"
-                );
-                let (thread, turns) = match app_server
-                    .thread_read(thread_id, /*include_turns*/ true)
-                    .await
-                {
-                    Ok(thread) => {
-                        let turns = thread.turns.clone();
-                        (thread, turns)
-                    }
-                    Err(err) if Self::can_fallback_from_include_turns_error(&err) => {
-                        let thread = app_server
-                            .thread_read(thread_id, /*include_turns*/ false)
-                            .await?;
-                        (thread, Vec::new())
-                    }
-                    Err(err) => return Err(err),
-                };
-                if turns.is_empty() {
-                    // A `thread/read` fallback without turns would create a blank local replay
-                    // channel with no live listener attached, which blocks later real re-attach.
-                    return Err(color_eyre::eyre::eyre!(
-                        "Agent thread {thread_id} is not yet available for replay or live attach."
-                    ));
-                }
-                let mut session = self.session_state_for_thread_read(thread_id, &thread).await;
-                // `thread/read` can seed replay state, but it does not attach the app-server
-                // listener that `thread/resume` establishes, so treat this path as replay-only.
-                session.model.clear();
-                (session, turns, false)
+        self.pending_app_server_requests.agent_thread_selection = None;
+        let keep_subscription = matches!(&result, Ok(PreparedAgentThread::Resumed(_)));
+        let replay_only = match result {
+            Ok(PreparedAgentThread::Resumed(started)) => {
+                let channel = self.ensure_thread_channel(thread_id);
+                let mut snapshot = channel.store.lock().await.snapshot();
+                self.apply_refreshed_snapshot_thread(thread_id, started, &mut snapshot)
+                    .await;
+                Some(false)
             }
+            Ok(PreparedAgentThread::Replay(mut thread)) => {
+                let mut session = self.session_state_for_thread_read(thread_id, &thread).await;
+                session.model.clear();
+                let channel = self.ensure_thread_channel(thread_id);
+                channel.mark_replay_only();
+                channel
+                    .store
+                    .lock()
+                    .await
+                    .set_session(session, std::mem::take(&mut thread.turns));
+                Some(true)
+            }
+            Ok(PreparedAgentThread::Unavailable) => {
+                self.agent_navigation.remove(thread_id);
+                self.chat_widget
+                    .add_error_message(format!("Agent thread {thread_id} is no longer available."));
+                None
+            }
+            Err(err) if attaching => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to attach to agent thread {thread_id}: {err}"
+                ));
+                None
+            }
+            Err(_) => Some(false),
         };
-        let channel = self.ensure_thread_channel(thread_id);
-        if !live_attached {
-            channel.mark_replay_only();
+        if !keep_subscription {
+            self.cleanup_agent_thread_subscription(app_server, thread_id, attaching);
         }
-        let mut store = channel.store.lock().await;
-        store.set_session(session, turns);
-        Ok(live_attached)
+        let Some(replay_only) = replay_only else {
+            return false;
+        };
+        self.pending_app_server_requests
+            .prepared_agent_thread_selection = Some(replay_only);
+        true
+    }
+
+    fn cleanup_agent_thread_subscription(
+        &self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        attaching: bool,
+    ) {
+        if !attaching
+            || self
+                .pending_app_server_requests
+                .agent_thread_selection
+                .is_some_and(|pending| pending.1 == thread_id)
+            || self.active_thread_id == Some(thread_id)
+        {
+            return;
+        }
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = request_handle
+                .request_typed::<ThreadUnsubscribeResponse>(ClientRequest::ThreadUnsubscribe {
+                    request_id: agent_request_id("unsubscribe"),
+                    params: ThreadUnsubscribeParams {
+                        thread_id: thread_id.to_string(),
+                    },
+                })
+                .await
+                .map(|_| ())
+                .map_err(|err| format!("thread/unsubscribe failed: {err}"));
+            app_event_tx.send(AppEvent::AgentThreadSelectionCleanupFinished(
+                thread_id, result,
+            ));
+        });
+    }
+
+    pub(super) async fn handle_agent_thread_selection_cleanup_finished(
+        &mut self,
+        thread_id: ThreadId,
+        result: std::result::Result<(), String>,
+    ) {
+        let thread_is_in_use = self.active_thread_id == Some(thread_id)
+            || matches!(
+                self.pending_app_server_requests.agent_thread_selection,
+                Some((_, pending_thread_id)) if pending_thread_id == thread_id
+            );
+        match result {
+            Ok(()) if !thread_is_in_use => {
+                self.abort_thread_event_listener(thread_id);
+                self.thread_event_channels.remove(&thread_id);
+                self.refresh_pending_thread_approvals().await;
+            }
+            Ok(()) => {}
+            Err(err) => tracing::warn!(thread_id = %thread_id, "{err}"),
+        }
     }
 
     /// Replaces the chat widget and re-seeds the new widget's collab metadata from the navigation
@@ -352,42 +499,38 @@ impl App {
         thread_id: ThreadId,
     ) -> Result<()> {
         if self.active_thread_id == Some(thread_id) {
+            self.pending_app_server_requests
+                .prepared_agent_thread_selection = None;
             return Ok(());
         }
-
-        if !self
-            .refresh_agent_picker_thread_liveness(app_server, thread_id)
-            .await
+        let attached_replay_only = if let Some(replay_only) = self
+            .pending_app_server_requests
+            .prepared_agent_thread_selection
+            .take()
         {
-            self.chat_widget
-                .add_error_message(format!("Agent thread {thread_id} is no longer available."));
-            return Ok(());
-        }
+            replay_only
+        } else {
+            if !self
+                .begin_agent_thread_selection(app_server, thread_id)
+                .await
+            {
+                return Ok(());
+            }
+            false
+        };
 
         let mut is_replay_only = self
             .agent_navigation
             .get(&thread_id)
-            .is_some_and(|entry| entry.is_closed);
-        let mut attached_replay_only = false;
-        if self.should_attach_live_thread_for_selection(thread_id) {
-            match self
-                .attach_live_thread_for_selection(app_server, thread_id)
-                .await
-            {
-                Ok(live_attached) => {
-                    attached_replay_only = !live_attached;
-                    if attached_replay_only {
-                        is_replay_only = true;
-                    }
-                }
-                Err(err) => {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to attach to agent thread {thread_id}: {err}"
-                    ));
-                    return Ok(());
-                }
-            }
-        } else if !self.thread_event_channels.contains_key(&thread_id) && is_replay_only {
+            .is_some_and(|entry| entry.is_closed)
+            || self
+                .thread_event_channels
+                .get(&thread_id)
+                .is_some_and(|channel| channel.attachment() == ThreadEventAttachment::ReplayOnly);
+        if attached_replay_only {
+            is_replay_only = true;
+        }
+        if !self.thread_event_channels.contains_key(&thread_id) && is_replay_only {
             self.chat_widget
                 .add_error_message(format!("Agent thread {thread_id} is no longer available."));
             return Ok(());
@@ -396,8 +539,7 @@ impl App {
         let previous_thread_id = self.active_thread_id;
         self.store_active_thread_receiver().await;
         self.active_thread_id = None;
-        let Some((receiver, mut snapshot)) = self.activate_thread_for_replay(thread_id).await
-        else {
+        let Some((receiver, snapshot)) = self.activate_thread_for_replay(thread_id).await else {
             self.chat_widget
                 .add_error_message(format!("Agent thread {thread_id} is already active."));
             if let Some(previous_thread_id) = previous_thread_id {
@@ -405,15 +547,6 @@ impl App {
             }
             return Ok(());
         };
-
-        self.refresh_snapshot_session_if_needed(
-            app_server,
-            thread_id,
-            is_replay_only,
-            &mut snapshot,
-        )
-        .await;
-
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
 
