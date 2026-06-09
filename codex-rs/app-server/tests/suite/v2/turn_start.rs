@@ -1096,8 +1096,13 @@ async fn spawned_child_turn_analytics_carry_direct_parent_turn_id() -> Result<()
     })
     .await??;
 
-    let events =
-        wait_for_analytics_events(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event", 2).await?;
+    let events = wait_for_analytics_events(
+        &server,
+        DEFAULT_READ_TIMEOUT,
+        "codex_turn_event",
+        /*expected_len*/ 2,
+    )
+    .await?;
     let parent_turn_event = events
         .iter()
         .find(|event| {

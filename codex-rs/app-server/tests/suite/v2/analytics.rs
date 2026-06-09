@@ -156,7 +156,6 @@ async fn wait_for_matching_analytics_event(
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 continue;
             };
-            let mut matching_events = Vec::new();
             for request in &requests {
                 if request.method != "POST"
                     || request.url.path() != "/codex/analytics-events/events"

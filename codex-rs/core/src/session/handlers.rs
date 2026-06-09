@@ -87,14 +87,7 @@ pub async fn user_input_or_turn(
     parent_turn_id: Option<String>,
     client_user_message_id: Option<String>,
 ) {
-    user_input_or_turn_inner(
-        sess,
-        sub_id,
-        op,
-        parent_turn_id,
-        client_user_message_id,
-    )
-    .await;
+    user_input_or_turn_inner(sess, sub_id, op, parent_turn_id, client_user_message_id).await;
 }
 
 pub async fn update_thread_settings(
