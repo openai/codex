@@ -14,6 +14,7 @@ CREATE TABLE security_events (
     port INTEGER,
     protocol TEXT,
     method TEXT,
+    network_mode TEXT,
     decision TEXT,
     source TEXT,
     review_id TEXT,

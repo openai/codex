@@ -25,13 +25,14 @@ INSERT INTO security_events (
     port,
     protocol,
     method,
+    network_mode,
     decision,
     source,
     review_id,
     reviewer,
     review_decision,
     details_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(event.created_at)
@@ -48,6 +49,7 @@ INSERT INTO security_events (
         .bind(event.port.map(i64::from))
         .bind(event.protocol.as_deref())
         .bind(event.method.as_deref())
+        .bind(event.network_mode.as_deref())
         .bind(event.decision.as_deref())
         .bind(event.source.as_deref())
         .bind(event.review_id.as_deref())
@@ -154,6 +156,7 @@ SELECT
     port,
     protocol,
     method,
+    network_mode,
     decision,
     source,
     review_id,
