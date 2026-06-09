@@ -143,6 +143,8 @@ pub enum Feature {
     Apps,
     /// Enable MCP apps.
     EnableMcpApps,
+    /// Removed compatibility flag for the legacy Apps MCP path override.
+    AppsMcpPathOverride,
     /// Removed compatibility flag retained as a no-op now that tool_search is always enabled.
     ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
@@ -980,6 +982,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::EnableMcpApps,
         key: "enable_mcp_apps",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AppsMcpPathOverride,
+        key: "apps_mcp_path_override",
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
