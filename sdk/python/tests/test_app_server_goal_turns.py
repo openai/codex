@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import pytest
 from app_server_harness import (
@@ -21,6 +22,7 @@ from openai_codex.errors import InvalidRequestError, TransportClosedError
 from openai_codex.generated.notification_registry import notification_turn_id
 from openai_codex.generated.v2_all import (
     AgentMessageDeltaNotification,
+    IdleThreadStatus,
     ThreadGoalGetResponse,
     ThreadGoalStatus,
     TurnCompletedNotification,
@@ -772,6 +774,71 @@ def test_async_goal_interrupts_an_active_continuation(tmp_path) -> None:
             "follow_up": (TurnStatus.completed, "Async ordinary follow-up complete."),
             "request_count": 3,
             "follow_up_input": ["Continue with an async ordinary turn"],
+        }
+
+    asyncio.run(scenario())
+
+
+def test_async_goal_start_cancellation_interrupts_work_and_releases_routing(tmp_path) -> None:
+    """Cancelling startup should pause and interrupt the physical goal turn."""
+
+    async def scenario() -> None:
+        with AppServerHarness(tmp_path, enable_goals=True) as harness:
+            harness.responses.enqueue_sse(
+                streaming_response(
+                    "cancelled-start",
+                    "msg-cancelled-start",
+                    ["cancelled ", "goal ", "work"],
+                ),
+                delay_between_events_s=0.5,
+            )
+            harness.responses.enqueue_assistant_message(
+                "Async follow-up complete.",
+                response_id="cancelled-start-follow-up",
+            )
+
+            async with AsyncCodex(config=harness.app_server_config()) as codex:
+                thread = await codex.thread_start()
+                startup = asyncio.create_task(thread.start_goal("Cancel this goal during startup"))
+                await asyncio.sleep(0)
+
+                # Keep the event loop occupied until model work starts so the
+                # worker result cannot reach start_goal before cancellation.
+                harness.responses.wait_for_requests(1)
+                startup.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await startup
+
+                deadline = time.monotonic() + 5
+                while True:
+                    current = await thread.read()
+                    registered_goals = dict(codex._client._sync._router._goal_operations)
+                    if isinstance(current.thread.status.root, IdleThreadStatus) and not (
+                        registered_goals
+                    ):
+                        break
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("cancelled goal turn did not stop")
+                    await asyncio.sleep(0.01)
+
+                persisted = await codex._client.request(
+                    "thread/goal/get",
+                    {"threadId": thread.id},
+                    response_model=ThreadGoalGetResponse,
+                )
+                follow_up = await thread.run("Continue after cancelled goal startup")
+                requests = harness.responses.wait_for_requests(2)
+
+        assert {
+            "goal_status": persisted.goal.status if persisted.goal else None,
+            "follow_up": (follow_up.status, follow_up.final_response),
+            "request_count": len(requests),
+            "registered_goals": registered_goals,
+        } == {
+            "goal_status": ThreadGoalStatus.paused,
+            "follow_up": (TurnStatus.completed, "Async follow-up complete."),
+            "request_count": 2,
+            "registered_goals": {},
         }
 
     asyncio.run(scenario())

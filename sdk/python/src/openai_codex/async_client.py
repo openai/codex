@@ -259,9 +259,7 @@ class AsyncCodexClient:
 
                 def stop_cancelled_goal() -> None:
                     try:
-                        self._sync.pause_goal(thread_id)
-                    except Exception:
-                        pass
+                        self._sync.stop_failed_goal(state)
                     finally:
                         state.finish()
                         self._sync.unregister_goal_operation(state)
