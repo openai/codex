@@ -620,16 +620,10 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_servers = mcp_manager_for_mcp
-                .effective_servers(&config_for_mcp, auth.as_ref())
+            let resolved_mcp_connections = mcp_manager_for_mcp
+                .resolve_connections(&config_for_mcp, auth.as_ref())
                 .await;
-            let auth_statuses = compute_auth_statuses(
-                mcp_servers.iter(),
-                config_for_mcp.mcp_oauth_credentials_store_mode,
-                auth.as_ref(),
-            )
-            .await;
-            (auth, mcp_servers, auth_statuses)
+            (auth, resolved_mcp_connections)
         }
         .instrument(info_span!(
             "session_init.auth_mcp",
@@ -652,7 +646,7 @@ impl Session {
         let (
             thread_persistence_result,
             state_db_ctx,
-            (auth, mcp_servers, auth_statuses),
+            (auth, resolved_mcp_connections),
             plugin_skill_errors,
         ) = tokio::join!(
             thread_persistence_fut,
@@ -817,7 +811,11 @@ impl Session {
                 config
                     .permissions
                     .legacy_sandbox_policy(session_configuration.cwd().as_path()),
-                mcp_servers.keys().map(String::as_str).collect(),
+                resolved_mcp_connections
+                    .servers
+                    .keys()
+                    .map(String::as_str)
+                    .collect(),
             );
 
             let use_zsh_fork_shell = config.features.enabled(Feature::ShellZshFork);
@@ -978,21 +976,11 @@ impl Session {
             }
 
             let services = SessionServices {
-                // Initialize the MCP connection manager with an uninitialized
-                // instance. It will be replaced with one created via
-                // McpConnectionManager::new() once all its constructor args are
-                // available. This also ensures `SessionConfigured` is emitted
-                // before any MCP-related events. It is reasonable to consider
-                // changing this to use Option or OnceCell, though the current
-                // setup is straightforward enough and performs well.
-                mcp_connection_manager: Arc::new(RwLock::new(
-                    McpConnectionManager::new_uninitialized_with_permission_profile(
-                        &config.permissions.approval_policy,
-                        config.permissions.permission_profile(),
-                        config.prefix_mcp_tool_names(),
-                    ),
+                mcp_connection_manager: Arc::new(McpConnectionManager::empty(
+                    config.permissions.approval_policy.value(),
+                    config.permissions.permission_profile().clone(),
+                    config.prefix_mcp_tool_names(),
                 )),
-                mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
                 ),
@@ -1116,32 +1104,16 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            let mut required_mcp_servers: Vec<String> = mcp_servers
+            let enabled_mcp_server_count = resolved_mcp_connections
+                .servers
+                .values()
+                .filter(|server| server.enabled())
+                .count();
+            let required_mcp_server_count = resolved_mcp_connections
+                .servers
                 .iter()
                 .filter(|(_, server)| server.enabled() && server.required())
-                .map(|(name, _)| name.clone())
-                .collect();
-            required_mcp_servers.sort();
-            let enabled_mcp_server_count =
-                mcp_servers.values().filter(|server| server.enabled()).count();
-            let required_mcp_server_count = required_mcp_servers.len();
-            let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
-            let host_owned_codex_apps_enabled = config
-                .features
-                .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
-            let client_elicitation_capability = if config.features.enabled(Feature::AuthElicitation) {
-                ElicitationCapability {
-                    form: Some(FormElicitationCapability::default()),
-                    url: Some(UrlElicitationCapability::default()),
-                }
-            } else {
-                ElicitationCapability::default()
-            };
-            {
-                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-                cancel_guard.cancel();
-                *cancel_guard = CancellationToken::new();
-            }
+                .count();
             let turn_environment = crate::environment_selection::resolve_environment_selections(
                 sess.services.environment_manager.as_ref(),
                 session_configuration.environment_selections(),
@@ -1164,22 +1136,12 @@ impl Session {
                     session_configuration.cwd().to_path_buf(),
                 ),
             };
-            let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-                &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                auth_statuses.clone(),
-                &session_configuration.approval_policy,
-                INITIAL_SUBMIT_ID.to_owned(),
-                tx_event.clone(),
-                session_configuration.permission_profile(),
+            sess.initialize_mcp_connections(
+                resolved_mcp_connections,
+                auth.cloned(),
+                &session_configuration,
                 mcp_runtime_context,
                 config.codex_home.to_path_buf(),
-                codex_apps_tools_cache_key(auth),
-                host_owned_codex_apps_enabled,
-                config.prefix_mcp_tool_names(),
-                client_elicitation_capability,
-                tool_plugin_provenance,
-                auth,
                 Some(sess.mcp_elicitation_reviewer()),
             )
             .instrument(info_span!(
@@ -1188,40 +1150,7 @@ impl Session {
                 session_init.enabled_mcp_server_count = enabled_mcp_server_count,
                 session_init.required_mcp_server_count = required_mcp_server_count,
             ))
-            .await;
-            {
-                let mut manager_guard = sess.services.mcp_connection_manager.write().await;
-                *manager_guard = mcp_connection_manager;
-            }
-            {
-                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-                if cancel_guard.is_cancelled() {
-                    cancel_token.cancel();
-                }
-                *cancel_guard = cancel_token;
-            }
-            if !required_mcp_servers.is_empty() {
-                let failures = sess
-                    .services
-                    .mcp_connection_manager
-                    .read()
-                    .await
-                    .required_startup_failures(&required_mcp_servers)
-                    .instrument(info_span!(
-                        "session_init.required_mcp_wait",
-                        otel.name = "session_init.required_mcp_wait",
-                        session_init.required_mcp_server_count = required_mcp_server_count,
-                    ))
-                    .await;
-                if !failures.is_empty() {
-                    let details = failures
-                        .iter()
-                        .map(|failure| format!("{}: {}", failure.server, failure.error))
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    anyhow::bail!("required MCP servers failed to initialize: {details}");
-                }
-            }
+            .await?;
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {

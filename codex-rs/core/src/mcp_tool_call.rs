@@ -316,13 +316,7 @@ async fn handle_approved_mcp_tool_call(
     let arguments_value = invocation.arguments.clone();
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
     let connector_name = metadata.and_then(|metadata| metadata.connector_name.as_deref());
-    let server_origin = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .server_origin(&server)
-        .map(str::to_string);
+    let server_origin = sess.services.mcp_connection_manager.server_origin(&server);
 
     let start = Instant::now();
     let rewrite = rewrite_mcp_tool_arguments_for_openai_files(
@@ -606,8 +600,6 @@ async fn maybe_request_codex_apps_auth_elicitation(
     if !sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
         .is_host_owned_codex_apps_server(server)
     {
         return result;
@@ -669,15 +661,12 @@ async fn maybe_request_codex_apps_auth_elicitation(
     auth_elicitation_completed_result(&plan.auth_failure, result.meta)
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "Codex Apps cache refresh reads through the session-owned manager guard"
-)]
 async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &TurnContext) {
-    let mcp_tools_result = {
-        let manager = sess.services.mcp_connection_manager.read().await;
-        manager.hard_refresh_codex_apps_tools_cache().await
-    };
+    let mcp_tools_result = sess
+        .services
+        .mcp_connection_manager
+        .hard_refresh_codex_apps_tools_cache()
+        .await;
 
     match mcp_tools_result {
         Ok(mcp_tools) => {
@@ -694,10 +683,6 @@ async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP sandbox metadata reads through the session-owned manager guard"
-)]
 async fn augment_mcp_tool_request_meta_with_sandbox_state(
     sess: &Session,
     turn_context: &TurnContext,
@@ -707,8 +692,6 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     let supports_sandbox_state_meta = sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
         .server_supports_sandbox_state_meta_capability(server)
         .await
         .unwrap_or(false);
@@ -757,8 +740,6 @@ async fn maybe_mark_thread_memory_mode_polluted(
     let pollutes_memory = sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
         .server_pollutes_memory(server);
     if !pollutes_memory {
         return;
@@ -1414,20 +1395,14 @@ async fn mcp_tool_approval_decision_from_guardian(
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP approval metadata reads through the session-owned manager guard"
-)]
 pub(crate) async fn lookup_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
-    let manager = sess.services.mcp_connection_manager.read().await;
-    let plugin_id = manager
-        .plugin_id_for_mcp_server_name(server)
-        .map(str::to_string);
+    let manager = &sess.services.mcp_connection_manager;
+    let plugin_id = manager.plugin_id_for_mcp_server_name(server);
     let tools = manager.list_all_tools().await;
     let tool_info = tools
         .into_iter()
@@ -1509,22 +1484,12 @@ fn get_mcp_app_resource_uri(
     })
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP app metadata reads through the session-owned manager guard"
-)]
 async fn lookup_mcp_app_usage_metadata(
     sess: &Session,
     server: &str,
     tool_name: &str,
 ) -> Option<McpAppUsageMetadata> {
-    let tools = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .await;
+    let tools = sess.services.mcp_connection_manager.list_all_tools().await;
 
     tools.into_iter().find_map(|tool_info| {
         if tool_info.server_name == server && tool_info.tool.name == tool_name {

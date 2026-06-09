@@ -37,7 +37,8 @@ use rmcp::model::ReadResourceResult;
 use serde_json::Value;
 
 use crate::codex_apps::codex_apps_tools_cache_key;
-use crate::connection_manager::McpConnectionManager;
+use crate::connection_generation::McpConnectionStartParams;
+use crate::connection_lifecycle::McpConnectionManager;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
 
@@ -293,30 +294,30 @@ pub async fn read_mcp_resource(
     .await;
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
-    let (manager, cancel_token) = McpConnectionManager::new(
-        &mcp_servers,
-        config.mcp_oauth_credentials_store_mode,
-        auth_statuses,
-        &config.approval_policy,
-        String::new(),
+    let manager = McpConnectionManager::start(McpConnectionStartParams {
+        mcp_servers,
+        store_mode: config.mcp_oauth_credentials_store_mode,
+        auth_entries: auth_statuses,
+        approval_policy: config.approval_policy.value(),
+        submit_id: String::new(),
         tx_event,
-        PermissionProfile::default(),
+        permission_profile: PermissionProfile::default(),
         runtime_context,
-        config.codex_home.clone(),
-        codex_apps_tools_cache_key(auth),
+        codex_home: config.codex_home.clone(),
+        codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth),
         host_owned_codex_apps_enabled,
-        config.prefix_mcp_tool_names,
-        config.client_elicitation_capability.clone(),
-        tool_plugin_provenance(config),
-        auth,
-        /*elicitation_reviewer*/ None,
-    )
+        prefix_mcp_tool_names: config.prefix_mcp_tool_names,
+        client_elicitation_capability: config.client_elicitation_capability.clone(),
+        tool_plugin_provenance: tool_plugin_provenance(config),
+        auth: auth.cloned(),
+        elicitation_reviewer: None,
+    })
     .await;
 
     let result = manager
         .read_resource(server, ReadResourceRequestParams::new(uri))
         .await;
-    cancel_token.cancel();
+    manager.shutdown().await;
     result
 }
 
@@ -363,24 +364,24 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-        &mcp_servers,
-        config.mcp_oauth_credentials_store_mode,
-        auth_status_entries.clone(),
-        &config.approval_policy,
+    let mcp_connection_manager = McpConnectionManager::start(McpConnectionStartParams {
+        mcp_servers,
+        store_mode: config.mcp_oauth_credentials_store_mode,
+        auth_entries: auth_status_entries.clone(),
+        approval_policy: config.approval_policy.value(),
         submit_id,
         tx_event,
-        PermissionProfile::default(),
+        permission_profile: PermissionProfile::default(),
         runtime_context,
-        config.codex_home.clone(),
-        codex_apps_tools_cache_key(auth),
+        codex_home: config.codex_home.clone(),
+        codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth),
         host_owned_codex_apps_enabled,
-        config.prefix_mcp_tool_names,
-        config.client_elicitation_capability.clone(),
+        prefix_mcp_tool_names: config.prefix_mcp_tool_names,
+        client_elicitation_capability: config.client_elicitation_capability.clone(),
         tool_plugin_provenance,
-        auth,
-        /*elicitation_reviewer*/ None,
-    )
+        auth: auth.cloned(),
+        elicitation_reviewer: None,
+    })
     .await;
 
     let snapshot = collect_mcp_server_status_snapshot_from_manager(
@@ -391,7 +392,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     )
     .await;
 
-    cancel_token.cancel();
+    mcp_connection_manager.shutdown().await;
 
     snapshot
 }

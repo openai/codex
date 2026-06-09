@@ -107,8 +107,6 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourceTemplatesHandler {
                 let templates = session
                     .services
                     .mcp_connection_manager
-                    .read()
-                    .await
                     .list_all_resource_templates()
                     .await;
                 Ok(ListResourceTemplatesPayload::from_all_servers(templates))

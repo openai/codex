@@ -1,4 +1,5 @@
-pub use connection_manager::McpConnectionManager;
+pub use connection_generation::McpConnectionStartParams;
+pub use connection_lifecycle::McpConnectionManager;
 pub use connection_manager::tool_is_model_visible;
 pub use elicitation::ElicitationReviewRequest;
 pub use elicitation::ElicitationReviewer;
@@ -55,6 +56,8 @@ pub use tools::declared_openai_file_input_param_names;
 
 pub(crate) mod auth_elicitation;
 pub(crate) mod codex_apps;
+pub(crate) mod connection_generation;
+pub(crate) mod connection_lifecycle;
 pub(crate) mod connection_manager;
 pub(crate) mod elicitation;
 pub(crate) mod mcp;

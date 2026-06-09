@@ -1,4 +1,9 @@
 use super::*;
+use crate::CodexAppsToolsCacheKey;
+use crate::EffectiveMcpServer;
+use crate::McpConnectionStartParams;
+use crate::McpRuntimeContext;
+use crate::ToolPluginProvenance;
 use crate::codex_apps::CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION;
 use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::load_startup_cached_codex_apps_server_info;
@@ -12,6 +17,7 @@ use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
+use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
@@ -20,10 +26,12 @@ use crate::tools::normalize_tools_for_model_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::EnvironmentManager;
 use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
 use futures::FutureExt;
@@ -36,8 +44,10 @@ use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
 use rmcp::model::Tool;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::tempdir;
+use tokio_util::sync::CancellationToken;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
     ToolInfo {
@@ -302,6 +312,69 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
             meta: None,
         }
     );
+}
+
+#[tokio::test]
+async fn elicitations_with_the_same_id_resolve_in_request_order() -> anyhow::Result<()> {
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::OnRequest,
+        PermissionProfile::default(),
+        /*reviewer*/ None,
+    );
+    let first_generation = manager.for_generation(/*reviewer*/ None);
+    let second_generation = manager.for_generation(/*reviewer*/ None);
+    let (tx_event, rx_event) = async_channel::bounded(2);
+    let first_sender = first_generation.make_sender("server".to_string(), tx_event.clone());
+    let second_sender = second_generation.make_sender("server".to_string(), tx_event);
+    let request_id = NumberOrString::Number(1);
+    let elicitation = CreateElicitationRequestParams::FormElicitationParams {
+        meta: None,
+        message: "What should I say?".to_string(),
+        requested_schema: rmcp::model::ElicitationSchema::builder()
+            .required_property(
+                "message",
+                rmcp::model::PrimitiveSchema::String(rmcp::model::StringSchema::new()),
+            )
+            .build()
+            .expect("schema should build"),
+    };
+
+    let first = tokio::spawn(first_sender(request_id.clone(), elicitation.clone()));
+    rx_event.recv().await?;
+    let second = tokio::spawn(second_sender(request_id.clone(), elicitation));
+    rx_event.recv().await?;
+
+    let first_response = ElicitationResponse {
+        action: ElicitationAction::Accept,
+        content: Some(serde_json::json!({"message": "first"})),
+        meta: None,
+    };
+    let second_response = ElicitationResponse {
+        action: ElicitationAction::Decline,
+        content: None,
+        meta: None,
+    };
+    manager
+        .resolve(
+            "server".to_string(),
+            request_id.clone(),
+            first_response.clone(),
+        )
+        .await?;
+    manager
+        .resolve("server".to_string(), request_id, second_response.clone())
+        .await?;
+
+    assert_eq!(
+        (
+            first.await.expect("first elicitation task should finish")?,
+            second
+                .await
+                .expect("second elicitation task should finish")?,
+        ),
+        (first_response, second_response),
+    );
+    Ok(())
 }
 
 #[test]
@@ -799,12 +872,12 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionManager::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
+    let manager = McpConnectionManager::empty(
+        approval_policy.value(),
+        permission_profile.get().clone(),
         /*prefix_mcp_tool_names*/ true,
     );
-    manager.clients.insert(
+    manager.insert_client_for_test(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
@@ -835,13 +908,13 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionManager::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
+    let manager = McpConnectionManager::empty(
+        approval_policy.value(),
+        permission_profile.get().clone(),
         /*prefix_mcp_tool_names*/ true,
     );
     let server_info = create_test_server_info("Codex Apps");
-    manager.clients.insert(
+    manager.insert_client_for_test(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
@@ -873,12 +946,12 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionManager::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
+    let manager = McpConnectionManager::empty(
+        approval_policy.value(),
+        permission_profile.get().clone(),
         /*prefix_mcp_tool_names*/ false,
     );
-    manager.clients.insert(
+    manager.insert_client_for_test(
         "rmcp".to_string(),
         AsyncManagedClient {
             client: pending_client,
@@ -916,12 +989,12 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionManager::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
+    let manager = McpConnectionManager::empty(
+        approval_policy.value(),
+        permission_profile.get().clone(),
         /*prefix_mcp_tool_names*/ true,
     );
-    manager.clients.insert(
+    manager.insert_client_for_test(
         "rmcp".to_string(),
         AsyncManagedClient {
             client: pending_client,
@@ -958,12 +1031,12 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionManager::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
+    let manager = McpConnectionManager::empty(
+        approval_policy.value(),
+        permission_profile.get().clone(),
         /*prefix_mcp_tool_names*/ true,
     );
-    manager.clients.insert(
+    manager.insert_client_for_test(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
@@ -987,12 +1060,12 @@ async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionManager::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
+    let manager = McpConnectionManager::empty(
+        approval_policy.value(),
+        permission_profile.get().clone(),
         /*prefix_mcp_tool_names*/ true,
     );
-    manager.clients.insert(
+    manager.insert_client_for_test(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
@@ -1026,13 +1099,13 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
     .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionManager::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
+    let manager = McpConnectionManager::empty(
+        approval_policy.value(),
+        permission_profile.get().clone(),
         /*prefix_mcp_tool_names*/ true,
     );
     let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    manager.clients.insert(
+    manager.insert_client_for_test(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: failed_client,
@@ -1072,12 +1145,12 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionManager::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
+    let manager = McpConnectionManager::empty(
+        approval_policy.value(),
+        permission_profile.get().clone(),
         /*prefix_mcp_tool_names*/ true,
     );
-    manager.server_metadata.insert(
+    manager.insert_server_metadata_for_test(
         server_name.to_string(),
         McpServerMetadata {
             pollutes_memory: true,
@@ -1087,7 +1160,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
             supports_parallel_tool_calls: true,
         },
     );
-    manager.clients.insert(
+    manager.insert_client_for_test(
         server_name.to_string(),
         AsyncManagedClient {
             client: pending_client,
@@ -1167,35 +1240,42 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         ),
     ]);
 
-    let (manager, cancel_token) = McpConnectionManager::new(
-        &mcp_servers,
-        OAuthCredentialsStoreMode::default(),
-        HashMap::new(),
-        &approval_policy,
-        String::new(),
+    let manager = McpConnectionManager::start(McpConnectionStartParams {
+        mcp_servers,
+        store_mode: OAuthCredentialsStoreMode::default(),
+        auth_entries: HashMap::new(),
+        approval_policy: approval_policy.value(),
+        submit_id: String::new(),
         tx_event,
-        PermissionProfile::default(),
-        McpRuntimeContext::new(
+        permission_profile: PermissionProfile::default(),
+        runtime_context: McpRuntimeContext::new(
             Arc::new(EnvironmentManager::without_environments()),
             PathBuf::from("/tmp"),
         ),
-        codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
+        codex_home: codex_home.path().to_path_buf(),
+        codex_apps_tools_cache_key: CodexAppsToolsCacheKey {
             account_id: None,
             chatgpt_user_id: None,
             is_workspace_account: false,
         },
-        /*host_owned_codex_apps_enabled*/ false,
-        /*prefix_mcp_tool_names*/ true,
-        ElicitationCapability::default(),
-        ToolPluginProvenance::default(),
-        /*auth*/ None,
-        /*elicitation_reviewer*/ None,
-    )
+        host_owned_codex_apps_enabled: false,
+        prefix_mcp_tool_names: true,
+        client_elicitation_capability: ElicitationCapability::default(),
+        tool_plugin_provenance: ToolPluginProvenance::default(),
+        auth: None,
+        elicitation_reviewer: None,
+    })
     .await;
 
-    assert!(manager.clients.contains_key("stdio"));
-    assert!(manager.clients.contains_key("http"));
+    assert_eq!(
+        manager
+            .generation()
+            .clients
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>(),
+        HashSet::from(["http".to_string(), "stdio".to_string()])
+    );
     assert!(
         !manager
             .wait_for_server_ready("stdio", Duration::from_millis(10))
@@ -1210,7 +1290,49 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         failures[0].error,
         "local stdio MCP server `stdio` requires a local environment"
     );
-    cancel_token.cancel();
+    manager.cancel_startup();
+}
+
+#[tokio::test]
+async fn shutdown_prevents_reconfiguration_from_publishing_connections() {
+    let manager = McpConnectionManager::empty(
+        AskForApproval::OnRequest,
+        PermissionProfile::default(),
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.shutdown().await;
+    let (tx_event, rx_event) = async_channel::bounded(1);
+    drop(rx_event);
+
+    manager
+        .reconfigure(McpConnectionStartParams {
+            mcp_servers: HashMap::new(),
+            store_mode: OAuthCredentialsStoreMode::default(),
+            auth_entries: HashMap::new(),
+            approval_policy: AskForApproval::OnRequest,
+            submit_id: String::new(),
+            tx_event,
+            permission_profile: PermissionProfile::default(),
+            runtime_context: McpRuntimeContext::new(
+                Arc::new(EnvironmentManager::without_environments()),
+                PathBuf::from("/tmp"),
+            ),
+            codex_home: PathBuf::from("/tmp"),
+            codex_apps_tools_cache_key: CodexAppsToolsCacheKey {
+                account_id: None,
+                chatgpt_user_id: None,
+                is_workspace_account: false,
+            },
+            host_owned_codex_apps_enabled: true,
+            prefix_mcp_tool_names: false,
+            client_elicitation_capability: ElicitationCapability::default(),
+            tool_plugin_provenance: ToolPluginProvenance::default(),
+            auth: None,
+            elicitation_reviewer: None,
+        })
+        .await;
+
+    assert!(!manager.is_host_owned_codex_apps_server(CODEX_APPS_MCP_SERVER_NAME));
 }
 
 #[test]

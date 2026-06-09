@@ -319,8 +319,6 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
     session
         .services
         .mcp_connection_manager
-        .read()
-        .await
         .set_elicitations_auto_deny(/*auto_deny*/ true);
 
     let requested_schema: McpElicitationSchema = serde_json::from_value(json!({
@@ -4801,14 +4799,11 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(
-            McpConnectionManager::new_uninitialized_with_permission_profile(
-                &config.permissions.approval_policy,
-                config.permissions.permission_profile(),
-                config.prefix_mcp_tool_names(),
-            ),
+        mcp_connection_manager: Arc::new(McpConnectionManager::empty(
+            config.permissions.approval_policy.value(),
+            config.permissions.permission_profile().clone(),
+            config.prefix_mcp_tool_names(),
         )),
-        mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -6867,14 +6862,11 @@ where
     );
 
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(
-            McpConnectionManager::new_uninitialized_with_permission_profile(
-                &config.permissions.approval_policy,
-                config.permissions.permission_profile(),
-                config.prefix_mcp_tool_names(),
-            ),
+        mcp_connection_manager: Arc::new(McpConnectionManager::empty(
+            config.permissions.approval_policy.value(),
+            config.permissions.permission_profile().clone(),
+            config.prefix_mcp_tool_names(),
         )),
-        mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -7025,8 +7017,6 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 #[tokio::test]
 async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     let (session, turn_context) = make_session_and_context().await;
-    let old_token = session.mcp_startup_cancellation_token().await;
-    assert!(!old_token.is_cancelled());
 
     let mcp_oauth_credentials_store_mode =
         serde_json::to_value(OAuthCredentialsStoreMode::Auto).expect("serialize store mode");
@@ -7039,7 +7029,6 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
         *guard = Some(refresh_config);
     }
 
-    assert!(!old_token.is_cancelled());
     assert!(
         session
             .pending_mcp_server_refresh_config
@@ -7052,7 +7041,6 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
         .refresh_mcp_servers_if_requested(&turn_context, /*elicitation_reviewer*/ None)
         .await;
 
-    assert!(old_token.is_cancelled());
     assert!(
         session
             .pending_mcp_server_refresh_config
@@ -7060,8 +7048,6 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
             .await
             .is_none()
     );
-    let new_token = session.mcp_startup_cancellation_token().await;
-    assert!(!new_token.is_cancelled());
 }
 
 #[tokio::test]
@@ -9405,18 +9391,12 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
 }
 
 #[tokio::test]
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "test builds a router from session-owned MCP manager state"
-)]
 async fn fatal_tool_error_stops_turn_and_reports_error() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let tools = {
         session
             .services
             .mcp_connection_manager
-            .read()
-            .await
             .list_all_tools()
             .await
     };

@@ -1256,29 +1256,35 @@ fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
 
 async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: &TurnContext) {
     let auth = session.services.auth_manager.auth().await;
-    let (manager, _cancel_token) = codex_mcp::McpConnectionManager::new(
-        &HashMap::new(),
-        turn_context.config.mcp_oauth_credentials_store_mode,
-        HashMap::new(),
-        &turn_context.approval_policy,
-        turn_context.sub_id.clone(),
-        session.get_tx_event(),
-        turn_context.permission_profile(),
-        codex_mcp::McpRuntimeContext::new(Arc::clone(&session.services.environment_manager), {
-            #[allow(deprecated)]
-            turn_context.cwd.to_path_buf()
-        }),
-        turn_context.config.codex_home.to_path_buf(),
-        codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
-        /*host_owned_codex_apps_enabled*/ true,
-        turn_context.config.prefix_mcp_tool_names(),
-        rmcp::model::ElicitationCapability::default(),
-        codex_mcp::ToolPluginProvenance::default(),
-        auth.as_ref(),
-        /*elicitation_reviewer*/ None,
-    )
-    .await;
-    *session.services.mcp_connection_manager.write().await = manager;
+    let params = codex_mcp::McpConnectionStartParams {
+        mcp_servers: HashMap::new(),
+        store_mode: turn_context.config.mcp_oauth_credentials_store_mode,
+        auth_entries: HashMap::new(),
+        approval_policy: turn_context.approval_policy.value(),
+        submit_id: turn_context.sub_id.clone(),
+        tx_event: session.get_tx_event(),
+        permission_profile: turn_context.permission_profile(),
+        runtime_context: codex_mcp::McpRuntimeContext::new(
+            Arc::clone(&session.services.environment_manager),
+            {
+                #[allow(deprecated)]
+                turn_context.cwd.to_path_buf()
+            },
+        ),
+        codex_home: turn_context.config.codex_home.to_path_buf(),
+        codex_apps_tools_cache_key: codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
+        host_owned_codex_apps_enabled: true,
+        prefix_mcp_tool_names: turn_context.config.prefix_mcp_tool_names(),
+        client_elicitation_capability: rmcp::model::ElicitationCapability::default(),
+        tool_plugin_provenance: codex_mcp::ToolPluginProvenance::default(),
+        auth,
+        elicitation_reviewer: None,
+    };
+    session
+        .services
+        .mcp_connection_manager
+        .reconfigure(params)
+        .await;
 }
 
 #[tokio::test]

@@ -632,11 +632,7 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
-    let mcp_shutdown = {
-        let mut manager = sess.services.mcp_connection_manager.write().await;
-        manager.begin_shutdown()
-    };
-    mcp_shutdown.await;
+    sess.services.mcp_connection_manager.shutdown().await;
     sess.guardian_review_session.shutdown().await;
 }
 

@@ -6,6 +6,7 @@
 //! and later resolved through the stored responder.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
@@ -54,7 +55,7 @@ pub(crate) struct ElicitationRequestManager {
     pub(crate) approval_policy: Arc<StdMutex<AskForApproval>>,
     pub(crate) permission_profile: Arc<StdMutex<PermissionProfile>>,
     auto_deny: Arc<StdMutex<bool>>,
-    reviewer: Option<ElicitationReviewerHandle>,
+    reviewer: Arc<StdMutex<Option<ElicitationReviewerHandle>>>,
 }
 
 impl ElicitationRequestManager {
@@ -68,7 +69,7 @@ impl ElicitationRequestManager {
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
             permission_profile: Arc::new(StdMutex::new(permission_profile)),
             auto_deny: Arc::new(StdMutex::new(false)),
-            reviewer,
+            reviewer: Arc::new(StdMutex::new(reviewer)),
         }
     }
 
@@ -85,19 +86,38 @@ impl ElicitationRequestManager {
         }
     }
 
+    pub(crate) fn for_generation(&self, reviewer: Option<ElicitationReviewerHandle>) -> Self {
+        Self {
+            requests: Arc::clone(&self.requests),
+            approval_policy: Arc::clone(&self.approval_policy),
+            permission_profile: Arc::clone(&self.permission_profile),
+            auto_deny: Arc::clone(&self.auto_deny),
+            reviewer: Arc::new(StdMutex::new(reviewer)),
+        }
+    }
+
     pub(crate) async fn resolve(
         &self,
         server_name: String,
         id: RequestId,
-        response: ElicitationResponse,
+        mut response: ElicitationResponse,
     ) -> Result<()> {
-        self.requests
-            .lock()
-            .await
-            .remove(&(server_name, id))
-            .ok_or_else(|| anyhow!("elicitation request not found"))?
-            .send(response)
-            .map_err(|e| anyhow!("failed to send elicitation response: {e:?}"))
+        let key = (server_name, id);
+        loop {
+            let responder = {
+                let mut requests = self.requests.lock().await;
+                let responder = requests.get_mut(&key).and_then(VecDeque::pop_front);
+                if requests.get(&key).is_some_and(VecDeque::is_empty) {
+                    requests.remove(&key);
+                }
+                responder
+            }
+            .ok_or_else(|| anyhow!("elicitation request not found"))?;
+            match responder.send(response) {
+                Ok(()) => return Ok(()),
+                Err(returned_response) => response = returned_response,
+            }
+        }
     }
 
     pub(crate) fn make_sender(
@@ -117,7 +137,7 @@ impl ElicitationRequestManager {
             let approval_policy = approval_policy.clone();
             let permission_profile = permission_profile.clone();
             let auto_deny = auto_deny.clone();
-            let reviewer = reviewer.clone();
+            let reviewer = reviewer.lock().ok().and_then(|reviewer| reviewer.clone());
             async move {
                 let auto_deny = auto_deny
                     .lock()
@@ -203,7 +223,9 @@ impl ElicitationRequestManager {
                 let (tx, rx) = oneshot::channel();
                 {
                     let mut lock = elicitation_requests.lock().await;
-                    lock.insert((server_name.clone(), id.clone()), tx);
+                    lock.entry((server_name.clone(), id.clone()))
+                        .or_default()
+                        .push_back(tx);
                 }
                 let _ = tx_event
                     .send(Event {
@@ -241,7 +263,7 @@ pub(crate) fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval)
     }
 }
 
-type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
+type ResponderMap = HashMap<(String, RequestId), VecDeque<oneshot::Sender<ElicitationResponse>>>;
 
 fn can_auto_accept_elicitation(elicitation: &CreateElicitationRequestParams) -> bool {
     match elicitation {

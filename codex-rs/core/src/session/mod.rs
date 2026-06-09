@@ -146,15 +146,12 @@ use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
-use rmcp::model::ElicitationCapability;
-use rmcp::model::FormElicitationCapability;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
-use rmcp::model::UrlElicitationCapability;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -316,9 +313,6 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core_plugins::PluginsManager;
 use codex_git_utils::get_git_repo_root;
-use codex_mcp::compute_auth_statuses;
-use codex_mcp::effective_mcp_servers_from_configured;
-use codex_mcp::host_owned_codex_apps_enabled;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
@@ -793,8 +787,10 @@ impl Codex {
                 ..Default::default()
             })
             .await?;
-        let mcp_connection_manager = self.session.services.mcp_connection_manager.read().await;
-        mcp_connection_manager.set_elicitations_auto_deny(mcp_elicitations_auto_deny);
+        self.session
+            .services
+            .mcp_connection_manager
+            .set_elicitations_auto_deny(mcp_elicitations_auto_deny);
         Ok(())
     }
 
@@ -2845,10 +2841,9 @@ impl Session {
             }
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(
-                    &mcp_connection_manager,
+                    self.services.mcp_connection_manager.as_ref(),
                     &turn_context.config,
                 )
                 .await;

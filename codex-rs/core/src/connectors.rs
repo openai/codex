@@ -35,13 +35,11 @@ use codex_login::CodexAuth;
 use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
+use codex_mcp::McpConnectionStartParams;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
-use codex_mcp::compute_auth_statuses;
-use codex_mcp::effective_mcp_servers;
-use codex_mcp::host_owned_codex_apps_enabled;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 
@@ -264,47 +262,45 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         });
     }
 
-    let mcp_config = mcp_manager.runtime_config(config).await;
-    let mut mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
-    mcp_servers.retain(|name, _| name == CODEX_APPS_MCP_SERVER_NAME);
-    let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
-    if mcp_servers.is_empty() {
+    let mut resolved = mcp_manager.resolve_connections(config, auth.as_ref()).await;
+    resolved
+        .servers
+        .retain(|name, _| name == CODEX_APPS_MCP_SERVER_NAME);
+    if resolved.servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
             codex_apps_ready: true,
         });
     }
-
-    let auth_status_entries = compute_auth_statuses(
-        mcp_servers.iter(),
-        config.mcp_oauth_credentials_store_mode,
-        auth.as_ref(),
-    )
-    .await;
+    let codex_apps_startup_timeout = resolved
+        .servers
+        .get(CODEX_APPS_MCP_SERVER_NAME)
+        .and_then(|server| server.configured_config())
+        .and_then(|config| config.startup_timeout_sec);
 
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-        &mcp_servers,
-        config.mcp_oauth_credentials_store_mode,
-        auth_status_entries,
-        &config.permissions.approval_policy,
-        INITIAL_SUBMIT_ID.to_owned(),
+    let mcp_connection_manager = McpConnectionManager::start(McpConnectionStartParams {
+        mcp_servers: resolved.servers,
+        store_mode: resolved.store_mode,
+        auth_entries: resolved.auth_statuses,
+        approval_policy: config.permissions.approval_policy.value(),
+        submit_id: INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
-        PermissionProfile::default(),
+        permission_profile: PermissionProfile::default(),
         // Connector discovery is threadless. Use an actually configured env if
         // one exists, but do not reintroduce the old hidden-local fallback.
-        McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
-        config.codex_home.to_path_buf(),
-        codex_apps_tools_cache_key(auth.as_ref()),
-        host_owned_codex_apps_enabled,
-        mcp_config.prefix_mcp_tool_names,
-        mcp_config.client_elicitation_capability,
-        ToolPluginProvenance::default(),
-        auth.as_ref(),
-        /*elicitation_reviewer*/ None,
-    )
+        runtime_context: McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
+        codex_home: config.codex_home.to_path_buf(),
+        codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth.as_ref()),
+        host_owned_codex_apps_enabled: resolved.host_owned_codex_apps_enabled,
+        prefix_mcp_tool_names: resolved.prefix_mcp_tool_names,
+        client_elicitation_capability: resolved.client_elicitation_capability,
+        tool_plugin_provenance: resolved.tool_plugin_provenance,
+        auth: auth.clone(),
+        elicitation_reviewer: None,
+    })
     .await;
 
     let refreshed_tools = if force_refetch {
@@ -333,17 +329,15 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     let mut should_reload_tools = false;
     let codex_apps_ready = if refreshed_tools_succeeded {
         true
-    } else if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
+    } else {
         let immediate_ready = mcp_connection_manager
             .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
             .await;
         if immediate_ready {
             true
         } else if tools.is_empty() {
-            let timeout = cfg
-                .configured_config()
-                .and_then(|config| config.startup_timeout_sec)
-                .unwrap_or(CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS);
+            let timeout =
+                codex_apps_startup_timeout.unwrap_or(CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS);
             let ready = mcp_connection_manager
                 .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
                 .await;
@@ -352,14 +346,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         } else {
             false
         }
-    } else {
-        false
     };
     if should_reload_tools {
         tools = mcp_connection_manager.list_all_tools().await;
     }
     if codex_apps_ready {
-        cancel_token.cancel();
+        mcp_connection_manager.cancel_startup();
     }
 
     let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(

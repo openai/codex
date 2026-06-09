@@ -3,17 +3,33 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use codex_config::McpServerConfig;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_core_plugins::PluginsManager;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpServerContribution;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::EffectiveMcpServer;
+use codex_mcp::McpAuthStatusEntry;
 use codex_mcp::McpConfig;
 use codex_mcp::ToolPluginProvenance;
+use codex_mcp::compute_auth_statuses;
 use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
+use codex_mcp::effective_mcp_servers_from_configured;
+use codex_mcp::host_owned_codex_apps_enabled;
 use codex_mcp::tool_plugin_provenance as collect_tool_plugin_provenance;
+use rmcp::model::ElicitationCapability;
+
+pub(crate) struct ResolvedMcpConnections {
+    pub(crate) servers: HashMap<String, EffectiveMcpServer>,
+    pub(crate) store_mode: OAuthCredentialsStoreMode,
+    pub(crate) auth_statuses: HashMap<String, McpAuthStatusEntry>,
+    pub(crate) host_owned_codex_apps_enabled: bool,
+    pub(crate) prefix_mcp_tool_names: bool,
+    pub(crate) client_elicitation_capability: ElicitationCapability,
+    pub(crate) tool_plugin_provenance: ToolPluginProvenance,
+}
 
 #[derive(Clone)]
 pub struct McpManager {
@@ -74,6 +90,54 @@ impl McpManager {
     ) -> HashMap<String, EffectiveMcpServer> {
         let mcp_config = self.runtime_config(config).await;
         effective_mcp_servers(&mcp_config, auth)
+    }
+
+    pub(crate) async fn resolve_connections(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+    ) -> ResolvedMcpConnections {
+        let mcp_config = self.runtime_config(config).await;
+        let servers = effective_mcp_servers(&mcp_config, auth);
+        self.resolve_connections_from_servers(
+            servers,
+            mcp_config.mcp_oauth_credentials_store_mode,
+            &mcp_config,
+            auth,
+        )
+        .await
+    }
+
+    pub(crate) async fn resolve_refreshed_connections(
+        &self,
+        config: &Config,
+        configured_servers: HashMap<String, McpServerConfig>,
+        store_mode: OAuthCredentialsStoreMode,
+        auth: Option<&CodexAuth>,
+    ) -> ResolvedMcpConnections {
+        let mcp_config = self.runtime_config(config).await;
+        let servers = effective_mcp_servers_from_configured(configured_servers, &mcp_config, auth);
+        self.resolve_connections_from_servers(servers, store_mode, &mcp_config, auth)
+            .await
+    }
+
+    async fn resolve_connections_from_servers(
+        &self,
+        servers: HashMap<String, EffectiveMcpServer>,
+        store_mode: OAuthCredentialsStoreMode,
+        mcp_config: &McpConfig,
+        auth: Option<&CodexAuth>,
+    ) -> ResolvedMcpConnections {
+        let auth_statuses = compute_auth_statuses(servers.iter(), store_mode, auth).await;
+        ResolvedMcpConnections {
+            host_owned_codex_apps_enabled: host_owned_codex_apps_enabled(mcp_config, auth),
+            prefix_mcp_tool_names: mcp_config.prefix_mcp_tool_names,
+            client_elicitation_capability: mcp_config.client_elicitation_capability.clone(),
+            tool_plugin_provenance: collect_tool_plugin_provenance(mcp_config),
+            servers,
+            store_mode,
+            auth_statuses,
+        }
     }
 
     /// Returns provenance for plugin-owned servers in the configured view.
