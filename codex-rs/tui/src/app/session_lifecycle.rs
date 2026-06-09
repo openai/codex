@@ -8,6 +8,7 @@ use super::*;
 use crate::app_event::PreparedAgentThread;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -763,29 +764,42 @@ impl App {
     /// `ChatWidget` metadata map.
     pub(super) async fn backfill_loaded_subagent_threads(
         &mut self,
-        app_server: &mut AppServerSession,
+        app_server: &AppServerSession,
     ) -> bool {
         let Some(primary_thread_id) = self.primary_thread_id else {
             return false;
         };
 
-        let loaded_thread_ids = match app_server
-            .thread_loaded_list(ThreadLoadedListParams {
-                cursor: None,
-                limit: None,
+        let (threads, complete) =
+            Self::request_loaded_subagent_threads(app_server.request_handle(), primary_thread_id)
+                .await;
+        self.apply_loaded_subagent_threads(primary_thread_id, threads);
+        complete
+    }
+
+    async fn request_loaded_subagent_threads(
+        request_handle: AppServerRequestHandle,
+        primary_thread_id: ThreadId,
+    ) -> (Vec<Thread>, bool) {
+        let response: ThreadLoadedListResponse = match request_handle
+            .request_typed(ClientRequest::ThreadLoadedList {
+                request_id: agent_request_id("loaded-list"),
+                params: ThreadLoadedListParams {
+                    cursor: None,
+                    limit: None,
+                },
             })
             .await
         {
-            Ok(response) => response.data,
+            Ok(response) => response,
             Err(err) => {
                 tracing::warn!(%err, "failed to list loaded threads for subagent backfill");
-                return false;
+                return (Vec::new(), false);
             }
         };
-
         let mut threads = Vec::new();
         let mut had_read_error = false;
-        for thread_id in loaded_thread_ids {
+        for thread_id in response.data {
             let Ok(thread_id) = ThreadId::from_string(&thread_id) else {
                 tracing::warn!("ignoring loaded thread with invalid id during subagent backfill");
                 continue;
@@ -795,9 +809,12 @@ impl App {
                 continue;
             }
 
-            match app_server
-                .thread_read(thread_id, /*include_turns*/ false)
-                .await
+            match Self::request_agent_thread_read(
+                &request_handle,
+                thread_id,
+                /*include_turns*/ false,
+            )
+            .await
             {
                 Ok(thread) => threads.push(thread),
                 Err(err) => {
@@ -806,7 +823,33 @@ impl App {
                 }
             }
         }
+        (threads, !had_read_error)
+    }
 
+    pub(super) fn backfill_loaded_subagent_threads_in_background(
+        &self,
+        app_server: &AppServerSession,
+    ) {
+        let Some(primary_thread_id) = self.primary_thread_id else {
+            return;
+        };
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let (threads, _) =
+                Self::request_loaded_subagent_threads(request_handle, primary_thread_id).await;
+            app_event_tx.send(AppEvent::LoadedSubagentThreads(primary_thread_id, threads));
+        });
+    }
+
+    pub(super) fn apply_loaded_subagent_threads(
+        &mut self,
+        primary_thread_id: ThreadId,
+        threads: Vec<Thread>,
+    ) {
+        if self.primary_thread_id != Some(primary_thread_id) {
+            return;
+        }
         for thread in find_loaded_subagent_threads_for_primary(threads, primary_thread_id) {
             let agent_path = thread.agent_path;
             self.upsert_agent_picker_thread(
@@ -819,8 +862,6 @@ impl App {
                 .set_agent_path(thread.thread_id, agent_path);
         }
         self.sync_active_agent_label();
-
-        !had_read_error
     }
 
     /// Returns the adjacent thread id for keyboard navigation, backfilling from the server if the

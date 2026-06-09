@@ -1736,6 +1736,9 @@ impl App {
                 self.handle_agent_thread_selection_cleanup_finished(thread_id, result)
                     .await;
             }
+            AppEvent::LoadedSubagentThreads(primary_thread_id, threads) => {
+                self.apply_loaded_subagent_threads(primary_thread_id, threads);
+            }
             AppEvent::StartSide {
                 parent_thread_id,
                 user_message,

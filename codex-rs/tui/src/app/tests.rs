@@ -1227,6 +1227,34 @@ async fn open_agent_picker_uses_cached_navigation_without_backend_reads() -> Res
 }
 
 #[tokio::test]
+async fn loaded_subagent_backfill_returns_through_app_event() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await?;
+    let primary_thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+
+    app.backfill_loaded_subagent_threads_in_background(&app_server);
+
+    loop {
+        match app_event_rx.recv().await {
+            Some(AppEvent::LoadedSubagentThreads(event_thread_id, threads)) => {
+                assert_eq!(event_thread_id, primary_thread_id);
+                assert!(threads.is_empty());
+                break;
+            }
+            Some(_) => {}
+            None => panic!("app event channel closed before subagent backfill completed"),
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
@@ -1338,7 +1366,8 @@ async fn open_agent_picker_uses_local_path_backed_running_state() -> Result<()> 
         })
     );
     app.thread_event_channels.remove(&thread_id);
-    app.agent_navigation.set_running(thread_id, true);
+    app.agent_navigation
+        .set_running(thread_id, /*is_running*/ true);
 
     Box::pin(app.open_agent_picker(&mut app_server)).await;
 

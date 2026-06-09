@@ -157,6 +157,7 @@ pub(crate) enum AppEvent {
         result: Result<PreparedAgentThread, String>,
     },
     AgentThreadSelectionCleanupFinished(ThreadId, Result<(), String>),
+    LoadedSubagentThreads(ThreadId, Vec<Thread>),
 
     /// Fork the current thread into a transient side conversation.
     StartSide {
