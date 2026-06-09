@@ -90,12 +90,6 @@ pub(crate) fn select_sync_handlers_for_matcher_inputs(
         .collect()
 }
 
-fn partition_handlers(
-    handlers: Vec<ConfiguredHandler>,
-) -> (Vec<ConfiguredHandler>, Vec<ConfiguredHandler>) {
-    handlers.into_iter().partition(|handler| !handler.r#async)
-}
-
 pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
     HookRunSummary {
         id: handler.run_id(),
@@ -124,7 +118,9 @@ pub(crate) async fn execute_handlers<T>(
     turn_id: Option<String>,
     parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
-    let (handlers, asynchronous) = partition_handlers(handlers);
+    let (handlers, asynchronous) = handlers
+        .into_iter()
+        .partition::<Vec<_>, _>(|handler| !handler.r#async);
     for handler in asynchronous {
         async_runtime.spawn_handler(
             shell.clone(),
@@ -469,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn select_handlers_preserves_declaration_order() {
+    fn sync_handler_selection_preserves_order_and_excludes_async_handlers() {
         let mut handlers = vec![
             make_handler(
                 HookEventName::Stop,
@@ -498,27 +494,17 @@ mod tests {
             HookEventName::Stop,
             /*matcher_input*/ None,
         );
-        let (_, asynchronous) = super::partition_handlers(selected.clone());
 
         assert_eq!(selected.len(), 3);
         assert_eq!(selected[0].command, "first");
         assert_eq!(selected[1].command, "second");
         assert_eq!(selected[2].command, "third");
         assert_eq!(
-            (
-                synchronous
-                    .into_iter()
-                    .map(|handler| handler.command)
-                    .collect::<Vec<_>>(),
-                asynchronous
-                    .into_iter()
-                    .map(|handler| handler.command)
-                    .collect::<Vec<_>>(),
-            ),
-            (
-                vec!["first".to_string(), "third".to_string()],
-                vec!["second".to_string()],
-            )
+            synchronous
+                .iter()
+                .map(|handler| handler.command.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "third"],
         );
     }
 
@@ -564,7 +550,7 @@ mod tests {
         })
         .await
         .expect("async serialization failure completion");
-        let output = batch.into_text();
+        let output = runtime.commit(batch);
         assert!(output.contains("Async hook failed to run: serialize failed"));
         assert!(output.contains("event=\"PreToolUse\""));
         runtime.shutdown().await;

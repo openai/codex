@@ -333,8 +333,8 @@ impl ClaudeHooksEngine {
         if !outcome.should_stop
             && let Some(batch) = async_output_batch
         {
-            self.async_runtime.commit(&batch);
-            outcome.additional_contexts.insert(0, batch.into_text());
+            let text = self.async_runtime.commit(batch);
+            outcome.additional_contexts.insert(0, text);
         }
         outcome
     }

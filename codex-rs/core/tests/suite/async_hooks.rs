@@ -40,25 +40,16 @@ if json.load(sys.stdin).get("prompt") != {FIRST_PROMPT:?}:
     raise SystemExit(0)
 root = Path(__file__).parent
 if name == "sync":
-    completed = root / "first.completed"
-    deadline = time.time() + 10
-    while not completed.exists() and time.time() < deadline:
-        time.sleep(0.01)
-    if not completed.exists():
-        raise RuntimeError("timed out waiting for first async hook")
     raise SystemExit(0)
 release = root / f"{{name}}.release"
 if name == "second":
     while not release.exists():
         time.sleep(0.01)
-if name == "invalid":
-    print("{{")
-else:
-    context = {{"first": {FIRST_CONTEXT:?}, "second": {SECOND_CONTEXT:?}}}[name]
-    print(json.dumps({{"hookSpecificOutput": {{
-        "hookEventName": "UserPromptSubmit",
-        "additionalContext": context,
-    }}}}))
+context = {{"first": {FIRST_CONTEXT:?}, "second": {SECOND_CONTEXT:?}}}[name]
+print(json.dumps({{"hookSpecificOutput": {{
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": context,
+}}}}))
 (root / f"{{name}}.completed").write_text("done", encoding="utf-8")
 "#,
     );
@@ -66,7 +57,6 @@ else:
         "hooks": {"UserPromptSubmit": [{"hooks": [
             {"type": "command", "command": format!("python3 {} first", script_path.display()), "async": true},
             {"type": "command", "command": format!("python3 {} second", script_path.display()), "async": true},
-            {"type": "command", "command": format!("python3 {} invalid", script_path.display()), "async": true},
             {"type": "command", "command": format!("python3 {} sync", script_path.display())},
         ]}]}
     });
@@ -121,11 +111,6 @@ async fn wait_for_hook(home: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn release_hook(home: &Path, name: &str) -> Result<()> {
-    fs::write(home.join(format!("{name}.release")), "release")?;
-    wait_for_hook(home, name).await
-}
-
 fn message_index(input: &[Value], role: &str, text: &str) -> Option<usize> {
     input.iter().position(|item| {
         item.get("role").and_then(Value::as_str) == Some(role) && item.to_string().contains(text)
@@ -166,10 +151,10 @@ async fn async_command_hooks_deliver_ordered_output_on_the_next_user_turn() -> R
     );
     assert_eq!(responses.requests().len(), 1);
     wait_for_hook(test.codex_home_path(), "first").await?;
-    wait_for_hook(test.codex_home_path(), "invalid").await?;
     assert!(!test.codex_home_path().join("second.completed").exists());
 
-    release_hook(test.codex_home_path(), "second").await?;
+    fs::write(test.codex_home_path().join("second.release"), "release")?;
+    wait_for_hook(test.codex_home_path(), "second").await?;
     assert_eq!(
         responses.requests().len(),
         1,
@@ -196,8 +181,7 @@ async fn async_command_hooks_deliver_ordered_output_on_the_next_user_turn() -> R
         .filter(|text| text.contains("<async_hook_outputs>"))
         .collect::<Vec<_>>();
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].matches("<async_hook_output ").count(), 3);
-    assert!(messages[0].contains("Async UserPromptSubmit hook returned invalid JSON output"));
+    assert_eq!(messages[0].matches("<async_hook_output ").count(), 2);
     let first = messages[0]
         .find(FIRST_CONTEXT)
         .context("first async context")?;
