@@ -13,6 +13,9 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
+use codex_model_provider::ModelProvider;
+use codex_model_provider::SharedModelProvider;
+use codex_model_provider::create_model_provider;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::SessionId;
@@ -68,6 +71,7 @@ pub(crate) struct MemoryStartupContext {
     thread: Arc<CodexThread>,
     thread_manager: Arc<ThreadManager>,
     auth_manager: Arc<AuthManager>,
+    provider: SharedModelProvider,
     session_telemetry: SessionTelemetry,
 }
 
@@ -90,6 +94,10 @@ impl MemoryStartupContext {
             &config.model_provider,
             auth_manager.codex_api_key_env_enabled(),
         );
+        let provider = create_model_provider(
+            config.model_provider.clone(),
+            Some(Arc::clone(&auth_manager)),
+        );
         let session_telemetry = SessionTelemetry::new(
             thread_id,
             model,
@@ -109,6 +117,7 @@ impl MemoryStartupContext {
             thread,
             thread_manager,
             auth_manager,
+            provider,
             session_telemetry,
         }
     }
@@ -119,6 +128,10 @@ impl MemoryStartupContext {
 
     pub(crate) fn state_db(&self) -> Option<Arc<StateRuntime>> {
         self.thread.state_db()
+    }
+
+    pub(crate) fn provider(&self) -> &dyn ModelProvider {
+        self.provider.as_ref()
     }
 
     pub(crate) fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {

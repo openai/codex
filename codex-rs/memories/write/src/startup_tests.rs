@@ -2,6 +2,10 @@ use crate::start_memories_startup_task;
 use codex_features::Feature;
 use codex_git_utils::diff_since_latest_init;
 use codex_git_utils::reset_git_repository;
+use codex_model_provider::create_model_provider;
+use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -324,6 +328,47 @@ async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_meta
     assert!(metadata.get("turn_id").is_none());
     assert!(metadata.get("window_id").is_none());
     assert!(metadata.get("workspaces").is_some());
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn memories_default_models_come_from_provider() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let test = build_test_codex(&server, home).await?;
+
+    let provider = create_model_provider(
+        test.config.model_provider.clone(),
+        Some(test.thread_manager.auth_manager()),
+    );
+    assert_eq!(
+        crate::phase1::extract_model(&test.config, provider.as_ref()),
+        "gpt-5.4-mini"
+    );
+    assert_eq!(
+        crate::phase2::consolidation_model(&test.config, provider.as_ref()),
+        "gpt-5.4"
+    );
+
+    let mut bedrock_config = test.config.clone();
+    bedrock_config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
+    bedrock_config.model_provider =
+        ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+    let bedrock_provider = create_model_provider(
+        bedrock_config.model_provider.clone(),
+        Some(test.thread_manager.auth_manager()),
+    );
+
+    assert_eq!(
+        crate::phase1::extract_model(&bedrock_config, bedrock_provider.as_ref()),
+        AMAZON_BEDROCK_GPT_5_4_MODEL_ID
+    );
+    assert_eq!(
+        crate::phase2::consolidation_model(&bedrock_config, bedrock_provider.as_ref()),
+        AMAZON_BEDROCK_GPT_5_4_MODEL_ID
+    );
 
     shutdown_test_codex(&test).await?;
     Ok(())

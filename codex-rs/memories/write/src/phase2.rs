@@ -16,6 +16,7 @@ use crate::workspace::write_workspace_diff;
 use codex_config::Constrained;
 use codex_core::config::Config;
 use codex_features::Feature;
+use codex_model_provider::ModelProvider;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
@@ -76,7 +77,7 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
     }
 
     // 3. Build the locked-down config used by the consolidation agent.
-    let Some(agent_config) = agent::get_config(config.as_ref()) else {
+    let Some(agent_config) = agent::get_config(config.as_ref(), context.provider()) else {
         // If we can't get the config, we can't consolidate.
         tracing::error!("failed to get agent config");
         job::failed(
@@ -297,7 +298,7 @@ mod agent {
     use super::*;
     use tracing::warn;
 
-    pub(super) fn get_config(config: &Config) -> Option<Config> {
+    pub(super) fn get_config(config: &Config, provider: &dyn ModelProvider) -> Option<Config> {
         let root = memory_root(&config.codex_home);
         let mut agent_config = config.clone();
 
@@ -334,13 +335,7 @@ mod agent {
             .set_legacy_sandbox_policy(consolidation_sandbox_policy, agent_config.cwd.as_path())
             .ok()?;
 
-        agent_config.model = Some(
-            config
-                .memories
-                .consolidation_model
-                .clone()
-                .unwrap_or(crate::stage_two::MODEL.to_string()),
-        );
+        agent_config.model = Some(consolidation_model(config, provider));
         agent_config.model_reasoning_effort = Some(crate::stage_two::REASONING_EFFORT);
 
         Some(agent_config)
@@ -514,6 +509,14 @@ mod agent {
             }
         }
     }
+}
+
+pub(crate) fn consolidation_model(config: &Config, provider: &dyn ModelProvider) -> String {
+    config
+        .memories
+        .consolidation_model
+        .clone()
+        .unwrap_or_else(|| provider.memory_consolidation_preferred_model().to_string())
 }
 
 pub(super) fn get_watermark(
