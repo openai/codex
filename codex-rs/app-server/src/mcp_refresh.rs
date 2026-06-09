@@ -67,10 +67,7 @@ async fn build_refresh_config(
     let config = config_manager
         .load_latest_config_for_thread(thread_config.as_ref())
         .await?;
-    let mcp_servers = thread_manager
-        .mcp_manager()
-        .configured_servers(&config)
-        .await;
+    let mcp_servers = thread_manager.mcp_manager().runtime_servers(&config).await;
     Ok(McpServerRefreshConfig {
         mcp_servers: serde_json::to_value(mcp_servers).map_err(io::Error::other)?,
         mcp_oauth_credentials_store_mode: serde_json::to_value(
