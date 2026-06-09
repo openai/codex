@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import run_bazel_ci
+import run_bazel_with_buildbuddy
 
 
 class RunBazelCiTest(unittest.TestCase):
@@ -56,12 +57,11 @@ class RunBazelCiTest(unittest.TestCase):
         self.assertEqual(
             invocation.command,
             [
-                "fake-bazel",
+                sys.executable,
+                str(Path(run_bazel_with_buildbuddy.__file__).resolve()),
                 "--output_user_root=/tmp/output",
                 "--noexperimental_remote_repo_contents_cache",
                 "test",
-                "--config=buildbuddy-generic-rbe",
-                "--remote_header=x-buildbuddy-api-key=token",
                 "--keep_going",
                 "--config=ci-linux",
                 "--remote_download_toplevel",

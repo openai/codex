@@ -16,7 +16,7 @@ from tempfile import NamedTemporaryFile
 from typing import TextIO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_bazel_with_buildbuddy import bazel_command
+from run_bazel_with_buildbuddy import buildbuddy_wrapper_command
 
 
 USAGE = (
@@ -198,13 +198,12 @@ def build_invocation(
     startup_args = []
     if output_user_root := env.get("BAZEL_OUTPUT_USER_ROOT"):
         startup_args.append(f"--output_user_root={output_user_root}")
-    command = bazel_command(
+    command = buildbuddy_wrapper_command(
         *startup_args,
         "--noexperimental_remote_repo_contents_cache",
         *run_args,
         "--",
         *targets,
-        env=env,
     )
     child_env = dict(env)
     if env.get("RUNNER_OS") == "Windows":
@@ -308,14 +307,10 @@ def bazel_testlogs_dir(invocation: Invocation) -> Path:
         for arg in invocation.post_config_args
         if arg.startswith(INFO_POST_CONFIG_PREFIXES)
     )
-    command = bazel_command(
-        *(
-            [arg for arg in invocation.command[1:] if arg.startswith("--output_user_root=")]
-        ),
+    command = buildbuddy_wrapper_command(
         "--noexperimental_remote_repo_contents_cache",
         *info_args,
         "bazel-testlogs",
-        env=invocation.child_env,
     )
     result = subprocess.run(
         command,

@@ -10,6 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import run_bazel_query_ci
+import run_bazel_with_buildbuddy
 
 
 class RunBazelQueryCiTest(unittest.TestCase):
@@ -29,12 +30,9 @@ class RunBazelQueryCiTest(unittest.TestCase):
                 },
             ),
             [
-                "fake-bazel",
-                "--output_user_root=/tmp/output",
-                "--noexperimental_remote_repo_contents_cache",
+                sys.executable,
+                str(Path(run_bazel_with_buildbuddy.__file__).resolve()),
                 "query",
-                "--config=buildbuddy-generic",
-                "--remote_header=x-buildbuddy-api-key=token",
                 "--repo_contents_cache=/tmp/contents",
                 "--repository_cache=/tmp/repository",
                 "--keep_going",

@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_bazel_with_buildbuddy import bazel_command
+from run_bazel_with_buildbuddy import buildbuddy_wrapper_command
 
 
 USAGE = "Usage: run_bazel_query_ci.py [<bazel query args>...] -- <query expression>"
@@ -28,7 +28,7 @@ def query_command(args: Sequence[str], env: Mapping[str, str]) -> list[str]:
     query_args.extend(args[:-2])
     query_args.append(args[-1])
 
-    return bazel_command(*query_args, env=env)
+    return buildbuddy_wrapper_command(*query_args)
 
 
 def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None) -> int:

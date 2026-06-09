@@ -158,6 +158,10 @@ def bazel_command(*args: str, env: Mapping[str, str] | None = None) -> list[str]
     return [bazel, *startup_args(args, env), *bazel_args_with_remote_config(args, env)]
 
 
+def buildbuddy_wrapper_command(*args: str) -> list[str]:
+    return [sys.executable, str(Path(__file__).resolve()), *args]
+
+
 def main() -> None:
     config = remote_config(sys.argv[1:], os.environ)
     if config is None:
