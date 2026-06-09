@@ -66,6 +66,7 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            thread_extension_init: Default::default(),
         })
         .await?;
     assert_eq!(provider.load_count(), 2);
