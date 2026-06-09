@@ -182,7 +182,6 @@ use crate::config::PermissionProfileState;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
-use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerSource;
@@ -1145,9 +1144,11 @@ impl Session {
         state.auto_compact_window_snapshot()
     }
 
-    pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
+    pub(crate) async fn estimated_tokens_after_last_model_generated_item(&self) -> i64 {
         let state = self.state.lock().await;
-        state.history.get_total_token_usage_breakdown()
+        state
+            .history
+            .estimated_tokens_after_last_model_generated_item()
     }
 
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
