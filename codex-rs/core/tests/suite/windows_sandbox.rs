@@ -377,6 +377,10 @@ async fn windows_unified_exec_managed_network_enforces_deny_read() -> anyhow::Re
                 .expect("test config should allow feature update");
             config.set_windows_sandbox_enabled(true);
             config.set_windows_elevated_sandbox_enabled(false);
+            config.workspace_roots = vec![config.cwd.clone()];
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
             config
                 .permissions
                 .set_permission_profile(permission_profile_for_config)
