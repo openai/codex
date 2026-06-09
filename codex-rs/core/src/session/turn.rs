@@ -561,13 +561,16 @@ async fn build_skills_and_plugins(
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
-    for plugin in mentioned_plugins
-        .iter()
-        .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
-    {
-        sess.services
-            .analytics_events_client
-            .track_plugin_used(tracking.clone(), plugin);
+    for summary in &mentioned_plugins {
+        if let Some(plugin) = sess
+            .services
+            .plugins_manager
+            .telemetry_metadata_for_capability_summary(summary)
+        {
+            sess.services
+                .analytics_events_client
+                .track_plugin_used(tracking.clone(), plugin);
+        }
     }
 
     let mut injection_items: Vec<ResponseItem> = match injected_host_skill_prompts {

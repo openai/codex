@@ -369,6 +369,81 @@ remote_plugin = true
 }
 
 #[tokio::test]
+async fn installed_plugin_telemetry_metadata_collects_capabilities() {
+    let codex_home = TempDir::new().unwrap();
+    write_cached_plugin(codex_home.path(), "test", "sample");
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let plugin_id = PluginId::parse("sample@test").expect("plugin id should parse");
+
+    let metadata = manager
+        .telemetry_metadata_for_installed_plugin(&plugin_id)
+        .await;
+
+    assert_eq!(
+        metadata,
+        PluginTelemetryMetadata {
+            plugin_id,
+            remote_plugin_id: None,
+            capability_summary: Some(PluginCapabilitySummary {
+                config_name: "sample@test".to_string(),
+                display_name: "sample".to_string(),
+                description: None,
+                has_skills: true,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: Vec::new(),
+            }),
+        }
+    );
+}
+
+#[tokio::test]
+async fn installed_plugin_telemetry_metadata_accepts_authoritative_remote_identity() {
+    let codex_home = TempDir::new().unwrap();
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let plugin_id =
+        PluginId::parse("linear@openai-curated-remote").expect("plugin id should parse");
+
+    let metadata = manager
+        .telemetry_metadata_for_installed_plugin_with_remote_id(&plugin_id, "plugins~Plugin_linear")
+        .await;
+
+    assert_eq!(
+        metadata,
+        PluginTelemetryMetadata {
+            plugin_id,
+            remote_plugin_id: Some("plugins~Plugin_linear".to_string()),
+            capability_summary: None,
+        }
+    );
+}
+
+#[test]
+fn capability_summary_telemetry_metadata_uses_local_identity() {
+    let codex_home = TempDir::new().unwrap();
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let summary = PluginCapabilitySummary {
+        config_name: "linear@openai-curated-remote".to_string(),
+        display_name: "Linear".to_string(),
+        description: Some("Track work".to_string()),
+        has_skills: true,
+        mcp_server_names: vec!["linear".to_string()],
+        app_connector_ids: vec![AppConnectorId("linear-app".to_string())],
+    };
+
+    let metadata = manager.telemetry_metadata_for_capability_summary(&summary);
+
+    assert_eq!(
+        metadata,
+        Some(PluginTelemetryMetadata {
+            plugin_id: PluginId::parse("linear@openai-curated-remote")
+                .expect("plugin id should parse"),
+            remote_plugin_id: None,
+            capability_summary: Some(summary),
+        })
+    );
+}
+
+#[tokio::test]
 async fn remote_installed_cache_prefers_local_curated_conflicts_when_remote_plugin_disabled() {
     let codex_home = TempDir::new().unwrap();
     write_file(
@@ -638,14 +713,14 @@ async fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
 }"#,
     );
 
-    let metadata = plugin_telemetry_metadata_from_root(
+    let summary = plugin_capability_summary_from_root(
         &PluginId::parse("sample@test").expect("plugin id should parse"),
         &plugin_root.abs(),
     )
     .await;
 
     assert_eq!(
-        metadata.capability_summary,
+        summary,
         Some(PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "sample".to_string(),

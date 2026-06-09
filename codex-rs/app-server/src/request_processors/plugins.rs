@@ -1523,9 +1523,14 @@ impl PluginRequestProcessor {
                 Some(self.effective_plugins_changed_callback()),
             );
 
-        let mut plugin_metadata =
-            plugin_telemetry_metadata_from_root(&result.plugin_id, &result.installed_path).await;
-        plugin_metadata.remote_plugin_id = Some(remote_plugin_id);
+        let plugin_metadata = self
+            .thread_manager
+            .plugins_manager()
+            .telemetry_metadata_for_installed_plugin_with_remote_id(
+                &result.plugin_id,
+                &remote_plugin_id,
+            )
+            .await;
         self.analytics_events_client
             .track_plugin_installed(plugin_metadata);
 
