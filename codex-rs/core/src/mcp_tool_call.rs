@@ -1426,9 +1426,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
     let manager = sess.services.mcp_connection_manager.read().await;
-    let plugin_id = manager
-        .plugin_id_for_mcp_server_name(server)
-        .map(str::to_string);
+    let plugin_id = manager.plugin_id_for_mcp_server_name(server);
     let tools = manager.list_all_tools().await;
     let tool_info = tools
         .into_iter()

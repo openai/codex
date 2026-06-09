@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -129,7 +130,7 @@ pub(crate) struct AsyncManagedClient {
     pub(crate) cached_tool_info_snapshot: Option<Vec<ToolInfo>>,
     pub(crate) cached_server_info: Option<McpServerInfo>,
     pub(crate) startup_complete: Arc<AtomicBool>,
-    pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
+    pub(crate) tool_plugin_provenance: Arc<RwLock<ToolPluginProvenance>>,
     pub(crate) cancel_token: CancellationToken,
 }
 
@@ -145,7 +146,7 @@ impl AsyncManagedClient {
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
-        tool_plugin_provenance: Arc<ToolPluginProvenance>,
+        tool_plugin_provenance: Arc<RwLock<ToolPluginProvenance>>,
         runtime_context: McpRuntimeContext,
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
@@ -257,6 +258,10 @@ impl AsyncManagedClient {
 
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
         let annotate_tools = |tools: Vec<ToolInfo>| {
+            let tool_plugin_provenance = self
+                .tool_plugin_provenance
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut tools = tools;
             for tool in &mut tools {
                 if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
@@ -264,11 +269,10 @@ impl AsyncManagedClient {
                 }
 
                 let plugin_names = match tool.connector_id.as_deref() {
-                    Some(connector_id) => self
-                        .tool_plugin_provenance
-                        .plugin_display_names_for_connector_id(connector_id),
-                    None => self
-                        .tool_plugin_provenance
+                    Some(connector_id) => {
+                        tool_plugin_provenance.plugin_display_names_for_connector_id(connector_id)
+                    }
+                    None => tool_plugin_provenance
                         .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
                 };
                 tool.plugin_display_names = plugin_names.to_vec();

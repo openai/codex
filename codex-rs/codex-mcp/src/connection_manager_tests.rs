@@ -36,6 +36,7 @@ use rmcp::model::NumberOrString;
 use rmcp::model::Tool;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::RwLock;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
@@ -810,7 +811,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            tool_plugin_provenance: Arc::new(RwLock::new(ToolPluginProvenance::default())),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -847,7 +848,7 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: Some(server_info.clone()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            tool_plugin_provenance: Arc::new(RwLock::new(ToolPluginProvenance::default())),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -884,7 +885,7 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            tool_plugin_provenance: Arc::new(RwLock::new(ToolPluginProvenance::default())),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -927,7 +928,7 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            tool_plugin_provenance: Arc::new(RwLock::new(ToolPluginProvenance::default())),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -969,7 +970,7 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
             cached_tool_info_snapshot: None,
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            tool_plugin_provenance: Arc::new(RwLock::new(ToolPluginProvenance::default())),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -998,7 +999,7 @@ async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty()
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            tool_plugin_provenance: Arc::new(RwLock::new(ToolPluginProvenance::default())),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1038,7 +1039,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: Some(server_info.clone()),
             startup_complete,
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            tool_plugin_provenance: Arc::new(RwLock::new(ToolPluginProvenance::default())),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1093,7 +1094,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            tool_plugin_provenance: Arc::new(RwLock::new(ToolPluginProvenance::default())),
             cancel_token: CancellationToken::new(),
         },
     );

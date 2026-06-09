@@ -3418,20 +3418,34 @@ async fn build_hooks_for_config(
     plugins_manager: &PluginsManager,
     user_shell: &crate::shell::Shell,
 ) -> Hooks {
+    let plugins_input = config.plugins_config_input();
+    let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
+    build_hooks_with_plugins(config, user_shell, &plugin_outcome)
+}
+
+fn build_hooks_without_plugins(config: &Config, user_shell: &crate::shell::Shell) -> Hooks {
+    build_hooks_with_plugins(
+        config,
+        user_shell,
+        &codex_core_plugins::PluginLoadOutcome::default(),
+    )
+}
+
+fn build_hooks_with_plugins(
+    config: &Config,
+    user_shell: &crate::shell::Shell,
+    plugin_outcome: &codex_core_plugins::PluginLoadOutcome,
+) -> Hooks {
     let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();
-    let plugins_input = config.plugins_config_input();
-    let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-    let plugin_hook_sources = plugin_outcome.effective_plugin_hook_sources();
-    let plugin_hook_load_warnings = plugin_outcome.effective_plugin_hook_warnings();
     Hooks::new(HooksConfig {
         legacy_notify_argv: config.notify.clone(),
         feature_enabled: config.features.enabled(Feature::CodexHooks),
         bypass_hook_trust: config.bypass_hook_trust,
         config_layer_stack: Some(config.config_layer_stack.clone()),
-        plugin_hook_sources,
-        plugin_hook_load_warnings,
+        plugin_hook_sources: plugin_outcome.effective_plugin_hook_sources(),
+        plugin_hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
         shell_program: Some(hook_shell_program),
         shell_args: hook_shell_argv,
     })

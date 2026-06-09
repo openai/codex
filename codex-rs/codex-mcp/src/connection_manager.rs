@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -104,7 +105,7 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_metadata: HashMap<String, McpServerMetadata>,
-    tool_plugin_provenance: Arc<ToolPluginProvenance>,
+    tool_plugin_provenance: Arc<RwLock<ToolPluginProvenance>>,
     host_owned_codex_apps_enabled: bool,
     prefix_mcp_tool_names: bool,
     elicitation_requests: ElicitationRequestManager,
@@ -132,7 +133,7 @@ impl McpConnectionManager {
         Self {
             clients: HashMap::new(),
             server_metadata: HashMap::new(),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            tool_plugin_provenance: Arc::new(RwLock::new(ToolPluginProvenance::default())),
             host_owned_codex_apps_enabled: false,
             prefix_mcp_tool_names,
             elicitation_requests: ElicitationRequestManager::new(
@@ -179,9 +180,12 @@ impl McpConnectionManager {
             .is_none_or(|metadata| metadata.pollutes_memory)
     }
 
-    pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<&str> {
+    pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<String> {
         self.tool_plugin_provenance
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .plugin_id_for_mcp_server_name(server_name)
+            .map(str::to_string)
     }
 
     pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
@@ -227,27 +231,85 @@ impl McpConnectionManager {
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
-        let mut clients = HashMap::new();
-        let mut server_metadata = HashMap::new();
-        let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::new(
             approval_policy.value(),
             initial_permission_profile,
             elicitation_reviewer,
         );
-        let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
+        let mut manager = Self {
+            clients: HashMap::new(),
+            server_metadata: HashMap::new(),
+            tool_plugin_provenance: Arc::new(RwLock::new(ToolPluginProvenance::default())),
+            host_owned_codex_apps_enabled,
+            prefix_mcp_tool_names,
+            elicitation_requests,
+            startup_cancellation_token: cancel_token.clone(),
+        };
+        let startup_was_empty = !mcp_servers.values().any(EffectiveMcpServer::enabled);
+        let empty_startup_event = startup_was_empty.then(|| Event {
+            id: submit_id.clone(),
+            msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent::default()),
+        });
+        manager
+            .add_servers(
+                mcp_servers,
+                store_mode,
+                submit_id,
+                tx_event.clone(),
+                runtime_context,
+                codex_home,
+                codex_apps_tools_cache_key,
+                client_elicitation_capability,
+                tool_plugin_provenance,
+                auth,
+            )
+            .await;
+        if let Some(event) = empty_startup_event {
+            let _ = tx_event.send(event).await;
+        }
+        (manager, cancel_token)
+    }
+
+    /// Start newly discovered MCP servers without reconnecting servers already owned by this
+    /// manager. Plugin discovery uses this after thread readiness has been published.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_servers(
+        &mut self,
+        mcp_servers: &HashMap<String, EffectiveMcpServer>,
+        store_mode: OAuthCredentialsStoreMode,
+        submit_id: String,
+        tx_event: Sender<Event>,
+        runtime_context: McpRuntimeContext,
+        codex_home: PathBuf,
+        codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+        client_elicitation_capability: ElicitationCapability,
+        tool_plugin_provenance: ToolPluginProvenance,
+        auth: Option<&CodexAuth>,
+    ) {
+        *self
+            .tool_plugin_provenance
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = tool_plugin_provenance;
+        let mut join_set = JoinSet::new();
         let startup_submit_id = submit_id.clone();
         let codex_apps_auth_provider = auth
             .filter(|auth| auth.uses_codex_backend())
             .map(codex_model_provider::auth_provider_from_auth);
-        let mcp_servers = mcp_servers.clone();
-        for (server_name, server) in mcp_servers
-            .into_iter()
-            .filter(|(_, server)| server.enabled())
-        {
+        let new_servers = mcp_servers
+            .iter()
+            .filter(|(server_name, server)| {
+                server.enabled() && !self.clients.contains_key(*server_name)
+            })
+            .map(|(server_name, server)| (server_name.clone(), server.clone()))
+            .collect::<Vec<_>>();
+        if new_servers.is_empty() {
+            return;
+        }
+        for (server_name, server) in new_servers {
             let configured_server = server.configured_config().cloned();
-            server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
-            let cancel_token = cancel_token.child_token();
+            self.server_metadata
+                .insert(server_name.clone(), McpServerMetadata::from(&server));
+            let cancel_token = self.startup_cancellation_token.child_token();
             let _ = emit_update(
                 startup_submit_id.as_str(),
                 &tx_event,
@@ -287,14 +349,15 @@ impl McpConnectionManager {
                 store_mode,
                 cancel_token.clone(),
                 tx_event.clone(),
-                elicitation_requests.clone(),
+                self.elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
-                Arc::clone(&tool_plugin_provenance),
+                Arc::clone(&self.tool_plugin_provenance),
                 runtime_context.clone(),
                 runtime_auth_provider,
                 client_elicitation_capability.clone(),
             );
-            clients.insert(server_name.clone(), async_managed_client.clone());
+            self.clients
+                .insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
             join_set.spawn(async move {
@@ -328,15 +391,6 @@ impl McpConnectionManager {
                 (server_name, outcome)
             });
         }
-        let manager = Self {
-            clients,
-            server_metadata,
-            tool_plugin_provenance,
-            host_owned_codex_apps_enabled,
-            prefix_mcp_tool_names,
-            elicitation_requests: elicitation_requests.clone(),
-            startup_cancellation_token: cancel_token.clone(),
-        };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
@@ -359,7 +413,6 @@ impl McpConnectionManager {
                 })
                 .await;
         });
-        (manager, cancel_token)
     }
 
     pub async fn resolve_elicitation(
@@ -829,9 +882,13 @@ fn mcp_init_error_display(
             "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
         )
     } else if is_mcp_client_startup_timeout_error(err) {
-        let startup_timeout_secs = config
-            .and_then(|config| config.startup_timeout_sec)
-            .unwrap_or(DEFAULT_STARTUP_TIMEOUT)
+        let startup_timeout_secs = match config {
+            Some(config) => match config.startup_timeout_sec {
+                Some(timeout) => timeout,
+                None => DEFAULT_STARTUP_TIMEOUT,
+            },
+            None => DEFAULT_STARTUP_TIMEOUT,
+        }
         .as_secs();
         format!(
             "MCP client for `{server_name}` timed out after {startup_timeout_secs} seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.{server_name}]\nstartup_timeout_sec = XX"

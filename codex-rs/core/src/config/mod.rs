@@ -1383,6 +1383,17 @@ impl Config {
     ) -> McpConfig {
         let plugins_input = self.plugins_config_input();
         let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
+        self.to_mcp_config_with_plugins(&loaded_plugins)
+    }
+
+    pub(crate) fn to_mcp_config_without_plugins(&self) -> McpConfig {
+        self.to_mcp_config_with_plugins(&codex_core_plugins::PluginLoadOutcome::default())
+    }
+
+    pub(crate) fn to_mcp_config_with_plugins(
+        &self,
+        loaded_plugins: &codex_core_plugins::PluginLoadOutcome,
+    ) -> McpConfig {
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         let mut plugin_ids_by_mcp_server_name = HashMap::new();
         for plugin in loaded_plugins

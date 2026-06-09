@@ -35,6 +35,14 @@ impl McpManager {
         effective_mcp_servers(&mcp_config, auth)
     }
 
+    pub fn effective_servers_without_plugins(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+    ) -> HashMap<String, EffectiveMcpServer> {
+        effective_mcp_servers(&config.to_mcp_config_without_plugins(), auth)
+    }
+
     pub async fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
         let mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
         collect_tool_plugin_provenance(&mcp_config)

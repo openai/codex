@@ -2,7 +2,6 @@ use super::input_queue::InputQueue;
 use super::*;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
-use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use crate::tools::registry::LateToolRegistry;
 use codex_protocol::SessionId;
@@ -453,29 +452,6 @@ pub(crate) struct AppServerClientMetadata {
     pub(crate) client_version: Option<String>,
 }
 
-async fn warm_plugins_and_skills_for_session_init(
-    config: Arc<Config>,
-    environment_manager: Arc<EnvironmentManager>,
-    plugins_manager: Arc<PluginsManager>,
-    skills_manager: Arc<SkillsManager>,
-    environments: Vec<TurnEnvironmentSelection>,
-) -> Vec<SkillError> {
-    let fs = crate::environment_selection::resolve_environment_selections(
-        environment_manager.as_ref(),
-        &environments,
-    )
-    .ok()
-    .and_then(|resolved| resolved.primary_filesystem());
-    let plugins_input = config.plugins_config_input();
-    let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-    let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots);
-    skills_manager
-        .skills_for_config(&skills_input, fs)
-        .await
-        .errors
-}
-
 impl Session {
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -650,8 +626,7 @@ impl Session {
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
             let mcp_servers = mcp_manager_for_mcp
-                .effective_servers(&config_for_mcp, auth.as_ref())
-                .await;
+                .effective_servers_without_plugins(&config_for_mcp, auth.as_ref());
             (auth, mcp_servers)
         }
         .instrument(info_span!(
@@ -659,33 +634,9 @@ impl Session {
             otel.name = "session_init.auth_mcp",
         ));
 
-        let plugin_and_skill_warmup_fut = warm_plugins_and_skills_for_session_init(
-            Arc::clone(&config),
-            Arc::clone(&environment_manager),
-            Arc::clone(&plugins_manager),
-            Arc::clone(&skills_manager),
-            session_configuration.environment_selections().to_vec(),
-        )
-        .instrument(info_span!(
-            "session_init.plugin_skill_warmup",
-            otel.name = "session_init.plugin_skill_warmup",
-        ));
-
         // Join all independent futures.
-        let (thread_persistence_result, state_db_ctx, (auth, mcp_servers), plugin_skill_errors) = tokio::join!(
-            thread_persistence_fut,
-            state_db_fut,
-            auth_and_mcp_fut,
-            plugin_and_skill_warmup_fut
-        );
-
-        for err in &plugin_skill_errors {
-            error!(
-                "failed to load skill {}: {}",
-                err.path.display(),
-                err.message
-            );
-        }
+        let (thread_persistence_result, state_db_ctx, (auth, mcp_servers)) =
+            tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -949,8 +900,7 @@ impl Session {
                     (None, None)
                 };
 
-            let hooks =
-                build_hooks_for_config(&config, plugins_manager.as_ref(), &default_shell).await;
+            let hooks = build_hooks_without_plugins(&config, &default_shell);
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -1145,7 +1095,6 @@ impl Session {
             for event in events {
                 sess.send_event_raw(event).await;
             }
-
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
                 .filter(|(_, server)| server.enabled() && server.required())
@@ -1155,7 +1104,7 @@ impl Session {
             let enabled_mcp_server_count =
                 mcp_servers.values().filter(|server| server.enabled()).count();
             let required_mcp_server_count = required_mcp_servers.len();
-            let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
+            let tool_plugin_provenance = codex_mcp::ToolPluginProvenance::default();
             let host_owned_codex_apps_enabled = config
                 .features
                 .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
