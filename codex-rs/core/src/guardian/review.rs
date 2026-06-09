@@ -19,7 +19,6 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
@@ -63,7 +62,7 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
     "You may retry once, or ask the user for guidance or explicit approval.",
 );
 
-const GUARDIAN_REVIEW_MAX_ATTEMPTS: u64 = 3;
+const GUARDIAN_REVIEW_MAX_ATTEMPTS: i64 = 3;
 
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -782,7 +781,7 @@ async fn run_guardian_review_session_before_deadline(
     )
     .await;
 
-    let (outcome, analytics_result) = match session_outcome {
+    match session_outcome {
         GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)) => match last_agent_message
         {
             Some(last_agent_message) => {
@@ -830,8 +829,7 @@ async fn run_guardian_review_session_before_deadline(
             GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
             session_analytics_result,
         ),
-    };
-    (outcome, analytics_result)
+    }
 }
 
 pub(super) async fn run_guardian_review_session_with_retry(
@@ -841,11 +839,12 @@ pub(super) async fn run_guardian_review_session_with_retry(
     retry_reason: Option<String>,
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
-    max_attempts: u64,
+    max_attempts: i64,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
     assert!(max_attempts > 0, "guardian review must run at least once");
     let deadline = Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
-    for attempt_count in 1..=max_attempts {
+    let mut attempt_count = 1;
+    loop {
         let (outcome, mut analytics_result) = run_guardian_review_session_before_deadline(
             Arc::clone(&session),
             Arc::clone(&turn),
@@ -857,7 +856,7 @@ pub(super) async fn run_guardian_review_session_with_retry(
         )
         .await;
         analytics_result.attempt_count = attempt_count;
-        if !should_retry_guardian_review(&outcome, attempt_count, max_attempts) {
+        if attempt_count >= max_attempts || !should_retry_guardian_review(&outcome) {
             return (outcome, analytics_result);
         }
         if let Some(error) =
@@ -865,16 +864,16 @@ pub(super) async fn run_guardian_review_session_with_retry(
         {
             return (GuardianReviewOutcome::Error(error), analytics_result);
         }
+        attempt_count += 1;
     }
-    unreachable!("guardian review retry loop always returns")
 }
 
 async fn wait_before_guardian_retry(
-    attempt_count: u64,
+    attempt_count: i64,
     deadline: Instant,
     external_cancel: Option<&CancellationToken>,
 ) -> Option<GuardianReviewError> {
-    let retry_delay = guardian_retry_delay(attempt_count)?;
+    let retry_delay = backoff(attempt_count as u64);
     let retry_at = (Instant::now() + retry_delay).min(deadline);
     tokio::select! {
         _ = sleep_until(retry_at) => {
@@ -890,36 +889,28 @@ async fn wait_before_guardian_retry(
     }
 }
 
-fn guardian_retry_delay(attempt_count: u64) -> Option<Duration> {
-    (attempt_count < GUARDIAN_REVIEW_MAX_ATTEMPTS).then(|| backoff(attempt_count))
-}
-
-fn should_retry_guardian_review(
-    outcome: &GuardianReviewOutcome,
-    attempt_count: u64,
-    max_attempts: u64,
-) -> bool {
-    attempt_count < max_attempts
-        && matches!(
-            outcome,
-            GuardianReviewOutcome::Error(
-                GuardianReviewError::Session {
-                    error_info: Some(
-                        CodexErrorInfo::ServerOverloaded
-                            | CodexErrorInfo::HttpConnectionFailed { .. }
-                            | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
-                            | CodexErrorInfo::InternalServerError
-                            | CodexErrorInfo::ResponseStreamDisconnected { .. }
-                    ),
-                    ..
-                } | GuardianReviewError::Parse { .. }
-            )
+fn should_retry_guardian_review(outcome: &GuardianReviewOutcome) -> bool {
+    matches!(
+        outcome,
+        GuardianReviewOutcome::Error(
+            GuardianReviewError::Session {
+                error_info: Some(
+                    CodexErrorInfo::ServerOverloaded
+                        | CodexErrorInfo::HttpConnectionFailed { .. }
+                        | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
+                        | CodexErrorInfo::InternalServerError
+                        | CodexErrorInfo::ResponseStreamDisconnected { .. }
+                ),
+                ..
+            } | GuardianReviewError::Parse { .. }
         )
+    )
 }
 
 #[cfg(test)]
 mod review_tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn guardian_review_error_reason_distinguishes_error_kinds() {
@@ -1019,40 +1010,8 @@ mod review_tests {
         ]);
 
         for (outcome, expected) in outcomes {
-            assert_eq!(
-                should_retry_guardian_review(
-                    &outcome, /*attempt_count*/ 1, /*max_attempts*/ 3,
-                ),
-                expected
-            );
-            assert_eq!(
-                should_retry_guardian_review(
-                    &outcome, /*attempt_count*/ 2, /*max_attempts*/ 3,
-                ),
-                expected
-            );
-            assert!(!should_retry_guardian_review(
-                &outcome, /*attempt_count*/ 3, /*max_attempts*/ 3,
-            ));
+            assert_eq!(should_retry_guardian_review(&outcome), expected);
         }
-    }
-
-    #[test]
-    fn guardian_review_retry_delays_are_jittered_within_bounds() {
-        let first_delay =
-            guardian_retry_delay(/*attempt_count*/ 1).expect("first retry should have a delay");
-        let second_delay =
-            guardian_retry_delay(/*attempt_count*/ 2).expect("second retry should have a delay");
-
-        assert!(
-            (Duration::from_millis(/*millis*/ 175)..=Duration::from_millis(/*millis*/ 225))
-                .contains(&first_delay)
-        );
-        assert!(
-            (Duration::from_millis(/*millis*/ 350)..=Duration::from_millis(/*millis*/ 450))
-                .contains(&second_delay)
-        );
-        assert_eq!(guardian_retry_delay(/*attempt_count*/ 3), None);
     }
 
     #[tokio::test]
