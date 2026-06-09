@@ -38,7 +38,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
 
     let server = MockServer::start().await;
 
-    // 1) On spawn, Codex fetches /models and stores the ETag.
+    // 1) The first inference fetches /models and stores the ETag without blocking spawn.
     let spawn_models_mock = responses::mount_models_once_with_etag(
         &server,
         ModelsResponse { models: Vec::new() },
@@ -68,8 +68,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
-    assert_eq!(spawn_models_mock.requests().len(), 1);
-    assert_eq!(spawn_models_mock.single_request_path(), "/v1/models");
+    assert_eq!(spawn_models_mock.requests().len(), 0);
 
     // 2) If the server sends a different X-Models-Etag on /responses, Codex refreshes /models.
     let refresh_models_mock = responses::mount_models_once_with_etag(
@@ -138,6 +137,9 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
         Duration::from_secs(30),
     )
     .await;
+
+    assert_eq!(spawn_models_mock.requests().len(), 1);
+    assert_eq!(spawn_models_mock.single_request_path(), "/v1/models");
 
     // Assert /models was refreshed exactly once after the X-Models-Etag mismatch.
     assert_eq!(refresh_models_mock.requests().len(), 1);

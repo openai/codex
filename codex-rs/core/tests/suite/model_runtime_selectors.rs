@@ -257,7 +257,7 @@ async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> 
             models_mock.requests().len(),
             test.codex.multi_agent_version(),
         ),
-        (1, None)
+        (0, None)
     );
 
     submit_thread_settings(

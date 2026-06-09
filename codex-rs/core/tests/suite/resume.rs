@@ -18,6 +18,7 @@ use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use pretty_assertions::assert_ne;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -237,7 +238,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
+async fn resume_switches_model_derived_base_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -342,7 +343,8 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     assert_eq!(requests.len(), 2, "expected two resumed requests");
 
     let first_resumed = &requests[0];
-    assert_eq!(first_resumed.instructions_text(), initial_instructions);
+    assert_ne!(first_resumed.instructions_text(), initial_instructions);
+    let resumed_instructions = first_resumed.instructions_text();
     let first_developer_texts = first_resumed.message_input_texts("developer");
     let first_model_switch_count = first_developer_texts
         .iter()
@@ -354,7 +356,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     );
 
     let second_resumed = &requests[1];
-    assert_eq!(second_resumed.instructions_text(), initial_instructions);
+    assert_eq!(second_resumed.instructions_text(), resumed_instructions);
     let second_developer_texts = second_resumed.message_input_texts("developer");
     let second_model_switch_count = second_developer_texts
         .iter()

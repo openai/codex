@@ -1313,7 +1313,7 @@ impl Session {
             turn_context.config.model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix
         ) {
-            let history = self.clone_history().await;
+            let history = self.state.lock().await.clone_history();
             let base_instructions = self.get_base_instructions().await;
             history.estimate_token_count_with_base_instructions(&base_instructions)
         } else {
@@ -2994,6 +2994,7 @@ impl Session {
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {
+        self.ensure_deferred_initialization_ready().await;
         let state = self.state.lock().await;
         state.clone_history()
     }

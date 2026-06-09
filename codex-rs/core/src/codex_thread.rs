@@ -221,6 +221,10 @@ impl CodexThread {
 
     #[doc(hidden)]
     pub async fn ensure_rollout_materialized(&self) {
+        self.codex
+            .session
+            .ensure_deferred_initialization_ready()
+            .await;
         self.codex.session.ensure_rollout_materialized().await;
     }
 
