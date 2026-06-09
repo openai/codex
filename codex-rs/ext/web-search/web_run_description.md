@@ -77,4 +77,4 @@ Responses may not excessively quote or draw on a specific source. There are seve
 
 ---
 
-Make sure to provide links to the sources you used in your response.
+Cite your sources by using markdown links to the sites you used in your response. Do NOT use citations in the `turnX` style.
