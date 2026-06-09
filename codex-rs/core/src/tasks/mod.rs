@@ -784,19 +784,7 @@ impl Session {
     }
 
     pub(crate) async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
-        self.services
-            .unified_exec_manager
-            .list_processes()
-            .await
-            .into_iter()
-            .map(|process| BackgroundTerminalInfo {
-                item_id: process.item_id,
-                process_id: process.process_id.to_string(),
-                command: process.command,
-                cwd: process.cwd,
-                started_at_ms: process.started_at_ms,
-            })
-            .collect()
+        self.services.unified_exec_manager.list_processes().await
     }
 
     pub(crate) async fn terminate_background_terminal(&self, process_id: i32) -> bool {

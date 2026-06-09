@@ -874,7 +874,7 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
 
 ### Example: List and terminate background terminals
 
-Use `thread/backgroundTerminals/list` to inspect running background terminals associated with a loaded thread. The `backgroundTerminals` segment intentionally follows the existing `thread/backgroundTerminals/clean` method. The returned `processId` is the app-server process id; host OS metadata is nullable. The response is intentionally unpaginated because unified exec caps the number of live processes. `startedAtMs` is a millisecond timestamp retained to match the existing process-manager runtime model.
+Use `thread/backgroundTerminals/list` to inspect running background terminals associated with a loaded thread. The `backgroundTerminals` segment intentionally follows the existing `thread/backgroundTerminals/clean` method. The returned `processId` is the app-server process id; host OS metadata is nullable. The request accepts the standard `cursor` and `limit` pagination fields. When `nextCursor` is non-null, pass it as `cursor` to fetch the next page.
 
 ```json
 { "method": "thread/backgroundTerminals/list", "id": 36, "params": { "threadId": "thr_123" } }
@@ -884,12 +884,11 @@ Use `thread/backgroundTerminals/list` to inspect running background terminals as
         "processId": "42",
         "command": "python3 -m http.server",
         "cwd": "/workspace",
-        "startedAtMs": 1730831111000,
         "osPid": null,
         "cpuPercent": null,
         "rssKb": null
     }
-] } }
+], "nextCursor": null } }
 ```
 
 Use `thread/backgroundTerminals/terminate` to terminate one running background terminal by that `processId`.

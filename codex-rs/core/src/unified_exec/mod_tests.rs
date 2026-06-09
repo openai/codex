@@ -8,7 +8,6 @@ use crate::session::session::Session;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
-use crate::turn_timing::now_unix_timestamp_ms;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
 use async_trait::async_trait;
@@ -60,16 +59,6 @@ async fn exec_command(
 
 fn shell_env() -> HashMap<String, String> {
     std::env::vars().collect()
-}
-
-fn background_terminal(process_id: i32, cwd: AbsolutePathBuf) -> BackgroundTerminalInfo {
-    BackgroundTerminalInfo {
-        item_id: "call".to_string(),
-        process_id: process_id.to_string(),
-        command: "bash -i".to_string(),
-        cwd,
-        started_at_ms: 0,
-    }
 }
 
 fn test_exec_request(
@@ -140,7 +129,6 @@ async fn exec_command_with_tty(
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone(),
-            started_at_ms: now_unix_timestamp_ms(),
             initial_exec_command_returned: false,
             hook_command: cmd.to_string(),
             tty,
@@ -268,26 +256,6 @@ impl ExecProcess for BlockingTerminateExecProcess {
         self.allow_terminate.notified().await;
         Ok(())
     }
-}
-
-async fn blocking_terminate_process(
-    process_id: i32,
-    terminate_started: Arc<Notify>,
-    allow_terminate: Arc<Notify>,
-) -> anyhow::Result<UnifiedExecProcess> {
-    let (wake_tx, _wake_rx) = watch::channel(0);
-    let started = StartedExecProcess {
-        process: Arc::new(BlockingTerminateExecProcess {
-            process_id: process_id.to_string().into(),
-            terminate_started,
-            allow_terminate,
-            wake_tx,
-        }),
-    };
-
-    UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
-        .await
-        .map_err(Into::into)
 }
 
 async fn write_stdin(
@@ -450,30 +418,15 @@ async fn background_terminals_can_be_listed_and_terminated() -> anyhow::Result<(
     .await?;
     let first_process_id = first_shell.process_id.expect("expected process id");
 
-    let second_shell = exec_command(
-        &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
-    )
-    .await?;
-    let second_process_id = second_shell.process_id.expect("expected process id");
-
     let listed_terminals = session.list_background_terminals().await;
-    assert!(
-        listed_terminals
-            .iter()
-            .all(|terminal| terminal.started_at_ms > 0)
-    );
     assert_eq!(
-        listed_terminals
-            .into_iter()
-            .map(|terminal| BackgroundTerminalInfo {
-                started_at_ms: 0,
-                ..terminal
-            })
-            .collect::<Vec<_>>(),
-        vec![
-            background_terminal(first_process_id, cwd.clone()),
-            background_terminal(second_process_id, cwd.clone()),
-        ]
+        listed_terminals,
+        vec![BackgroundTerminalInfo {
+            item_id: "call".to_string(),
+            process_id: first_process_id.to_string(),
+            command: "bash -i".to_string(),
+            cwd,
+        }]
     );
 
     assert!(
@@ -486,23 +439,7 @@ async fn background_terminals_can_be_listed_and_terminated() -> anyhow::Result<(
             .terminate_background_terminal(first_process_id)
             .await
     );
-
-    let listed_terminals = session.list_background_terminals().await;
-    assert!(
-        listed_terminals
-            .iter()
-            .all(|terminal| terminal.started_at_ms > 0)
-    );
-    assert_eq!(
-        listed_terminals
-            .into_iter()
-            .map(|terminal| BackgroundTerminalInfo {
-                started_at_ms: 0,
-                ..terminal
-            })
-            .collect::<Vec<_>>(),
-        vec![background_terminal(second_process_id, cwd)]
-    );
+    assert!(session.list_background_terminals().await.is_empty());
 
     let err = write_stdin(
         &session,
@@ -721,11 +658,18 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
     let process_id = manager.allocate_process_id().await;
     let terminate_started = Arc::new(Notify::new());
     let allow_terminate = Arc::new(Notify::new());
+    let (wake_tx, _wake_rx) = watch::channel(0);
     let process = Arc::new(
-        blocking_terminate_process(
-            process_id,
-            Arc::clone(&terminate_started),
-            Arc::clone(&allow_terminate),
+        UnifiedExecProcess::from_exec_server_started(
+            StartedExecProcess {
+                process: Arc::new(BlockingTerminateExecProcess {
+                    process_id: process_id.to_string().into(),
+                    terminate_started: Arc::clone(&terminate_started),
+                    allow_terminate: Arc::clone(&allow_terminate),
+                    wake_tx,
+                }),
+            },
+            SandboxType::None,
         )
         .await?,
     );
@@ -738,7 +682,6 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             call_id: "call".to_string(),
             process_id,
             cwd,
-            started_at_ms: now_unix_timestamp_ms(),
             initial_exec_command_returned: false,
             hook_command: "sleep 60".to_string(),
             tty: true,

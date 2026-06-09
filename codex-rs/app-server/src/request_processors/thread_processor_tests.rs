@@ -36,6 +36,55 @@ mod thread_list_cwd_filter_tests {
     }
 }
 
+mod background_terminal_pagination_tests {
+    use super::super::paginate_background_terminals;
+    use codex_app_server_protocol::ThreadBackgroundTerminal;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+
+    fn terminal(process_id: &str) -> ThreadBackgroundTerminal {
+        let cwd = if cfg!(windows) { r"C:\tmp" } else { "/tmp" };
+
+        ThreadBackgroundTerminal {
+            item_id: format!("item-{process_id}"),
+            process_id: process_id.to_string(),
+            command: format!("command-{process_id}"),
+            cwd: AbsolutePathBuf::from_absolute_path(cwd).expect("absolute cwd"),
+            os_pid: None,
+            cpu_percent: None,
+            rss_kb: None,
+        }
+    }
+
+    #[test]
+    fn paginates_with_process_id_cursor() {
+        let terminals = vec![
+            terminal("1"),
+            terminal("2"),
+            terminal("3"),
+            terminal("4"),
+            terminal("5"),
+        ];
+
+        let (data, next_cursor) =
+            paginate_background_terminals(&terminals, None, Some(2)).expect("valid page");
+
+        assert_eq!(data, vec![terminal("1"), terminal("2")]);
+        assert_eq!(next_cursor, Some("2".to_string()));
+
+        let (data, next_cursor) =
+            paginate_background_terminals(&terminals, next_cursor, Some(2)).expect("valid page");
+
+        assert_eq!(data, vec![terminal("3"), terminal("4")]);
+        assert_eq!(next_cursor, Some("4".to_string()));
+
+        assert!(
+            paginate_background_terminals(&terminals, Some("missing".to_string()), Some(1))
+                .is_err()
+        );
+    }
+}
+
 mod thread_processor_behavior_tests {
     async fn forked_from_id_from_rollout(path: &Path) -> Option<String> {
         codex_core::read_session_meta_line(path)

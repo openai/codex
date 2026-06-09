@@ -159,13 +159,12 @@ pub struct CodexThread {
     out_of_band_elicitation_count: Mutex<u64>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct BackgroundTerminalInfo {
     pub item_id: String,
     pub process_id: String,
     pub command: String,
     pub cwd: AbsolutePathBuf,
-    pub started_at_ms: i64,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread

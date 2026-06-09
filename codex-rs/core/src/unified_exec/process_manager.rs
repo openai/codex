@@ -11,6 +11,7 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::codex_thread::BackgroundTerminalInfo;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
@@ -27,7 +28,6 @@ use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolR
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
-use crate::turn_timing::now_unix_timestamp_ms;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
@@ -38,7 +38,6 @@ use crate::unified_exec::ProcessStore;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::unified_exec::UnifiedExecProcessSnapshot;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::emit_failed_exec_end_for_unified_exec;
@@ -824,7 +823,6 @@ impl UnifiedExecProcessManager {
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone(),
-            started_at_ms: now_unix_timestamp_ms(),
             initial_exec_command_returned: false,
             hook_command,
             tty,
@@ -1273,22 +1271,23 @@ impl UnifiedExecProcessManager {
         }
     }
 
-    pub(crate) async fn list_processes(&self) -> Vec<UnifiedExecProcessSnapshot> {
+    pub(crate) async fn list_processes(&self) -> Vec<BackgroundTerminalInfo> {
         let store = self.process_store.lock().await;
-        let mut snapshots = store
+        let mut entries = store
             .processes
             .values()
             .filter(|entry| !entry.process.has_exited())
-            .map(|entry| UnifiedExecProcessSnapshot {
-                process_id: entry.process_id,
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.process_id);
+        entries
+            .into_iter()
+            .map(|entry| BackgroundTerminalInfo {
                 item_id: entry.call_id.clone(),
+                process_id: entry.process_id.to_string(),
                 command: entry.hook_command.clone(),
                 cwd: entry.cwd.clone(),
-                started_at_ms: entry.started_at_ms,
             })
-            .collect::<Vec<_>>();
-        snapshots.sort_by_key(|snapshot| snapshot.process_id);
-        snapshots
+            .collect()
     }
 
     pub(crate) async fn terminate_process(&self, process_id: i32) -> bool {
@@ -1319,7 +1318,6 @@ impl UnifiedExecProcessManager {
         };
 
         unregister_network_approval_for_entry(&entry).await;
-        entry.process.terminate();
         true
     }
 }

@@ -940,6 +940,12 @@ pub struct ThreadBackgroundTerminalsCleanResponse {}
 #[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsListParams {
     pub thread_id: String,
+    /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional page size.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -950,9 +956,6 @@ pub struct ThreadBackgroundTerminal {
     pub process_id: String,
     pub command: String,
     pub cwd: AbsolutePathBuf,
-    /// Milliseconds since Unix epoch, matching existing process-manager runtime state.
-    #[ts(type = "number")]
-    pub started_at_ms: i64,
     pub os_pid: Option<u32>,
     pub cpu_percent: Option<f64>,
     pub rss_kb: Option<u64>,
@@ -962,8 +965,10 @@ pub struct ThreadBackgroundTerminal {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsListResponse {
-    /// Intentionally unpaginated because unified exec caps live processes.
     pub data: Vec<ThreadBackgroundTerminal>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

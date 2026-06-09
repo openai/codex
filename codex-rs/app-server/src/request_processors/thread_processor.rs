@@ -1747,10 +1747,14 @@ impl ThreadRequestProcessor {
         &self,
         params: ThreadBackgroundTerminalsListParams,
     ) -> Result<ThreadBackgroundTerminalsListResponse, JSONRPCErrorError> {
-        let ThreadBackgroundTerminalsListParams { thread_id } = params;
+        let ThreadBackgroundTerminalsListParams {
+            thread_id,
+            cursor,
+            limit,
+        } = params;
 
         let (_, thread) = self.load_thread(&thread_id).await?;
-        let data = thread
+        let terminals = thread
             .list_background_terminals()
             .await
             .into_iter()
@@ -1759,14 +1763,15 @@ impl ThreadRequestProcessor {
                 process_id: terminal.process_id,
                 command: terminal.command,
                 cwd: terminal.cwd,
-                started_at_ms: terminal.started_at_ms,
                 os_pid: None,
                 cpu_percent: None,
                 rss_kb: None,
             })
-            .collect();
+            .collect::<Vec<_>>();
 
-        Ok(ThreadBackgroundTerminalsListResponse { data })
+        let (data, next_cursor) = paginate_background_terminals(&terminals, cursor, limit)?;
+
+        Ok(ThreadBackgroundTerminalsListResponse { data, next_cursor })
     }
 
     async fn thread_background_terminals_terminate_inner(
@@ -4309,6 +4314,25 @@ fn build_thread_from_snapshot(
         name: None,
         turns: Vec::new(),
     }
+}
+
+fn paginate_background_terminals(
+    terminals: &[ThreadBackgroundTerminal],
+    cursor: Option<String>,
+    limit: Option<u32>,
+) -> Result<(Vec<ThreadBackgroundTerminal>, Option<String>), JSONRPCErrorError> {
+    let start = match cursor {
+        Some(cursor) => terminals
+            .iter()
+            .position(|terminal| terminal.process_id == cursor)
+            .map(|index| index + 1)
+            .ok_or_else(|| invalid_request(format!("invalid cursor: {cursor}")))?,
+        None => 0,
+    };
+    let effective_limit = limit.unwrap_or(terminals.len() as u32).max(1) as usize;
+    let end = start.saturating_add(effective_limit).min(terminals.len());
+    let next_cursor = (end < terminals.len()).then(|| terminals[end - 1].process_id.clone());
+    Ok((terminals[start..end].to_vec(), next_cursor))
 }
 
 fn build_thread_from_loaded_snapshot(

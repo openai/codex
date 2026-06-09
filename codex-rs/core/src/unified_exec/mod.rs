@@ -117,15 +117,6 @@ pub(crate) struct WriteStdinRequest<'a> {
     pub truncation_policy: TruncationPolicy,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct UnifiedExecProcessSnapshot {
-    pub process_id: i32,
-    pub item_id: String,
-    pub command: String,
-    pub cwd: AbsolutePathBuf,
-    pub started_at_ms: i64,
-}
-
 #[derive(Default)]
 pub(crate) struct ProcessStore {
     processes: HashMap<i32, ProcessEntry>,
@@ -165,7 +156,6 @@ struct ProcessEntry {
     call_id: String,
     process_id: i32,
     cwd: AbsolutePathBuf,
-    started_at_ms: i64,
     initial_exec_command_returned: bool,
     hook_command: String,
     tty: bool,

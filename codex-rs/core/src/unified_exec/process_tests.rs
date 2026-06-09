@@ -135,7 +135,7 @@ async fn fail_and_terminate_preserves_failure_message() {
 }
 
 #[tokio::test]
-async fn remote_terminate_failure_does_not_mark_process_exited() {
+async fn remote_terminate_confirmed_updates_state_on_success_only() {
     let process = remote_process(
         WriteStatus::Accepted,
         Some("terminate unavailable".to_string()),
@@ -149,10 +149,7 @@ async fn remote_terminate_failure_does_not_mark_process_exited() {
 
     assert!(matches!(err, UnifiedExecError::ProcessFailed { .. }));
     assert!(!process.has_exited());
-}
 
-#[tokio::test]
-async fn remote_terminate_confirmed_marks_process_exited() {
     let process = remote_process(WriteStatus::Accepted, /*terminate_error*/ None).await;
 
     process
