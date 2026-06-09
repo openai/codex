@@ -15,11 +15,14 @@ use crate::endpoint::realtime_websocket::protocol::SessionAudioOutput;
 use crate::endpoint::realtime_websocket::protocol::SessionType;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 
-pub(super) fn conversation_item_create_message(text: String) -> RealtimeOutboundMessage {
+pub(super) fn conversation_item_create_message(
+    role: ConversationRole,
+    text: String,
+) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::ConversationItemCreate {
         item: ConversationItemPayload::Message(ConversationMessageItem {
             r#type: ConversationItemType::Message,
-            role: ConversationRole::User,
+            role,
             content: vec![ConversationItemContent {
                 r#type: ConversationContentType::InputText,
                 text,
@@ -29,7 +32,7 @@ pub(super) fn conversation_item_create_message(text: String) -> RealtimeOutbound
 }
 
 pub(super) fn conversation_handoff_append_message(
-    handoff_id: String,
+    handoff_id: Option<String>,
     output_text: String,
 ) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::ConversationHandoffAppend {

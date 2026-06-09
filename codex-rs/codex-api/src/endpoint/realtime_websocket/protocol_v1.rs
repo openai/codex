@@ -1,11 +1,15 @@
 use crate::endpoint::realtime_websocket::protocol_common::parse_error_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_realtime_payload;
+use crate::endpoint::realtime_websocket::protocol_common::parse_response_event_response_id;
 use crate::endpoint::realtime_websocket::protocol_common::parse_session_updated_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_delta_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_done_event;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeResponseCancelled;
+use codex_protocol::protocol::RealtimeResponseCreated;
+use codex_protocol::protocol::RealtimeResponseDone;
 use serde_json::Value;
 use tracing::debug;
 
@@ -62,6 +66,17 @@ pub(super) fn parse_realtime_event_v1(payload: &str) -> Option<RealtimeEvent> {
             .cloned()
             .map(RealtimeEvent::ConversationItemAdded),
         "conversation.item.done" => parse_conversation_item_done_event(&parsed),
+        "response.created" => Some(RealtimeEvent::ResponseCreated(RealtimeResponseCreated {
+            response_id: parse_response_event_response_id(&parsed),
+        })),
+        "response.cancelled" => Some(RealtimeEvent::ResponseCancelled(
+            RealtimeResponseCancelled {
+                response_id: parse_response_event_response_id(&parsed),
+            },
+        )),
+        "response.done" => Some(RealtimeEvent::ResponseDone(RealtimeResponseDone {
+            response_id: parse_response_event_response_id(&parsed),
+        })),
         "conversation.handoff.requested" => {
             let handoff_id = parsed
                 .get("handoff_id")

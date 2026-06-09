@@ -3,6 +3,7 @@ use crate::endpoint::realtime_websocket::methods_common::conversation_item_creat
 use crate::endpoint::realtime_websocket::methods_common::normalized_session_mode;
 use crate::endpoint::realtime_websocket::methods_common::session_update_session;
 use crate::endpoint::realtime_websocket::methods_common::websocket_intent;
+use crate::endpoint::realtime_websocket::protocol::ConversationRole;
 use crate::endpoint::realtime_websocket::protocol::RealtimeAudioFrame;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEvent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEventParser;
@@ -241,6 +242,16 @@ impl RealtimeWebsocketConnection {
             .await
     }
 
+    pub async fn send_conversation_handoff_append(
+        &self,
+        handoff_id: Option<String>,
+        output_text: String,
+    ) -> Result<(), ApiError> {
+        self.writer
+            .send_conversation_handoff_append(handoff_id, output_text)
+            .await
+    }
+
     pub async fn close(&self) -> Result<(), ApiError> {
         self.writer.close().await
     }
@@ -287,8 +298,24 @@ impl RealtimeWebsocketWriter {
     }
 
     pub async fn send_conversation_item_create(&self, text: String) -> Result<(), ApiError> {
-        self.send_json(&conversation_item_create_message(self.event_parser, text))
-            .await
+        self.send_json(&conversation_item_create_message(
+            self.event_parser,
+            ConversationRole::User,
+            text,
+        ))
+        .await
+    }
+
+    pub async fn send_conversation_developer_item_create(
+        &self,
+        text: String,
+    ) -> Result<(), ApiError> {
+        self.send_json(&conversation_item_create_message(
+            self.event_parser,
+            ConversationRole::Developer,
+            text,
+        ))
+        .await
     }
 
     pub async fn send_conversation_function_call_output(
@@ -301,6 +328,20 @@ impl RealtimeWebsocketWriter {
             call_id,
             output_text,
         ))
+        .await
+    }
+
+    pub async fn send_conversation_handoff_append(
+        &self,
+        handoff_id: Option<String>,
+        output_text: String,
+    ) -> Result<(), ApiError> {
+        self.send_json(
+            &crate::endpoint::realtime_websocket::methods_v1::conversation_handoff_append_message(
+                handoff_id,
+                output_text,
+            ),
+        )
         .await
     }
 
@@ -1611,11 +1652,12 @@ mod tests {
                 .into_text()
                 .expect("text");
             let fourth_json: Value = serde_json::from_str(&fourth).expect("json");
-            assert_eq!(fourth_json["type"], "conversation.handoff.append");
-            assert_eq!(fourth_json["handoff_id"], "handoff_1");
             assert_eq!(
-                fourth_json["output_text"],
-                "\"Agent Final Message\":\n\nhello from background agent"
+                fourth_json,
+                json!({
+                    "type": "conversation.handoff.append",
+                    "output_text": "hello from background agent"
+                })
             );
 
             ws.send(Message::Text(
@@ -1738,8 +1780,8 @@ mod tests {
             .await
             .expect("send item");
         connection
-            .send_conversation_function_call_output(
-                "handoff_1".to_string(),
+            .send_conversation_handoff_append(
+                /*handoff_id*/ None,
                 "hello from background agent".to_string(),
             )
             .await

@@ -65,6 +65,21 @@ pub(super) fn parse_transcript_done_event(
         .map(|text| RealtimeTranscriptDone { text })
 }
 
+pub(super) fn parse_response_event_response_id(parsed: &Value) -> Option<String> {
+    parsed
+        .get("response")
+        .and_then(Value::as_object)
+        .and_then(|response| response.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            parsed
+                .get("response_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+}
+
 pub(super) fn parse_error_event(parsed: &Value) -> Option<RealtimeEvent> {
     parsed
         .get("message")

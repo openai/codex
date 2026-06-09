@@ -2117,6 +2117,8 @@ async fn conversation_user_text_turn_is_not_sent_to_realtime() -> Result<()> {
             "session": { "id": "sess_user_text", "instructions": "backend prompt" }
         })],
         vec![],
+        vec![],
+        vec![],
     ]])
     .await;
 
@@ -2275,7 +2277,7 @@ async fn realtime_v2_noop_tool_call_returns_empty_function_output_without_respon
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Result<()> {
+async fn conversation_sends_terminal_assistant_message_to_realtime_handoff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let api_server = start_mock_server().await;
@@ -2381,7 +2383,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
     );
     assert_eq!(
         realtime_connections[0][1].body_json()["output_text"].as_str(),
-        Some("\"Agent Final Message\":\n\nassistant says hi")
+        Some("assistant says hi")
     );
 
     realtime_server.shutdown().await;
@@ -2389,7 +2391,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_handoff_persists_across_item_done_until_turn_complete() -> Result<()> {
+async fn conversation_sends_only_last_assistant_message_at_turn_complete() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let (gate_second_message_tx, gate_second_message_rx) = oneshot::channel();
@@ -2436,10 +2438,6 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
                 "input_transcript": "delegate now"
             }),
         ],
-        vec![json!({
-            "type": "conversation.item.done",
-            "item": { "id": "item_item_done" }
-        })],
         vec![],
     ]])
     .await;
@@ -2483,47 +2481,17 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
     })
     .await;
 
-    let first_append = realtime_server
-        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
-        .await;
-    assert_eq!(
-        first_append.body_json()["type"].as_str(),
-        Some("conversation.handoff.append")
-    );
-    assert_eq!(
-        first_append.body_json()["handoff_id"].as_str(),
-        Some("handoff_item_done")
-    );
-    assert_eq!(
-        first_append.body_json()["output_text"].as_str(),
-        Some("\"Agent Final Message\":\n\nassistant message 1")
-    );
-
-    let _ = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::ConversationItemDone { item_id },
-        }) if item_id == "item_item_done" => Some(()),
-        _ => None,
-    })
+    let intermediate_output = timeout(
+        Duration::from_millis(200),
+        realtime_server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 1),
+    )
     .await;
+    assert!(
+        intermediate_output.is_err(),
+        "assistant items should not be sent before turn completion"
+    );
 
     let _ = gate_second_message_tx.send(());
-
-    let second_append = realtime_server
-        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 2)
-        .await;
-    assert_eq!(
-        second_append.body_json()["type"].as_str(),
-        Some("conversation.handoff.append")
-    );
-    assert_eq!(
-        second_append.body_json()["handoff_id"].as_str(),
-        Some("handoff_item_done")
-    );
-    assert_eq!(
-        second_append.body_json()["output_text"].as_str(),
-        Some("\"Agent Final Message\":\n\nassistant message 2")
-    );
 
     let completion = completions
         .into_iter()
@@ -2536,6 +2504,27 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+
+    let terminal_output = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
+        .await;
+    assert_eq!(
+        terminal_output.body_json(),
+        json!({
+            "type": "conversation.handoff.append",
+            "handoff_id": "handoff_item_done",
+            "output_text": "assistant message 2"
+        })
+    );
+    let duplicate_output = timeout(
+        Duration::from_millis(200),
+        realtime_server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 2),
+    )
+    .await;
+    assert!(
+        duplicate_output.is_err(),
+        "turn completion should emit exactly one terminal output"
+    );
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;
@@ -3054,6 +3043,19 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
         "delegate now"
     );
 
+    let completion = completions
+        .into_iter()
+        .next()
+        .expect("missing delegated turn completion");
+    let _ = gate_completed_tx.send(());
+    completion
+        .await
+        .expect("delegated turn request did not complete");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
     let mirrored_request = realtime_server
         .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
         .await;
@@ -3075,7 +3077,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     );
     assert_eq!(
         mirrored_request_body["output_text"].as_str(),
-        Some("\"Agent Final Message\":\n\nassistant says hi")
+        Some("assistant says hi")
     );
 
     let audio_out = wait_for_event_match(&test.codex, |msg| match msg {
@@ -3094,22 +3096,10 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     );
     assert_eq!(audio_out.data, "AQID");
 
-    let completion = completions
-        .into_iter()
-        .next()
-        .expect("missing delegated turn completion");
-    let _ = gate_completed_tx.send(());
-    completion
-        .await
-        .expect("delegated turn request did not complete");
     eprintln!(
         "[realtime test +{}ms] delegated completion resolved",
         start.elapsed().as_millis()
     );
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
 
     let requests = api_server.requests().await;
     assert_eq!(requests.len(), 1);

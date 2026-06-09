@@ -1,5 +1,6 @@
 use crate::endpoint::realtime_websocket::protocol_common::parse_error_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_realtime_payload;
+use crate::endpoint::realtime_websocket::protocol_common::parse_response_event_response_id;
 use crate::endpoint::realtime_websocket::protocol_common::parse_session_updated_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_delta_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_done_event;
@@ -76,21 +77,6 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
             None
         }
     }
-}
-
-fn parse_response_event_response_id(parsed: &Value) -> Option<String> {
-    parsed
-        .get("response")
-        .and_then(Value::as_object)
-        .and_then(|response| response.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| {
-            parsed
-                .get("response_id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
 }
 
 fn parse_output_audio_delta_event(parsed: &Value) -> Option<RealtimeEvent> {

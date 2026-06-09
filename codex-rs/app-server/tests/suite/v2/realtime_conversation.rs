@@ -36,7 +36,10 @@ use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::protocol::RealtimeConversationVersion;
@@ -1320,11 +1323,118 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
         json!({
             "type": "conversation.handoff.append",
             "handoff_id": "handoff_v1",
-            "output_text": "\"Agent Final Message\":\n\ndelegated from v1",
+            "output_text": "delegated from v1",
         })
     );
 
     harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn webrtc_terminal_output_without_handoff_reaches_realtime() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    for (version, output_texts) in [
+        (
+            RealtimeTestVersion::V1,
+            [
+                "first direct result from v1",
+                "second direct result from v1",
+            ],
+        ),
+        (
+            RealtimeTestVersion::V2,
+            [
+                "first direct result from v2",
+                "second direct result from v2",
+            ],
+        ),
+    ] {
+        let mut harness = RealtimeE2eHarness::new(
+            version,
+            main_loop_responses(vec![
+                create_final_assistant_message_sse_response(output_texts[0])?,
+                create_final_assistant_message_sse_response(output_texts[1])?,
+            ]),
+            realtime_sideband(vec![realtime_sideband_connection(vec![
+                vec![session_updated("sess_terminal_output")],
+                vec![],
+                vec![
+                    json!({
+                        "type": "response.created",
+                        "response": { "id": "resp_direct_1" },
+                    }),
+                    json!({
+                        "type": "response.done",
+                        "response": { "id": "resp_direct_1" },
+                    }),
+                ],
+                vec![],
+                vec![],
+            ])]),
+        )
+        .await?;
+
+        let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+        assert_eq!(
+            started.started.version,
+            match version {
+                RealtimeTestVersion::V1 => RealtimeConversationVersion::V1,
+                RealtimeTestVersion::V2 => RealtimeConversationVersion::V2,
+            }
+        );
+
+        for (turn_index, output_text) in output_texts.into_iter().enumerate() {
+            let turn_request_id = harness
+                .mcp
+                .send_turn_start_request(TurnStartParams {
+                    thread_id: harness.thread_id.clone(),
+                    input: vec![V2UserInput::Text {
+                        text: format!("direct text turn {turn_index}"),
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                })
+                .await?;
+            let turn_response: JSONRPCResponse = timeout(
+                DEFAULT_TIMEOUT,
+                harness
+                    .mcp
+                    .read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+            )
+            .await??;
+            let _: TurnStartResponse = to_response(turn_response)?;
+            let _ = harness
+                .read_notification::<TurnCompletedNotification>("turn/completed")
+                .await?;
+
+            assert_eq!(
+                harness
+                    .sideband_outbound_request(/*request_index*/ 1 + turn_index * 2)
+                    .await,
+                json!({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{
+                            "type": "input_text",
+                            "text": output_text,
+                        }],
+                    },
+                })
+            );
+            assert_v2_response_create(
+                &harness
+                    .sideband_outbound_request(/*request_index*/ 2 + turn_index * 2)
+                    .await,
+            );
+        }
+
+        harness.shutdown().await;
+    }
+
     Ok(())
 }
 
@@ -1628,8 +1738,8 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
         requests[0]
     );
 
-    let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
-    assert_v2_progress_update(&progress, "delegated from v2");
+    let terminal_output = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    assert_v2_terminal_output(&terminal_output, "delegated from v2");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
     assert_v2_function_call_output(&tool_output, "call_v2", V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT);
@@ -1736,7 +1846,7 @@ async fn webrtc_v2_background_agent_steering_ack_requests_response_create() -> R
 }
 
 #[tokio::test]
-async fn webrtc_v2_background_agent_progress_is_sent_before_function_output() -> Result<()> {
+async fn webrtc_v2_terminal_output_is_sent_before_function_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut harness = RealtimeE2eHarness::new(
@@ -1763,8 +1873,8 @@ async fn webrtc_v2_background_agent_progress_is_sent_before_function_output() ->
         .await?;
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
-    let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
-    assert_v2_progress_update(&progress, "progress before final");
+    let terminal_output = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    assert_v2_terminal_output(&terminal_output, "progress before final");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
     assert_v2_function_call_output(
@@ -1853,8 +1963,8 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
         requests[1]
     );
 
-    let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
-    assert_v2_progress_update(&progress, "shell tool finished");
+    let terminal_output = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    assert_v2_terminal_output(&terminal_output, "shell tool finished");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
     assert_v2_function_call_output(
@@ -1937,8 +2047,8 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
         .await?;
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
-    let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
-    assert_v2_progress_update(&progress, "late delegated result");
+    let terminal_output = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    assert_v2_terminal_output(&terminal_output, "late delegated result");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
     assert_v2_function_call_output(
@@ -2196,7 +2306,7 @@ fn assert_v2_function_call_output(request: &Value, call_id: &str, expected_outpu
     );
 }
 
-fn assert_v2_progress_update(request: &Value, expected_text: &str) {
+fn assert_v2_terminal_output(request: &Value, expected_text: &str) {
     assert_eq!(
         request,
         &json!({

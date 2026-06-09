@@ -1,5 +1,6 @@
 use super::RealtimeHandoffState;
 use super::RealtimeSessionKind;
+use super::RealtimeTerminalOutput;
 use super::realtime_delegation_from_handoff;
 use super::realtime_request_headers;
 use super::realtime_text_from_handoff_request;
@@ -126,18 +127,71 @@ fn wraps_realtime_delegation_input_with_xml_escaping_without_transcript() {
 }
 
 #[tokio::test]
-async fn clears_active_handoff_explicitly() {
-    let (tx, _rx) = bounded(1);
-    let state = RealtimeHandoffState::new(tx, RealtimeSessionKind::V1);
+async fn terminal_output_consumes_only_its_handoff() {
+    for (session_kind, expected_output_text) in [
+        (RealtimeSessionKind::V1, "finished"),
+        (RealtimeSessionKind::V2, "[BACKEND] finished"),
+    ] {
+        let (tx, _rx) = bounded(1);
+        let state = RealtimeHandoffState::new(tx, session_kind);
 
-    *state.active_handoff.lock().await = Some("handoff_1".to_string());
-    assert_eq!(
-        state.active_handoff.lock().await.clone(),
-        Some("handoff_1".to_string())
-    );
+        *state.active_handoff.lock().await = Some("handoff_1".to_string());
+        let first_output = state
+            .take_terminal_output(Some("finished".to_string()))
+            .await;
+        *state.active_handoff.lock().await = Some("handoff_2".to_string());
 
-    *state.active_handoff.lock().await = None;
-    assert_eq!(state.active_handoff.lock().await.clone(), None);
+        assert_eq!(
+            first_output,
+            Some(RealtimeTerminalOutput::Handoff {
+                handoff_id: "handoff_1".to_string(),
+                output_text: expected_output_text.to_string(),
+            })
+        );
+        assert_eq!(
+            state.active_handoff.lock().await.clone(),
+            Some("handoff_2".to_string())
+        );
+        assert_eq!(
+            state
+                .take_terminal_output(Some("finished again".to_string()))
+                .await,
+            Some(RealtimeTerminalOutput::Handoff {
+                handoff_id: "handoff_2".to_string(),
+                output_text: format!("{expected_output_text} again"),
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn terminal_output_without_handoff_stays_plain() {
+    for session_kind in [RealtimeSessionKind::V1, RealtimeSessionKind::V2] {
+        let (tx, _rx) = bounded(1);
+        let state = RealtimeHandoffState::new(tx, session_kind);
+
+        assert_eq!(
+            state
+                .take_terminal_output(Some("finished".to_string()))
+                .await,
+            Some(RealtimeTerminalOutput::Direct {
+                output_text: "finished".to_string(),
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn terminal_output_without_message_still_consumes_handoff() {
+    for session_kind in [RealtimeSessionKind::V1, RealtimeSessionKind::V2] {
+        let (tx, _rx) = bounded(1);
+        let state = RealtimeHandoffState::new(tx, session_kind);
+
+        *state.active_handoff.lock().await = Some("handoff_1".to_string());
+
+        assert_eq!(state.take_terminal_output(/*output_text*/ None).await, None);
+        assert_eq!(state.active_handoff.lock().await.clone(), None);
+    }
 }
 
 #[test]

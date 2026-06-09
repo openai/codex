@@ -61,7 +61,7 @@ use tracing::warn;
 
 const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
-const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
+const TERMINAL_OUTPUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_300;
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
@@ -98,19 +98,17 @@ enum RealtimeSessionKind {
 
 #[derive(Clone, Debug)]
 struct RealtimeHandoffState {
-    output_tx: Sender<HandoffOutput>,
+    terminal_output_tx: Sender<RealtimeTerminalOutput>,
     active_handoff: Arc<Mutex<Option<String>>>,
-    last_output_text: Arc<Mutex<Option<String>>>,
     session_kind: RealtimeSessionKind,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum HandoffOutput {
-    ProgressUpdate {
-        handoff_id: String,
+enum RealtimeTerminalOutput {
+    Direct {
         output_text: String,
     },
-    FinalUpdate {
+    Handoff {
         handoff_id: String,
         output_text: String,
     },
@@ -188,7 +186,7 @@ struct RealtimeInputTask {
     writer: RealtimeWebsocketWriter,
     events: RealtimeWebsocketEvents,
     user_text_rx: Receiver<String>,
-    handoff_output_rx: Receiver<HandoffOutput>,
+    terminal_output_rx: Receiver<RealtimeTerminalOutput>,
     audio_rx: Receiver<RealtimeAudioFrame>,
     events_tx: Sender<RealtimeEvent>,
     handoff_state: RealtimeHandoffState,
@@ -198,17 +196,38 @@ struct RealtimeInputTask {
 
 struct RealtimeInputChannels {
     user_text_rx: Receiver<String>,
-    handoff_output_rx: Receiver<HandoffOutput>,
+    terminal_output_rx: Receiver<RealtimeTerminalOutput>,
     audio_rx: Receiver<RealtimeAudioFrame>,
 }
 
 impl RealtimeHandoffState {
-    fn new(output_tx: Sender<HandoffOutput>, session_kind: RealtimeSessionKind) -> Self {
+    fn new(
+        terminal_output_tx: Sender<RealtimeTerminalOutput>,
+        session_kind: RealtimeSessionKind,
+    ) -> Self {
         Self {
-            output_tx,
+            terminal_output_tx,
             active_handoff: Arc::new(Mutex::new(None)),
-            last_output_text: Arc::new(Mutex::new(None)),
             session_kind,
+        }
+    }
+
+    async fn take_terminal_output(
+        &self,
+        output_text: Option<String>,
+    ) -> Option<RealtimeTerminalOutput> {
+        let handoff_id = self.active_handoff.lock().await.take();
+        let output_text = output_text?;
+        match handoff_id {
+            Some(handoff_id) => Some(RealtimeTerminalOutput::Handoff {
+                handoff_id,
+                output_text: prefix_realtime_text(
+                    output_text,
+                    REALTIME_BACKEND_TEXT_PREFIX,
+                    self.session_kind,
+                ),
+            }),
+            None => Some(RealtimeTerminalOutput::Direct { output_text }),
         }
     }
 }
@@ -293,16 +312,16 @@ impl RealtimeConversationManager {
             async_channel::bounded::<RealtimeAudioFrame>(AUDIO_IN_QUEUE_CAPACITY);
         let (user_text_tx, user_text_rx) =
             async_channel::bounded::<String>(USER_TEXT_IN_QUEUE_CAPACITY);
-        let (handoff_output_tx, handoff_output_rx) =
-            async_channel::bounded::<HandoffOutput>(HANDOFF_OUT_QUEUE_CAPACITY);
+        let (terminal_output_tx, terminal_output_rx) =
+            async_channel::bounded::<RealtimeTerminalOutput>(TERMINAL_OUTPUT_QUEUE_CAPACITY);
         let (events_tx, events_rx) =
             async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
         let realtime_active = Arc::new(AtomicBool::new(true));
-        let handoff = RealtimeHandoffState::new(handoff_output_tx, session_kind);
+        let handoff = RealtimeHandoffState::new(terminal_output_tx, session_kind);
         let input_channels = RealtimeInputChannels {
             user_text_rx,
-            handoff_output_rx,
+            terminal_output_rx,
             audio_rx,
         };
 
@@ -341,7 +360,7 @@ impl RealtimeConversationManager {
                 writer: connection.writer(),
                 events: connection.events(),
                 user_text_rx: input_channels.user_text_rx,
-                handoff_output_rx: input_channels.handoff_output_rx,
+                terminal_output_rx: input_channels.terminal_output_rx,
                 audio_rx: input_channels.audio_rx,
                 events_tx,
                 handoff_state: handoff.clone(),
@@ -449,39 +468,7 @@ impl RealtimeConversationManager {
         Ok(())
     }
 
-    pub(crate) async fn handoff_out(&self, output_text: String) -> CodexResult<()> {
-        let handoff = {
-            let guard = self.state.lock().await;
-            let Some(state) = guard.as_ref() else {
-                return Err(CodexErr::InvalidRequest(
-                    "conversation is not running".to_string(),
-                ));
-            };
-            state.handoff.clone()
-        };
-
-        let Some(handoff_id) = handoff.active_handoff.lock().await.clone() else {
-            return Ok(());
-        };
-
-        let output_text = prefix_realtime_text(
-            output_text,
-            REALTIME_BACKEND_TEXT_PREFIX,
-            handoff.session_kind,
-        );
-        *handoff.last_output_text.lock().await = Some(output_text.clone());
-        handoff
-            .output_tx
-            .send(HandoffOutput::ProgressUpdate {
-                handoff_id,
-                output_text,
-            })
-            .await
-            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
-        Ok(())
-    }
-
-    pub(crate) async fn handoff_complete(&self) -> CodexResult<()> {
+    pub(crate) async fn finish_turn(&self, output_text: Option<String>) -> CodexResult<()> {
         let handoff = {
             let guard = self.state.lock().await;
             guard.as_ref().map(|state| state.handoff.clone())
@@ -489,45 +476,16 @@ impl RealtimeConversationManager {
         let Some(handoff) = handoff else {
             return Ok(());
         };
-        match handoff.session_kind {
-            RealtimeSessionKind::V1 => return Ok(()),
-            RealtimeSessionKind::V2 => {}
-        }
 
-        let Some(handoff_id) = handoff.active_handoff.lock().await.clone() else {
+        let Some(terminal_output) = handoff.take_terminal_output(output_text).await else {
             return Ok(());
         };
-        let Some(output_text) = handoff.last_output_text.lock().await.clone() else {
-            return Ok(());
-        };
-
         handoff
-            .output_tx
-            .send(HandoffOutput::FinalUpdate {
-                handoff_id,
-                output_text,
-            })
+            .terminal_output_tx
+            .send(terminal_output)
             .await
-            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))
-    }
-
-    pub(crate) async fn active_handoff_id(&self) -> Option<String> {
-        let handoff = {
-            let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.handoff.clone())
-        }?;
-        handoff.active_handoff.lock().await.clone()
-    }
-
-    pub(crate) async fn clear_active_handoff(&self) {
-        let handoff = {
-            let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.handoff.clone())
-        };
-        if let Some(handoff) = handoff {
-            *handoff.active_handoff.lock().await = None;
-            *handoff.last_output_text.lock().await = None;
-        }
+            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+        Ok(())
     }
 
     pub(crate) async fn shutdown(&self) -> CodexResult<()> {
@@ -1082,7 +1040,7 @@ fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> J
             writer: connection.writer(),
             events: connection.events(),
             user_text_rx: input_channels.user_text_rx,
-            handoff_output_rx: input_channels.handoff_output_rx,
+            terminal_output_rx: input_channels.terminal_output_rx,
             audio_rx: input_channels.audio_rx,
             events_tx,
             handoff_state,
@@ -1098,7 +1056,7 @@ async fn run_realtime_input_task(input: RealtimeInputTask) {
         writer,
         events,
         user_text_rx,
-        handoff_output_rx,
+        terminal_output_rx,
         audio_rx,
         events_tx,
         handoff_state,
@@ -1120,13 +1078,12 @@ async fn run_realtime_input_task(input: RealtimeInputTask) {
                 )
                     .await
             }
-            // Background agent progress or final output that should be sent back to realtime.
-            background_agent_output = handoff_output_rx.recv() => {
-                handle_handoff_output(
-                    background_agent_output,
+            // Terminal Codex output that should be sent back to realtime.
+            terminal_output = terminal_output_rx.recv() => {
+                handle_terminal_output(
+                    terminal_output,
                     &writer,
                     &events_tx,
-                    &handoff_state,
                     event_parser,
                     &mut response_create_queue,
                 )
@@ -1175,75 +1132,62 @@ async fn handle_user_text_input(
     Ok(())
 }
 
-async fn handle_handoff_output(
-    handoff_output: Result<HandoffOutput, RecvError>,
+async fn handle_terminal_output(
+    terminal_output: Result<RealtimeTerminalOutput, RecvError>,
     writer: &RealtimeWebsocketWriter,
     events_tx: &Sender<RealtimeEvent>,
-    handoff_state: &RealtimeHandoffState,
     event_parser: RealtimeEventParser,
     response_create_queue: &mut RealtimeResponseCreateQueue,
 ) -> anyhow::Result<()> {
-    let handoff_output = handoff_output.context("handoff output channel closed")?;
+    let terminal_output = terminal_output.context("terminal output channel closed")?;
 
-    let result = match event_parser {
-        RealtimeEventParser::V1 => match handoff_output {
-            HandoffOutput::ProgressUpdate {
-                handoff_id,
-                output_text,
-            }
-            | HandoffOutput::FinalUpdate {
-                handoff_id,
-                output_text,
-            } => {
+    let (result, request_response) = match terminal_output {
+        RealtimeTerminalOutput::Direct { output_text } => (
+            writer
+                .send_conversation_developer_item_create(output_text)
+                .await,
+            true,
+        ),
+        RealtimeTerminalOutput::Handoff {
+            handoff_id,
+            output_text,
+        } => match event_parser {
+            RealtimeEventParser::V1 => (
                 writer
-                    .send_conversation_function_call_output(handoff_id, output_text)
-                    .await
-            }
-        },
-        RealtimeEventParser::RealtimeV2 => match handoff_output {
-            HandoffOutput::ProgressUpdate {
-                handoff_id,
-                output_text,
-            } => {
-                let active_handoff = handoff_state.active_handoff.lock().await.clone();
-                match active_handoff {
-                    Some(active_handoff) if active_handoff == handoff_id => {}
-                    Some(_) | None => {
-                        debug!("dropping stale realtime handoff progress update");
-                        return Ok(());
-                    }
-                }
-                writer.send_conversation_item_create(output_text).await
-            }
-            HandoffOutput::FinalUpdate {
-                handoff_id,
-                output_text: _,
-            } => {
-                if let Err(err) = writer
-                    .send_conversation_function_call_output(
-                        handoff_id,
-                        REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT.to_string(),
-                    )
-                    .await
-                {
+                    .send_conversation_handoff_append(Some(handoff_id), output_text)
+                    .await,
+                false,
+            ),
+            RealtimeEventParser::RealtimeV2 => (
+                if let Err(err) = writer.send_conversation_item_create(output_text).await {
                     Err(err)
                 } else {
-                    return response_create_queue
-                        .request_create(writer, events_tx, "handoff")
-                        .await;
-                }
-            }
+                    writer
+                        .send_conversation_function_call_output(
+                            handoff_id,
+                            REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT.to_string(),
+                        )
+                        .await
+                },
+                true,
+            ),
         },
     };
     if let Err(err) = result {
         let mapped_error = map_api_error(err);
-        warn!("failed to send handoff output: {mapped_error}");
+        warn!("failed to send terminal output: {mapped_error}");
         let _ = events_tx
             .send(RealtimeEvent::Error(mapped_error.to_string()))
             .await;
         return Err(mapped_error.into());
     }
-    Ok(())
+    if request_response {
+        response_create_queue
+            .request_create(writer, events_tx, "terminal output")
+            .await
+    } else {
+        Ok(())
+    }
 }
 
 async fn handle_realtime_server_event(
@@ -1311,34 +1255,14 @@ async fn handle_realtime_server_event(
             false
         }
         RealtimeEvent::ResponseCreated(_) => {
-            match session_kind {
-                RealtimeSessionKind::V1 => {}
-                RealtimeSessionKind::V2 => response_create_queue.mark_started(),
-            }
+            response_create_queue.mark_started();
             false
         }
-        RealtimeEvent::ResponseCancelled(_) => {
+        RealtimeEvent::ResponseCancelled(_) | RealtimeEvent::ResponseDone(_) => {
             *output_audio_state = None;
-            match session_kind {
-                RealtimeSessionKind::V1 => {}
-                RealtimeSessionKind::V2 => {
-                    response_create_queue
-                        .mark_finished(writer, events_tx, "deferred")
-                        .await?;
-                }
-            }
-            false
-        }
-        RealtimeEvent::ResponseDone(_) => {
-            *output_audio_state = None;
-            match session_kind {
-                RealtimeSessionKind::V1 => {}
-                RealtimeSessionKind::V2 => {
-                    response_create_queue
-                        .mark_finished(writer, events_tx, "deferred")
-                        .await?;
-                }
-            }
+            response_create_queue
+                .mark_finished(writer, events_tx, "deferred")
+                .await?;
             false
         }
         RealtimeEvent::HandoffRequested(handoff) => {
@@ -1346,7 +1270,6 @@ async fn handle_realtime_server_event(
 
             match session_kind {
                 RealtimeSessionKind::V1 => {
-                    *handoff_state.last_output_text.lock().await = None;
                     *handoff_state.active_handoff.lock().await = Some(handoff.handoff_id.clone());
                 }
                 RealtimeSessionKind::V2 => {
@@ -1374,7 +1297,6 @@ async fn handle_realtime_server_event(
                                 .await?;
                         }
                         None => {
-                            *handoff_state.last_output_text.lock().await = None;
                             *handoff_state.active_handoff.lock().await =
                                 Some(handoff.handoff_id.clone());
                         }
