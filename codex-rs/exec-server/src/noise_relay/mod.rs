@@ -1,17 +1,4 @@
-// These two modules intentionally land one stack layer before the remote
-// registration path starts the relay. Bazel compiles this PR as a library and
-// therefore sees their production-only entry points as dead, while the next
-// PR makes the same code reachable. Keep the allowances at the module boundary
-// so unrelated dead code elsewhere in exec-server remains an error.
-#[allow(
-    dead_code,
-    reason = "used by the remote Noise opt-in in the next stacked change"
-)]
 pub(crate) mod environment;
-#[allow(
-    dead_code,
-    reason = "used by the remote Noise opt-in in the next stacked change"
-)]
 mod executor_stream;
 mod harness;
 mod message_framing;
@@ -26,10 +13,6 @@ pub(crate) use harness::noise_harness_connection_from_websocket;
 
 // This value is already part of the relay wire contract. Keep it stable even
 // though the source module now uses the more precise Noise terminology.
-#[allow(
-    dead_code,
-    reason = "used by the remote Noise opt-in in the next stacked change"
-)]
 const NOISE_RELAY_RESET_REASON: &str = "secure_relay_protocol_error";
 
 // This bounds allocation in tungstenite before protobuf and Noise record
