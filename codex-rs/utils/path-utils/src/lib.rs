@@ -150,15 +150,6 @@ pub fn write_atomically(write_path: &Path, contents: &str) -> io::Result<()> {
 /// `0o666`, subject to the process umask.
 #[cfg(unix)]
 pub fn open_file_for_write_no_follow(path: &Path) -> io::Result<File> {
-    open_file_no_follow(
-        path,
-        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
-        /*mode*/ 0o666,
-    )
-}
-
-#[cfg(unix)]
-fn open_file_no_follow(path: &Path, flags: libc::c_int, mode: libc::mode_t) -> io::Result<File> {
     let components = path
         .components()
         .filter_map(|component| match component {
@@ -194,8 +185,8 @@ fn open_file_no_follow(path: &Path, flags: libc::c_int, mode: libc::mode_t) -> i
     openat(
         &current_dir,
         file_name,
-        flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-        mode,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        /*mode*/ 0o666,
     )
 }
 
