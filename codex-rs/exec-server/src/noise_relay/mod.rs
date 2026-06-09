@@ -1,15 +1,4 @@
-// This stack lands the executor-side relay runtime one layer before the remote
-// registration path calls it. Keep this intermediate PR lint-clean without
-// hiding dead code once the production call site arrives in the next layer.
-#[expect(
-    dead_code,
-    reason = "used by the remote Noise opt-in in the next stacked change"
-)]
 pub(crate) mod environment;
-#[expect(
-    dead_code,
-    reason = "used by the remote Noise opt-in in the next stacked change"
-)]
 mod executor_stream;
 mod harness;
 mod message_framing;
