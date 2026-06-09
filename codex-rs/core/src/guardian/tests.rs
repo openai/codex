@@ -2549,6 +2549,10 @@ async fn guardian_review_session_config_keeps_bedrock_provider_for_bedrock_gpt_5
     )
     .expect("guardian config");
 
+    let mut expected_model_provider =
+        ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+    expected_model_provider.request_max_retries = Some(0);
+    expected_model_provider.stream_max_retries = Some(0);
     assert_eq!(
         (
             guardian_config.model,
@@ -2558,7 +2562,7 @@ async fn guardian_review_session_config_keeps_bedrock_provider_for_bedrock_gpt_5
         (
             Some(AMAZON_BEDROCK_GPT_5_4_MODEL_ID.to_string()),
             AMAZON_BEDROCK_PROVIDER_ID.to_string(),
-            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+            expected_model_provider,
         )
     );
 }
