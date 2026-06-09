@@ -68,7 +68,6 @@ use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
-use tracing::Span;
 use tracing::info_span;
 use tracing::instrument;
 use tracing::trace;
@@ -135,24 +134,12 @@ impl McpConnectionManager {
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> Result<Self> {
-        let enabled_mcp_server_count = mcp_servers
-            .values()
-            .filter(|server| server.enabled())
-            .count();
         let mut required_servers = mcp_servers
             .iter()
             .filter(|(_, server)| server.enabled() && server.required())
             .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
         required_servers.sort();
-        Span::current().record(
-            "session_init.enabled_mcp_server_count",
-            enabled_mcp_server_count,
-        );
-        Span::current().record(
-            "session_init.required_mcp_server_count",
-            required_servers.len(),
-        );
         let mut clients = HashMap::new();
         let mut server_metadata = HashMap::new();
         let mut join_set = JoinSet::new();
