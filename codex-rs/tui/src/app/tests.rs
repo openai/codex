@@ -1303,7 +1303,7 @@ async fn open_agent_picker_clears_completed_path_backed_agent_running_state() ->
 }
 
 #[tokio::test]
-async fn open_agent_picker_clears_replay_only_path_backed_running_hint() -> Result<()> {
+async fn open_agent_picker_uses_local_path_backed_running_state() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
@@ -1337,6 +1337,12 @@ async fn open_agent_picker_clears_replay_only_path_backed_running_hint() -> Resu
             is_closed: false,
         })
     );
+    app.thread_event_channels.remove(&thread_id);
+    app.agent_navigation.set_running(thread_id, true);
+
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
+
+    assert!(app.agent_navigation.get(&thread_id).unwrap().is_running);
     Ok(())
 }
 

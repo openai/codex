@@ -33,7 +33,7 @@ impl App {
             {
                 let is_running = channel.store.lock().await.active_turn_id().is_some();
                 self.agent_navigation.set_running(thread_id, is_running);
-            } else {
+            } else if self.thread_event_channels.contains_key(&thread_id) {
                 self.agent_navigation
                     .set_running(thread_id, /*is_running*/ false);
             }

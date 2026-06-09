@@ -121,7 +121,7 @@ pub(crate) fn maybe_init(config: &Config) {
 
 pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     // Log only if enabled
-    if !LOGGER.is_enabled() {
+    if !LOGGER.is_enabled() || matches!(event, AppEvent::AgentThreadSelectionPrepared { .. }) {
         return;
     }
 
