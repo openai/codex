@@ -1,5 +1,9 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
+use codex_features::Feature;
+use codex_protocol::protocol::DEFAULT_ROLLOUT_REFERENCE_DEPTH;
+use codex_protocol::protocol::RolloutReferenceItem;
+use std::path::PathBuf;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
@@ -30,37 +34,43 @@ pub(super) fn agent_nickname_candidates(config: &Config, role_name: Option<&str>
         .collect()
 }
 
-fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item: bool) -> bool {
-    match item {
-        RolloutItem::ResponseItem(ResponseItem::Message { role, phase, .. }) => match role.as_str()
-        {
-            "system" | "developer" | "user" => true,
-            "assistant" => *phase == Some(MessagePhase::FinalAnswer),
-            _ => false,
-        },
-        RolloutItem::ResponseItem(
-            ResponseItem::AgentMessage { .. }
-            | ResponseItem::Reasoning { .. }
-            | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::FunctionCall { .. }
-            | ResponseItem::ToolSearchCall { .. }
-            | ResponseItem::FunctionCallOutput { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::CustomToolCallOutput { .. }
-            | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
-            | ResponseItem::ContextCompaction { .. }
-            | ResponseItem::Other,
-        ) => false,
-        // Full-history forks preserve the cached prompt prefix and can keep diffing
-        // from the parent's durable baseline. Truncated forks drop part of that prompt,
-        // so they must rebuild context on their first child turn.
-        RolloutItem::TurnContext(_) => preserve_reference_context_item,
-        RolloutItem::Compacted(_) | RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
-    }
+fn full_history_rollout_reference_items(
+    rollout_path: PathBuf,
+    source_items: &[RolloutItem],
+) -> Vec<RolloutItem> {
+    let source_meta = source_items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta) => Some(meta),
+        RolloutItem::Compacted(_)
+        | RolloutItem::EventMsg(_)
+        | RolloutItem::RolloutReference(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::TurnContext(_) => None,
+    });
+
+    source_items
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::SessionMeta(meta) => Some(RolloutItem::SessionMeta(meta.clone())),
+            RolloutItem::Compacted(_)
+            | RolloutItem::EventMsg(_)
+            | RolloutItem::RolloutReference(_)
+            | RolloutItem::ResponseItem(_)
+            | RolloutItem::TurnContext(_) => None,
+        })
+        .into_iter()
+        .chain(std::iter::once(RolloutItem::RolloutReference(
+            RolloutReferenceItem {
+                rollout_path,
+                thread_id: source_meta.map(|meta| meta.meta.id),
+                rollout_timestamp: None,
+                segment_id: source_meta.and_then(|meta| meta.meta.segment_id),
+                max_depth: DEFAULT_ROLLOUT_REFERENCE_DEPTH,
+                nth_user_message: Some(usize::MAX),
+                filter_fork_history: true,
+                developer_message_filter_texts: None,
+            },
+        )))
+        .collect()
 }
 
 fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &[String]) -> bool {
@@ -416,21 +426,31 @@ impl AgentControl {
             parent_thread.flush_rollout().await?;
         }
 
-        let parent_history = state
+        let parent_stored_thread = state
             .read_stored_thread(ReadThreadParams {
                 thread_id: parent_thread_id,
                 include_archived: true,
                 include_history: true,
             })
-            .await?
-            .history
-            .ok_or_else(|| {
-                CodexErr::Fatal(format!(
-                    "parent thread history unavailable for fork: {parent_thread_id}"
-                ))
-            })?;
+            .await?;
+        let parent_rollout_path = parent_stored_thread.rollout_path.clone();
+        let parent_history = parent_stored_thread.history.ok_or_else(|| {
+            CodexErr::Fatal(format!(
+                "parent thread history unavailable for fork: {parent_thread_id}"
+            ))
+        })?;
 
-        let mut forked_rollout_items = parent_history.items;
+        let mut forked_rollout_items = if matches!(fork_mode, SpawnAgentForkMode::FullHistory) {
+            if config.features.enabled(Feature::SessionSegmentation)
+                && let Some(rollout_path) = parent_rollout_path
+            {
+                full_history_rollout_reference_items(rollout_path, &parent_history.items)
+            } else {
+                parent_history.items
+            }
+        } else {
+            parent_history.items
+        };
         if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
@@ -467,16 +487,24 @@ impl AgentControl {
                 Vec::new()
             };
         let preserve_reference_context_item = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
+        for item in &mut forked_rollout_items {
+            if let RolloutItem::RolloutReference(reference) = item {
+                reference.developer_message_filter_texts =
+                    Some(multi_agent_v2_usage_hint_texts_to_filter.clone());
+            }
+        }
         forked_rollout_items.retain(|item| {
-            keep_forked_rollout_item(item, preserve_reference_context_item)
-                && !matches!(
-                    item,
-                    RolloutItem::ResponseItem(response_item)
-                        if is_multi_agent_v2_usage_hint_message(
-                            response_item,
-                            &multi_agent_v2_usage_hint_texts_to_filter,
-                        )
-                )
+            crate::thread_rollout_truncation::keep_forked_rollout_item(
+                item,
+                preserve_reference_context_item,
+            ) && !matches!(
+                item,
+                RolloutItem::ResponseItem(response_item)
+                    if is_multi_agent_v2_usage_hint_message(
+                        response_item,
+                        &multi_agent_v2_usage_hint_texts_to_filter,
+                    )
+            )
         });
         for item in &mut forked_rollout_items {
             if let RolloutItem::Compacted(compacted) = item

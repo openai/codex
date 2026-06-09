@@ -1036,6 +1036,7 @@ mod thread_processor_behavior_tests {
 
         let session_meta = SessionMeta {
             id: conversation_id,
+            segment_id: None,
             forked_from_id: Some(forked_from_id),
             timestamp: timestamp.clone(),
             model_provider: Some("test-provider".to_string()),

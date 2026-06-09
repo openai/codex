@@ -125,6 +125,8 @@ pub enum Feature {
     MemoryTool,
     /// Compress cold local thread-store rollout files.
     LocalThreadStoreCompression,
+    /// Split long-lived sessions into rollout segments connected by references.
+    SessionSegmentation,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
     /// Append additional AGENTS.md guidance to user instructions.
@@ -858,6 +860,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::LocalThreadStoreCompression,
         key: "local_thread_store_compression",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SessionSegmentation,
+        key: "session_segmentation",
+        stage: Stage::Experimental {
+            name: "Session segmentation",
+            menu_description: "Split long-lived sessions into linked rollout segments after compaction.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

@@ -9,6 +9,7 @@ use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
+use crate::rollout::RolloutRecorder;
 use assert_matches::assert_matches;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -825,6 +826,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         Some("Parent subagent guidance.".to_string());
     let mut child_config = harness.config.clone();
     let _ = child_config.features.enable(Feature::MultiAgentV2);
+    let _ = child_config.features.enable(Feature::SessionSegmentation);
     child_config.multi_agent_v2.root_agent_usage_hint_text =
         Some("Child root guidance.".to_string());
     child_config.multi_agent_v2.subagent_usage_hint_text =
@@ -932,6 +934,23 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .await
         .expect("child thread should be registered");
     assert_ne!(child_thread_id, parent_thread_id);
+    let child_rollout_path = child_thread
+        .rollout_path()
+        .expect("child rollout path should be present");
+    let child_rollout = RolloutRecorder::get_rollout_history(&child_rollout_path)
+        .await
+        .expect("child rollout should be readable");
+    assert!(
+        child_rollout
+            .get_rollout_items()
+            .iter()
+            .any(|item| matches!(
+                item,
+                RolloutItem::RolloutReference(reference)
+                    if reference.nth_user_message.is_some()
+            )),
+        "full-history forks should store a compact RolloutReference so fork rollout files do not copy parent rollout history"
+    );
     let history = child_thread.codex.session.clone_history().await;
     let expected_history = [
         ResponseItem::Message {

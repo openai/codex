@@ -145,7 +145,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
     user_turn(&base, "AFTER_COMPACT").await;
-    let base_path = fetch_conversation_path(&base);
+    let base_path = fetch_conversation_path(&base).await;
     assert!(
         base_path.exists(),
         "compact+resume test expects base path {base_path:?} to exist",
@@ -154,7 +154,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     shutdown_conversation(&base).await;
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
-    let resumed_path = fetch_conversation_path(&resumed);
+    let resumed_path = fetch_conversation_path(&resumed).await;
     assert!(
         resumed_path.exists(),
         "compact+resume test expects resumed path {resumed_path:?} to exist",
@@ -301,7 +301,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
     user_turn(&base, "AFTER_COMPACT").await;
-    let base_path = fetch_conversation_path(&base);
+    let base_path = fetch_conversation_path(&base).await;
     assert!(
         base_path.exists(),
         "second compact test expects base path {base_path:?} to exist",
@@ -310,7 +310,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     shutdown_conversation(&base).await;
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
-    let resumed_path = fetch_conversation_path(&resumed);
+    let resumed_path = fetch_conversation_path(&resumed).await;
     assert!(
         resumed_path.exists(),
         "second compact test expects resumed path {resumed_path:?} to exist",
@@ -321,7 +321,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
 
     compact_conversation(&forked).await;
     user_turn(&forked, "AFTER_COMPACT_2").await;
-    let forked_path = fetch_conversation_path(&forked);
+    let forked_path = fetch_conversation_path(&forked).await;
     assert!(
         forked_path.exists(),
         "second compact test expects forked path {forked_path:?} to exist",
@@ -808,8 +808,11 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
-fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
-    conversation.rollout_path().expect("rollout path")
+async fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
+    conversation
+        .current_rollout_path()
+        .await
+        .expect("rollout path")
 }
 
 async fn shutdown_conversation(conversation: &Arc<CodexThread>) {

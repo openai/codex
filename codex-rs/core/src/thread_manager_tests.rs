@@ -7,6 +7,7 @@ use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
+use crate::thread_rollout_truncation::materialize_rollout_items_for_replay;
 use codex_extension_api::empty_extension_registry;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
@@ -1453,8 +1454,17 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let reforked_history = RolloutRecorder::get_rollout_history(&reforked_path)
         .await
         .expect("read re-forked rollout history");
-    let reforked_rollout_items: Vec<_> = reforked_history
-        .get_rollout_items()
+    let reforked_raw_items = reforked_history.get_rollout_items();
+    assert!(
+        !reforked_raw_items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::RolloutReference(_))),
+        "forks should copy history while session segmentation is disabled"
+    );
+    let materialized_reforked_items =
+        materialize_rollout_items_for_replay(config.codex_home.as_path(), &reforked_raw_items)
+            .await;
+    let reforked_rollout_items: Vec<_> = materialized_reforked_items
         .into_iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();

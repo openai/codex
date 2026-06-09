@@ -29,6 +29,7 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::RotateThreadSegmentParams;
 use crate::SearchThreadsParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
@@ -123,6 +124,14 @@ impl LocalThreadStore {
     /// Return the live local rollout path for legacy local-only code paths.
     pub async fn live_rollout_path(&self, thread_id: ThreadId) -> ThreadStoreResult<PathBuf> {
         live_writer::rollout_path(self, thread_id).await
+    }
+
+    pub async fn rotate_thread_segment(
+        &self,
+        thread_id: ThreadId,
+        params: RotateThreadSegmentParams,
+    ) -> ThreadStoreResult<()> {
+        live_writer::rotate_thread_segment(self, thread_id, params).await
     }
 
     pub(super) async fn live_recorder(
@@ -429,6 +438,100 @@ mod tests {
         );
         assert_eq!(metadata.preview.as_deref(), Some("observed append"));
         assert_eq!(metadata.title, "observed append");
+    }
+
+    #[tokio::test]
+    async fn rotate_thread_segment_keeps_live_thread_out_of_archived_sessions() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        live_thread
+            .append_items(&[user_message_item("before rotation")])
+            .await
+            .expect("append before rotation");
+        live_thread.flush().await.expect("flush before rotation");
+        let live_rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("live rollout path");
+
+        store
+            .rotate_thread_segment(
+                thread_id,
+                RotateThreadSegmentParams {
+                    source: SessionSource::Exec,
+                    base_instructions: BaseInstructions::default(),
+                    dynamic_tools: Vec::new(),
+                    metadata: thread_metadata(),
+                    initial_items: Vec::new(),
+                    previous_segment_reference_depth: 1,
+                },
+            )
+            .await
+            .expect("rotate thread segment");
+
+        assert!(
+            tokio::fs::try_exists(live_rollout_path.as_path())
+                .await
+                .expect("live rollout path should be checkable")
+        );
+        let (items, _, _) = RolloutRecorder::load_rollout_items(live_rollout_path.as_path())
+            .await
+            .expect("load rotated rollout items");
+        let rotated_rollout_path = items
+            .iter()
+            .find_map(|item| match item {
+                RolloutItem::RolloutReference(reference) => Some(reference.rollout_path.clone()),
+                RolloutItem::SessionMeta(_)
+                | RolloutItem::ResponseItem(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
+            })
+            .expect("rotated rollout reference");
+        assert!(
+            rotated_rollout_path.starts_with(
+                home.path()
+                    .join(codex_rollout::ROTATED_ROLLOUT_SEGMENTS_SUBDIR)
+                    .join(thread_id.to_string())
+            )
+        );
+        assert!(
+            tokio::fs::try_exists(rotated_rollout_path.as_path())
+                .await
+                .expect("rotated rollout path should be checkable")
+        );
+        assert!(
+            !tokio::fs::try_exists(
+                home.path()
+                    .join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR)
+                    .join(
+                        live_rollout_path
+                            .file_name()
+                            .expect("live rollout file name"),
+                    )
+                    .as_path(),
+            )
+            .await
+            .expect("legacy archived rollout path should be checkable")
+        );
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(metadata.rollout_path, live_rollout_path);
+        assert_eq!(metadata.archived_at, None);
     }
 
     #[tokio::test]

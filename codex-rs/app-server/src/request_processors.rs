@@ -298,6 +298,7 @@ use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
+use codex_core::materialize_rollout_items_for_replay;
 use codex_core::path_utils;
 #[cfg(test)]
 use codex_core::read_head_for_summary;
@@ -563,4 +564,11 @@ pub(crate) fn build_api_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<T
         }
     }
     builder.finish()
+}
+
+async fn materialize_rollout_items_for_app_server(
+    codex_home: &Path,
+    rollout_items: &[RolloutItem],
+) -> Vec<RolloutItem> {
+    materialize_rollout_items_for_replay(codex_home, rollout_items).await
 }

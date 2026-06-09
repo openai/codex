@@ -34,6 +34,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
 
     let session_meta = SessionMeta {
         id,
+        segment_id: None,
         forked_from_id: None,
         parent_thread_id: None,
         timestamp: "2026-01-27T12:34:56Z".to_string(),
@@ -88,6 +89,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
 
     let session_meta = SessionMeta {
         id,
+        segment_id: None,
         forked_from_id: None,
         parent_thread_id: None,
         timestamp: "2026-01-27T12:34:56Z".to_string(),
@@ -289,6 +291,46 @@ async fn backfill_sessions_preserves_existing_git_branch_and_fills_missing_git_f
 }
 
 #[tokio::test]
+async fn backfill_ignores_legacy_rotated_segment_when_live_rollout_exists() {
+    let dir = tempdir().expect("tempdir");
+    let codex_home = dir.path().to_path_buf();
+    let thread_uuid = Uuid::new_v4();
+    let live_rollout_path = write_rollout_in_sessions(
+        codex_home.as_path(),
+        "2026-01-27T12-34-56",
+        "2026-01-27T12:34:56Z",
+        thread_uuid,
+        /*git*/ None,
+    );
+    let legacy_rotated_path = codex_home
+        .join(ARCHIVED_SESSIONS_SUBDIR)
+        .join(live_rollout_path.file_name().expect("rollout file name"));
+    std::fs::create_dir_all(
+        legacy_rotated_path
+            .parent()
+            .expect("legacy rotated rollout parent"),
+    )
+    .expect("create legacy rotated rollout parent");
+    std::fs::copy(live_rollout_path.as_path(), legacy_rotated_path.as_path())
+        .expect("copy legacy rotated rollout");
+
+    let runtime = codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+        .await
+        .expect("initialize runtime");
+
+    backfill_sessions(runtime.as_ref(), codex_home.as_path(), "test-provider").await;
+
+    let thread_id = ThreadId::from_string(&thread_uuid.to_string()).expect("thread id");
+    let metadata = runtime
+        .get_thread(thread_id)
+        .await
+        .expect("get thread")
+        .expect("thread metadata");
+    assert_eq!(metadata.rollout_path, live_rollout_path);
+    assert_eq!(metadata.archived_at, None);
+}
+
+#[tokio::test]
 async fn backfill_sessions_normalizes_cwd_before_upsert() {
     let dir = tempdir().expect("tempdir");
     let codex_home = dir.path().to_path_buf();
@@ -351,6 +393,7 @@ fn write_rollout_in_sessions_with_cwd(
     let path = sessions_dir.join(format!("rollout-{filename_ts}-{thread_uuid}.jsonl"));
     let session_meta = SessionMeta {
         id,
+        segment_id: None,
         forked_from_id: None,
         parent_thread_id: None,
         timestamp: event_ts.to_string(),

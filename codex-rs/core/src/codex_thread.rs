@@ -452,6 +452,13 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
+    pub async fn current_rollout_path(&self) -> Option<PathBuf> {
+        match self.codex.session.current_rollout_path().await {
+            Ok(Some(path)) => Some(path),
+            Ok(None) | Err(_) => self.rollout_path.clone(),
+        }
+    }
+
     pub fn session_configured(&self) -> SessionConfiguredEvent {
         self.session_configured.clone()
     }

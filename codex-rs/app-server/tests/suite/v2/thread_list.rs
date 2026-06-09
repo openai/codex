@@ -1891,6 +1891,71 @@ async fn thread_list_archived_filter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_list_keeps_rotated_live_thread_in_recent_results() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-03-01T10-00-00",
+        "2025-03-01T10:00:00Z",
+        "Active after rotation",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let live_rollout_path = rollout_path(codex_home.path(), "2025-03-01T10-00-00", &thread_id);
+    let legacy_rotated_path = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR).join(
+        live_rollout_path
+            .file_name()
+            .expect("live rollout should have a file name"),
+    );
+    fs::create_dir_all(
+        legacy_rotated_path
+            .parent()
+            .expect("legacy rotated rollout should have a parent"),
+    )?;
+    fs::copy(live_rollout_path.as_path(), legacy_rotated_path.as_path())?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let state_db =
+        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
+            .await?;
+    let thread_id = ThreadId::from_string(&thread_id)?;
+    let mut metadata = state_db
+        .get_thread(thread_id)
+        .await?
+        .expect("thread should be backfilled into sqlite");
+    metadata.rollout_path = legacy_rotated_path;
+    metadata.archived_at = Some(Utc::now());
+    state_db.upsert_thread(&metadata).await?;
+
+    let ThreadListResponse { data, .. } = list_threads(
+        &mut mcp,
+        /*cursor*/ None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        /*source_kinds*/ None,
+        /*archived*/ None,
+    )
+    .await?;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].id, thread_id.to_string());
+
+    let ThreadListResponse { data, .. } = list_threads(
+        &mut mcp,
+        /*cursor*/ None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        /*source_kinds*/ None,
+        Some(true),
+    )
+    .await?;
+    assert!(data.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;

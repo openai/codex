@@ -458,6 +458,7 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
     let session_meta_line = SessionMetaLine {
         meta: SessionMeta {
             id: thread_id,
+            segment_id: None,
             forked_from_id: None,
             parent_thread_id: None,
             timestamp: "2025-01-03T12:00:00Z".to_string(),
