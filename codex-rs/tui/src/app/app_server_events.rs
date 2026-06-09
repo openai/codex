@@ -15,10 +15,9 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 
 impl App {
-    fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
+    pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
         let enabled_config_mcp_servers: Vec<String> = self
-            .chat_widget
-            .config_ref()
+            .config
             .mcp_servers
             .get()
             .iter()
@@ -138,6 +137,12 @@ impl App {
                 tracing::warn!(
                     thread_id,
                     "ignoring app-server notification with invalid thread_id"
+                );
+                return;
+            }
+            ServerNotificationThreadTarget::AppScoped => {
+                tracing::debug!(
+                    "ignoring app-scoped MCP startup notification without a TUI app-level target"
                 );
                 return;
             }

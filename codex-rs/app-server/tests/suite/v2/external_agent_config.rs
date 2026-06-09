@@ -435,6 +435,98 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn external_agent_config_import_does_not_initialize_required_mcp() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("unused").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let mut config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    config.push_str(
+        r#"
+[mcp_servers.required_broken]
+command = "this-command-does-not-exist"
+required = true
+"#,
+    );
+    std::fs::write(codex_home.path().join("config.toml"), config)?;
+    let project_root = codex_home.path().join("repo");
+    let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let session_dir = codex_home.path().join(".claude/projects/repo");
+    let session_path = session_dir.join("session.jsonl");
+    std::fs::create_dir_all(&project_root)?;
+    std::fs::create_dir_all(&session_dir)?;
+    std::fs::write(
+        &session_path,
+        serde_json::json!({
+            "type": "user",
+            "cwd": &project_root,
+            "timestamp": &recent_timestamp,
+            "message": { "content": "first request" },
+        })
+        .to_string(),
+    )?;
+
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
+            .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import",
+            Some(serde_json::json!({
+                "migrationItems": [{
+                    "itemType": "SESSIONS",
+                    "description": "Migrate recent sessions",
+                    "cwd": null,
+                    "details": {
+                        "sessions": [{
+                            "path": session_path,
+                            "cwd": project_root,
+                            "title": "first request"
+                        }]
+                    }
+                }]
+            })),
+        )
+        .await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
+    )
+    .await??;
+
+    let request_id = mcp
+        .send_thread_list_request(ThreadListParams {
+            cursor: None,
+            limit: None,
+            sort_key: None,
+            sort_direction: None,
+            model_providers: None,
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only: false,
+            search_term: None,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ThreadListResponse = to_response(response)?;
+    assert_eq!(response.data.len(), 1);
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_agent_config_import_accepts_detected_session_payload_after_restart() -> Result<()>
 {

@@ -50,6 +50,9 @@ jobs:
 
     # Configure a human readable name for each job
     name: Bazel test on ${{ matrix.os }} for ${{ matrix.target }}
+    environment:
+      name: bazel
+      deployment: false
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -149,9 +152,12 @@ jobs:
           - 3
           - 4
     runs-on:
-      group: codex-runners
-      labels: codex-windows-x64
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-windows-x64
     name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm shard ${{ matrix.shard }}/4
+    environment:
+      name: bazel
+      deployment: false
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -261,9 +267,12 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 40
     runs-on:
-      group: codex-runners
-      labels: codex-windows-x64
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-windows-x64
     name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm (native main)
+    environment:
+      name: bazel
+      deployment: false
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -348,10 +357,13 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-gnullvm
             runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
     runs-on: ${{ matrix.runs_on || matrix.os }}
     name: Bazel clippy on ${{ matrix.os }} for ${{ matrix.target }}
+    environment:
+      name: bazel
+      deployment: false
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -441,10 +453,13 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-gnullvm
             runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
     runs-on: ${{ matrix.runs_on || matrix.os }}
     name: Verify release build on ${{ matrix.os }} for ${{ matrix.target }}
+    environment:
+      name: bazel
+      deployment: false
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

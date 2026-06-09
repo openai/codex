@@ -32,6 +32,7 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::StoredThread;
@@ -59,7 +60,7 @@ pub struct ThreadConfigSnapshot {
     pub approvals_reviewer: ApprovalsReviewer,
     pub permission_profile: PermissionProfile,
     pub active_permission_profile: Option<ActivePermissionProfile>,
-    pub cwd: AbsolutePathBuf,
+    pub environments: TurnEnvironmentSelections,
     pub workspace_roots: Vec<AbsolutePathBuf>,
     pub profile_workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
@@ -114,10 +115,18 @@ impl TryStartTurnIfIdleError {
 }
 
 impl ThreadConfigSnapshot {
+    pub fn cwd(&self) -> &AbsolutePathBuf {
+        &self.environments.legacy_fallback_cwd
+    }
+
+    pub fn environment_selections(&self) -> &[TurnEnvironmentSelection] {
+        &self.environments.environments
+    }
+
     pub fn sandbox_policy(&self) -> SandboxPolicy {
         codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
             &self.permission_profile,
-            self.cwd.as_path(),
+            self.cwd().as_path(),
         )
     }
 }
@@ -125,7 +134,7 @@ impl ThreadConfigSnapshot {
 /// Thread settings overrides that app-server validates before starting a turn.
 #[derive(Clone, Default)]
 pub struct CodexThreadSettingsOverrides {
-    pub cwd: Option<AbsolutePathBuf>,
+    pub environments: Option<TurnEnvironmentSelections>,
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub approval_policy: Option<AskForApproval>,
@@ -235,6 +244,12 @@ impl CodexThread {
         client_user_message_id: Option<String>,
     ) -> CodexResult<String> {
         self.codex
+            .session
+            .services
+            .agent_control
+            .ensure_execution_capacity_for_op(self.session_configured.thread_id, &op)
+            .await?;
+        self.codex
             .submit_user_input_with_client_user_message_id(op, trace, client_user_message_id)
             .await
     }
@@ -324,7 +339,7 @@ impl CodexThread {
         overrides: CodexThreadSettingsOverrides,
     ) -> SessionSettingsUpdate {
         let CodexThreadSettingsOverrides {
-            cwd,
+            environments,
             workspace_roots,
             profile_workspace_roots,
             approval_policy,
@@ -351,7 +366,7 @@ impl CodexThread {
         };
 
         SessionSettingsUpdate {
-            cwd,
+            environments,
             workspace_roots,
             profile_workspace_roots,
             approval_policy,

@@ -22,6 +22,7 @@ use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::loader::project_trust_key;
 use codex_config::types::ToolSuggestDisabledTool;
+use core_test_support::test_codex::local_selections;
 
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -53,6 +54,7 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
@@ -142,6 +144,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_path_buf;
 use core_test_support::tracing::install_test_tracing;
@@ -2392,7 +2395,8 @@ async fn session_permission_profile_rebinds_runtime_workspace_roots() -> anyhow:
     );
 
     let mut session_configuration = make_session_configuration_for_tests().await;
-    session_configuration.cwd = config.cwd.clone();
+    session_configuration.environments =
+        TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new());
     session_configuration.workspace_roots = config.workspace_roots.clone();
     session_configuration.permission_profile_state = session_permission_profile_state;
 
@@ -2404,8 +2408,8 @@ async fn session_permission_profile_rebinds_runtime_workspace_roots() -> anyhow:
         ..Default::default()
     })?;
     let updated_policy = updated.file_system_sandbox_policy();
-    assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd.as_path()));
-    assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd.as_path()));
+    assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd().as_path()));
+    assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd().as_path()));
     Ok(())
 }
 
@@ -2437,7 +2441,6 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     initial
         .codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "fork seed".into(),
                 text_elements: Vec::new(),
@@ -2483,7 +2486,6 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     forked
         .thread
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "after fork".into(),
                 text_elements: Vec::new(),
@@ -3157,11 +3159,10 @@ async fn set_rate_limits_retains_previous_credits() {
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        cwd: config.cwd.clone(),
+        environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environments: Vec::new(),
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -3265,11 +3266,10 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        cwd: config.cwd.clone(),
+        environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environments: Vec::new(),
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -3526,6 +3526,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
         Arc::clone(&session.services.thread_store),
         CreateThreadParams {
             thread_id: session.thread_id,
+            extra_config: None,
             forked_from_id: None,
             parent_thread_id: None,
             source: SessionSource::Exec,
@@ -3797,11 +3798,10 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        cwd: config.cwd.clone(),
+        environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environments: Vec::new(),
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -3920,7 +3920,8 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
     let project_root = project_root.abs();
     let docs_dir = docs_dir.abs();
 
-    session_configuration.cwd = original_cwd.abs();
+    session_configuration.environments =
+        TurnEnvironmentSelections::new(original_cwd.abs(), Vec::new());
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: Vec::new(),
         network_access: false,
@@ -3954,7 +3955,7 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
-            cwd: Some(project_root),
+            environments: Some(TurnEnvironmentSelections::new(project_root, Vec::new())),
             ..Default::default()
         })
         .expect("cwd-only update should succeed");
@@ -3969,7 +3970,8 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
 async fn session_configuration_apply_permission_profile_preserves_existing_deny_read_entries() {
     let mut session_configuration = make_session_configuration_for_tests().await;
     let cwd = tempfile::tempdir().expect("create temp dir");
-    session_configuration.cwd = cwd.path().abs();
+    session_configuration.environments =
+        TurnEnvironmentSelections::new(cwd.path().abs(), Vec::new());
 
     let workspace_policy = SandboxPolicy::new_workspace_write_policy();
     let deny_entry = FileSystemSandboxEntry {
@@ -3981,7 +3983,7 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
     let mut existing_file_system_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
             &workspace_policy,
-            session_configuration.cwd.as_path(),
+            session_configuration.cwd().as_path(),
         );
     existing_file_system_policy.glob_scan_max_depth = Some(2);
     existing_file_system_policy.entries.push(deny_entry.clone());
@@ -3997,7 +3999,7 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
 
     let requested_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &workspace_policy,
-        session_configuration.cwd.as_path(),
+        session_configuration.cwd().as_path(),
     );
     let permission_profile = codex_protocol::models::PermissionProfile::from_runtime_permissions(
         &requested_file_system_policy,
@@ -4024,7 +4026,8 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
 async fn session_configuration_apply_permission_profile_accepts_direct_write_roots() {
     let mut session_configuration = make_session_configuration_for_tests().await;
     let cwd = tempfile::tempdir().expect("create cwd");
-    session_configuration.cwd = cwd.path().abs();
+    session_configuration.environments =
+        TurnEnvironmentSelections::new(cwd.path().abs(), Vec::new());
     let external_write_dir = tempfile::tempdir().expect("create external write root");
     let external_write_path = AbsolutePathBuf::from_absolute_path(
         codex_utils_absolute_path::canonicalize_preserving_symlinks(external_write_dir.path())
@@ -4100,8 +4103,8 @@ async fn session_configuration_apply_rebinds_symbolic_profile_to_updated_workspa
         .expect("permission profile update should succeed");
 
     let updated_policy = updated.file_system_sandbox_policy();
-    assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd.as_path()));
-    assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd.as_path()));
+    assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd().as_path()));
+    assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd().as_path()));
     assert_eq!(
         updated.active_permission_profile(),
         Some(ActivePermissionProfile::new("dev"))
@@ -4118,7 +4121,8 @@ async fn session_configuration_apply_retargets_implicit_workspace_root_on_cwd_up
     let old_root = old_root.path().abs();
     let new_root = new_root.path().abs();
     let extra_root = extra_root.path().abs();
-    session_configuration.cwd = old_root.clone();
+    session_configuration.environments =
+        TurnEnvironmentSelections::new(old_root.clone(), Vec::new());
     session_configuration.workspace_roots = vec![old_root.clone(), extra_root.clone()];
 
     let file_system_sandbox_policy =
@@ -4138,7 +4142,7 @@ async fn session_configuration_apply_retargets_implicit_workspace_root_on_cwd_up
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
-            cwd: Some(new_root.clone()),
+            environments: Some(TurnEnvironmentSelections::new(new_root.clone(), Vec::new())),
             ..Default::default()
         })
         .expect("cwd-only update should succeed");
@@ -4148,9 +4152,9 @@ async fn session_configuration_apply_retargets_implicit_workspace_root_on_cwd_up
         vec![new_root.clone(), extra_root.clone()]
     );
     let updated_policy = updated.file_system_sandbox_policy();
-    assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd.as_path()));
-    assert!(updated_policy.can_write_path_with_cwd(extra_root.as_path(), updated.cwd.as_path()));
-    assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd.as_path()));
+    assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd().as_path()));
+    assert!(updated_policy.can_write_path_with_cwd(extra_root.as_path(), updated.cwd().as_path()));
+    assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd().as_path()));
 }
 
 #[tokio::test]
@@ -4353,8 +4357,9 @@ async fn session_configuration_apply_retargets_legacy_workspace_root_on_cwd_upda
     let workspace = tempfile::tempdir().expect("create temp dir");
     let original_cwd = workspace.path().join("repo-a").abs();
     let project_root = workspace.path().join("repo-b").abs();
-    session_configuration.cwd = original_cwd.clone();
-    session_configuration.workspace_roots = vec![session_configuration.cwd.clone()];
+    session_configuration.environments =
+        TurnEnvironmentSelections::new(original_cwd.clone(), Vec::new());
+    session_configuration.workspace_roots = vec![session_configuration.cwd().clone()];
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: Vec::new(),
         network_access: false,
@@ -4363,7 +4368,7 @@ async fn session_configuration_apply_retargets_legacy_workspace_root_on_cwd_upda
     };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &sandbox_policy,
-        &session_configuration.cwd,
+        session_configuration.cwd(),
     );
     session_configuration
         .set_permission_profile_for_tests(
@@ -4377,7 +4382,10 @@ async fn session_configuration_apply_retargets_legacy_workspace_root_on_cwd_upda
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
-            cwd: Some(project_root.clone()),
+            environments: Some(TurnEnvironmentSelections::new(
+                project_root.clone(),
+                Vec::new(),
+            )),
             ..Default::default()
         })
         .expect("cwd-only update should succeed");
@@ -4386,13 +4394,13 @@ async fn session_configuration_apply_retargets_legacy_workspace_root_on_cwd_upda
     assert!(
         updated
             .file_system_sandbox_policy()
-            .can_write_path_with_cwd(project_root.as_path(), updated.cwd.as_path()),
+            .can_write_path_with_cwd(project_root.as_path(), updated.cwd().as_path()),
         "cwd-only update should keep the new cwd writable"
     );
     assert!(
         !updated
             .file_system_sandbox_policy()
-            .can_write_path_with_cwd(original_cwd.as_path(), updated.cwd.as_path()),
+            .can_write_path_with_cwd(original_cwd.as_path(), updated.cwd().as_path()),
         "cwd-only update should not keep the old implicit cwd writable"
     );
 }
@@ -4408,7 +4416,8 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
     let original_cwd = original_cwd.abs();
     let next_cwd = next_cwd.abs();
 
-    session_configuration.cwd = original_cwd.clone();
+    session_configuration.environments =
+        TurnEnvironmentSelections::new(original_cwd.clone(), Vec::new());
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -4435,7 +4444,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
-            cwd: Some(next_cwd.clone()),
+            environments: Some(TurnEnvironmentSelections::new(next_cwd.clone(), Vec::new())),
             ..Default::default()
         })
         .expect("cwd-only update should succeed");
@@ -4447,13 +4456,13 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
     assert!(
         updated
             .file_system_sandbox_policy()
-            .can_write_path_with_cwd(original_cwd.as_path(), updated.cwd.as_path()),
+            .can_write_path_with_cwd(original_cwd.as_path(), updated.cwd().as_path()),
         "absolute grant to the old cwd must remain writable"
     );
     assert!(
         !updated
             .file_system_sandbox_policy()
-            .can_write_path_with_cwd(next_cwd.as_path(), updated.cwd.as_path()),
+            .can_write_path_with_cwd(next_cwd.as_path(), updated.cwd().as_path()),
         "cwd-only update must not reinterpret an absolute old-cwd grant as :workspace_roots"
     );
 }
@@ -4463,11 +4472,21 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
     let (session, turn_context) = make_session_and_context().await;
     #[allow(deprecated)]
     let updated_cwd = turn_context.cwd.join("project");
+    let current_environments = {
+        let state = session.state.lock().await;
+        state
+            .session_configuration
+            .environment_selections()
+            .to_vec()
+    };
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
 
     session
         .update_settings(SessionSettingsUpdate {
-            cwd: Some(updated_cwd.clone()),
+            environments: Some(TurnEnvironmentSelections::new(
+                updated_cwd.clone(),
+                current_environments,
+            )),
             ..Default::default()
         })
         .await
@@ -4475,7 +4494,7 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
 
     let session_cwd = {
         let state = session.state.lock().await;
-        state.session_configuration.cwd.clone()
+        state.session_configuration.cwd().clone()
     };
     let config = session.get_config().await;
     let next_turn = session.new_default_turn().await;
@@ -4495,55 +4514,65 @@ async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
     let (session, _turn_context) = make_session_and_context().await;
     let original_cwd = {
         let mut state = session.state.lock().await;
-        state.session_configuration.environments = Vec::new();
-        state.session_configuration.cwd.clone()
+        state.session_configuration.environments.environments = Vec::new();
+        state.session_configuration.cwd().clone()
     };
     let updated_cwd = original_cwd.join("project");
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
 
     session
         .update_settings(SessionSettingsUpdate {
-            cwd: Some(updated_cwd.clone()),
+            environments: Some(TurnEnvironmentSelections::new(
+                updated_cwd.clone(),
+                Vec::new(),
+            )),
             ..Default::default()
         })
         .await
         .expect("cwd update should succeed");
 
     let state = session.state.lock().await;
-    assert_eq!(state.session_configuration.cwd, updated_cwd);
-    assert!(state.session_configuration.environments.is_empty());
+    assert_eq!(state.session_configuration.cwd(), &updated_cwd);
+    assert!(
+        state
+            .session_configuration
+            .environment_selections()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
-async fn cwd_update_does_not_rewrite_sticky_environment_cwd() {
+async fn cwd_update_rewrites_sticky_environment_cwd() {
     let (session, _turn_context) = make_session_and_context().await;
-    let (original_cwd, environment_cwd) = {
+    let (original_cwd, environment_cwd, environments) = {
         let mut state = session.state.lock().await;
-        let original_cwd = state.session_configuration.cwd.clone();
+        let original_cwd = state.session_configuration.cwd().clone();
         let environment_cwd = original_cwd.join("environment");
-        state.session_configuration.environments = vec![TurnEnvironmentSelection {
-            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            cwd: environment_cwd.clone(),
-        }];
-        (original_cwd, environment_cwd)
+        let environments = vec![local(environment_cwd.clone())];
+        state.session_configuration.environments.environments = environments.clone();
+        (original_cwd, environment_cwd, environments)
     };
     let updated_cwd = original_cwd.join("project");
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
 
     session
         .update_settings(SessionSettingsUpdate {
-            cwd: Some(updated_cwd.clone()),
+            environments: Some(TurnEnvironmentSelections::new(
+                updated_cwd.clone(),
+                environments,
+            )),
             ..Default::default()
         })
         .await
         .expect("cwd update should succeed");
 
     let state = session.state.lock().await;
-    assert_eq!(state.session_configuration.cwd, updated_cwd);
+    assert_eq!(state.session_configuration.cwd(), &updated_cwd);
     assert_eq!(
-        state.session_configuration.environments[0].cwd,
-        environment_cwd
+        state.session_configuration.environment_selections()[0].cwd,
+        updated_cwd
     );
+    assert_ne!(environment_cwd, updated_cwd);
 }
 
 #[tokio::test]
@@ -4551,7 +4580,7 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let absolute_cwd = {
         let state = session.state.lock().await;
-        state.session_configuration.cwd.join("absolute-turn")
+        state.session_configuration.cwd().join("absolute-turn")
     };
     std::fs::create_dir_all(absolute_cwd.as_path()).expect("create absolute turn dir");
 
@@ -4559,11 +4588,10 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
-                cwd: Some(absolute_cwd.clone()),
-                environments: Some(vec![TurnEnvironmentSelection {
-                    environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd: absolute_cwd.clone(),
-                }]),
+                environments: Some(TurnEnvironmentSelections::new(
+                    absolute_cwd.clone(),
+                    vec![local(absolute_cwd.clone())],
+                )),
                 ..Default::default()
             },
         )
@@ -4622,11 +4650,10 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        cwd: config.cwd.clone(),
+        environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environments: Vec::new(),
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -4663,6 +4690,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        codex_extension_api::ExtensionDataInit::default(),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -4712,10 +4740,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             developer_instructions: None,
         },
     };
-    let default_environments = vec![TurnEnvironmentSelection {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: config.cwd.clone(),
-    }];
+    let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
@@ -4733,11 +4758,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        cwd: config.cwd.clone(),
+        environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environments: default_environments,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -4751,7 +4775,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         user_shell_override: None,
     };
     let per_turn_config =
-        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd().clone());
     let model_info = construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config.to_models_manager_config(),
@@ -4863,7 +4887,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
             .await,
     );
-    let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
+    let turn_environments = turn_environments_for_tests(&environment, session_configuration.cwd());
     let turn_context = Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
@@ -4880,7 +4904,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         &models_manager,
         /*network*/ None,
         turn_environments,
-        session_configuration.cwd.clone(),
+        session_configuration.cwd().clone(),
         "turn_id".to_string(),
         skills_outcome,
     );
@@ -4948,10 +4972,7 @@ async fn make_session_with_config_and_rx(
             developer_instructions: None,
         },
     };
-    let default_environments = vec![TurnEnvironmentSelection {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: config.cwd.clone(),
-    }];
+    let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
@@ -4969,11 +4990,10 @@ async fn make_session_with_config_and_rx(
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        cwd: config.cwd.clone(),
+        environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environments: default_environments,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -5011,6 +5031,7 @@ async fn make_session_with_config_and_rx(
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        codex_extension_api::ExtensionDataInit::default(),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -5053,10 +5074,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
             developer_instructions: None,
         },
     };
-    let default_environments = vec![TurnEnvironmentSelection {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: config.cwd.clone(),
-    }];
+    let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
@@ -5074,11 +5092,10 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        cwd: config.cwd.clone(),
+        environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environments: default_environments,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -5116,6 +5133,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        codex_extension_api::ExtensionDataInit::default(),
         agent_control,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -5184,7 +5202,7 @@ async fn resumed_subagent_session_keeps_inherited_session_id() {
             rollout_path: None,
         }),
         session_source,
-        AgentControl::default().with_session_id(parent_session_id),
+        AgentControl::default().with_session_id(parent_session_id, /*max_threads*/ usize::MAX),
     )
     .await
     .expect("resume should succeed");
@@ -5937,7 +5955,6 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
 fn op_kind_for_input_and_context_ops() {
     assert_eq!(
         Op::UserInput {
-            environments: None,
             items: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -5969,12 +5986,11 @@ async fn user_turn_updates_approvals_reviewer() {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(config.cwd.clone()),
+                environments: Some(local_selections(config.cwd.clone())),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
@@ -6013,10 +6029,10 @@ async fn turn_environments_set_primary_environment() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
-                environments: Some(vec![TurnEnvironmentSelection {
-                    environment_id: "local".to_string(),
-                    cwd: selected_cwd.clone(),
-                }]),
+                environments: Some(TurnEnvironmentSelections::new(
+                    selected_cwd.clone(),
+                    vec![local(selected_cwd.clone())],
+                )),
                 ..Default::default()
             },
         )
@@ -6041,7 +6057,7 @@ async fn turn_environments_set_primary_environment() {
 }
 
 #[tokio::test]
-async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
+async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_environments() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
     let selected_cwd =
@@ -6049,10 +6065,7 @@ async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
 
     {
         let mut state = session.state.lock().await;
-        state.session_configuration.environments = vec![TurnEnvironmentSelection {
-            environment_id: "local".to_string(),
-            cwd: selected_cwd.clone(),
-        }];
+        state.session_configuration.environments.environments = vec![local(selected_cwd.clone())];
     }
 
     let turn_context = session.new_default_turn().await;
@@ -6069,8 +6082,8 @@ async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
     ));
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
-    assert_eq!(turn_cwd, session_cwd);
-    assert_eq!(turn_context.config.cwd, session_cwd);
+    assert_eq!(turn_cwd, selected_cwd);
+    assert_eq!(turn_context.config.cwd, selected_cwd);
 }
 
 #[tokio::test]
@@ -6080,7 +6093,7 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 
     {
         let mut state = session.state.lock().await;
-        state.session_configuration.environments = Vec::new();
+        state.session_configuration.environments.environments = Vec::new();
     }
 
     let turn_context = session.new_default_turn().await;
@@ -6143,7 +6156,10 @@ async fn empty_turn_environments_clear_primary_environment() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
-                environments: Some(vec![]),
+                environments: Some(TurnEnvironmentSelections::new(
+                    session.get_config().await.cwd.clone(),
+                    vec![],
+                )),
                 ..Default::default()
             },
         )
@@ -6170,10 +6186,13 @@ async fn unknown_turn_environment_returns_error() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
-                environments: Some(vec![TurnEnvironmentSelection {
-                    environment_id: "missing".to_string(),
-                    cwd: original_configuration.cwd.clone(),
-                }]),
+                environments: Some(TurnEnvironmentSelections::new(
+                    original_configuration.cwd().clone(),
+                    vec![TurnEnvironmentSelection {
+                        environment_id: "missing".to_string(),
+                        cwd: original_configuration.cwd().clone(),
+                    }],
+                )),
                 ..Default::default()
             },
         )
@@ -6186,10 +6205,10 @@ async fn unknown_turn_environment_returns_error() {
     };
     assert!(matches!(err, CodexErr::InvalidRequest(_)));
     assert!(err.to_string().contains("missing"));
-    assert_eq!(current_configuration.cwd, original_configuration.cwd);
+    assert_eq!(current_configuration.cwd(), original_configuration.cwd());
     assert_eq!(
-        current_configuration.environments,
-        original_configuration.environments
+        current_configuration.environment_selections(),
+        original_configuration.environment_selections()
     );
 }
 
@@ -6205,16 +6224,13 @@ async fn duplicate_turn_environment_returns_error_without_mutating_session() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
-                environments: Some(vec![
-                    TurnEnvironmentSelection {
-                        environment_id: "local".to_string(),
-                        cwd: original_configuration.cwd.clone(),
-                    },
-                    TurnEnvironmentSelection {
-                        environment_id: "local".to_string(),
-                        cwd: original_configuration.cwd.join("second"),
-                    },
-                ]),
+                environments: Some(TurnEnvironmentSelections::new(
+                    original_configuration.cwd().clone(),
+                    vec![
+                        local(original_configuration.cwd().clone()),
+                        local(original_configuration.cwd().join("second")),
+                    ],
+                )),
                 ..Default::default()
             },
         )
@@ -6227,10 +6243,10 @@ async fn duplicate_turn_environment_returns_error_without_mutating_session() {
     };
     assert!(matches!(err, CodexErr::InvalidRequest(_)));
     assert!(err.to_string().contains("duplicate"));
-    assert_eq!(current_configuration.cwd, original_configuration.cwd);
+    assert_eq!(current_configuration.cwd(), original_configuration.cwd());
     assert_eq!(
-        current_configuration.environments,
-        original_configuration.environments
+        current_configuration.environment_selections(),
+        original_configuration.environment_selections()
     );
 }
 
@@ -6348,6 +6364,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
         Arc::clone(&thread_store),
         CreateThreadParams {
             thread_id: session.thread_id,
+            extra_config: None,
             forked_from_id: None,
             parent_thread_id: None,
             source: SessionSource::Exec,
@@ -6789,10 +6806,7 @@ where
             developer_instructions: None,
         },
     };
-    let default_environments = vec![TurnEnvironmentSelection {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: config.cwd.clone(),
-    }];
+    let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
@@ -6810,11 +6824,10 @@ where
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        cwd: config.cwd.clone(),
+        environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environments: default_environments,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -6828,7 +6841,7 @@ where
         user_shell_override: None,
     };
     let per_turn_config =
-        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd().clone());
     let model_info = construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config.to_models_manager_config(),
@@ -6940,7 +6953,7 @@ where
             .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
             .await,
     );
-    let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
+    let turn_environments = turn_environments_for_tests(&environment, session_configuration.cwd());
     let turn_context = Arc::new(Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
@@ -6957,7 +6970,7 @@ where
         &models_manager,
         /*network*/ None,
         turn_environments,
-        session_configuration.cwd.clone(),
+        session_configuration.cwd().clone(),
         "turn_id".to_string(),
         skills_outcome,
     ));
