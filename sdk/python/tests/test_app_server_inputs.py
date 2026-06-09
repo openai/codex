@@ -24,7 +24,9 @@ def test_remote_image_input_is_materialized_before_responses_api(
             response_id="remote-image",
         )
 
-        with Codex(config=harness.app_server_config()) as codex:
+        config = harness.app_server_config()
+        config.config_overrides = ("features.materialize_remote_images=true",)
+        with Codex(config=config) as codex:
             result = codex.thread_start().run(
                 [
                     TextInput("Describe the remote image."),

@@ -506,6 +506,7 @@ chatgpt_base_url = "{server_uri}"
 
 [features]
 imagegenext = true
+materialize_remote_images = true
 {code_mode_only}
 
 [model_providers.openai-custom]

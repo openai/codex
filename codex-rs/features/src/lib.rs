@@ -183,6 +183,8 @@ pub enum Feature {
     ImageGeneration,
     /// Replace hosted image generation with the standalone image-generation extension.
     ImageGenExt,
+    /// Download remote images before recording them in conversation history.
+    MaterializeRemoteImages,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
@@ -1087,6 +1089,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageGenExt,
         key: "imagegenext",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MaterializeRemoteImages,
+        key: "materialize_remote_images",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -512,6 +512,9 @@
             "local_thread_store_compression": {
               "type": "boolean"
             },
+            "materialize_remote_images": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -4636,6 +4639,9 @@
           "type": "boolean"
         },
         "local_thread_store_compression": {
+          "type": "boolean"
+        },
+        "materialize_remote_images": {
           "type": "boolean"
         },
         "memories": {

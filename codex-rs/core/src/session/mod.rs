@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -2588,8 +2589,14 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        let items =
-            crate::image_url_materializer::materialize_conversation_item_images(items).await;
+        let items = if turn_context
+            .features
+            .enabled(Feature::MaterializeRemoteImages)
+        {
+            crate::image_url_materializer::materialize_conversation_item_images(items).await
+        } else {
+            Cow::Borrowed(items)
+        };
         let items = items.as_ref();
         {
             let mut state = self.state.lock().await;

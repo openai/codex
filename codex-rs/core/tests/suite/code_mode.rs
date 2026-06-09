@@ -2508,7 +2508,10 @@ image("data:image/png;base64,AAA");
 "#
     );
     let (_test, second_mock) =
-        run_code_mode_turn(&server, "use exec to return images", &code).await?;
+        run_code_mode_turn_with_config(&server, "use exec to return images", &code, |config| {
+            let _ = config.features.enable(Feature::MaterializeRemoteImages);
+        })
+        .await?;
 
     let req = second_mock.single_request();
     let items = custom_tool_output_items(&req, "call-1");
