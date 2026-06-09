@@ -13,8 +13,9 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     let (metrics, exporter) =
         build_metrics_with_defaults(&[("service", "codex-cli"), ("env", "prod")])?;
 
-    metrics.counter(
+    metrics.counter_with_description(
         "codex.turns",
+        "Total number of Codex turns.",
         /*inc*/ 1,
         &[("model", "gpt-5.1"), ("env", "dev")],
     )?;
@@ -28,6 +29,7 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     let resource_metrics = latest_metrics(&exporter);
 
     let counter = find_metric(&resource_metrics, "codex.turns").expect("counter metric missing");
+    assert_eq!(counter.description(), "Total number of Codex turns.");
     let counter_attributes = match counter.data() {
         opentelemetry_sdk::metrics::data::AggregatedMetrics::U64(data) => match data {
             opentelemetry_sdk::metrics::data::MetricData::Sum(sum) => {
