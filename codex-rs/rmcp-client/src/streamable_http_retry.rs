@@ -112,15 +112,23 @@ impl RmcpClient {
     fn is_retryable_client_initialize_error(error: &rmcp::service::ClientInitializeError) -> bool {
         match error {
             rmcp::service::ClientInitializeError::TransportError { error, context }
-                if matches!(
-                    context.as_ref(),
-                    "send initialize request" | "send initialized notification"
-                ) =>
+                if context.as_ref() == "send initialize request" =>
             {
                 error
                     .error
                     .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
                     .is_some_and(Self::is_retryable_streamable_http_error)
+            }
+            rmcp::service::ClientInitializeError::TransportError { error, context }
+                if context.as_ref() == "send initialized notification" =>
+            {
+                error
+                    .error
+                    .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
+                    .is_some_and(|error| {
+                        matches!(error, StreamableHttpError::TransportChannelClosed)
+                            || Self::is_retryable_streamable_http_error(error)
+                    })
             }
             _ => false,
         }

@@ -18,6 +18,7 @@ use serde_json::Value;
 
 use streamable_http_test_support::arm_initialize_post_failure;
 use streamable_http_test_support::arm_initialize_post_json_rpc_failure;
+use streamable_http_test_support::arm_initialized_notification_post_json_rpc_failure;
 use streamable_http_test_support::arm_session_post_failure;
 use streamable_http_test_support::call_echo_tool;
 use streamable_http_test_support::create_client;
@@ -142,6 +143,26 @@ async fn streamable_http_initialize_retries_json_rpc_transient_status() -> anyho
     let result = call_echo_tool(&client, "after-json-status-retry").await?;
 
     assert_eq!(result, expected_echo_result("after-json-status-retry"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_retries_initialized_notification_status() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+
+    arm_initialized_notification_post_json_rpc_failure(
+        &base_url, /*status*/ 502, /*remaining*/ 1,
+    )
+    .await?;
+
+    let client = create_client(&base_url).await?;
+    let result = call_echo_tool(&client, "after-notification-status-retry").await?;
+
+    assert_eq!(
+        result,
+        expected_echo_result("after-notification-status-retry")
+    );
 
     Ok(())
 }
@@ -326,11 +347,10 @@ async fn streamable_http_404_recovery_only_retries_once() -> anyhow::Result<()> 
     .await?;
 
     let error = call_echo_tool(&client, "double-404").await.unwrap_err();
+    let error_message = error.to_string();
     assert!(
-        error
-            .to_string()
-            .contains("handshaking with MCP server failed")
-            || error.to_string().contains("Transport channel closed")
+        error_message.contains("404") || error_message.contains("session expired"),
+        "expected session-expiry error, got: {error:#}"
     );
 
     let recovered = call_echo_tool(&client, "after-double-404").await?;

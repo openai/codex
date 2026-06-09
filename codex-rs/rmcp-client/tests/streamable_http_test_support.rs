@@ -46,6 +46,8 @@ use tokio::time::sleep;
 
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
 const INITIALIZE_POST_FAILURE_CONTROL_PATH: &str = "/test/control/initialize-post-failure";
+const INITIALIZED_NOTIFICATION_POST_FAILURE_CONTROL_PATH: &str =
+    "/test/control/initialized-notification-post-failure";
 
 fn streamable_http_server_bin() -> Result<PathBuf, CargoBinError> {
     codex_utils_cargo_bin::cargo_bin("test_streamable_http_server")
@@ -185,6 +187,35 @@ pub(crate) async fn arm_session_post_failure(
             "status": status,
             "remaining": remaining,
             "www_authenticate_headers": www_authenticate_headers,
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    Ok(())
+}
+
+pub(crate) async fn arm_initialized_notification_post_json_rpc_failure(
+    base_url: &str,
+    status: u16,
+    remaining: usize,
+) -> anyhow::Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{base_url}{INITIALIZED_NOTIFICATION_POST_FAILURE_CONTROL_PATH}"
+        ))
+        .json(&json!({
+            "status": status,
+            "remaining": remaining,
+            "content_type": "application/json",
+            "body": json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32000,
+                    "message": "transient session failure",
+                },
+            }).to_string(),
         }))
         .send()
         .await?;

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
+use axum::body::to_bytes;
 use axum::extract::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -48,6 +49,7 @@ use rmcp::transport::StreamableHttpServerConfig;
 use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde::Deserialize;
+use serde_json::Value;
 use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::task;
@@ -65,6 +67,9 @@ const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp tes
 const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
 const INITIALIZE_POST_FAILURE_CONTROL_PATH: &str = "/test/control/initialize-post-failure";
+const INITIALIZED_NOTIFICATION_POST_FAILURE_CONTROL_PATH: &str =
+    "/test/control/initialized-notification-post-failure";
+const MAX_MCP_POST_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Default)]
 struct PostFailureState {
@@ -74,6 +79,7 @@ struct PostFailureState {
 #[derive(Clone, Copy, Debug)]
 enum ArmedFailureTarget {
     Initialize,
+    InitializedNotification,
     Session,
 }
 
@@ -144,6 +150,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             INITIALIZE_POST_FAILURE_CONTROL_PATH,
             post(arm_initialize_post_failure),
+        )
+        .route(
+            INITIALIZED_NOTIFICATION_POST_FAILURE_CONTROL_PATH,
+            post(arm_initialized_notification_post_failure),
         )
         .route(
             "/.well-known/oauth-authorization-server/mcp",
@@ -433,6 +443,13 @@ async fn arm_initialize_post_failure(
     arm_post_failure(state, request, ArmedFailureTarget::Initialize).await
 }
 
+async fn arm_initialized_notification_post_failure(
+    State(state): State<PostFailureState>,
+    Json(request): Json<ArmSessionPostFailureRequest>,
+) -> Result<StatusCode, StatusCode> {
+    arm_post_failure(state, request, ArmedFailureTarget::InitializedNotification).await
+}
+
 async fn arm_post_failure(
     state: PostFailureState,
     request: ArmSessionPostFailureRequest,
@@ -472,7 +489,17 @@ async fn fail_mcp_post_when_armed(
     if request.uri().path() != "/mcp" || request.method() != Method::POST {
         return next.run(request).await;
     }
-    let has_session_id = request.headers().contains_key(MCP_SESSION_ID_HEADER);
+    let (parts, body) = request.into_parts();
+    let body_bytes = match to_bytes(body, MAX_MCP_POST_BODY_BYTES).await {
+        Ok(body_bytes) => body_bytes,
+        Err(_) => {
+            let mut response = Response::new(Body::from("failed to read request body"));
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return response;
+        }
+    };
+    let has_session_id = parts.headers.contains_key(MCP_SESSION_ID_HEADER);
+    let mcp_method = request_mcp_method(&body_bytes);
 
     {
         let mut armed_failure = state.armed_failure.lock().await;
@@ -480,7 +507,12 @@ async fn fail_mcp_post_when_armed(
             && failure.remaining > 0
             && match failure.target {
                 ArmedFailureTarget::Initialize => !has_session_id,
-                ArmedFailureTarget::Session => has_session_id,
+                ArmedFailureTarget::InitializedNotification => {
+                    has_session_id && mcp_method.as_deref() == Some("notifications/initialized")
+                }
+                ArmedFailureTarget::Session => {
+                    has_session_id && mcp_method.as_deref() != Some("notifications/initialized")
+                }
             }
         {
             failure.remaining -= 1;
@@ -508,5 +540,14 @@ async fn fail_mcp_post_when_armed(
         }
     }
 
-    next.run(request).await
+    next.run(Request::from_parts(parts, Body::from(body_bytes)))
+        .await
+}
+
+fn request_mcp_method(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<Value>(body)
+        .ok()?
+        .get("method")?
+        .as_str()
+        .map(ToString::to_string)
 }

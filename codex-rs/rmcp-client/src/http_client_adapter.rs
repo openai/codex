@@ -28,6 +28,8 @@ use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use rmcp::model::ClientJsonRpcMessage;
+use rmcp::model::ClientNotification;
+use rmcp::model::ConstString;
 use rmcp::model::JsonRpcMessage;
 use rmcp::model::ServerJsonRpcMessage;
 use rmcp::transport::streamable_http_client::AuthRequiredError;
@@ -399,7 +401,26 @@ fn client_jsonrpc_message_fields(
             Some(request.id.to_string()),
         ),
         JsonRpcMessage::Response(response) => (None, Some(response.id.to_string())),
-        JsonRpcMessage::Notification(_) => (None, None),
+        JsonRpcMessage::Notification(notification) => {
+            let method = match &notification.notification {
+                ClientNotification::CancelledNotification(notification) => {
+                    notification.method.as_str()
+                }
+                ClientNotification::ProgressNotification(notification) => {
+                    notification.method.as_str()
+                }
+                ClientNotification::InitializedNotification(notification) => {
+                    notification.method.as_str()
+                }
+                ClientNotification::RootsListChangedNotification(notification) => {
+                    notification.method.as_str()
+                }
+                ClientNotification::CustomNotification(notification) => {
+                    notification.method.as_str()
+                }
+            };
+            (Some(method.to_string()), None)
+        }
         JsonRpcMessage::Error(error) => (None, error.id.as_ref().map(ToString::to_string)),
     }
 }
