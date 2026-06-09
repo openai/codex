@@ -66,10 +66,13 @@ async fn disabled_apps_remove_reserved_server_config() -> Result<(), Box<dyn std
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cli_overrides(vec![(
-            "mcp_servers.codex_apps.url".to_string(),
-            "https://example.com/mcp".into(),
-        )])
+        .cli_overrides(vec![
+            ("features.apps".to_string(), false.into()),
+            (
+                "mcp_servers.codex_apps.url".to_string(),
+                "https://example.com/mcp".into(),
+            ),
+        ])
         .build()
         .await?;
     let manager = installed_manager(&config);
