@@ -262,6 +262,7 @@ impl AuthStorageBackend for DirectKeyringAuthStorage {
 #[derive(Clone)]
 struct SecretsKeyringAuthStorage {
     codex_home: PathBuf,
+    direct_storage: DirectKeyringAuthStorage,
     secrets_manager: SecretsManager,
 }
 
@@ -275,6 +276,8 @@ impl Debug for SecretsKeyringAuthStorage {
 
 impl SecretsKeyringAuthStorage {
     fn new(codex_home: PathBuf, keyring_store: Arc<dyn KeyringStore>) -> Self {
+        let direct_storage =
+            DirectKeyringAuthStorage::new(codex_home.clone(), Arc::clone(&keyring_store));
         let secrets_manager = SecretsManager::new_with_keyring_store(
             codex_home.clone(),
             SecretsBackendKind::Local,
@@ -282,6 +285,7 @@ impl SecretsKeyringAuthStorage {
         );
         Self {
             codex_home,
+            direct_storage,
             secrets_manager,
         }
     }
@@ -332,7 +336,8 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
                 ))
             })?;
         let file_removed = delete_file_if_exists(&self.codex_home)?;
-        Ok(keyring_removed || file_removed)
+        let direct_removed = self.direct_storage.delete()?;
+        Ok(keyring_removed || file_removed || direct_removed)
     }
 }
 

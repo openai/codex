@@ -507,6 +507,42 @@ fn secrets_keyring_auth_storage_delete_removes_keyring_and_file() -> anyhow::Res
 }
 
 #[test]
+fn secrets_keyring_auth_storage_delete_removes_legacy_direct_keyring_entry() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let mock_keyring = MockKeyringStore::default();
+    let direct_storage = DirectKeyringAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(mock_keyring.clone()),
+    );
+    direct_storage.save(&auth_with_prefix("legacy-direct"))?;
+    let storage = SecretsKeyringAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(mock_keyring.clone()),
+    );
+    let auth = auth_with_prefix("to-delete");
+    let auth_file = seed_secrets_backend_and_fallback_auth_file_for_delete(
+        &mock_keyring,
+        codex_home.path(),
+        &auth,
+    )?;
+
+    let removed = storage.delete()?;
+
+    assert!(removed, "delete should report removal");
+    assert_eq!(storage.load()?, None, "encrypted auth should be removed");
+    assert_eq!(
+        direct_storage.load()?,
+        None,
+        "legacy direct keyring auth should be removed"
+    );
+    assert!(
+        !auth_file.exists(),
+        "fallback auth.json should be removed after keyring delete"
+    );
+    Ok(())
+}
+
+#[test]
 fn auto_auth_storage_load_prefers_keyring_value() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let mock_keyring = MockKeyringStore::default();
