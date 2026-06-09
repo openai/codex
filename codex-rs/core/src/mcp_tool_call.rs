@@ -143,14 +143,7 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let metadata =
         lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
-    let item_metadata = McpToolCallItemMetadata {
-        mcp_app_resource_uri: metadata
-            .as_ref()
-            .and_then(|metadata| metadata.mcp_app_resource_uri.clone()),
-        plugin_id: metadata
-            .as_ref()
-            .and_then(|metadata| metadata.plugin_id.clone()),
-    };
+    let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, metadata.as_ref());
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
         let annotations = metadata
             .as_ref()
@@ -312,10 +305,34 @@ pub(crate) struct HandledMcpToolCall {
     pub(crate) tool_input: JsonValue,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct McpToolCallItemMetadata {
+    connector_id: Option<String>,
     mcp_app_resource_uri: Option<String>,
+    mcp_app_invoked_resource_uri: Option<String>,
     plugin_id: Option<String>,
+}
+
+impl McpToolCallItemMetadata {
+    fn from_tool_metadata(server: &str, metadata: Option<&McpToolApprovalMetadata>) -> Self {
+        let trusted_mcp_app_metadata = if server == CODEX_APPS_MCP_SERVER_NAME {
+            metadata
+        } else {
+            None
+        };
+        Self {
+            connector_id: trusted_mcp_app_metadata
+                .and_then(|metadata| metadata.connector_id.clone()),
+            mcp_app_resource_uri: metadata
+                .and_then(|metadata| metadata.mcp_app_resource_uri.clone()),
+            mcp_app_invoked_resource_uri: trusted_mcp_app_metadata
+                .and_then(|metadata| metadata.codex_apps_meta.as_ref())
+                .and_then(|metadata| metadata.get("resource_uri"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            plugin_id: metadata.and_then(|metadata| metadata.plugin_id.clone()),
+        }
+    }
 }
 
 async fn handle_approved_mcp_tool_call(
@@ -892,7 +909,9 @@ async fn notify_mcp_tool_call_started(
         server,
         tool,
         arguments: arguments.unwrap_or(JsonValue::Null),
+        connector_id: item_metadata.connector_id,
         mcp_app_resource_uri: item_metadata.mcp_app_resource_uri,
+        mcp_app_invoked_resource_uri: item_metadata.mcp_app_invoked_resource_uri,
         plugin_id: item_metadata.plugin_id,
         status: McpToolCallStatus::InProgress,
         result: None,
@@ -932,7 +951,9 @@ async fn notify_mcp_tool_call_completed(
         server,
         tool,
         arguments: arguments.unwrap_or(JsonValue::Null),
+        connector_id: item_metadata.connector_id,
         mcp_app_resource_uri: item_metadata.mcp_app_resource_uri,
+        mcp_app_invoked_resource_uri: item_metadata.mcp_app_invoked_resource_uri,
         plugin_id: item_metadata.plugin_id,
         status,
         result,

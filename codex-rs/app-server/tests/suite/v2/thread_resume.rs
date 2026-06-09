@@ -729,6 +729,8 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 .expect("remote resume should include redacted MCP item");
             let ThreadItem::McpToolCall {
                 arguments,
+                connector_id,
+                mcp_app_invoked_resource_uri,
                 result,
                 error,
                 ..
@@ -737,6 +739,11 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 unreachable!("matched MCP item");
             };
             assert_eq!(arguments, &json!("[redacted]"));
+            assert_eq!(connector_id.as_deref(), Some("calendar"));
+            assert_eq!(
+                mcp_app_invoked_resource_uri.as_deref(),
+                Some("connector://calendar/tools/lookup")
+            );
             let result = result.as_ref().expect("redacted MCP result");
             assert_eq!(
                 result.content,
@@ -770,12 +777,21 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
         .find(|item| matches!(item, ThreadItem::McpToolCall { .. }))
         .expect("normal resume should include MCP item");
     let ThreadItem::McpToolCall {
-        arguments, result, ..
+        arguments,
+        connector_id,
+        mcp_app_invoked_resource_uri,
+        result,
+        ..
     } = normal_mcp_item
     else {
         unreachable!("matched MCP item");
     };
     assert_eq!(arguments, &json!({"secret":"argument"}));
+    assert_eq!(connector_id.as_deref(), Some("calendar"));
+    assert_eq!(
+        mcp_app_invoked_resource_uri.as_deref(),
+        Some("connector://calendar/tools/lookup")
+    );
     let result = result.as_ref().expect("normal MCP result");
     assert_eq!(
         result.content,
@@ -877,7 +893,9 @@ fn append_resume_redaction_history(
                 tool: "lookup".to_string(),
                 arguments: Some(json!({"secret":"argument"})),
             },
+            connector_id: Some("calendar".to_string()),
             mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+            mcp_app_invoked_resource_uri: Some("connector://calendar/tools/lookup".to_string()),
             plugin_id: None,
             duration: Duration::from_millis(8),
             result: Ok(CallToolResult {

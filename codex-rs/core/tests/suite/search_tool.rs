@@ -559,9 +559,14 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         unreachable!("event guard guarantees McpToolCallEnd");
     };
     assert_eq!(end.call_id, "calendar-call-1");
+    assert_eq!(end.connector_id.as_deref(), Some("calendar"));
     assert_eq!(
         end.mcp_app_resource_uri.as_deref(),
         Some(CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI)
+    );
+    assert_eq!(
+        end.mcp_app_invoked_resource_uri.as_deref(),
+        Some(CALENDAR_CREATE_EVENT_RESOURCE_URI)
     );
     assert_eq!(
         end.invocation,

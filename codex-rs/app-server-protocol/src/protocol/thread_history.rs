@@ -581,7 +581,8 @@ impl ThreadHistoryBuilder {
                     ThreadItem::from(payload.item.clone()),
                 );
             }
-            codex_protocol::items::TurnItem::Sleep(_) => {
+            codex_protocol::items::TurnItem::Sleep(_)
+            | codex_protocol::items::TurnItem::McpToolCall(_) => {
                 self.upsert_item_in_turn_id(
                     &payload.turn_id,
                     ThreadItem::from(payload.item.clone()),
@@ -595,7 +596,6 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
             | codex_protocol::items::TurnItem::FileChange(_)
-            | codex_protocol::items::TurnItem::McpToolCall(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
     }
@@ -755,6 +755,12 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_mcp_tool_call_begin(&mut self, payload: &McpToolCallBeginEvent) {
+        // The canonical started item carries app identity that this deprecated event cannot.
+        if self.ensure_turn().items.iter().any(
+            |item| matches!(item, ThreadItem::McpToolCall { id, .. } if id == &payload.call_id),
+        ) {
+            return;
+        }
         let item = ThreadItem::McpToolCall {
             id: payload.call_id.clone(),
             server: payload.invocation.server.clone(),
@@ -765,7 +771,9 @@ impl ThreadHistoryBuilder {
                 .arguments
                 .clone()
                 .unwrap_or(serde_json::Value::Null),
+            connector_id: None,
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
+            mcp_app_invoked_resource_uri: None,
             plugin_id: payload.plugin_id.clone(),
             result: None,
             error: None,
@@ -807,7 +815,9 @@ impl ThreadHistoryBuilder {
                 .arguments
                 .clone()
                 .unwrap_or(serde_json::Value::Null),
+            connector_id: payload.connector_id.clone(),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
+            mcp_app_invoked_resource_uri: payload.mcp_app_invoked_resource_uri.clone(),
             plugin_id: payload.plugin_id.clone(),
             result,
             error,
@@ -1549,6 +1559,8 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::HookPromptFragment as CoreHookPromptFragment;
+    use codex_protocol::items::McpToolCallItem as CoreMcpToolCallItem;
+    use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
     use codex_protocol::items::SleepItem as CoreSleepItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
@@ -1839,6 +1851,73 @@ mod tests {
             vec![ThreadItem::Sleep {
                 id: "sleep-1".to_string(),
                 duration_ms: 1_000,
+            }]
+        );
+    }
+
+    #[test]
+    fn active_turn_snapshot_preserves_started_mcp_app_identity() {
+        let turn_id = "turn-1";
+        let call_id = "mcp-1";
+        let arguments = serde_json::json!({"title":"Planning"});
+        let invocation = McpInvocation {
+            server: "codex_apps".into(),
+            tool: "calendar_create_event".into(),
+            arguments: Some(arguments.clone()),
+        };
+        let mut builder = ThreadHistoryBuilder::new();
+        builder.handle_event(&EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_id.into(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        }));
+        builder.handle_event(&EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: turn_id.into(),
+            item: CoreTurnItem::McpToolCall(CoreMcpToolCallItem {
+                id: call_id.into(),
+                server: invocation.server.clone(),
+                tool: invocation.tool.clone(),
+                arguments: arguments.clone(),
+                connector_id: Some("calendar".into()),
+                mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
+                mcp_app_invoked_resource_uri: Some(
+                    "connector://calendar/tools/calendar_create_event".into(),
+                ),
+                plugin_id: Some("sample@test".into()),
+                status: CoreMcpToolCallStatus::InProgress,
+                result: None,
+                error: None,
+                duration: None,
+            }),
+            started_at_ms: 0,
+        }));
+        builder.handle_event(&EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: call_id.into(),
+            invocation,
+            mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
+            plugin_id: Some("sample@test".into()),
+        }));
+
+        assert_eq!(
+            builder.active_turn_snapshot().expect("active turn").items,
+            vec![ThreadItem::McpToolCall {
+                id: call_id.into(),
+                server: "codex_apps".into(),
+                tool: "calendar_create_event".into(),
+                status: McpToolCallStatus::InProgress,
+                arguments,
+                connector_id: Some("calendar".into()),
+                mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
+                mcp_app_invoked_resource_uri: Some(
+                    "connector://calendar/tools/calendar_create_event".into(),
+                ),
+                plugin_id: Some("sample@test".into()),
+                result: None,
+                error: None,
+                duration_ms: None,
             }]
         );
     }
@@ -2397,7 +2476,9 @@ mod tests {
                     tool: "lookup".into(),
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
+                connector_id: None,
                 mcp_app_resource_uri: None,
+                mcp_app_invoked_resource_uri: None,
                 plugin_id: None,
                 duration: Duration::from_millis(8),
                 result: Err("boom".into()),
@@ -2447,7 +2528,9 @@ mod tests {
                 tool: "lookup".into(),
                 status: McpToolCallStatus::Failed,
                 arguments: serde_json::json!({"id":"123"}),
+                connector_id: None,
                 mcp_app_resource_uri: None,
+                mcp_app_invoked_resource_uri: None,
                 plugin_id: None,
                 result: None,
                 error: Some(McpToolCallError {
@@ -2475,7 +2558,9 @@ mod tests {
                     tool: "lookup".into(),
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
+                connector_id: Some("calendar".into()),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
+                mcp_app_invoked_resource_uri: Some("connector://calendar/tools/lookup".into()),
                 plugin_id: Some("sample@test".into()),
                 duration: Duration::from_millis(8),
                 result: Ok(CallToolResult {
@@ -2506,7 +2591,9 @@ mod tests {
                 tool: "lookup".into(),
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"id":"123"}),
+                connector_id: Some("calendar".into()),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
+                mcp_app_invoked_resource_uri: Some("connector://calendar/tools/lookup".into(),),
                 plugin_id: Some("sample@test".into()),
                 result: Some(Box::new(McpToolCallResult {
                     content: vec![serde_json::json!({

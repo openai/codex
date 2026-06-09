@@ -2337,7 +2337,13 @@ pub struct McpToolCallEndEvent {
     pub invocation: McpInvocation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub connector_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_invoked_resource_uri: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plugin_id: Option<String>,
@@ -4940,7 +4946,9 @@ mod tests {
                 server: "server".into(),
                 tool: "tool".into(),
                 arguments: json!({"arg": "value"}),
+                connector_id: Some("connector".into()),
                 mcp_app_resource_uri: Some("app://connector".into()),
+                mcp_app_invoked_resource_uri: Some("connector://resource".into()),
                 plugin_id: Some("sample@test".into()),
                 status: McpToolCallStatus::InProgress,
                 result: None,
@@ -5047,7 +5055,9 @@ mod tests {
                 server: "server".into(),
                 tool: "tool".into(),
                 arguments: json!({"arg": "value"}),
+                connector_id: Some("connector".into()),
                 mcp_app_resource_uri: Some("app://connector".into()),
+                mcp_app_invoked_resource_uri: Some("connector://resource".into()),
                 plugin_id: Some("sample@test".into()),
                 status: McpToolCallStatus::Completed,
                 result: Some(CallToolResult {
@@ -5068,9 +5078,14 @@ mod tests {
                 assert_eq!(event.call_id, "mcp-1");
                 assert_eq!(event.invocation.server, "server");
                 assert_eq!(event.invocation.tool, "tool");
+                assert_eq!(event.connector_id.as_deref(), Some("connector"));
                 assert_eq!(
                     event.mcp_app_resource_uri.as_deref(),
                     Some("app://connector")
+                );
+                assert_eq!(
+                    event.mcp_app_invoked_resource_uri.as_deref(),
+                    Some("connector://resource")
                 );
                 assert_eq!(event.plugin_id.as_deref(), Some("sample@test"));
                 assert_eq!(event.duration, Duration::from_millis(42));
@@ -5078,6 +5093,47 @@ mod tests {
             }
             _ => panic!("expected McpToolCallEnd event"),
         }
+    }
+
+    #[test]
+    fn mcp_tool_call_end_event_defaults_missing_app_identity() {
+        let event = McpToolCallEndEvent {
+            call_id: "mcp-1".into(),
+            invocation: McpInvocation {
+                server: "server".into(),
+                tool: "tool".into(),
+                arguments: Some(json!({"arg": "value"})),
+            },
+            connector_id: Some("connector".into()),
+            mcp_app_resource_uri: Some("app://connector".into()),
+            mcp_app_invoked_resource_uri: Some("connector://resource".into()),
+            plugin_id: Some("sample@test".into()),
+            duration: Duration::from_millis(42),
+            result: Ok(CallToolResult {
+                content: vec![json!({"type": "text", "text": "ok"})],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        };
+        let mut value = serde_json::to_value(&event).expect("serialize MCP tool call end event");
+        let object = value
+            .as_object_mut()
+            .expect("MCP tool call end event should serialize as an object");
+        object.remove("connector_id");
+        object.remove("mcp_app_invoked_resource_uri");
+
+        let deserialized: McpToolCallEndEvent =
+            serde_json::from_value(value).expect("deserialize legacy MCP tool call end event");
+
+        assert_eq!(
+            deserialized,
+            McpToolCallEndEvent {
+                connector_id: None,
+                mcp_app_invoked_resource_uri: None,
+                ..event
+            }
+        );
     }
 
     #[test]
