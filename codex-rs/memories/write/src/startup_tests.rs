@@ -1,5 +1,6 @@
 use crate::extensions::seed_extension_instructions;
 use crate::memory_root;
+use crate::phase1;
 use crate::phase2;
 use crate::runtime::MemoryStartupContext;
 use crate::start_memories_startup_task;
@@ -16,10 +17,14 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
@@ -27,7 +32,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
@@ -347,20 +351,31 @@ async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_meta
 }
 
 #[tokio::test]
-async fn memories_startup_provider_defaults_drive_phase_requests() -> anyhow::Result<()> {
+async fn memories_startup_phase1_provider_default_drives_request_model() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
-
-    let requests =
-        run_memories_startup_model_request_test(&server, home, startup_test_memories_config())
+    let request =
+        run_memory_phase_one_model_request_test(&server, home, startup_test_memories_config())
             .await?;
 
     assert_eq!(
-        requests[0].body_json()["model"].as_str(),
+        request.body_json()["model"].as_str(),
         Some(MOCK_PROVIDER_PHASE_ONE_MODEL)
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn memories_startup_phase2_provider_default_drives_request_model() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let request =
+        run_memory_phase_two_model_request_test(&server, home, startup_test_memories_config())
+            .await?;
+
     assert_eq!(
-        requests[1].body_json()["model"].as_str(),
+        request.body_json()["model"].as_str(),
         Some(MOCK_PROVIDER_PHASE_TWO_MODEL)
     );
 
@@ -368,77 +383,97 @@ async fn memories_startup_provider_defaults_drive_phase_requests() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn memories_startup_explicit_model_overrides_drive_phase_requests() -> anyhow::Result<()> {
+async fn memories_startup_phase1_explicit_model_override_drives_request_model() -> anyhow::Result<()>
+{
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
-
     let mut memories = startup_test_memories_config();
     memories.extract_model = Some("override.phase-one".to_string());
-    memories.consolidation_model = Some("override.phase-two".to_string());
-    let requests = run_memories_startup_model_request_test(&server, home, memories).await?;
+    let request = run_memory_phase_one_model_request_test(&server, home, memories).await?;
 
     assert_eq!(
-        requests[0].body_json()["model"].as_str(),
+        request.body_json()["model"].as_str(),
         Some("override.phase-one")
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn memories_startup_phase2_explicit_model_override_drives_request_model() -> anyhow::Result<()>
+{
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let mut memories = startup_test_memories_config();
+    memories.consolidation_model = Some("override.phase-two".to_string());
+    let request = run_memory_phase_two_model_request_test(&server, home, memories).await?;
+
     assert_eq!(
-        requests[1].body_json()["model"].as_str(),
+        request.body_json()["model"].as_str(),
         Some("override.phase-two")
     );
 
     Ok(())
 }
 
-async fn run_memories_startup_model_request_test(
+async fn run_memory_phase_one_model_request_test(
     server: &wiremock::MockServer,
     home: Arc<TempDir>,
     memories: MemoriesConfig,
-) -> anyhow::Result<Vec<ResponsesRequest>> {
-    let phase1_memories = memories.clone();
-    let phase1_test =
-        build_test_codex_with_memories_config(server, home.clone(), phase1_memories).await?;
-    let phase1_provider = Arc::new(MockMemoryModelProvider::new(
-        phase1_test.config.model_provider.clone(),
-        Some(phase1_test.thread_manager.auth_manager()),
+) -> anyhow::Result<ResponsesRequest> {
+    let test = build_test_codex_with_memories_config(server, Arc::clone(&home), memories).await?;
+    let provider = Arc::new(MockMemoryModelProvider::new(
+        test.config.model_provider.clone(),
+        Some(test.thread_manager.auth_manager()),
     ));
-    let responses = mount_sse_sequence(
+    let db = test
+        .codex
+        .state_db()
+        .ok_or_else(|| anyhow::anyhow!("state db should be enabled for memory startup test"))?;
+    seed_stage1_candidate(
+        db.as_ref(),
+        home.path(),
+        chrono::Utc::now() - chrono::Duration::hours(2),
+        "startup-models",
+    )
+    .await?;
+    let response = mount_sse_once(
         server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-phase1"),
-                ev_assistant_message(
-                    "msg-phase1",
-                    r#"{"raw_memory":"raw memory","rollout_summary":"rollout summary","rollout_slug":"startup-models"}"#,
-                ),
-                ev_completed("resp-phase1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-phase2"),
-                ev_assistant_message("msg-phase2", "phase2 complete"),
-                ev_completed("resp-phase2"),
-            ]),
-        ],
+        sse(vec![
+            ev_response_created("resp-phase1"),
+            ev_assistant_message(
+                "msg-phase1",
+                r#"{"raw_memory":"raw memory","rollout_summary":"rollout summary","rollout_slug":"startup-models"}"#,
+            ),
+            ev_completed("resp-phase1"),
+        ]),
     )
     .await;
 
-    run_memory_phase_one_request_with_provider(&phase1_test, phase1_provider).await?;
-    let _ = wait_for_request(&responses, /*expected_count*/ 1).await;
-    shutdown_test_codex(&phase1_test).await?;
+    let (context, config) = memory_startup_context_with_provider(&test, provider).await;
+    phase1::run(context, config).await;
+    let request = wait_for_single_request(&response).await;
+    shutdown_test_codex(&test).await?;
+    Ok(request)
+}
 
-    let phase2_home = Arc::new(TempDir::new()?);
-    let phase2_test =
-        build_test_codex_with_memories_config(server, phase2_home.clone(), memories).await?;
-    let phase2_provider = Arc::new(MockMemoryModelProvider::new(
-        phase2_test.config.model_provider.clone(),
-        Some(phase2_test.thread_manager.auth_manager()),
+async fn run_memory_phase_two_model_request_test(
+    server: &wiremock::MockServer,
+    home: Arc<TempDir>,
+    memories: MemoriesConfig,
+) -> anyhow::Result<ResponsesRequest> {
+    let test = build_test_codex_with_memories_config(server, home.clone(), memories).await?;
+    let provider = Arc::new(MockMemoryModelProvider::new(
+        test.config.model_provider.clone(),
+        Some(test.thread_manager.auth_manager()),
     ));
-    let db = phase2_test
+    let db = test
         .codex
         .state_db()
         .ok_or_else(|| anyhow::anyhow!("state db should be enabled for memory startup test"))?;
     seed_stage1_output(
         db.as_ref(),
-        phase2_home.path(),
+        home.path(),
         chrono::Utc::now(),
         "raw memory for phase two",
         "rollout summary for phase two",
@@ -446,12 +481,25 @@ async fn run_memories_startup_model_request_test(
     )
     .await?;
 
-    run_memory_phase_two_with_provider(&phase2_test, phase2_provider).await?;
+    let response = mount_sse_once(
+        server,
+        sse(vec![
+            ev_response_created("resp-phase2"),
+            ev_assistant_message("msg-phase2", "phase2 complete"),
+            ev_completed("resp-phase2"),
+        ]),
+    )
+    .await;
 
-    let requests = wait_for_request(&responses, /*expected_count*/ 2).await;
-    wait_for_phase2_workspace_reset(&phase2_home.path().join("memories")).await?;
-    shutdown_test_codex(&phase2_test).await?;
-    Ok(requests)
+    let (context, config) = memory_startup_context_with_provider(&test, provider).await;
+    let root = memory_root(&config.codex_home);
+    tokio::fs::create_dir_all(&root).await?;
+    seed_extension_instructions(&root).await?;
+    phase2::run(context, config).await;
+    let request = wait_for_single_request(&response).await;
+    wait_for_phase2_workspace_reset(&home.path().join("memories")).await?;
+    shutdown_test_codex(&test).await?;
+    Ok(request)
 }
 
 fn startup_test_memories_config() -> MemoriesConfig {
@@ -533,38 +581,6 @@ async fn memory_startup_context_with_provider(
     ));
 
     (context, config)
-}
-
-async fn run_memory_phase_one_request_with_provider(
-    test: &TestCodex,
-    provider: SharedModelProvider,
-) -> anyhow::Result<()> {
-    let (context, config) = memory_startup_context_with_provider(test, provider).await;
-    let model = config.memories.extract_model.clone().unwrap_or_else(|| {
-        context
-            .provider()
-            .memory_extraction_preferred_model()
-            .to_string()
-    });
-    let request_context = context
-        .stage_one_request_context(&config, &model, crate::stage_one::REASONING_EFFORT)
-        .await;
-    context
-        .stream_stage_one_prompt(&config, &codex_core::Prompt::default(), &request_context)
-        .await?;
-    Ok(())
-}
-
-async fn run_memory_phase_two_with_provider(
-    test: &TestCodex,
-    provider: SharedModelProvider,
-) -> anyhow::Result<()> {
-    let (context, config) = memory_startup_context_with_provider(test, provider).await;
-    let root = memory_root(&config.codex_home);
-    tokio::fs::create_dir_all(&root).await?;
-    seed_extension_instructions(&root).await?;
-    phase2::run(context, config).await;
-    Ok(())
 }
 
 const MOCK_PROVIDER_PHASE_ONE_MODEL: &str = "mock.phase-one";
@@ -655,6 +671,46 @@ async fn seed_stage1_output(
         Some(rollout_slug),
     )
     .await?;
+
+    Ok(thread_id)
+}
+
+async fn seed_stage1_candidate(
+    db: &codex_state::StateRuntime,
+    codex_home: &Path,
+    updated_at: chrono::DateTime<chrono::Utc>,
+    rollout_slug: &str,
+) -> anyhow::Result<ThreadId> {
+    let thread_id = ThreadId::new();
+    let rollout_path = codex_home.join(format!("rollout-{thread_id}.jsonl"));
+    let line = RolloutLine {
+        timestamp: updated_at.to_rfc3339(),
+        item: RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "remember this startup test conversation".to_string(),
+            }],
+            phase: None,
+        }),
+    };
+    let jsonl = serde_json::to_string(&line)?;
+    tokio::fs::write(&rollout_path, format!("{jsonl}\n")).await?;
+
+    let mut metadata_builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        rollout_path,
+        updated_at,
+        SessionSource::Cli,
+    );
+    metadata_builder.cwd = codex_home.join(format!("workspace-{rollout_slug}"));
+    metadata_builder.model_provider = Some("test-provider".to_string());
+    metadata_builder.git_branch = Some(format!("branch-{rollout_slug}"));
+    let mut metadata = metadata_builder.build("test-provider");
+    metadata.preview = Some("remember this startup test conversation".to_string());
+    metadata.first_user_message = metadata.preview.clone();
+    db.upsert_thread(&metadata).await?;
+    db.set_thread_memory_mode(thread_id, "enabled").await?;
 
     Ok(thread_id)
 }
