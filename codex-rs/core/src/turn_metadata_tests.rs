@@ -12,6 +12,8 @@ use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -96,6 +98,80 @@ async fn build_turn_metadata_header_marks_detached_memory_without_turn_identity(
     assert_eq!(
         workspace.get("has_changes").and_then(Value::as_bool),
         Some(false)
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn build_turn_metadata_header_ignores_repo_fsmonitor_helper() {
+    let (temp_dir, repo_path) = create_clean_git_repo("repo").await;
+    let helper_path = temp_dir.path().join("fsmonitor-helper.sh");
+    let marker_path = temp_dir.path().join("fsmonitor-ran");
+
+    std::fs::write(
+        &helper_path,
+        format!(
+            "#!/bin/sh\n\
+             : > \"{}\"\n\
+             if [ \"${{1-}}\" = \"2\" ]; then printf 'token\\\\0'; fi\n\
+             exit 0\n",
+            marker_path.to_string_lossy()
+        ),
+    )
+    .expect("write fsmonitor helper");
+    let mut permissions = std::fs::metadata(&helper_path)
+        .expect("read fsmonitor helper metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&helper_path, permissions).expect("mark helper executable");
+
+    Command::new("git")
+        .args([
+            "config",
+            "core.fsmonitor",
+            helper_path.to_string_lossy().as_ref(),
+        ])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("configure fsmonitor helper");
+    Command::new("git")
+        .args(["config", "core.fsmonitorHookVersion", "2"])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("configure fsmonitor hook version");
+
+    Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("exercise raw git status");
+    assert!(
+        marker_path.exists(),
+        "sanity check: raw git status should invoke the configured helper"
+    );
+    std::fs::remove_file(&marker_path).expect("remove fsmonitor marker");
+
+    let header = build_turn_metadata_header(&repo_path, Some("none"))
+        .await
+        .expect("header");
+    let parsed: Value = serde_json::from_str(&header).expect("valid json");
+    let workspace = parsed
+        .get("workspaces")
+        .and_then(Value::as_object)
+        .and_then(|workspaces| workspaces.values().next())
+        .cloned()
+        .expect("workspace");
+
+    assert_eq!(
+        workspace.get("has_changes").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        !marker_path.exists(),
+        "turn metadata collection should not invoke repository fsmonitor helpers"
     );
 }
 
