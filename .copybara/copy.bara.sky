@@ -10,9 +10,14 @@ PUBLIC_FILES = glob(
     exclude = INTERNAL_ONLY_FILES,
 )
 
-INTERNAL_ONLY_MARKER_FILES = glob([
-    "codex-rs/Cargo.toml",
-])
+INTERNAL_ONLY_MARKER_FILES = glob(
+    [
+        "codex-rs/Cargo.toml",
+        "codex-rs/**/Cargo.toml",
+        "codex-rs/**/*.rs",
+    ],
+    exclude = INTERNAL_ONLY_FILES,
+)
 
 PROJECT_INTERNAL_ONLY_MARKERS_TO_PUBLIC = core.transform(
     [
@@ -57,10 +62,10 @@ PROJECT_INTERNAL_ONLY_MARKERS_TO_PUBLIC = core.transform(
             paths = INTERNAL_ONLY_MARKER_FILES,
         ),
         core.verify_match(
-            "copybara:replace-for-public|copybara:public",
+            "copybara:",
             paths = INTERNAL_ONLY_MARKER_FILES,
             verify_no_match = True,
-            failure_message = "Malformed copybara replacement marker remained after internal-to-public transforms.",
+            failure_message = "Malformed copybara marker remained after internal-to-public transforms.",
         ),
     ],
     reversal = [],

@@ -27,14 +27,15 @@ including the original PR body. The PR body and generated sync commit also
 include a `Codex-Public-RevId` trailer so later runs can identify the last
 imported public revision.
 
-The public-to-internal Copybara workflow uses `merge_import` for shared files
-listed in `INTERNAL_ONLY_MARKER_FILES`. Copybara runs a three-way merge for
-those files so destination-only internal lines can survive public imports.
-After Copybara creates the sync branch, the Actions workflow restores the
-previous internal `codex-rs/Cargo.lock` unless the public change touched that
-file, then asks Cargo to resolve the workspace from that baseline and amends the
-generated sync commit. This keeps internal workspace crate entries available
-without eagerly refreshing unrelated third-party package versions.
+The public-to-internal Copybara workflow uses `merge_import` for shared
+marker-eligible files matched by `INTERNAL_ONLY_MARKER_FILES`. Copybara runs a
+three-way merge for those files so destination-only internal lines can survive
+public imports. After Copybara creates the sync branch, the Actions workflow
+restores the previous internal `codex-rs/Cargo.lock` unless the public change
+touched that file, then asks Cargo to resolve the workspace from that baseline
+and amends the generated sync commit. This keeps internal workspace crate
+entries available without eagerly refreshing unrelated third-party package
+versions.
 
 If multiple public changes are pending, the workflow opens one internal sync PR
 for the oldest pending public change and merges it immediately, without waiting
@@ -81,8 +82,9 @@ members = [
 ```
 
 Use the same marker token in the file's native comment syntax for internal-only
-dependency entries or other single-line edits in files listed in
-`INTERNAL_ONLY_MARKER_FILES`:
+dependency entries or other single-line edits in marker-eligible files. The
+default marker set covers `codex-rs/Cargo.toml`, `codex-rs/**/Cargo.toml`, and
+`codex-rs/**/*.rs`, excluding internal-only paths:
 
 ```toml
 codex-internal-foo = { path = "internal-foo" } # copybara:strip-for-public
@@ -126,15 +128,15 @@ foo = true
 ```
 
 Keep marked regions small and close to stable anchors in the file. Copybara uses
-`merge_import` for files in `INTERNAL_ONLY_MARKER_FILES`, so public-to-internal
-imports should preserve destination-only marked lines unless the public change
-edits the same hunk. If that happens, resolve the merge conflict by keeping the
-public change and reapplying the marked internal lines. If another shared file
-needs these markers, add that file to `INTERNAL_ONLY_MARKER_FILES` in
-`copy.bara.sky` so imports three-way merge it and exports strip or replace the
-markers. Replacement blocks currently expect TOML-style `# copybara:public`
-payload lines; add a file-specific transform before using replacement blocks in
-a language with different comment syntax.
+`merge_import` for marker-eligible files, so public-to-internal imports should
+preserve destination-only marked lines unless the public change edits the same
+hunk. If that happens, resolve the merge conflict by keeping the public change
+and reapplying the marked internal lines. If another shared file type needs
+these markers, add a broad path pattern to `INTERNAL_ONLY_MARKER_FILES` in
+`copy.bara.sky` so imports three-way merge that file class and exports strip or
+replace the markers. Replacement blocks currently expect TOML-style
+`# copybara:public` payload lines; add a file-specific transform before using
+replacement blocks in a language with different comment syntax.
 
 Do not use line markers in generated files. In particular, `codex-rs/Cargo.lock`
 is projection-sensitive once internal workspace crates add lockfile entries.

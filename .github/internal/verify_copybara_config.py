@@ -45,8 +45,14 @@ def validate_config(base_copybara_args: list[str]) -> None:
 def verify_marker_projection(base_copybara_args: list[str], temp_root: Path) -> None:
     origin = temp_root / "marker-origin"
     destination = temp_root / "marker-destination"
+    internal_crate = (
+        origin / "codex-rs" / "internal-persistent-mode" / "src" / "lib.rs"
+    )
+    internal_crate.parent.mkdir(parents=True)
+    internal_crate.write_text("internal persistent mode implementation\n", encoding="utf-8")
+
     cargo_manifest = origin / "codex-rs" / "Cargo.toml"
-    cargo_manifest.parent.mkdir(parents=True)
+    cargo_manifest.parent.mkdir(parents=True, exist_ok=True)
     cargo_manifest.write_text(
         textwrap.dedent(
             """\
@@ -66,6 +72,47 @@ def verify_marker_projection(base_copybara_args: list[str], temp_root: Path) -> 
 
             [dependencies]
             codex-otel = { workspace = true }
+            """
+        ),
+        encoding="utf-8",
+    )
+    app_server_manifest = origin / "codex-rs" / "app-server" / "Cargo.toml"
+    app_server_manifest.parent.mkdir(parents=True)
+    app_server_manifest.write_text(
+        textwrap.dedent(
+            """\
+            [dependencies]
+            codex-internal-persistent-mode = { workspace = true } # copybara:strip-for-public
+            other = { workspace = true }
+            """
+        ),
+        encoding="utf-8",
+    )
+    extensions = origin / "codex-rs" / "app-server" / "src" / "extensions.rs"
+    extensions.parent.mkdir(parents=True)
+    extensions.write_text(
+        textwrap.dedent(
+            """\
+            fn install() {
+                // copybara:strip-for-public begin
+                codex_internal_persistent_mode::install();
+                // copybara:strip-for-public end
+                install_public_extensions();
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    thread_store_types = origin / "codex-rs" / "thread-store" / "src" / "types.rs"
+    thread_store_types.parent.mkdir(parents=True)
+    thread_store_types.write_text(
+        textwrap.dedent(
+            """\
+            pub struct PersistentModeConfig {
+                // copybara:strip-for-public begin
+                pub message: String,
+                // copybara:strip-for-public end
+            }
             """
         ),
         encoding="utf-8",
@@ -92,6 +139,33 @@ def verify_marker_projection(base_copybara_args: list[str], temp_root: Path) -> 
     assert_not_contains(projected_manifest, actual, "internal-only")
     assert_not_contains(projected_manifest, actual, "workspace.metadata.codex-internal")
     assert_not_contains(projected_manifest, actual, "copybara:")
+    assert_not_exists(destination / "codex-rs" / "internal-persistent-mode")
+
+    projected_app_server_manifest = (
+        destination / "codex-rs" / "app-server" / "Cargo.toml"
+    )
+    actual = projected_app_server_manifest.read_text(encoding="utf-8")
+    assert_contains(projected_app_server_manifest, actual, "other = { workspace = true }")
+    assert_not_contains(
+        projected_app_server_manifest, actual, "codex-internal-persistent-mode"
+    )
+    assert_not_contains(projected_app_server_manifest, actual, "copybara:")
+
+    projected_extensions = (
+        destination / "codex-rs" / "app-server" / "src" / "extensions.rs"
+    )
+    actual = projected_extensions.read_text(encoding="utf-8")
+    assert_contains(projected_extensions, actual, "install_public_extensions();")
+    assert_not_contains(projected_extensions, actual, "codex_internal_persistent_mode")
+    assert_not_contains(projected_extensions, actual, "copybara:")
+
+    projected_thread_store_types = (
+        destination / "codex-rs" / "thread-store" / "src" / "types.rs"
+    )
+    actual = projected_thread_store_types.read_text(encoding="utf-8")
+    assert_contains(projected_thread_store_types, actual, "pub struct PersistentModeConfig")
+    assert_not_contains(projected_thread_store_types, actual, "pub message")
+    assert_not_contains(projected_thread_store_types, actual, "copybara:")
 
 
 def assert_contains(path: Path, text: str, expected: str) -> None:
@@ -102,6 +176,11 @@ def assert_contains(path: Path, text: str, expected: str) -> None:
 def assert_not_contains(path: Path, text: str, unexpected: str) -> None:
     if unexpected in text:
         raise RuntimeError(f"{path} contained unexpected text: {unexpected}")
+
+
+def assert_not_exists(path: Path) -> None:
+    if path.exists():
+        raise RuntimeError(f"{path} should not exist")
 
 
 def run(args: list[str]) -> None:
