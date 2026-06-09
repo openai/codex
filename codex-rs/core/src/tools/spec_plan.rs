@@ -152,8 +152,11 @@ pub(crate) fn build_tool_router(
     turn_context: &TurnContext,
     params: ToolRouterParams<'_>,
 ) -> ToolRouter {
-    let (model_visible_specs, registry) = build_tool_specs_and_registry(turn_context, params);
-    ToolRouter::from_parts(registry, model_visible_specs)
+    tracing::trace_span!("build_tool_router").in_scope(|| {
+        let (model_visible_specs, registry) = tracing::trace_span!("build_tool_specs_and_registry")
+            .in_scope(|| build_tool_specs_and_registry(turn_context, params));
+        ToolRouter::from_parts(registry, model_visible_specs)
+    })
 }
 
 fn build_tool_specs_and_registry(
@@ -180,10 +183,13 @@ fn build_tool_specs_and_registry(
         wait_agent_timeouts: wait_agent_timeout_options(turn_context),
     };
     let mut planned_tools = PlannedTools::default();
-    add_tool_sources(&context, &mut planned_tools);
-    append_tool_search_executor(&context, &mut planned_tools);
+    tracing::trace_span!("build_tool_specs_and_registry.add_tool_sources")
+        .in_scope(|| add_tool_sources(&context, &mut planned_tools));
+    tracing::trace_span!("build_tool_specs_and_registry.append_tool_search_executor")
+        .in_scope(|| append_tool_search_executor(&context, &mut planned_tools));
     prepend_code_mode_executors(&context, &mut planned_tools);
-    build_model_visible_specs_and_registry(turn_context, planned_tools)
+    tracing::trace_span!("build_tool_specs_and_registry.build_model_visible_specs_and_registry")
+        .in_scope(|| build_model_visible_specs_and_registry(turn_context, planned_tools))
 }
 
 fn build_model_visible_specs_and_registry(
