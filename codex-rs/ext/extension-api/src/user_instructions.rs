@@ -20,7 +20,7 @@ pub struct UserInstructions {
 
 /// Result of loading host-provided user instructions.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct UserInstructionsLoadOutcome {
+pub struct LoadedUserInstructions {
     /// Loaded instructions, or `None` when the provider has no applicable text.
     pub instructions: Option<UserInstructions>,
     /// Recoverable loading problems that should be surfaced during startup.
@@ -28,8 +28,8 @@ pub struct UserInstructionsLoadOutcome {
 }
 
 /// Future returned by a [`UserInstructionsProvider`].
-pub type UserInstructionsLoadFuture<'a> =
-    Pin<Box<dyn Future<Output = UserInstructionsLoadOutcome> + Send + 'a>>;
+pub type LoadUserInstructionsFuture<'a> =
+    Pin<Box<dyn Future<Output = LoadedUserInstructions> + Send + 'a>>;
 
 /// Loads the user instructions that apply when a root thread runtime starts.
 ///
@@ -37,5 +37,5 @@ pub type UserInstructionsLoadFuture<'a> =
 /// while still returning usable fallback instructions when available.
 pub trait UserInstructionsProvider: Send + Sync {
     /// Loads the snapshot to use for a newly created root runtime.
-    fn load(&self) -> UserInstructionsLoadFuture<'_>;
+    fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_>;
 }

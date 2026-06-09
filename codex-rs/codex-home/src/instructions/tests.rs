@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::Path;
 
+use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::UserInstructions;
-use codex_extension_api::UserInstructionsLoadOutcome;
 use codex_extension_api::UserInstructionsProvider;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -23,8 +23,8 @@ fn expected(
     filename: &str,
     text: &str,
     warnings: Vec<String>,
-) -> UserInstructionsLoadOutcome {
-    UserInstructionsLoadOutcome {
+) -> LoadedUserInstructions {
+    LoadedUserInstructions {
         instructions: Some(UserInstructions {
             text: text.to_string(),
             source: AbsolutePathBuf::try_from(home.path().join(filename))
@@ -57,8 +57,8 @@ async fn missing_files_return_no_instructions() {
     let home = TempDir::new().expect("temp dir");
 
     assert_eq!(
-        provider(&home).load().await,
-        UserInstructionsLoadOutcome::default()
+        provider(&home).load_user_instructions().await,
+        LoadedUserInstructions::default()
     );
 }
 
@@ -69,7 +69,7 @@ async fn override_takes_precedence_over_default() {
     fs::write(home.path().join(LOCAL_AGENTS_MD_FILENAME), "override").expect("write override");
 
     assert_eq!(
-        provider(&home).load().await,
+        provider(&home).load_user_instructions().await,
         expected(&home, LOCAL_AGENTS_MD_FILENAME, "override", Vec::new())
     );
 }
@@ -85,7 +85,7 @@ async fn empty_override_falls_back_to_trimmed_default() {
     .expect("write default");
 
     assert_eq!(
-        provider(&home).load().await,
+        provider(&home).load_user_instructions().await,
         expected(
             &home,
             DEFAULT_AGENTS_MD_FILENAME,
@@ -102,7 +102,7 @@ async fn directory_override_falls_back_to_default() {
     fs::write(home.path().join(DEFAULT_AGENTS_MD_FILENAME), "default").expect("write default");
 
     assert_eq!(
-        provider(&home).load().await,
+        provider(&home).load_user_instructions().await,
         expected(&home, DEFAULT_AGENTS_MD_FILENAME, "default", Vec::new())
     );
 }
@@ -120,7 +120,7 @@ async fn recoverable_override_read_error_warns_and_falls_back_to_default() {
     );
 
     assert_eq!(
-        provider(&home).load().await,
+        provider(&home).load_user_instructions().await,
         expected(&home, DEFAULT_AGENTS_MD_FILENAME, "default", vec![warning])
     );
 }
@@ -134,7 +134,7 @@ async fn invalid_utf8_is_lossy_and_warned() {
     invalid_utf8.extend_from_slice(b" doc");
     fs::write(&path, &invalid_utf8).expect("write invalid utf-8");
 
-    let outcome = provider(&home).load().await;
+    let outcome = provider(&home).load_user_instructions().await;
     let utf8_error = std::str::from_utf8(&invalid_utf8).expect_err("invalid utf-8");
     let warning = format!(
         "Global AGENTS.md instructions from `{}` contain invalid UTF-8: {utf8_error}. Invalid byte sequences were replaced.",

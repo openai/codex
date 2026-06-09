@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
-use codex_extension_api::UserInstructionsLoadFuture;
-use codex_extension_api::UserInstructionsLoadOutcome;
+use codex_extension_api::LoadUserInstructionsFuture;
+use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::UserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -44,8 +44,8 @@ static TEST_MODEL_PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
 pub struct EmptyUserInstructionsProvider;
 
 impl UserInstructionsProvider for EmptyUserInstructionsProvider {
-    fn load(&self) -> UserInstructionsLoadFuture<'_> {
-        Box::pin(async { UserInstructionsLoadOutcome::default() })
+    fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_> {
+        Box::pin(async { LoadedUserInstructions::default() })
     }
 }
 

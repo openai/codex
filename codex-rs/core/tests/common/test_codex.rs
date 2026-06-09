@@ -25,7 +25,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::ExtensionRegistry;
-use codex_extension_api::UserInstructionsLoadFuture;
+use codex_extension_api::LoadUserInstructionsFuture;
 use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_home::CodexHomeUserInstructionsProvider;
@@ -95,9 +95,9 @@ impl RecordingUserInstructionsProvider {
 }
 
 impl UserInstructionsProvider for RecordingUserInstructionsProvider {
-    fn load(&self) -> UserInstructionsLoadFuture<'_> {
+    fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_> {
         self.load_count.fetch_add(1, Ordering::SeqCst);
-        self.inner.load()
+        self.inner.load_user_instructions()
     }
 }
 

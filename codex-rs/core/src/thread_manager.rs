@@ -23,7 +23,7 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
-use codex_extension_api::UserInstructionsLoadOutcome;
+use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
@@ -1114,9 +1114,12 @@ impl ThreadManagerState {
         session_source: &SessionSource,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
-    ) -> UserInstructionsLoadOutcome {
+    ) -> LoadedUserInstructions {
         if !session_source.is_non_root_agent() {
-            return self.user_instructions_provider.load().await;
+            return self
+                .user_instructions_provider
+                .load_user_instructions()
+                .await;
         }
 
         let inherited_thread_id = match session_source {
@@ -1126,13 +1129,15 @@ impl ThreadManagerState {
             _ => parent_thread_id.or(forked_from_thread_id),
         };
         let instructions = match inherited_thread_id {
+            // FIXME(anp): Factor this so the spawn path does not have to look
+            // the parent thread back up to inherit user instructions.
             Some(thread_id) => match self.get_thread(thread_id).await {
                 Ok(thread) => thread.codex.session.user_instructions().await,
                 Err(_) => None,
             },
             None => None,
         };
-        UserInstructionsLoadOutcome {
+        LoadedUserInstructions {
             instructions,
             warnings: Vec::new(),
         }

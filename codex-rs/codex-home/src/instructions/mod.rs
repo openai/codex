@@ -1,8 +1,8 @@
 use std::io;
 
+use codex_extension_api::LoadUserInstructionsFuture;
+use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::UserInstructions;
-use codex_extension_api::UserInstructionsLoadFuture;
-use codex_extension_api::UserInstructionsLoadOutcome;
 use codex_extension_api::UserInstructionsProvider;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -21,7 +21,7 @@ impl CodexHomeUserInstructionsProvider {
         Self { codex_home }
     }
 
-    async fn load_from_codex_home(&self) -> UserInstructionsLoadOutcome {
+    async fn load_from_codex_home(&self) -> LoadedUserInstructions {
         let mut warnings = Vec::new();
         for candidate in [LOCAL_AGENTS_MD_FILENAME, DEFAULT_AGENTS_MD_FILENAME] {
             let path = self.codex_home.join(candidate);
@@ -46,7 +46,7 @@ impl CodexHomeUserInstructionsProvider {
             let contents = String::from_utf8_lossy(&data);
             let trimmed = contents.trim();
             if !trimmed.is_empty() {
-                return UserInstructionsLoadOutcome {
+                return LoadedUserInstructions {
                     instructions: Some(UserInstructions {
                         text: trimmed.to_string(),
                         source: path,
@@ -55,7 +55,7 @@ impl CodexHomeUserInstructionsProvider {
                 };
             }
         }
-        UserInstructionsLoadOutcome {
+        LoadedUserInstructions {
             instructions: None,
             warnings,
         }
@@ -63,7 +63,7 @@ impl CodexHomeUserInstructionsProvider {
 }
 
 impl UserInstructionsProvider for CodexHomeUserInstructionsProvider {
-    fn load(&self) -> UserInstructionsLoadFuture<'_> {
+    fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_> {
         Box::pin(self.load_from_codex_home())
     }
 }
