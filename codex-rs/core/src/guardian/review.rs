@@ -699,7 +699,8 @@ pub(super) async fn run_guardian_review_session(
     let guardian_catalog_contains_auto_review = available_models
         .iter()
         .any(|preset| preset.model == default_review_model_id);
-    let guardian_catalog_contains_post_override_review_model = review_model.is_some();
+    let guardian_review_model_overridden = model_override.is_some();
+    let guardian_review_model_override = model_override.map(str::to_string);
     let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = review_model {
         let reasoning_effort = preferred_reasoning_effort(
             preset
@@ -755,7 +756,8 @@ pub(super) async fn run_guardian_review_session(
                 model: guardian_model,
                 reasoning_effort: guardian_reasoning_effort,
                 guardian_catalog_contains_auto_review,
-                guardian_catalog_contains_post_override_review_model,
+                guardian_review_model_overridden,
+                guardian_review_model_override,
                 reasoning_summary: turn.reasoning_summary,
                 personality: turn.personality,
                 external_cancel,

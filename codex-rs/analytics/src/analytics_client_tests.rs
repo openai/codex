@@ -1944,7 +1944,8 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                     guardian_model: None,
                     guardian_reasoning_effort: None,
                     guardian_catalog_contains_auto_review: Some(false),
-                    guardian_catalog_contains_post_override_review_model: Some(false),
+                    guardian_review_model_overridden: Some(false),
+                    guardian_review_model_override: None,
                     guardian_model_provider_id: Some("openai".to_string()),
                     had_prior_review_context: None,
                     review_timeout_ms: 90_000,
@@ -2016,8 +2017,12 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
         false
     );
     assert_eq!(
-        payload[0]["event_params"]["guardian_catalog_contains_post_override_review_model"],
+        payload[0]["event_params"]["guardian_review_model_overridden"],
         false
+    );
+    assert_eq!(
+        payload[0]["event_params"]["guardian_review_model_override"],
+        json!(null)
     );
     assert_eq!(
         payload[0]["event_params"]["guardian_model_provider_id"],
