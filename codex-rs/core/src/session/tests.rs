@@ -3526,6 +3526,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
         Arc::clone(&session.services.thread_store),
         CreateThreadParams {
             thread_id: session.thread_id,
+            extra_config: None,
             forked_from_id: None,
             parent_thread_id: None,
             source: SessionSource::Exec,
@@ -6360,6 +6361,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
         Arc::clone(&thread_store),
         CreateThreadParams {
             thread_id: session.thread_id,
+            extra_config: None,
             forked_from_id: None,
             parent_thread_id: None,
             source: SessionSource::Exec,

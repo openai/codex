@@ -177,6 +177,7 @@ impl ExternalAgentSessionImporter {
         let now = Utc::now();
         let create_params = CreateThreadParams {
             thread_id,
+            extra_config: None,
             forked_from_id: None,
             parent_thread_id: None,
             source: source.clone(),

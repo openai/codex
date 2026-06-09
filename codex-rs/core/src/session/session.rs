@@ -543,6 +543,7 @@ impl Session {
                             Arc::clone(&thread_store),
                             CreateThreadParams {
                                 thread_id,
+                                extra_config: config.extra_config.clone(),
                                 forked_from_id,
                                 parent_thread_id,
                                 source: session_source,
