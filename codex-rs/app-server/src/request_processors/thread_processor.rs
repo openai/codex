@@ -960,6 +960,10 @@ impl ThreadRequestProcessor {
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
+            .instrument(tracing::info_span!(
+                "app_server.thread_start.load_config",
+                otel.name = "app_server.thread_start.load_config",
+            ))
             .await
             .map_err(|err| config_load_error(&err))?;
 
@@ -1024,6 +1028,10 @@ impl ThreadRequestProcessor {
                     typesafe_overrides,
                     /*fallback_cwd*/ None,
                 )
+                .instrument(tracing::info_span!(
+                    "app_server.thread_start.reload_config_after_trust",
+                    otel.name = "app_server.thread_start.reload_config_after_trust",
+                ))
                 .await
                 .map_err(|err| config_load_error(&err))?;
         }
@@ -1183,6 +1191,11 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.send_response",
             ))
             .await;
+        session_telemetry.record_startup_phase(
+            "thread_start_response",
+            thread_start_started_at.elapsed(),
+            Some("ready"),
+        );
 
         listener_task_context
             .outgoing
