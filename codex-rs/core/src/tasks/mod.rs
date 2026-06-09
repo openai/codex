@@ -550,6 +550,12 @@ impl Session {
         true
     }
 
+    async fn drain_guardian_reviews(&self, drain: crate::guardian::GuardianReviewDrain) {
+        if drain.drain().await == crate::guardian::GuardianReviewDrainOutcome::Forced {
+            self.guardian_review_session.shutdown().await;
+        }
+    }
+
     pub async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -570,6 +576,8 @@ impl Session {
         let Some(turn_state) = turn_state else {
             return;
         };
+        self.drain_guardian_reviews(turn_context.guardian_reviews.close())
+            .await;
         let pending_input = self
             .input_queue
             .take_pending_input_for_turn_state(turn_state.as_ref())
@@ -784,12 +792,15 @@ impl Session {
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
-        if task.cancellation_token.is_cancelled() {
+        let guardian_drain = task.turn_context.guardian_reviews.close();
+        let task_already_cancelled = task.cancellation_token.is_cancelled();
+        task.cancellation_token.cancel();
+        if task_already_cancelled {
+            self.drain_guardian_reviews(guardian_drain).await;
             return;
         }
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
-        task.cancellation_token.cancel();
         task.turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
@@ -812,6 +823,7 @@ impl Session {
         session_task
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
+        self.drain_guardian_reviews(guardian_drain).await;
 
         if reason == TurnAbortReason::Interrupted
             && let Some(marker) = interrupted_turn_history_marker(

@@ -16,6 +16,7 @@ mod metrics;
 mod prompt;
 mod review;
 mod review_session;
+mod task_owner;
 
 use std::time::Duration;
 
@@ -43,6 +44,9 @@ pub(crate) use review::routes_approval_to_guardian_with_reviewer;
 pub(crate) use review::spawn_approval_request_review;
 pub(crate) use review_session::GuardianReviewSessionManager;
 pub(crate) use review_session::prompt_cache_key_override_for_review_session;
+pub(crate) use task_owner::GuardianReviewDrain;
+pub(crate) use task_owner::GuardianReviewDrainOutcome;
+pub(crate) use task_owner::GuardianReviewTaskOwner;
 
 pub(crate) const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const GUARDIAN_REVIEWER_NAME: &str = "guardian";

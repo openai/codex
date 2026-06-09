@@ -20,6 +20,8 @@ use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use crate::guardian::GuardianReviewTaskOwner;
+
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
     pub(crate) outcome: Arc<SkillLoadOutcome>,
@@ -56,6 +58,7 @@ impl TurnEnvironment {
 #[derive(Debug)]
 pub struct TurnContext {
     pub(crate) sub_id: String,
+    pub(crate) guardian_reviews: Arc<GuardianReviewTaskOwner>,
     pub(crate) trace_id: Option<String>,
     pub(crate) realtime_active: bool,
     pub config: Arc<Config>,
@@ -224,6 +227,7 @@ impl TurnContext {
 
         Self {
             sub_id: self.sub_id.clone(),
+            guardian_reviews: Arc::clone(&self.guardian_reviews),
             trace_id: self.trace_id.clone(),
             realtime_active: self.realtime_active,
             config: Arc::new(config),
@@ -526,6 +530,7 @@ impl Session {
         extension_data.insert(HostLoadedSkills::new(Arc::clone(&skills_outcome)));
         TurnContext {
             sub_id,
+            guardian_reviews: Arc::new(GuardianReviewTaskOwner::default()),
             trace_id: current_span_trace_id(),
             realtime_active: false,
             config: per_turn_config.clone(),

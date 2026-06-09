@@ -568,6 +568,50 @@ async fn run_guardian_review(
     }
 }
 
+async fn run_guardian_review_in_task(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    review_id: String,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    approval_request_source: GuardianApprovalRequestSource,
+    owner_cancel: CancellationToken,
+) -> ReviewDecision {
+    let Some(review_activity) = turn.guardian_reviews.begin() else {
+        return ReviewDecision::Abort;
+    };
+    let cancel_activity = review_activity.clone();
+    let request_cancel = owner_cancel.clone();
+    let runtime_handle = session.services.runtime_handle.clone();
+    let review = run_guardian_review(
+        session,
+        Arc::clone(&turn),
+        review_id,
+        request,
+        retry_reason,
+        approval_request_source,
+        Some(review_activity.cancellation_token()),
+    );
+    let Some(review) = turn.guardian_reviews.spawn(&runtime_handle, async move {
+        tokio::pin!(review);
+        tokio::select! {
+            biased;
+            _ = request_cancel.cancelled() => {
+                cancel_activity.cancel();
+                review.await
+            }
+            decision = &mut review => decision,
+        }
+    }) else {
+        return ReviewDecision::Abort;
+    };
+    match review.await {
+        Ok(decision) => decision,
+        Err(err) if err.is_cancelled() || owner_cancel.is_cancelled() => ReviewDecision::Abort,
+        Err(_) => ReviewDecision::Denied,
+    }
+}
+
 /// Public entrypoint for approval requests that should be reviewed by guardian.
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
@@ -576,17 +620,15 @@ pub(crate) async fn review_approval_request(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    // Box the delegated review future so callers do not inline the entire
-    // guardian session state machine into their own async stack.
-    Box::pin(run_guardian_review(
+    run_guardian_review_in_task(
         Arc::clone(session),
         Arc::clone(turn),
         review_id,
         request,
         retry_reason,
         GuardianApprovalRequestSource::MainTurn,
-        /*external_cancel*/ None,
-    ))
+        turn.guardian_reviews.cancellation_token(),
+    )
     .await
 }
 
@@ -599,14 +641,14 @@ pub(crate) async fn review_approval_request_with_cancel(
     approval_request_source: GuardianApprovalRequestSource,
     cancel_token: CancellationToken,
 ) -> ReviewDecision {
-    run_guardian_review(
+    run_guardian_review_in_task(
         Arc::clone(session),
         Arc::clone(turn),
         review_id,
         request,
         retry_reason,
         approval_request_source,
-        Some(cancel_token),
+        cancel_token,
     )
     .await
 }
