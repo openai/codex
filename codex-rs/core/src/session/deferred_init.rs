@@ -94,13 +94,25 @@ impl Session {
         self.deferred_initialization_ready
             .get_or_init(|| async {
                 self.ensure_model_catalog_ready().await;
-                self.initialize_plugins_and_skills().await;
                 let initial_history = self.initial_history.lock().await.take();
                 if let Some(initial_history) = initial_history {
                     self.record_initial_history(initial_history).await;
                 }
             })
             .await;
+    }
+
+    async fn ensure_plugin_initialization_ready(&self) {
+        self.plugin_initialization_ready
+            .get_or_init(|| self.initialize_plugins_and_skills())
+            .await;
+    }
+
+    pub(crate) async fn ensure_turn_initialization_ready(&self) {
+        tokio::join!(
+            self.ensure_deferred_initialization_ready(),
+            self.ensure_plugin_initialization_ready(),
+        );
     }
 
     #[expect(
@@ -199,7 +211,7 @@ impl Session {
         reason = "the prewarm gate must stay locked until the handle is installed"
     )]
     pub(crate) async fn finish_deferred_initialization(self: &Arc<Self>) {
-        self.ensure_deferred_initialization_ready().await;
+        self.ensure_turn_initialization_ready().await;
         let mut prewarm_pending = self.model_catalog_prewarm_pending.lock().await;
         if self.shutdown_requested.load(Ordering::SeqCst) || !*prewarm_pending {
             return;

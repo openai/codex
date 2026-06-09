@@ -265,7 +265,9 @@ impl McpConnectionManager {
             )
             .await;
         if let Some(event) = empty_startup_event {
-            let _ = tx_event.send(event).await;
+            tokio::spawn(async move {
+                let _ = tx_event.send(event).await;
+            });
         }
         (manager, cancel_token)
     }
