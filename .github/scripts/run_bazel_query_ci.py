@@ -28,11 +28,7 @@ def query_command(args: Sequence[str], env: Mapping[str, str]) -> list[str]:
     query_args.extend(args[:-2])
     query_args.append(args[-1])
 
-    return bazel_command(
-        *query_args,
-        env=env,
-        enable_remote_config=False,
-    )
+    return bazel_command(*query_args, env=env)
 
 
 def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None) -> int:

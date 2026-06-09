@@ -214,20 +214,6 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             ],
         )
 
-    def test_bazel_command_can_explicitly_disable_remote_configuration(self) -> None:
-        self.assertEqual(
-            run_bazel_with_buildbuddy.bazel_command(
-                "query",
-                "//codex-rs/...",
-                env={
-                    "BUILDBUDDY_API_KEY": "token",
-                    "CODEX_BAZEL_BIN": "fake-bazel",
-                },
-                enable_remote_config=False,
-            ),
-            ["fake-bazel", "query", "//codex-rs/..."],
-        )
-
     def test_main_preserves_spaced_argument_and_child_exit_status(self) -> None:
         spaced_arg = (
             r"--test_env=PATH=C:\Program Files\PowerShell\7;C:\Program Files\Git\bin"

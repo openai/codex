@@ -33,6 +33,8 @@ class RunBazelQueryCiTest(unittest.TestCase):
                 "--output_user_root=/tmp/output",
                 "--noexperimental_remote_repo_contents_cache",
                 "query",
+                "--config=buildbuddy-generic",
+                "--remote_header=x-buildbuddy-api-key=token",
                 "--repo_contents_cache=/tmp/contents",
                 "--repository_cache=/tmp/repository",
                 "--keep_going",
@@ -47,7 +49,7 @@ class RunBazelQueryCiTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Usage:"):
                     run_bazel_query_ci.query_command(args, {})
 
-    def test_main_runs_query_without_buildbuddy_configuration(self) -> None:
+    def test_main_runs_query_with_buildbuddy_configuration(self) -> None:
         with TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             args_path = temp / "args.json"
@@ -91,6 +93,8 @@ class RunBazelQueryCiTest(unittest.TestCase):
                 [
                     "--noexperimental_remote_repo_contents_cache",
                     "query",
+                    "--config=buildbuddy-generic",
+                    "--remote_header=x-buildbuddy-api-key=token",
                     "--output=label",
                     "//codex-rs/...",
                 ],
