@@ -1,10 +1,7 @@
-use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::Mutex;
-use tokio::sync::watch;
-use tokio_util::sync::CancellationToken;
+use tokio::sync::OwnedMutexGuard;
 use tracing::warn;
 
 use crate::guardian::GUARDIAN_REVIEW_TIMEOUT;
@@ -12,78 +9,19 @@ use crate::session::turn;
 
 use super::GuardianReviewSession;
 
-#[cfg(test)]
-#[path = "eager_compaction_tests.rs"]
-mod tests;
-
+/// A held guard means eager maintenance is in flight.
 #[derive(Default)]
 pub(super) struct GuardianEagerCompaction {
-    completion: Mutex<Option<watch::Receiver<bool>>>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum EagerCompactionRunOutcome {
-    Completed,
-    Cancelled,
-    TimedOut,
-}
-
-struct EagerCompactionRun {
-    completion: watch::Sender<bool>,
-}
-
-impl EagerCompactionRun {
-    async fn run_bounded<F>(
-        self,
-        cancel_token: &CancellationToken,
-        timeout: Duration,
-        maintenance: F,
-    ) -> EagerCompactionRunOutcome
-    where
-        F: Future<Output = ()>,
-    {
-        let outcome = tokio::select! {
-            _ = cancel_token.cancelled() => EagerCompactionRunOutcome::Cancelled,
-            result = tokio::time::timeout(timeout, maintenance) => {
-                if result.is_ok() {
-                    EagerCompactionRunOutcome::Completed
-                } else {
-                    EagerCompactionRunOutcome::TimedOut
-                }
-            }
-        };
-        self.completion.send_replace(true);
-        outcome
-    }
+    in_flight: Arc<Mutex<()>>,
 }
 
 impl GuardianEagerCompaction {
-    async fn begin(&self) -> Option<EagerCompactionRun> {
-        let mut completion = self.completion.lock().await;
-        if let Some(receiver) = completion.as_ref()
-            && !*receiver.borrow()
-            && receiver.has_changed().is_ok()
-        {
-            return None;
-        }
-
-        let (sender, receiver) = watch::channel(false);
-        *completion = Some(receiver);
-        Some(EagerCompactionRun { completion: sender })
+    fn begin(&self) -> Option<OwnedMutexGuard<()>> {
+        Arc::clone(&self.in_flight).try_lock_owned().ok()
     }
 
     async fn wait(&self) {
-        let Some(mut completion) = self.completion.lock().await.clone() else {
-            return;
-        };
-        if *completion.borrow() {
-            return;
-        }
-        while completion.changed().await.is_ok() {
-            if *completion.borrow() {
-                return;
-            }
-        }
+        drop(Arc::clone(&self.in_flight).lock_owned().await);
     }
 }
 
@@ -93,21 +31,23 @@ impl GuardianReviewSession {
         if !turn::auto_compact_needed(self.codex.session.as_ref(), turn_context.as_ref()).await {
             return;
         }
-        let Some(run) = self.eager_compaction.begin().await else {
+        let Some(in_flight_guard) = self.eager_compaction.begin() else {
             return;
         };
 
         let review_session = Arc::clone(self);
         drop(tokio::spawn(async move {
+            // Keep the latch closed through compaction and snapshot refresh. Any exit path drops it.
+            let _in_flight_guard = in_flight_guard;
             let cancel_token = review_session.cancel_token.clone();
-            let outcome = run
-                .run_bounded(
-                    &cancel_token,
+            let timed_out = tokio::select! {
+                _ = cancel_token.cancelled() => false,
+                result = tokio::time::timeout(
                     GUARDIAN_REVIEW_TIMEOUT,
                     review_session.run_eager_compaction(turn_context),
-                )
-                .await;
-            if outcome == EagerCompactionRunOutcome::TimedOut {
+                ) => result.is_err(),
+            };
+            if timed_out {
                 warn!(
                     guardian_thread_id = %review_session.codex.session.thread_id,
                     "eager guardian maintenance timed out after {GUARDIAN_REVIEW_TIMEOUT:?}"
