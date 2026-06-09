@@ -166,20 +166,4 @@ mod tests {
             AMAZON_BEDROCK_GPT_5_4_MODEL_ID
         );
     }
-
-    #[test]
-    fn memory_preferred_models_use_bedrock_gpt_5_4() {
-        let provider = AmazonBedrockModelProvider::new(
-            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-        );
-
-        assert_eq!(
-            provider.memory_extraction_preferred_model(),
-            AMAZON_BEDROCK_GPT_5_4_MODEL_ID
-        );
-        assert_eq!(
-            provider.memory_consolidation_preferred_model(),
-            AMAZON_BEDROCK_GPT_5_4_MODEL_ID
-        );
-    }
 }

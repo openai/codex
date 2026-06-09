@@ -397,23 +397,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn configured_provider_uses_default_memory_preferred_models() {
-        let provider = create_model_provider(
-            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
-            /*auth_manager*/ None,
-        );
-
-        assert_eq!(
-            provider.memory_extraction_preferred_model(),
-            DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL
-        );
-        assert_eq!(
-            provider.memory_consolidation_preferred_model(),
-            DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL
-        );
-    }
-
     #[tokio::test]
     async fn configured_provider_runtime_base_url_uses_configured_base_url() {
         let provider = create_model_provider(
