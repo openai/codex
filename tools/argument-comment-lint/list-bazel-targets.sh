@@ -10,7 +10,7 @@ cd "${repo_root}"
 # Add only those manual rust_test targets explicitly so inline `#[cfg(test)]`
 # call sites are linted without pulling in unrelated manual release targets.
 manual_rust_test_targets="$(
-  ./.github/scripts/run_bazel_query_ci.py \
+  MSYS2_ARG_CONV_EXCL='*' ./.github/scripts/run_bazel_query_ci.py \
     --output=label \
     -- 'kind("rust_test rule", attr(tags, "manual", //codex-rs/...))'
 )"

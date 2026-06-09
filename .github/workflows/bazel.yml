@@ -112,7 +112,7 @@ jobs:
             --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
-          ./.github/scripts/run_bazel_ci.py \
+          MSYS2_ARG_CONV_EXCL='*' ./.github/scripts/run_bazel_ci.py \
             "${bazel_wrapper_args[@]}" \
             -- \
             "${bazel_test_args[@]}" \
@@ -192,7 +192,7 @@ jobs:
 
           bazel_test_query='tests(//...) except tests(//third_party/v8:all) except attr(tags, "manual", tests(//...))'
           mapfile -t bazel_targets < <(
-            ./.github/scripts/run_bazel_query_ci.py --output=label -- "${bazel_test_query}" \
+            MSYS2_ARG_CONV_EXCL='*' ./.github/scripts/run_bazel_query_ci.py --output=label -- "${bazel_test_query}" \
               | LC_ALL=C sort
           )
 
@@ -224,7 +224,7 @@ jobs:
             --build_metadata=TAG_windows_test_shard=${BAZEL_TEST_SHARD}
           )
 
-          ./.github/scripts/run_bazel_ci.py \
+          MSYS2_ARG_CONV_EXCL='*' ./.github/scripts/run_bazel_ci.py \
             --print-failed-action-summary \
             --print-failed-test-logs \
             --windows-cross-compile \
@@ -313,7 +313,7 @@ jobs:
             --build_metadata=TAG_windows_native_main=true
           )
 
-          ./.github/scripts/run_bazel_ci.py \
+          MSYS2_ARG_CONV_EXCL='*' ./.github/scripts/run_bazel_ci.py \
             --print-failed-action-summary \
             --print-failed-test-logs \
             -- \
@@ -412,7 +412,7 @@ jobs:
             bazel_targets+=("${target}")
           done <<< "${bazel_target_lines}"
 
-          ./.github/scripts/run_bazel_ci.py \
+          MSYS2_ARG_CONV_EXCL='*' ./.github/scripts/run_bazel_ci.py \
             --print-failed-action-summary \
             "${bazel_wrapper_args[@]}" \
             -- \
@@ -510,7 +510,7 @@ jobs:
             bazel_targets+=("${target}")
           done <<< "${bazel_target_lines}"
 
-          ./.github/scripts/run_bazel_ci.py \
+          MSYS2_ARG_CONV_EXCL='*' ./.github/scripts/run_bazel_ci.py \
             "${bazel_wrapper_args[@]}" \
             -- \
             build \
@@ -524,7 +524,7 @@ jobs:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          ./.github/scripts/run_bazel_ci.py \
+          MSYS2_ARG_CONV_EXCL='*' ./.github/scripts/run_bazel_ci.py \
             --remote-download-toplevel \
             --print-failed-action-summary \
             -- \
