@@ -50,14 +50,6 @@ pub(crate) struct ContextManager {
     reference_context_item: Option<TurnContextItem>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct TotalTokenUsageBreakdown {
-    pub last_api_response_total_tokens: i64,
-    pub all_history_items_model_visible_bytes: i64,
-    pub estimated_tokens_of_items_added_since_last_successful_api_response: i64,
-    pub estimated_bytes_of_items_added_since_last_successful_api_response: i64,
-}
-
 impl ContextManager {
     pub(crate) fn new() -> Self {
         Self {
@@ -321,32 +313,11 @@ impl ContextManager {
         }
     }
 
-    pub(crate) fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
-        let last_usage = self
-            .token_info
-            .as_ref()
-            .map(|info| info.last_token_usage.clone())
-            .unwrap_or_default();
-        let items_after_last_model_generated = self.items_after_last_model_generated_item();
-
-        TotalTokenUsageBreakdown {
-            last_api_response_total_tokens: last_usage.total_tokens,
-            all_history_items_model_visible_bytes: self
-                .items
-                .iter()
-                .map(estimate_response_item_model_visible_bytes)
-                .fold(0i64, i64::saturating_add),
-            estimated_tokens_of_items_added_since_last_successful_api_response:
-                items_after_last_model_generated
-                    .iter()
-                    .map(estimate_item_token_count)
-                    .fold(0i64, i64::saturating_add),
-            estimated_bytes_of_items_added_since_last_successful_api_response:
-                items_after_last_model_generated
-                    .iter()
-                    .map(estimate_response_item_model_visible_bytes)
-                    .fold(0i64, i64::saturating_add),
-        }
+    pub(crate) fn estimated_tokens_after_last_model_generated_item(&self) -> i64 {
+        self.items_after_last_model_generated_item()
+            .iter()
+            .map(estimate_item_token_count)
+            .fold(0i64, i64::saturating_add)
     }
 
     /// This function enforces a couple of invariants on the in-memory history:
@@ -532,7 +503,7 @@ static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Option
         )
     });
 
-pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
+fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
         ResponseItem::Reasoning {
             encrypted_content: Some(content),
