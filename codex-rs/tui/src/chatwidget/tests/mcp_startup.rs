@@ -33,7 +33,10 @@ async fn mcp_startup_ignores_status_for_other_thread() {
     let parent_thread_id = ThreadId::new();
     let child_thread_id = ThreadId::new();
     chat.thread_id = Some(parent_thread_id);
-    chat.on_stream_error("Connection interrupted, retrying".to_string(), None);
+    chat.on_stream_error(
+        "Connection interrupted, retrying".to_string(),
+        /*additional_details*/ None,
+    );
     let status_before = chat.status_state.current_status.clone();
     let retry_status_header_before = chat.status_state.retry_status_header.clone();
 
