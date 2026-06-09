@@ -402,7 +402,11 @@ fn delete_oauth_tokens_from_keyring<K: KeyringStore + Clone + 'static>(
             delete_oauth_tokens_from_direct_keyring(keyring_store, server_name, url)
         }
         AuthKeyringBackendKind::Secrets => {
-            delete_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)
+            let direct_removed =
+                delete_oauth_tokens_from_direct_keyring(keyring_store, server_name, url)?;
+            let secrets_removed =
+                delete_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)?;
+            Ok(direct_removed || secrets_removed)
         }
     }
 }
