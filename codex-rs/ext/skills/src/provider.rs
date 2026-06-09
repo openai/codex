@@ -2,9 +2,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+mod executor;
 mod host;
 
 use codex_core_skills::HostLoadedSkills;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -14,12 +16,13 @@ use crate::catalog::SkillReadResult;
 use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSearchResult;
 
+pub use executor::ExecutorSkillProvider;
 pub use host::HostSkillProvider;
 
 #[derive(Clone, Debug)]
 pub struct SkillListQuery {
     pub turn_id: String,
-    pub executor_authorities: Vec<SkillAuthority>,
+    pub executor_roots: Vec<SelectedCapabilityRoot>,
     pub host: Option<Arc<HostLoadedSkills>>,
     pub include_host_skills: bool,
     pub include_bundled_skills: bool,

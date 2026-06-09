@@ -307,6 +307,14 @@ impl MessageProcessor {
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
         let environment_manager_for_requests = Arc::clone(&environment_manager);
+        let environment_manager_for_extensions = Arc::clone(&environment_manager);
+        let restriction_product = session_source.restriction_product();
+        let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
+            codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
+                environment_manager_for_extensions,
+                restriction_product,
+            ),
+        );
         let goal_service = Arc::new(GoalService::new());
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
@@ -321,6 +329,7 @@ impl MessageProcessor {
                     state_db.clone(),
                     thread_manager.clone(),
                     Arc::clone(&goal_service),
+                    Arc::clone(&executor_skill_provider),
                 ),
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
