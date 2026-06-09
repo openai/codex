@@ -23,6 +23,7 @@ use codex_config::Sourced;
 use codex_config::loader::project_trust_key;
 use codex_config::types::ToolSuggestDisabledTool;
 use core_test_support::test_codex::local_selections;
+use std::sync::atomic::AtomicBool;
 
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -4924,6 +4925,16 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         pending_mcp_server_refresh_config: Mutex::new(None),
         late_mcp_tools: crate::tools::registry::LateToolRegistry::default(),
+        model_catalog_ready: tokio::sync::OnceCell::new(),
+        deferred_initialization_ready: tokio::sync::OnceCell::new(),
+        initial_history: Mutex::new(None),
+        model_catalog_refresh_enabled: false,
+        initial_default_model: None,
+        model_catalog_prewarm_pending: Mutex::new(false),
+        deferred_initialization_task: Mutex::new(None),
+        config_lock_export_task: Mutex::new(None),
+        shutdown_requested: AtomicBool::new(false),
+        base_instructions_origin: BaseInstructionsOrigin::Fixed,
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
@@ -6991,6 +7002,16 @@ where
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         pending_mcp_server_refresh_config: Mutex::new(None),
         late_mcp_tools: crate::tools::registry::LateToolRegistry::default(),
+        model_catalog_ready: tokio::sync::OnceCell::new(),
+        deferred_initialization_ready: tokio::sync::OnceCell::new(),
+        initial_history: Mutex::new(None),
+        model_catalog_refresh_enabled: false,
+        initial_default_model: None,
+        model_catalog_prewarm_pending: Mutex::new(false),
+        deferred_initialization_task: Mutex::new(None),
+        config_lock_export_task: Mutex::new(None),
+        shutdown_requested: AtomicBool::new(false),
+        base_instructions_origin: BaseInstructionsOrigin::Fixed,
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),

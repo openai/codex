@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -22,6 +24,8 @@ pub struct StreamingSseServer {
     uri: String,
     requests: Arc<TokioMutex<Vec<Vec<u8>>>>,
     request_notify: Arc<Notify>,
+    model_request_count: Arc<AtomicUsize>,
+    model_request_notify: Arc<Notify>,
     shutdown: oneshot::Sender<()>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -44,6 +48,15 @@ impl StreamingSseServer {
         }
     }
 
+    pub async fn wait_for_model_request_count(&self, count: usize) {
+        loop {
+            if self.model_request_count.load(Ordering::Acquire) >= count {
+                return;
+            }
+            self.model_request_notify.notified().await;
+        }
+    }
+
     pub async fn shutdown(self) {
         let _ = self.shutdown.send(());
         let _ = self.task.await;
@@ -58,6 +71,37 @@ impl StreamingSseServer {
 /// response stream finishes sending its final chunk.
 pub async fn start_streaming_sse_server(
     responses: Vec<Vec<StreamingSseChunk>>,
+) -> (StreamingSseServer, Vec<oneshot::Receiver<i64>>) {
+    let models_response = serde_json::json!({
+        "data": [],
+        "object": "list"
+    })
+    .to_string();
+    start_streaming_sse_server_inner(responses, models_response, /*models_gate*/ None).await
+}
+
+pub async fn start_streaming_sse_server_with_models_gate(
+    responses: Vec<Vec<StreamingSseChunk>>,
+    models_response: codex_protocol::openai_models::ModelsResponse,
+) -> (
+    StreamingSseServer,
+    Vec<oneshot::Receiver<i64>>,
+    oneshot::Sender<()>,
+) {
+    let (models_gate_tx, models_gate_rx) = oneshot::channel();
+    let (server, completions) = start_streaming_sse_server_inner(
+        responses,
+        serde_json::to_string(&models_response).expect("serialize models response"),
+        Some(models_gate_rx),
+    )
+    .await;
+    (server, completions, models_gate_tx)
+}
+
+async fn start_streaming_sse_server_inner(
+    responses: Vec<Vec<StreamingSseChunk>>,
+    models_response: String,
+    models_gate: Option<oneshot::Receiver<()>>,
 ) -> (StreamingSseServer, Vec<oneshot::Receiver<i64>>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -76,11 +120,17 @@ pub async fn start_streaming_sse_server(
     let state = Arc::new(TokioMutex::new(StreamingSseState {
         responses: VecDeque::from(responses),
         completions: VecDeque::from(completion_senders),
+        models_response,
+        models_gate,
     }));
     let requests = Arc::new(TokioMutex::new(Vec::new()));
     let request_notify = Arc::new(Notify::new());
     let requests_for_task = Arc::clone(&requests);
     let request_notify_for_task = Arc::clone(&request_notify);
+    let model_request_count = Arc::new(AtomicUsize::new(0));
+    let model_request_notify = Arc::new(Notify::new());
+    let model_request_count_for_task = Arc::clone(&model_request_count);
+    let model_request_notify_for_task = Arc::clone(&model_request_notify);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
     let task = tokio::spawn(async move {
@@ -92,6 +142,8 @@ pub async fn start_streaming_sse_server(
                     let state = Arc::clone(&state);
                     let requests = Arc::clone(&requests_for_task);
                     let request_notify = Arc::clone(&request_notify_for_task);
+                    let model_request_count = Arc::clone(&model_request_count_for_task);
+                    let model_request_notify = Arc::clone(&model_request_notify_for_task);
                     tokio::spawn(async move {
                         let (request, body_prefix) = read_http_request(&mut stream).await;
                         let Some((method, path)) = parse_request_line(&request) else {
@@ -99,7 +151,7 @@ pub async fn start_streaming_sse_server(
                             return;
                         };
 
-                        if method == "GET" && path == "/v1/models" {
+                        if method == "GET" && path.starts_with("/v1/models") {
                             if read_request_body(&mut stream, &request, body_prefix)
                                 .await
                                 .is_err()
@@ -107,11 +159,15 @@ pub async fn start_streaming_sse_server(
                                 let _ = write_http_response(&mut stream, /*status*/ 400, "bad request", "text/plain").await;
                                 return;
                             }
-                            let body = serde_json::json!({
-                                "data": [],
-                                "object": "list"
-                            })
-                            .to_string();
+                            model_request_count.fetch_add(1, Ordering::Release);
+                            model_request_notify.notify_waiters();
+                            let (body, gate) = {
+                                let mut state = state.lock().await;
+                                (state.models_response.clone(), state.models_gate.take())
+                            };
+                            if let Some(gate) = gate {
+                                let _ = gate.await;
+                            }
                             let _ = write_http_response(&mut stream, /*status*/ 200, &body, "application/json").await;
                             return;
                         }
@@ -165,6 +221,8 @@ pub async fn start_streaming_sse_server(
             uri,
             requests,
             request_notify,
+            model_request_count,
+            model_request_notify,
             shutdown: shutdown_tx,
             task,
         },
@@ -175,6 +233,8 @@ pub async fn start_streaming_sse_server(
 struct StreamingSseState {
     responses: VecDeque<Vec<StreamingSseChunk>>,
     completions: VecDeque<oneshot::Sender<i64>>,
+    models_response: String,
+    models_gate: Option<oneshot::Receiver<()>>,
 }
 
 async fn take_next_stream(

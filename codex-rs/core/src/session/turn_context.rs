@@ -582,6 +582,8 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
+        self.claim_model_catalog_prewarm().await;
+        self.ensure_deferred_initialization_ready().await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
@@ -826,6 +828,17 @@ impl Session {
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
         self.new_default_turn_with_sub_id(self.next_internal_sub_id())
             .await
+    }
+
+    pub(crate) async fn new_inference_turn(&self) -> Arc<TurnContext> {
+        self.new_inference_turn_with_sub_id(self.next_internal_sub_id())
+            .await
+    }
+
+    pub(crate) async fn new_inference_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
+        self.claim_model_catalog_prewarm().await;
+        self.ensure_deferred_initialization_ready().await;
+        self.new_default_turn_with_sub_id(sub_id).await
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {

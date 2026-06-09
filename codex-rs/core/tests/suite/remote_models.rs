@@ -1,6 +1,8 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used)]
+use anyhow::Context;
 use anyhow::Result;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -12,6 +14,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -36,6 +39,8 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server_with_models_gate;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -1038,7 +1043,7 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
         ModelsResponse {
             models: vec![remote_model],
         },
-        Duration::from_secs(6),
+        Duration::from_secs(/*secs*/ 6),
     )
     .await;
 
@@ -1089,6 +1094,247 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
         1,
         "expected a single /models request"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_start_does_not_wait_for_uncached_remote_models() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let remote_model_slug = "remote-cold-start-default";
+    let remote_base_instructions = "Use the delayed remote model instructions.";
+    let remote_model = ModelInfo {
+        slug: remote_model_slug.to_string(),
+        base_instructions: remote_base_instructions.to_string(),
+        service_tiers: vec![ModelServiceTier {
+            id: "flex".to_string(),
+            name: "Flex".to_string(),
+            description: "Remote-only flex tier".to_string(),
+        }],
+        ..test_remote_model(
+            remote_model_slug,
+            ModelVisibility::List,
+            /*priority*/ 0,
+        )
+    };
+    let (server, _completions, models_gate) = start_streaming_sse_server_with_models_gate(
+        vec![vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-1"),
+            ]),
+        }]],
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+    let config_lock_dir = tempfile::tempdir()?;
+    let config_lock_path = config_lock_dir.path().to_path_buf();
+    let test = timeout(
+        Duration::from_secs(/*secs*/ 10),
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(move |config| {
+                config
+                    .features
+                    .disable(Feature::EnableRequestCompression)
+                    .expect("test config should allow feature update");
+                config
+                    .features
+                    .enable(Feature::FastMode)
+                    .expect("test config should allow feature update");
+                config.model = None;
+                config.service_tier = Some("flex".to_string());
+                config.config_lock_export_dir = Some(
+                    config_lock_path
+                        .try_into()
+                        .expect("config lock path should be absolute"),
+                );
+                config.config_lock_save_fields_resolved_from_model_catalog = true;
+            })
+            .build_with_streaming_server(&server),
+    )
+    .await
+    .expect("thread startup should complete while the remote model catalog is blocked")?;
+
+    assert_eq!(test.session_configured.model, bundled_model_slug());
+    timeout(
+        Duration::from_secs(/*secs*/ 10),
+        server.wait_for_model_request_count(/*count*/ 1),
+    )
+    .await
+    .expect("background model refresh should start");
+    models_gate
+        .send(())
+        .expect("models response gate should still be held");
+    let refreshed_model = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ThreadSettingsApplied(event) => Some(event.thread_settings.model.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(refreshed_model, remote_model_slug);
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello after cold start".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(server.requests().await.len(), 1);
+    let response_requests = server.requests().await;
+    let response_request: serde_json::Value = serde_json::from_slice(&response_requests[0])
+        .with_context(|| format!("parse response request body: {:?}", response_requests[0]))?;
+    assert_eq!(response_request["instructions"], remote_base_instructions);
+    assert_eq!(response_request["model"], remote_model_slug);
+    assert_eq!(response_request["service_tier"], "flex");
+    let config_lock_path = config_lock_dir.path().join(format!(
+        "{}.config.lock.toml",
+        test.session_configured.session_id
+    ));
+    let config_lock = timeout(Duration::from_secs(/*secs*/ 2), async {
+        loop {
+            match tokio::fs::read_to_string(&config_lock_path).await {
+                Ok(config_lock) => break Ok(config_lock),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    sleep(Duration::from_millis(/*millis*/ 10)).await;
+                }
+                Err(err) => break Err(err),
+            }
+        }
+    })
+    .await
+    .expect("config lock export should complete")?;
+    assert!(config_lock.contains(remote_base_instructions));
+    assert!(config_lock.contains(remote_model_slug));
+    assert!(config_lock.contains("service_tier = \"flex\""));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn immediate_shutdown_waits_for_deferred_config_lock_export() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let remote_model_slug = "remote-shutdown-default";
+    let remote_base_instructions = "Persist instructions resolved during graceful shutdown.";
+    let models_mock = mount_models_once_with_delay(
+        &server,
+        ModelsResponse {
+            models: vec![ModelInfo {
+                slug: remote_model_slug.to_string(),
+                base_instructions: remote_base_instructions.to_string(),
+                ..test_remote_model(
+                    remote_model_slug,
+                    ModelVisibility::List,
+                    /*priority*/ 0,
+                )
+            }],
+        },
+        Duration::from_secs(/*secs*/ 1),
+    )
+    .await;
+    let config_lock_dir = tempfile::tempdir()?;
+    let config_lock_path = config_lock_dir.path().to_path_buf();
+    let test = timeout(
+        Duration::from_millis(/*millis*/ 500),
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(move |config| {
+                config.model = None;
+                config.config_lock_export_dir = Some(
+                    config_lock_path
+                        .try_into()
+                        .expect("config lock path should be absolute"),
+                );
+                config.config_lock_save_fields_resolved_from_model_catalog = true;
+            })
+            .build(&server),
+    )
+    .await
+    .expect("thread startup should not wait for the remote model catalog")?;
+
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    assert_eq!(models_mock.requests().len(), 1);
+    let config_lock = tokio::fs::read_to_string(config_lock_dir.path().join(format!(
+        "{}.config.lock.toml",
+        test.session_configured.session_id
+    )))
+    .await?;
+    assert!(config_lock.contains(remote_model_slug));
+    assert!(config_lock.contains(remote_base_instructions));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_reports_deferred_config_lock_export_failure() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let remote_model_slug = "remote-shutdown-export-error";
+    let _models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![test_remote_model(
+                remote_model_slug,
+                ModelVisibility::List,
+                /*priority*/ 0,
+            )],
+        },
+    )
+    .await;
+    let export_parent = tempfile::tempdir()?;
+    let export_path = export_parent.path().join("not-a-directory");
+    tokio::fs::write(&export_path, "occupied").await?;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.model = None;
+            config.config_lock_export_dir = Some(
+                export_path
+                    .try_into()
+                    .expect("config lock path should be absolute"),
+            );
+        })
+        .build(&server)
+        .await?;
+
+    test.codex.submit(Op::Shutdown).await?;
+    let error_message = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Error(error) if error.message.contains("Failed to export config lock") => {
+            Some(error.message.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert!(error_message.contains("failed to create config lock export directory"));
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
 
     Ok(())
 }

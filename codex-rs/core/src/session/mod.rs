@@ -196,6 +196,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::exec_output::StreamOutput;
 
 mod config_lock;
+mod deferred_init;
 mod handlers;
 mod inject;
 mod input_queue;
@@ -207,7 +208,6 @@ mod rollout_reconstruction;
 pub(crate) mod session;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
-use self::config_lock::export_config_lock_if_configured;
 use self::config_lock::validate_config_lock_if_configured;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
@@ -533,22 +533,7 @@ impl Codex {
         };
 
         let config = Arc::new(config);
-        let refresh_strategy = if session_source.is_non_root_agent() {
-            codex_models_manager::manager::RefreshStrategy::Offline
-        } else {
-            codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
-        };
-        if config.model.is_none()
-            || !matches!(
-                refresh_strategy,
-                codex_models_manager::manager::RefreshStrategy::Offline
-            )
-        {
-            let _ = models_manager.list_models(refresh_strategy).await;
-        }
-        let model = models_manager
-            .get_default_model(&config.model, refresh_strategy)
-            .await;
+        let model = models_manager.get_default_model_from_current_catalog(config.model.as_deref());
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
@@ -590,11 +575,9 @@ impl Codex {
                 developer_instructions: None,
             },
         };
-        let service_tier = get_service_tier(
-            config.service_tier.clone(),
-            config.features.enabled(Feature::FastMode),
-            &model_info,
-        );
+        // Preserve the requested tier until the final model catalog is available. Per-turn
+        // construction filters it against the resolved model before sending a request.
+        let service_tier = config.service_tier.clone();
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -644,7 +627,7 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
-            session_source_clone,
+            session_source_clone.clone(),
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
@@ -662,6 +645,21 @@ impl Codex {
             error!("Failed to create session: {e:#}");
             map_session_init_error(&e, &config.codex_home)
         })?;
+        if !session_source_clone.is_non_root_agent() {
+            let session_for_deferred_init = Arc::clone(&session);
+            let deferred_initialization_task = tokio::spawn(
+                async move {
+                    session_for_deferred_init
+                        .finish_deferred_initialization()
+                        .await;
+                }
+                .instrument(info_span!(
+                    "session_init.deferred_initialization",
+                    otel.name = "session_init.deferred_initialization",
+                )),
+            );
+            *session.deferred_initialization_task.lock().await = Some(deferred_initialization_task);
+        }
         let thread_id = session.thread_id;
 
         // This task will run until Op::Shutdown is received.

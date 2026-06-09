@@ -15,7 +15,10 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
+use tokio::task::JoinHandle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BaseInstructionsOrigin {
@@ -42,6 +45,16 @@ pub(crate) struct Session {
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) late_mcp_tools: LateToolRegistry,
+    pub(super) model_catalog_ready: OnceCell<()>,
+    pub(super) deferred_initialization_ready: OnceCell<()>,
+    pub(super) initial_history: Mutex<Option<InitialHistory>>,
+    pub(super) model_catalog_refresh_enabled: bool,
+    pub(super) initial_default_model: Option<String>,
+    pub(super) model_catalog_prewarm_pending: Mutex<bool>,
+    pub(super) deferred_initialization_task: Mutex<Option<JoinHandle<()>>>,
+    pub(super) config_lock_export_task: Mutex<Option<JoinHandle<anyhow::Result<()>>>>,
+    pub(super) shutdown_requested: AtomicBool,
+    pub(super) base_instructions_origin: BaseInstructionsOrigin,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) input_queue: InputQueue,
@@ -519,6 +532,12 @@ impl Session {
         session_configuration.parent_thread_id = parent_thread_id;
         let multi_agent_version = multi_agent_version.map(OnceLock::from).unwrap_or_default();
         let initial_multi_agent_version = multi_agent_version.get().copied();
+        let model_catalog_refresh_enabled = !session_source.is_non_root_agent();
+        let initial_default_model = config
+            .model
+            .is_none()
+            .then(|| session_configuration.collaboration_mode.model().to_string());
+        let model_catalog_prewarm_pending = model_catalog_refresh_enabled;
 
         let thread_id = match &initial_history {
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
@@ -653,12 +672,7 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let (
-            thread_persistence_result,
-            state_db_ctx,
-            (auth, mcp_servers),
-            plugin_skill_errors,
-        ) = tokio::join!(
+        let (thread_persistence_result, state_db_ctx, (auth, mcp_servers), plugin_skill_errors) = tokio::join!(
             thread_persistence_fut,
             state_db_fut,
             auth_and_mcp_fut,
@@ -875,7 +889,6 @@ impl Session {
                     .await;
             session_configuration.thread_name = thread_name.clone();
             validate_config_lock_if_configured(&session_configuration).await?;
-            export_config_lock_if_configured(&session_configuration, thread_id).await?;
             let state = SessionState::new(session_configuration.clone());
             let managed_network_requirements_configured = config
                 .config_layer_stack
@@ -1071,6 +1084,16 @@ impl Session {
                 multi_agent_version,
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 late_mcp_tools: LateToolRegistry::default(),
+                model_catalog_ready: OnceCell::new(),
+                deferred_initialization_ready: OnceCell::new(),
+                initial_history: Mutex::new(Some(initial_history.clone())),
+                model_catalog_refresh_enabled,
+                initial_default_model,
+                model_catalog_prewarm_pending: Mutex::new(model_catalog_prewarm_pending),
+                deferred_initialization_task: Mutex::new(None),
+                config_lock_export_task: Mutex::new(None),
+                shutdown_requested: AtomicBool::new(false),
+                base_instructions_origin,
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
                 input_queue: InputQueue::new(),
@@ -1078,6 +1101,10 @@ impl Session {
                 services,
                 next_internal_sub_id: AtomicU64::new(0),
             });
+            if !model_catalog_refresh_enabled {
+                sess.spawn_config_lock_export(session_configuration.clone())
+                    .await;
+            }
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);
@@ -1224,8 +1251,10 @@ impl Session {
                     anyhow::bail!("required MCP servers failed to initialize: {details}");
                 }
             }
-            sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
-                .await;
+            if !model_catalog_prewarm_pending {
+                sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
+                    .await;
+            }
             let session_start_source = match &initial_history {
                 InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,
                 InitialHistory::New | InitialHistory::Forked(_) => {
@@ -1234,8 +1263,6 @@ impl Session {
                 InitialHistory::Cleared => codex_hooks::SessionStartSource::Clear,
             };
 
-            // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            Box::pin(sess.record_initial_history(initial_history)).await;
             {
                 let mut state = sess.state.lock().await;
                 state.queue_pending_session_start_source(session_start_source);

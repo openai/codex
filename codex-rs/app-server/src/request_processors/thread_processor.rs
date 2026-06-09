@@ -795,6 +795,7 @@ impl ThreadRequestProcessor {
             conversation_id,
             conversation,
             thread_state,
+            /*thread_settings_baseline*/ None,
         )
         .await
     }
@@ -1029,8 +1030,8 @@ impl ThreadRequestProcessor {
                     /*fallback_cwd*/ None,
                 )
                 .instrument(tracing::info_span!(
-                    "app_server.thread_start.reload_config_after_trust",
-                    otel.name = "app_server.thread_start.reload_config_after_trust",
+                    "app_server.thread_start.reload_config",
+                    otel.name = "app_server.thread_start.reload_config",
                 ))
                 .await
                 .map_err(|err| config_load_error(&err))?;
@@ -1122,11 +1123,12 @@ impl ThreadRequestProcessor {
 
         // Auto-attach a thread listener when starting a thread.
         log_listener_attach_result(
-            super::thread_lifecycle::ensure_conversation_listener(
+            super::thread_lifecycle::ensure_conversation_listener_with_baseline(
                 listener_task_context.clone(),
                 thread_id,
                 request_id.connection_id,
                 experimental_raw_events,
+                Some(thread_settings_from_config_snapshot(&config_snapshot)),
             )
             .instrument(tracing::info_span!(
                 "app_server.thread_start.attach_listener",

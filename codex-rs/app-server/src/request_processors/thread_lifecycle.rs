@@ -130,15 +130,32 @@ pub(super) enum EnsureConversationListenerResult {
     ConnectionClosed,
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "listener subscription must be serialized against pending unloads"
-)]
 pub(super) async fn ensure_conversation_listener(
     listener_task_context: ListenerTaskContext,
     conversation_id: ThreadId,
     connection_id: ConnectionId,
     raw_events_enabled: bool,
+) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
+    ensure_conversation_listener_with_baseline(
+        listener_task_context,
+        conversation_id,
+        connection_id,
+        raw_events_enabled,
+        /*thread_settings_baseline*/ None,
+    )
+    .await
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "listener subscription must be serialized against pending unloads"
+)]
+pub(super) async fn ensure_conversation_listener_with_baseline(
+    listener_task_context: ListenerTaskContext,
+    conversation_id: ThreadId,
+    connection_id: ConnectionId,
+    raw_events_enabled: bool,
+    thread_settings_baseline: Option<ThreadSettings>,
 ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
     let conversation = match listener_task_context
         .thread_manager
@@ -173,6 +190,7 @@ pub(super) async fn ensure_conversation_listener(
         conversation_id,
         conversation,
         thread_state,
+        thread_settings_baseline,
     )
     .await
     {
@@ -214,6 +232,7 @@ pub(super) async fn ensure_listener_task_running(
     conversation_id: ThreadId,
     conversation: Arc<CodexThread>,
     thread_state: Arc<Mutex<ThreadState>>,
+    thread_settings_baseline: Option<ThreadSettings>,
 ) -> Result<(), JSONRPCErrorError> {
     let (cancel_tx, mut cancel_rx) = oneshot::channel();
     let Some(mut unloading_state) = UnloadingState::new(
@@ -237,8 +256,10 @@ pub(super) async fn ensure_listener_task_running(
             &environments,
         )
         .await;
-    let thread_settings_baseline =
-        thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
+    let thread_settings_baseline = match thread_settings_baseline {
+        Some(thread_settings_baseline) => thread_settings_baseline,
+        None => thread_settings_from_config_snapshot(&conversation.config_snapshot().await),
+    };
     let (mut listener_command_rx, listener_generation) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {

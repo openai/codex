@@ -16,6 +16,7 @@ use crate::config_lock::config_lockfile;
 use crate::config_lock::toml_round_trip;
 use crate::config_lock::validate_config_lock_replay;
 
+use super::Session;
 use super::SessionConfiguration;
 
 pub(crate) async fn validate_config_lock_if_configured(
@@ -67,6 +68,35 @@ pub(crate) async fn export_config_lock_if_configured(
         .with_context(|| format!("failed to write config lock to {}", path.display()))?;
 
     Ok(())
+}
+
+impl Session {
+    pub(super) async fn spawn_config_lock_export(
+        &self,
+        session_configuration: SessionConfiguration,
+    ) {
+        if session_configuration
+            .original_config_do_not_use
+            .config_lock_export_dir
+            .is_none()
+        {
+            return;
+        }
+        let conversation_id = self.thread_id;
+        let task = tokio::spawn(async move {
+            export_config_lock_if_configured(&session_configuration, conversation_id).await
+        });
+        *self.config_lock_export_task.lock().await = Some(task);
+    }
+
+    pub(super) async fn wait_for_config_lock_export(&self) -> anyhow::Result<()> {
+        let task = self.config_lock_export_task.lock().await.take();
+        if let Some(task) = task {
+            task.await
+                .context("config lock export task failed to join")??;
+        }
+        Ok(())
+    }
 }
 
 impl SessionConfiguration {
