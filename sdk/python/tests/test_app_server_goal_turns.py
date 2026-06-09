@@ -107,6 +107,7 @@ def test_sync_goal_run_aggregates_automatic_continuation(tmp_path) -> None:
             thread = codex.thread_start()
             result = thread.run_goal("  Improve benchmark coverage  ")
             requests = harness.responses.wait_for_requests(3)
+            registered_goals = dict(codex._client._router._goal_operations)
 
     usage = result.usage.model_dump(by_alias=True, mode="json") if result.usage else None
     assert {
@@ -124,6 +125,7 @@ def test_sync_goal_run_aggregates_automatic_continuation(tmp_path) -> None:
         ),
         "continuation_has_objective": "<objective>\nImprove benchmark coverage\n</objective>"
         in _continuation_text(requests[0]),
+        "registered_goals": registered_goals,
     } == {
         "id_is_present": True,
         "status": TurnStatus.completed,
@@ -148,6 +150,7 @@ def test_sync_goal_run_aggregates_automatic_continuation(tmp_path) -> None:
         },
         "timing": (True, True, True),
         "continuation_has_objective": True,
+        "registered_goals": {},
     }
 
 

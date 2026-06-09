@@ -222,11 +222,18 @@ class MockResponsesServer:
 class AppServerHarness:
     """Test fixture that points a pinned runtime app-server at MockResponsesServer."""
 
-    def __init__(self, tmp_path: Path, *, requires_openai_auth: bool = False) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        requires_openai_auth: bool = False,
+        enable_goals: bool | None = None,
+    ) -> None:
         self.tmp_path = tmp_path
         self.codex_home = tmp_path / "codex-home"
         self.workspace = tmp_path / "workspace"
         self.requires_openai_auth = requires_openai_auth
+        self.enable_goals = enable_goals
         self.responses = MockResponsesServer()
 
     def __enter__(self) -> AppServerHarness:
@@ -256,6 +263,9 @@ class AppServerHarness:
         """Write config.toml that routes model calls to the mock server."""
         config_toml = self.codex_home / "config.toml"
         requires_openai_auth = "requires_openai_auth = true\n" if self.requires_openai_auth else ""
+        goals = ""
+        if self.enable_goals is not None:
+            goals = f"[features]\ngoals = {str(self.enable_goals).lower()}\n\n"
         config_toml.write_text(
             f"""
 model = "mock-model"
@@ -264,7 +274,7 @@ sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
 
-[model_providers.mock_provider]
+{goals}[model_providers.mock_provider]
 name = "Mock provider for Python SDK tests"
 base_url = "{self.responses.url}/v1"
 wire_api = "responses"
@@ -462,12 +472,12 @@ def ev_function_call(call_id: str, name: str, arguments: str) -> Json:
     }
 
 
-def ev_failed(response_id: str, message: str) -> Json:
+def ev_failed(response_id: str, message: str, *, code: str = "server_error") -> Json:
     """Return a failed model response event."""
     return {
         "type": "response.failed",
         "response": {
             "id": response_id,
-            "error": {"code": "server_error", "message": message},
+            "error": {"code": code, "message": message},
         },
     }
