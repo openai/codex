@@ -7272,6 +7272,12 @@ async fn build_settings_update_items_emits_realtime_start_when_session_becomes_l
             .any(|text| text.contains("<realtime_conversation>")),
         "expected a realtime start update, got {developer_texts:?}"
     );
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("one short, standalone, voice-ready final response")),
+        "expected realtime response guidance, got {developer_texts:?}"
+    );
 }
 
 #[tokio::test]
