@@ -800,7 +800,12 @@ def test_async_goal_start_cancellation_interrupts_work_and_releases_routing(tmp_
             async with AsyncCodex(config=harness.app_server_config()) as codex:
                 thread = await codex.thread_start()
                 startup = asyncio.create_task(thread.start_goal("Cancel this goal during startup"))
-                await asyncio.sleep(0)
+
+                deadline = time.monotonic() + 5
+                while not codex._client._sync._router._goal_operations:
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("goal startup did not register routing")
+                    await asyncio.sleep(0.01)
 
                 # Keep the event loop occupied until model work starts so the
                 # worker result cannot reach start_goal before cancellation.
