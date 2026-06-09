@@ -854,14 +854,31 @@ impl RmcpClient {
             ),
         };
 
-        let service = match timeout {
-            Some(duration) => time::timeout(duration, transport)
-                .await
-                .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?
-                .map_err(|source| HandshakeError { source })?,
+        let service_result = match timeout {
+            Some(duration) => match time::timeout(duration, transport).await {
+                Ok(result) => {
+                    result.map_err(|source| anyhow::Error::from(HandshakeError { source }))
+                }
+                Err(_elapsed) => Err(anyhow!(
+                    "timed out handshaking with MCP server after {duration:?}"
+                )),
+            },
             None => transport
                 .await
-                .map_err(|source| HandshakeError { source })?,
+                .map_err(|source| anyhow::Error::from(HandshakeError { source })),
+        };
+        let service = match service_result {
+            Ok(service) => service,
+            Err(error) => {
+                if let Some(runtime) = oauth_persistor.as_ref()
+                    && let Err(persist_error) = runtime.persist_if_needed().await
+                {
+                    warn!(
+                        "failed to persist OAuth tokens after failed initialize: {persist_error}"
+                    );
+                }
+                return Err(error);
+            }
         };
 
         Ok((Arc::new(service), oauth_persistor))

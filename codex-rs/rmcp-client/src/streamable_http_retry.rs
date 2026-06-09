@@ -46,21 +46,22 @@ impl RmcpClient {
             .chain(std::iter::once(None))
             .enumerate()
         {
-            let attempt_timeout =
-                retry_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-            if let Some(remaining) = attempt_timeout
-                && remaining.is_zero()
-            {
-                let duration = timeout.unwrap_or(remaining);
-                return Err(anyhow!(
-                    "timed out handshaking with MCP server after {duration:?}"
-                ));
-            }
-
             let transport = match pending_transport.take() {
                 Some(transport) => transport,
-                None => Self::create_pending_transport(&self.transport_recipe).await?,
+                None => {
+                    let remaining = remaining_initialize_timeout(timeout, retry_deadline)?;
+                    match remaining {
+                        Some(remaining) => time::timeout(
+                            remaining,
+                            Self::create_pending_transport(&self.transport_recipe),
+                        )
+                        .await
+                        .map_err(|_| initialize_timeout_error(timeout, remaining))??,
+                        None => Self::create_pending_transport(&self.transport_recipe).await?,
+                    }
+                }
             };
+            let attempt_timeout = remaining_initialize_timeout(timeout, retry_deadline)?;
 
             match Self::connect_pending_transport(
                 transport,
@@ -142,6 +143,26 @@ impl RmcpClient {
             _ => false,
         }
     }
+}
+
+fn remaining_initialize_timeout(
+    timeout: Option<Duration>,
+    deadline: Option<Instant>,
+) -> Result<Option<Duration>> {
+    let Some(deadline) = deadline else {
+        return Ok(None);
+    };
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        Err(initialize_timeout_error(timeout, remaining))
+    } else {
+        Ok(Some(remaining))
+    }
+}
+
+fn initialize_timeout_error(timeout: Option<Duration>, fallback: Duration) -> anyhow::Error {
+    let duration = timeout.unwrap_or(fallback);
+    anyhow!("timed out handshaking with MCP server after {duration:?}")
 }
 
 async fn sleep_with_retry_deadline(delay: Duration, deadline: Option<Instant>) -> bool {
