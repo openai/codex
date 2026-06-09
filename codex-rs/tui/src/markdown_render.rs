@@ -39,6 +39,7 @@
 //! body rows, or even 3-char-wide columns cannot fit, body rows render as
 //! key/value records.
 
+use crate::markdown_text_merge::DecodedTextMerge;
 use crate::render::highlight::foreground_style_for_scopes;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
@@ -322,7 +323,7 @@ pub(crate) fn render_markdown_lines_with_width_and_cwd(
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
-    let parser = Parser::new_ext(input, options).into_offset_iter();
+    let parser = DecodedTextMerge::new(Parser::new_ext(input, options).into_offset_iter());
     let mut w = Writer::new(input, parser, width, cwd);
     w.run();
     w.text
