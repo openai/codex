@@ -17,7 +17,9 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
+use rand::Rng;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -62,6 +64,7 @@ const GUARDIAN_RETRY_WARNING: &str = concat!(
     "Automatic approval review is temporarily unavailable. ",
     "Retrying once before blocking the action.",
 );
+const GUARDIAN_RETRY_MAX_DELAY: Duration = Duration::from_secs(3);
 
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -680,6 +683,23 @@ async fn run_guardian_review_session_with_retry(
             }),
         )
         .await;
+
+    let retry_delay = Duration::from_millis(
+        rand::rng().random_range(0..=GUARDIAN_RETRY_MAX_DELAY.as_millis() as u64),
+    );
+    if let Some(external_cancel) = external_cancel.as_ref() {
+        tokio::select! {
+            () = tokio::time::sleep(retry_delay) => {}
+            () = external_cancel.cancelled() => {
+                return (
+                    GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
+                    first_analytics_result,
+                );
+            }
+        }
+    } else {
+        tokio::time::sleep(retry_delay).await;
+    }
 
     let retry_reason = match retry_reason {
         Some(retry_reason) => format!("{retry_reason}\n\n{}", error.retry_reason()),
