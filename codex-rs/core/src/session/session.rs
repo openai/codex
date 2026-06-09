@@ -1157,12 +1157,6 @@ impl Session {
                     session_configuration.cwd().to_path_buf(),
                 ),
             };
-            let enabled_mcp_server_count =
-                mcp_servers.values().filter(|server| server.enabled()).count();
-            let required_mcp_server_count = mcp_servers
-                .values()
-                .filter(|server| server.enabled() && server.required())
-                .count();
             let mcp_connection_manager = McpConnectionManager::new(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
@@ -1185,8 +1179,6 @@ impl Session {
             .instrument(info_span!(
                 "session_init.mcp_manager_init",
                 otel.name = "session_init.mcp_manager_init",
-                session_init.enabled_mcp_server_count = enabled_mcp_server_count,
-                session_init.required_mcp_server_count = required_mcp_server_count,
             ))
             .await?;
             {
