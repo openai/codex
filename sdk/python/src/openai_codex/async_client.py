@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Iterator
+from concurrent.futures import Future
 from typing import AsyncIterator, Callable, ParamSpec, TypeVar
 
 from pydantic import BaseModel
@@ -226,6 +228,58 @@ class AsyncCodexClient:
     async def pause_goal(self, thread_id: str) -> ThreadGoalSetResponse:
         """Pause the active goal through the wrapped sync client."""
         return await self._call_sync(self._sync.pause_goal, thread_id)
+
+    async def cancel_goal_operation(self, state: _GoalOperationState) -> None:
+        """Stop continuation work after a logical goal operation is cancelled."""
+        await self._call_sync(self._sync.cancel_goal_operation, state)
+
+    async def start_goal_operation(
+        self,
+        thread_id: str,
+        objective: str,
+    ) -> tuple[_GoalOperationState, str]:
+        """Start a logical goal through the wrapped sync client."""
+        operation: Future[tuple[_GoalOperationState, str]] = Future()
+
+        def start_operation() -> None:
+            try:
+                operation.set_result(self._sync.start_goal_operation(thread_id, objective))
+            except BaseException as exc:
+                operation.set_exception(exc)
+
+        worker = threading.Thread(
+            target=start_operation,
+            name="codex-goal-start",
+            daemon=True,
+        )
+        worker.start()
+        try:
+            return await asyncio.shield(asyncio.wrap_future(operation))
+        except asyncio.CancelledError:
+
+            def cleanup_cancelled_start(
+                completed: Future[tuple[_GoalOperationState, str]],
+            ) -> None:
+                try:
+                    state, _ = completed.result()
+                except BaseException:
+                    return
+
+                def stop_cancelled_goal() -> None:
+                    try:
+                        self._sync.cancel_goal_operation(state)
+                    finally:
+                        state.finish()
+                        self._sync.unregister_goal_operation(state)
+
+                threading.Thread(
+                    target=stop_cancelled_goal,
+                    name="codex-goal-start-cleanup",
+                    daemon=True,
+                ).start()
+
+            operation.add_done_callback(cleanup_cancelled_start)
+            raise
 
     async def turn_start(
         self,
