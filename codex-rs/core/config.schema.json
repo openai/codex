@@ -395,6 +395,9 @@
             "apps": {
               "type": "boolean"
             },
+            "apps_mcp_path_override": {
+              "type": "boolean"
+            },
             "auth_elicitation": {
               "type": "boolean"
             },
@@ -4506,6 +4509,9 @@
           "type": "boolean"
         },
         "apps": {
+          "type": "boolean"
+        },
+        "apps_mcp_path_override": {
           "type": "boolean"
         },
         "auth_elicitation": {
