@@ -193,12 +193,23 @@ impl InitiatorHandshake {
     }
 }
 
+// The executor transport lands before the remote opt-in call site in this
+// stack. Keep the intermediate layer lint-clean without weakening dead-code
+// checking after the next layer wires the responder into production.
+#[expect(
+    dead_code,
+    reason = "used by the remote Noise opt-in in the next stacked change"
+)]
 pub(crate) struct PendingResponderHandshake {
     handshake: Handshake,
     initiator_public_key: NoiseChannelPublicKey,
     payload: Vec<u8>,
 }
 
+#[expect(
+    dead_code,
+    reason = "used by the remote Noise opt-in in the next stacked change"
+)]
 impl PendingResponderHandshake {
     /// Authenticate and parse the first IK message without completing it.
     ///
