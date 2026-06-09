@@ -187,9 +187,10 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         let session_id = response_header(&response.headers, HEADER_SESSION_ID);
         if !status_is_success(response.status) {
             let body = collect_body(&mut body_stream).await?;
-            if content_type
-                .as_deref()
-                .is_some_and(|content_type| content_type.starts_with(JSON_MIME_TYPE))
+            if !retryable_post_response_status(mcp_method.as_deref(), response.status)
+                && content_type
+                    .as_deref()
+                    .is_some_and(|content_type| content_type.starts_with(JSON_MIME_TYPE))
                 && let Some(message) = parse_json_rpc_error(&body)
             {
                 return Ok(StreamableHttpPostResponse::Json(message, session_id));
@@ -479,6 +480,29 @@ fn response_header(headers: &[HttpHeader], name: impl AsRef<str>) -> Option<Stri
 
 fn status_is_success(status: u16) -> bool {
     StatusCode::from_u16(status).is_ok_and(|status| status.is_success())
+}
+
+fn retryable_post_response_status(mcp_method: Option<&str>, status: u16) -> bool {
+    let Ok(status) = StatusCode::from_u16(status) else {
+        return false;
+    };
+    is_retryable_http_status(status)
+        && matches!(
+            mcp_method,
+            Some("initialize" | "notifications/initialized" | "tools/list")
+        )
+}
+
+fn is_retryable_http_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    )
 }
 
 fn parse_json_rpc_error(body: &[u8]) -> Option<ServerJsonRpcMessage> {

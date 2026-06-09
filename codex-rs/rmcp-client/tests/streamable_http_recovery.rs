@@ -3,6 +3,7 @@ mod streamable_http_test_support;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_exec_server::Environment;
 use codex_exec_server::ExecServerError;
@@ -16,6 +17,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 
 use streamable_http_test_support::arm_initialize_post_failure;
+use streamable_http_test_support::arm_initialize_post_json_rpc_failure;
 use streamable_http_test_support::arm_session_post_failure;
 use streamable_http_test_support::call_echo_tool;
 use streamable_http_test_support::create_client;
@@ -126,6 +128,51 @@ async fn streamable_http_initialize_retries_transient_http_status() -> anyhow::R
     let result = call_echo_tool(&client, "after-status-retry").await?;
 
     assert_eq!(result, expected_echo_result("after-status-retry"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_initialize_retries_json_rpc_transient_status() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+
+    arm_initialize_post_json_rpc_failure(&base_url, /*status*/ 502, /*remaining*/ 1).await?;
+
+    let client = create_client(&base_url).await?;
+    let result = call_echo_tool(&client, "after-json-status-retry").await?;
+
+    assert_eq!(result, expected_echo_result("after-json-status-retry"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_tools_list_retries_transient_http_status() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    let client = create_client(&base_url).await?;
+
+    let expected = client
+        .list_tools(
+            /*params*/ None,
+            /*timeout*/ Some(Duration::from_secs(5)),
+        )
+        .await?;
+    arm_session_post_failure(
+        &base_url,
+        /*status*/ 502,
+        /*remaining*/ 1,
+        /*www_authenticate_headers*/ &[],
+    )
+    .await?;
+
+    let result = client
+        .list_tools(
+            /*params*/ None,
+            /*timeout*/ Some(Duration::from_secs(5)),
+        )
+        .await?;
+
+    assert_eq!(result, expected);
 
     Ok(())
 }

@@ -84,6 +84,8 @@ struct ArmedFailure {
     remaining: usize,
     /// Raw `WWW-Authenticate` challenge header field values returned with the failure.
     www_authenticate_headers: Vec<HeaderValue>,
+    content_type: Option<HeaderValue>,
+    body: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +95,8 @@ struct ArmSessionPostFailureRequest {
     /// Raw `WWW-Authenticate` challenge header field values to add to the failure.
     #[serde(default)]
     www_authenticate_headers: Vec<String>,
+    content_type: Option<String>,
+    body: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -440,6 +444,10 @@ async fn arm_post_failure(
         .into_iter()
         .map(|value| HeaderValue::from_str(&value).map_err(|_| StatusCode::BAD_REQUEST))
         .collect::<Result<Vec<_>, _>>()?;
+    let content_type = request
+        .content_type
+        .map(|value| HeaderValue::from_str(&value).map_err(|_| StatusCode::BAD_REQUEST))
+        .transpose()?;
     let armed_failure = if request.remaining == 0 {
         None
     } else {
@@ -448,6 +456,8 @@ async fn arm_post_failure(
             status,
             remaining: request.remaining,
             www_authenticate_headers,
+            content_type,
+            body: request.body,
         })
     };
     *state.armed_failure.lock().await = armed_failure;
@@ -476,13 +486,19 @@ async fn fail_mcp_post_when_armed(
             failure.remaining -= 1;
             let status = failure.status;
             let www_authenticate_headers = failure.www_authenticate_headers.clone();
+            let content_type = failure.content_type.clone();
+            let body = failure
+                .body
+                .clone()
+                .unwrap_or_else(|| format!("forced session failure with status {status}"));
             if failure.remaining == 0 {
                 *armed_failure = None;
             }
-            let mut response = Response::new(Body::from(format!(
-                "forced session failure with status {status}"
-            )));
+            let mut response = Response::new(Body::from(body));
             *response.status_mut() = status;
+            if let Some(content_type) = content_type {
+                response.headers_mut().insert(CONTENT_TYPE, content_type);
+            }
             for www_authenticate_header in www_authenticate_headers {
                 response
                     .headers_mut()

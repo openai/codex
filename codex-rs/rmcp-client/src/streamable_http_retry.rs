@@ -20,7 +20,7 @@ use super::PendingTransport;
 use super::RmcpClient;
 
 const JSON_RPC_INTERNAL_ERROR_CODE: i64 = -32603;
-const STREAMABLE_HTTP_RETRY_DELAYS_MS: [u64; 2] = [250, 1_000];
+pub(super) const STREAMABLE_HTTP_RETRY_DELAYS_MS: [u64; 2] = [250, 1_000];
 
 impl RmcpClient {
     pub(super) async fn connect_pending_transport_with_initialize_retries(
@@ -126,7 +126,7 @@ impl RmcpClient {
         }
     }
 
-    fn is_retryable_streamable_http_error(
+    pub(super) fn is_retryable_streamable_http_error(
         error: &StreamableHttpError<StreamableHttpClientAdapterError>,
     ) -> bool {
         match error {
@@ -206,7 +206,7 @@ fn initialize_timeout_error(timeout: Option<Duration>, fallback: Duration) -> an
     anyhow!("timed out handshaking with MCP server after {duration:?}")
 }
 
-async fn sleep_with_retry_deadline(delay: Duration, deadline: Option<Instant>) -> bool {
+pub(super) async fn sleep_with_retry_deadline(delay: Duration, deadline: Option<Instant>) -> bool {
     if let Some(deadline) = deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
