@@ -16,6 +16,10 @@ use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 
+mod context_windows;
+mod synthetic_chat;
+mod synthetic_conversation;
+
 const MATERIALIZE_SQL: &str = r#"
 CREATE TEMP VIEW codex_events AS
 SELECT
@@ -102,6 +106,7 @@ SELECT
     thread_id,
     turn_id,
     json_extract_string(payload, '$.responses_call_id') AS responses_call_id,
+    json_extract_string(payload, '$.context_window_id') AS context_window_id,
     row_number() OVER (
         PARTITION BY session_id, thread_id, turn_id
         ORDER BY TRY_CAST(json_extract_string(payload, '$.request_started_at_epoch_millis') AS BIGINT), json_extract_string(payload, '$.responses_call_id')
@@ -195,7 +200,7 @@ SELECT
     sum(CASE WHEN json_extract_string(payload, '$.event_params.requested_additional_permissions') = 'true' THEN 1 ELSE 0 END) AS tool_calls_requested_additional_permissions_count,
     coalesce(sum(TRY_CAST(json_extract_string(payload, '$.event_params.duration_ms') AS BIGINT)), 0) AS tool_calls_total_duration_ms
 FROM codex_events
-WHERE event_type IN ('codex_command_execution', 'codex_file_change', 'codex_mcp_tool_call', 'codex_dynamic_tool_call', 'codex_collab_agent_tool_call', 'codex_web_search', 'codex_image_generation')
+WHERE event_type IN ('codex_command_execution_event', 'codex_file_change_event', 'codex_mcp_tool_call_event', 'codex_dynamic_tool_call_event', 'codex_collab_agent_tool_call_event', 'codex_web_search_event', 'codex_image_generation_event')
 GROUP BY thread_id, turn_id;
 
 CREATE TEMP VIEW viewer_turn_compaction_aggregates AS
@@ -207,7 +212,7 @@ SELECT
     sum(CASE WHEN json_extract_string(payload, '$.event_params.status') = 'failed' THEN 1 ELSE 0 END) AS compactions_failed_count,
     bool_or(NULLIF(CAST(json_extract(payload, '$.event_params.error') AS VARCHAR), 'null') IS NOT NULL) AS compactions_any_error
 FROM codex_events
-WHERE event_type = 'codex_compaction'
+WHERE event_type = 'codex_compaction_event'
 GROUP BY thread_id, turn_id;
 
 CREATE TEMP VIEW viewer_turn_review_aggregates AS
@@ -404,6 +409,7 @@ pub fn process_local_analytics(input: impl AsRef<Path>, output: impl AsRef<Path>
     create_raw_records_table(&connection)?;
     insert_local_records(&connection, input)?;
     connection.execute_batch(MATERIALIZE_SQL)?;
+    context_windows::materialize_context_windows(&connection)?;
     Ok(())
 }
 

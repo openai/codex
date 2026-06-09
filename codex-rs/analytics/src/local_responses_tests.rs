@@ -14,6 +14,7 @@ fn reducer_emits_one_responses_record_after_terminal_fact() {
         session_id: "session-1".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        context_window_id: "thread-1:0".to_string(),
         transport: LocalResponsesApiTransport::Http,
         request_started_at_epoch_millis: 10,
         request_json: json!({"model": "gpt-test"}),
@@ -39,6 +40,7 @@ fn reducer_emits_one_responses_record_after_terminal_fact() {
         record.payload,
         json!({
             "responses_call_id": "call-1",
+            "context_window_id": "thread-1:0",
             "transport": "http",
             "status": "completed",
             "request_started_at_epoch_millis": 10,

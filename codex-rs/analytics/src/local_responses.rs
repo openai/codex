@@ -38,6 +38,7 @@ pub struct LocalResponsesApiCallCapture {
     session_id: String,
     thread_id: String,
     turn_id: String,
+    context_window_id: String,
 }
 
 /// One locally captured Responses API attempt.
@@ -53,6 +54,7 @@ pub(crate) struct LocalResponsesApiCallStartedFact {
     session_id: String,
     thread_id: String,
     turn_id: String,
+    context_window_id: String,
     transport: LocalResponsesApiTransport,
     request_started_at_epoch_millis: u64,
     request_json: JsonValue,
@@ -92,6 +94,7 @@ pub(crate) struct LocalResponsesApiCallReducer {
 #[derive(Serialize)]
 struct LocalResponsesApiCallPayload {
     responses_call_id: String,
+    context_window_id: String,
     transport: LocalResponsesApiTransport,
     status: LocalResponsesApiCallStatus,
     request_started_at_epoch_millis: u64,
@@ -120,6 +123,7 @@ impl LocalResponsesApiCallCapture {
             session_id: String::new(),
             thread_id: String::new(),
             turn_id: String::new(),
+            context_window_id: String::new(),
         }
     }
 
@@ -128,12 +132,14 @@ impl LocalResponsesApiCallCapture {
         session_id: String,
         thread_id: String,
         turn_id: String,
+        context_window_id: String,
     ) -> Self {
         Self {
             sender: Some(sender),
             session_id,
             thread_id,
             turn_id,
+            context_window_id,
         }
     }
 
@@ -157,6 +163,7 @@ impl LocalResponsesApiCallCapture {
                 session_id: self.session_id.clone(),
                 thread_id: self.thread_id.clone(),
                 turn_id: self.turn_id.clone(),
+                context_window_id: self.context_window_id.clone(),
                 transport,
                 request_started_at_epoch_millis: now_unix_millis(),
                 request_json,
@@ -346,6 +353,7 @@ impl LocalResponsesApiCallTerminalFact {
         };
         let payload = LocalResponsesApiCallPayload {
             responses_call_id: started.responses_call_id,
+            context_window_id: started.context_window_id,
             transport: started.transport,
             status,
             request_started_at_epoch_millis: started.request_started_at_epoch_millis,

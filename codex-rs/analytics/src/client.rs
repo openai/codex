@@ -180,6 +180,7 @@ impl AnalyticsEventsClient {
         session_id: String,
         thread_id: String,
         turn_id: String,
+        context_window_id: String,
     ) -> LocalResponsesApiCallCapture {
         let Some(queue) = self.queue.as_ref() else {
             return LocalResponsesApiCallCapture::disabled();
@@ -187,7 +188,13 @@ impl AnalyticsEventsClient {
         if queue.local_sink.is_none() {
             return LocalResponsesApiCallCapture::disabled();
         }
-        LocalResponsesApiCallCapture::enabled(queue.sender.clone(), session_id, thread_id, turn_id)
+        LocalResponsesApiCallCapture::enabled(
+            queue.sender.clone(),
+            session_id,
+            thread_id,
+            turn_id,
+            context_window_id,
+        )
     }
 
     #[cfg(test)]

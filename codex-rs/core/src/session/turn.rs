@@ -231,6 +231,7 @@ pub(crate) async fn run_turn(
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
             turn_metadata_header.as_deref(),
+            &window_id,
             sampling_request_input.clone(),
             cancellation_token.child_token(),
         )
@@ -978,6 +979,7 @@ async fn run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
+    context_window_id: &str,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
@@ -1021,6 +1023,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_store),
             client_session,
             turn_metadata_header,
+            context_window_id,
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
@@ -1754,6 +1757,7 @@ async fn try_run_sampling_request(
     turn_store: Arc<codex_extension_api::ExtensionData>,
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
+    context_window_id: &str,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
@@ -1778,6 +1782,7 @@ async fn try_run_sampling_request(
             sess.session_id().to_string(),
             sess.thread_id().to_string(),
             turn_context.sub_id.clone(),
+            context_window_id.to_string(),
         );
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let mut stream = client_session

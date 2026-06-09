@@ -288,6 +288,7 @@ async fn local_responses_capture_writes_reduced_terminal_record() {
         "session-1".to_string(),
         "thread-1".to_string(),
         "turn-1".to_string(),
+        "thread-1:0".to_string(),
     );
     let attempt = capture.start_attempt(LocalResponsesApiTransport::Http, &json!({"model": "gpt"}));
     attempt.record_completed("response-1", Some("request-1"), &None, &[]);
@@ -300,6 +301,7 @@ async fn local_responses_capture_writes_reduced_terminal_record() {
     );
     assert_eq!(records[0].session_id.as_deref(), Some("session-1"));
     assert_eq!(records[0].payload["status"], "completed");
+    assert_eq!(records[0].payload["context_window_id"], "thread-1:0");
     assert_eq!(records[0].payload["request_json"], json!({"model": "gpt"}));
 }
 
