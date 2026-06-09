@@ -146,10 +146,7 @@ pub(crate) async fn run_turn(
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session)
-        .instrument(trace_span!("run_turn.pre_sampling_compact"))
-        .await
-    {
+    if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
         let error = err.to_codex_protocol_error();
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
@@ -158,29 +155,16 @@ pub(crate) async fn run_turn(
     }
 
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
-        .instrument(trace_span!(
-            "run_turn.record_context_updates_and_reference_item"
-        ))
         .await;
 
     let (injection_items, explicitly_enabled_connectors) =
-        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token)
-            .instrument(trace_span!("run_turn.build_skills_and_plugins"))
-            .await?;
+        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await?;
 
-    if run_pending_session_start_hooks(&sess, &turn_context)
-        .instrument(trace_span!("run_turn.run_session_start_hooks"))
-        .await
-    {
+    if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
     }
     let mut can_drain_pending_input = input.is_empty();
-    if run_hooks_and_record_inputs(&sess, &turn_context, &input)
-        .instrument(trace_span!(
-            "run_turn.run_initial_input_hooks_and_record_input"
-        ))
-        .await
-    {
+    if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
         return None;
     }
 
@@ -202,15 +186,10 @@ pub(crate) async fn run_turn(
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
-    let turn_diff_tracker = async {
-        Arc::new(tokio::sync::Mutex::new(
-            TurnDiffTracker::with_environment_display_roots(
-                turn_diff_display_roots(turn_context.as_ref()).await,
-            ),
-        ))
-    }
-    .instrument(trace_span!("run_turn.build_turn_diff_tracker"))
-    .await;
+    let display_roots = turn_diff_display_roots(turn_context.as_ref()).await;
+    let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(
+        TurnDiffTracker::with_environment_display_roots(display_roots),
+    ));
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -306,7 +285,6 @@ pub(crate) async fn run_turn(
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
                     )
-                    .instrument(trace_span!("run_turn.mid_turn_auto_compact"))
                     .await
                     {
                         let error = err.to_codex_protocol_error();
@@ -326,7 +304,6 @@ pub(crate) async fn run_turn(
                         stop_hook_active,
                         last_agent_message.clone(),
                     )
-                    .instrument(trace_span!("run_turn.stop_hooks"))
                     .await;
                     if stop_outcome.should_block {
                         if let Some(hook_prompt_message) =
@@ -358,7 +335,6 @@ pub(crate) async fn run_turn(
                         &sampling_request_input,
                         last_agent_message.clone(),
                     )
-                    .instrument(trace_span!("run_turn.legacy_after_agent_hook"))
                     .await
                     {
                         return None;
@@ -411,6 +387,7 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
+#[instrument(level = "trace", skip_all)]
 async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
     let mut display_roots = Vec::new();
     for turn_environment in &turn_context.environments.turn_environments {
@@ -426,6 +403,7 @@ async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, Pat
     display_roots
 }
 
+#[instrument(level = "trace", skip_all)]
 async fn run_hooks_and_record_inputs(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -458,6 +436,7 @@ async fn run_hooks_and_record_inputs(
     clippy::await_holding_invalid_type,
     reason = "MCP tool listing borrows the read guard across cancellation-aware await"
 )]
+#[instrument(level = "trace", skip_all)]
 async fn build_skills_and_plugins(
     sess: &Arc<Session>,
     turn_context: &TurnContext,
@@ -786,6 +765,7 @@ async fn auto_compact_token_status(
     }
 }
 
+#[instrument(level = "trace", skip_all)]
 async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -864,6 +844,11 @@ async fn maybe_run_previous_model_inline_compact(
     Ok(())
 }
 
+#[instrument(
+    level = "trace",
+    skip_all,
+    fields(reason = ?reason, phase = ?phase)
+)]
 async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -972,6 +957,7 @@ pub(super) fn collect_explicit_app_ids_from_skill_items(
     connector_ids
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     router: &ToolRouter,
@@ -1038,14 +1024,12 @@ async fn run_sampling_request(
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
-        let prompt = trace_span!("run_sampling_request.build_prompt").in_scope(|| {
-            build_prompt(
-                prompt_input,
-                router.as_ref(),
-                turn_context.as_ref(),
-                base_instructions.clone(),
-            )
-        });
+        let prompt = build_prompt(
+            prompt_input,
+            router.as_ref(),
+            turn_context.as_ref(),
+            base_instructions.clone(),
+        );
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
@@ -1192,14 +1176,12 @@ pub(crate) async fn built_tools(
     .instrument(trace_span!("built_tools.load_discoverable_tools"))
     .await;
 
-    let mcp_tool_exposure = trace_span!("built_tools.build_mcp_tool_exposure").in_scope(|| {
-        build_mcp_tool_exposure(
-            &all_mcp_tools,
-            connectors.as_deref(),
-            &turn_context.config,
-            search_tool_enabled(turn_context),
-        )
-    });
+    let mcp_tool_exposure = build_mcp_tool_exposure(
+        &all_mcp_tools,
+        connectors.as_deref(),
+        &turn_context.config,
+        search_tool_enabled(turn_context),
+    );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
     Ok(Arc::new(ToolRouter::from_turn_context(
