@@ -516,7 +516,11 @@ def test_cancel_goal_retries_the_server_reported_active_turn(tmp_path) -> None:
 @pytest.mark.parametrize(
     ("error_code", "expected_error", "expected_status"),
     [
-        ("server_error", "goal model failed", ThreadGoalStatus.blocked),
+        (
+            "server_error",
+            "stream disconnected before completion: goal model failed",
+            ThreadGoalStatus.blocked,
+        ),
         (
             "insufficient_quota",
             "Quota exceeded. Check your plan and billing details.",
