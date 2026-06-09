@@ -514,6 +514,7 @@ class CodexClient:
     ) -> None:
         """Persist the terminal status for a failed physical goal turn."""
         self.thread_goal_set(state.thread_id, status=status)
+        self._interrupt_goal_operation(state)
 
     def cancel_goal_operation(self, state: _GoalOperationState) -> None:
         """Best-effort cleanup after a logical goal operation is cancelled."""
@@ -521,6 +522,9 @@ class CodexClient:
             self.pause_goal(state.thread_id)
         except Exception:
             pass
+        self._interrupt_goal_operation(state)
+
+    def _interrupt_goal_operation(self, state: _GoalOperationState) -> None:
         turn_id = state.current_turn()
         if turn_id is None:
             return
