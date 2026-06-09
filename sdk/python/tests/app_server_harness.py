@@ -5,7 +5,7 @@ import queue
 import shutil
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -83,11 +83,25 @@ class CapturedResponsesRequest:
 
 
 @dataclass(frozen=True)
+class SseGate:
+    """Hold an SSE response after its first event has been flushed."""
+
+    ready: threading.Event = field(default_factory=threading.Event)
+    release: threading.Event = field(default_factory=threading.Event)
+
+    def wait_until_ready(self, timeout_s: float = 5.0) -> None:
+        """Wait until the response is active and held before its second event."""
+        if not self.ready.wait(timeout_s):
+            raise AssertionError("SSE response did not reach its gate")
+
+
+@dataclass(frozen=True)
 class MockSseResponse:
     """One queued SSE response served by the mock Responses API."""
 
     body: str
     delay_between_events_s: float = 0.0
+    gate: SseGate | None = None
 
     def chunks(self) -> list[bytes]:
         """Split an SSE body into event chunks while preserving framing."""
@@ -137,12 +151,14 @@ class MockResponsesServer:
         body: str,
         *,
         delay_between_events_s: float = 0.0,
+        gate: SseGate | None = None,
     ) -> None:
-        """Queue one SSE body for the next `/v1/responses` request."""
+        """Queue SSE, optionally holding after its first event until released."""
         self._responses.put(
             MockSseResponse(
                 body=body,
                 delay_between_events_s=delay_between_events_s,
+                gate=gate,
             )
         )
 
@@ -319,9 +335,15 @@ class _ResponsesHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.end_headers()
-        for chunk in response.chunks():
-            self.wfile.write(chunk)
-            self.wfile.flush()
+        for index, chunk in enumerate(response.chunks()):
+            try:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            if index == 0 and response.gate is not None:
+                response.gate.ready.set()
+                response.gate.release.wait()
             if response.delay_between_events_s:
                 time.sleep(response.delay_between_events_s)
 
