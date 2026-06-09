@@ -27,7 +27,7 @@ pub fn create_create_goal_tool() -> ToolSpec {
         (
             "objective".to_string(),
             JsonSchema::string(Some(
-                "Required. The concrete objective to start pursuing. This starts a new active goal only when no goal is currently defined; if a goal already exists, this tool fails."
+                "Required. The concrete objective to start pursuing. This starts a new active goal when no goal exists or replaces the current goal when it is complete."
                     .to_string(),
             )),
         ),
@@ -44,7 +44,7 @@ pub fn create_create_goal_tool() -> ToolSpec {
         name: CREATE_GOAL_TOOL_NAME.to_string(),
         description: format!(
             r#"Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks.
-Set token_budget only when an explicit token budget is requested. Fails if a goal exists; use {UPDATE_GOAL_TOOL_NAME} only for status."#
+Set token_budget only when an explicit token budget is requested. Fails if an unfinished goal exists; use {UPDATE_GOAL_TOOL_NAME} only for status."#
         ),
         strict: false,
         defer_loading: None,

@@ -191,7 +191,7 @@ impl GoalToolExecutor {
             .map_err(|err| FunctionCallError::RespondToModel(format!("failed to create goal: {err}")))?
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(
-                    "cannot create a new goal because this thread already has a goal; use update_goal only when the existing goal is complete"
+                    "cannot create a new goal because this thread has an unfinished goal; complete the existing goal first"
                         .to_string(),
                 )
             })?;

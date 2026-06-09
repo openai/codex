@@ -124,7 +124,7 @@ async fn goal_tools_hidden_for_review_subagents() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn installed_goal_tools_reject_duplicate_goal_creation() -> anyhow::Result<()> {
+async fn installed_goal_tools_only_replace_complete_goal() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -152,10 +152,31 @@ async fn installed_goal_tools_reject_duplicate_goal_creation() -> anyhow::Result
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "cannot create a new goal because this thread already has a goal; use update_goal only when the existing goal is complete"
+            "cannot create a new goal because this thread has an unfinished goal; complete the existing goal first"
                 .to_string()
         )
     );
+
+    let update_tool = tool_by_name(&tools, "update_goal");
+    update_tool
+        .handle(tool_call(
+            "update_goal",
+            "call-complete-goal",
+            json!({ "status": "complete" }),
+        ))
+        .await?;
+
+    let invocation = tool_call(
+        "create_goal",
+        "call-create-goal-3",
+        json!({ "objective": "replacement goal" }),
+    );
+    let output = create_tool.handle(invocation.clone()).await?;
+    let result = output.code_mode_result(&invocation.payload);
+
+    assert_eq!(json!("replacement goal"), result["goal"]["objective"]);
+    assert_eq!(json!("active"), result["goal"]["status"]);
+    assert_eq!(json!(0), result["goal"]["tokensUsed"]);
     Ok(())
 }
 

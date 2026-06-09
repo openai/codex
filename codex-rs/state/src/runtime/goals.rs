@@ -141,7 +141,16 @@ INSERT INTO thread_goals (
     created_at_ms,
     updated_at_ms
 ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
-ON CONFLICT(thread_id) DO NOTHING
+ON CONFLICT(thread_id) DO UPDATE SET
+    goal_id = excluded.goal_id,
+    objective = excluded.objective,
+    status = excluded.status,
+    token_budget = excluded.token_budget,
+    tokens_used = 0,
+    time_used_seconds = 0,
+    created_at_ms = excluded.created_at_ms,
+    updated_at_ms = excluded.updated_at_ms
+WHERE thread_goals.status = 'complete'
 RETURNING
     thread_id,
     goal_id,
