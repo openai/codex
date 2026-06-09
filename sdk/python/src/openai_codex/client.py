@@ -507,6 +507,14 @@ class CodexClient:
         """Pause the active goal used by a logical goal turn."""
         return self.thread_goal_set(thread_id, status=ThreadGoalStatus.paused)
 
+    def finish_failed_goal(
+        self,
+        state: _GoalOperationState,
+        status: ThreadGoalStatus,
+    ) -> None:
+        """Persist the terminal status for a failed physical goal turn."""
+        self.thread_goal_set(state.thread_id, status=status)
+
     def cancel_goal_operation(self, state: _GoalOperationState) -> None:
         """Best-effort cleanup after a logical goal operation is cancelled."""
         try:

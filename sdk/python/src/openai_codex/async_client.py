@@ -228,6 +228,14 @@ class AsyncCodexClient:
         """Pause the active goal through the wrapped sync client."""
         return await self._call_sync(self._sync.pause_goal, thread_id)
 
+    async def finish_failed_goal(
+        self,
+        state: _GoalOperationState,
+        status: ThreadGoalStatus,
+    ) -> None:
+        """Persist the terminal status for a failed physical goal turn."""
+        await self._call_sync(self._sync.finish_failed_goal, state, status)
+
     async def cancel_goal_operation(self, state: _GoalOperationState) -> None:
         """Stop continuation work after a logical goal operation is cancelled."""
         await self._call_sync(self._sync.cancel_goal_operation, state)
