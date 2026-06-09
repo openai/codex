@@ -1998,6 +1998,32 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
+    assert_write_stdin_ctrl_c_interrupts_non_tty_session(
+        "trap",
+        "trap 'echo INT-TRAP; exit 42' INT; echo READY; while true; do sleep 30; done",
+        /*expected_exit_code*/ 42,
+        Some("INT-TRAP"),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_stdin_ctrl_c_default_interrupt_reports_130_for_non_tty_session() -> Result<()> {
+    assert_write_stdin_ctrl_c_interrupts_non_tty_session(
+        "default",
+        "echo READY; exec sleep 30",
+        /*expected_exit_code*/ 130,
+        /*expected_interrupt_output*/ None,
+    )
+    .await
+}
+
+async fn assert_write_stdin_ctrl_c_interrupts_non_tty_session(
+    test_name: &str,
+    command: &str,
+    expected_exit_code: i32,
+    expected_interrupt_output: Option<&str>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_windows!(Ok(()));
@@ -2012,11 +2038,11 @@ async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
     });
     let test = builder.build_with_remote_env(&server).await?;
 
-    let start_call_id = "uexec-non-tty-interrupt-start";
-    let interrupt_call_id = "uexec-non-tty-interrupt";
+    let start_call_id = format!("uexec-non-tty-interrupt-{test_name}-start");
+    let interrupt_call_id = format!("uexec-non-tty-interrupt-{test_name}");
 
     let start_args = serde_json::json!({
-        "cmd": "trap 'echo INT-TRAP; exit 42' INT; echo READY; while true; do sleep 30; done",
+        "cmd": command,
         "yield_time_ms": 250,
         "tty": false,
     });
@@ -2030,7 +2056,7 @@ async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
         sse(vec![
             ev_response_created("resp-1"),
             ev_function_call(
-                start_call_id,
+                &start_call_id,
                 "exec_command",
                 &serde_json::to_string(&start_args)?,
             ),
@@ -2039,7 +2065,7 @@ async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
         sse(vec![
             ev_response_created("resp-2"),
             ev_function_call(
-                interrupt_call_id,
+                &interrupt_call_id,
                 "write_stdin",
                 &serde_json::to_string(&interrupt_args)?,
             ),
@@ -2074,7 +2100,7 @@ async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
     let outputs = collect_tool_outputs(&bodies)?;
 
     let start_output = outputs
-        .get(start_call_id)
+        .get(&start_call_id)
         .expect("missing start output for exec_command");
     assert_eq!(
         start_output.process_id.as_deref(),
@@ -2092,7 +2118,7 @@ async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
     );
 
     let interrupt_output = outputs
-        .get(interrupt_call_id)
+        .get(&interrupt_call_id)
         .expect("missing interrupt output for write_stdin");
     assert!(
         interrupt_output.process_id.is_none(),
@@ -2100,14 +2126,16 @@ async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
     );
     assert_eq!(
         interrupt_output.exit_code,
-        Some(42),
+        Some(expected_exit_code),
         "interrupt should preserve the process-reported exit code"
     );
-    assert!(
-        interrupt_output.output.contains("INT-TRAP"),
-        "interrupt should drain output from the signal handler, got {:?}",
-        interrupt_output.output
-    );
+    if let Some(expected_interrupt_output) = expected_interrupt_output {
+        assert!(
+            interrupt_output.output.contains(expected_interrupt_output),
+            "interrupt should drain output from the signal handler, got {:?}",
+            interrupt_output.output
+        );
+    }
 
     Ok(())
 }

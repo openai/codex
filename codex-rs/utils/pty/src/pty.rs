@@ -35,6 +35,8 @@ use crate::process::PtyHandles;
 use crate::process::PtyMasterHandle;
 use crate::process::SpawnedProcess;
 use crate::process::TerminalSize;
+#[cfg(unix)]
+use crate::process::exit_code_from_status;
 
 /// Returns true when ConPTY support is available (Windows only).
 #[cfg(windows)]
@@ -390,7 +392,7 @@ async fn spawn_process_preserving_fds(
     let wait_exit_code = Arc::clone(&exit_code);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
-            Ok(status) => status.code().unwrap_or(-1),
+            Ok(status) => exit_code_from_status(status),
             Err(_) => -1,
         };
         wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);

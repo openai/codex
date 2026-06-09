@@ -2,6 +2,7 @@ use core::fmt;
 use std::io;
 #[cfg(unix)]
 use std::os::fd::RawFd;
+use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
@@ -29,6 +30,22 @@ pub(crate) fn unsupported_signal(signal: ProcessSignal) -> io::Error {
             "process interrupt is not supported by this process backend",
         ),
     }
+}
+
+pub(crate) fn exit_code_from_status(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+
+    -1
 }
 
 pub(crate) trait ChildTerminator: Send + Sync {

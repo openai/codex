@@ -21,6 +21,7 @@ use crate::process::ChildTerminator;
 use crate::process::ProcessHandle;
 use crate::process::ProcessSignal;
 use crate::process::SpawnedProcess;
+use crate::process::exit_code_from_status;
 
 #[cfg(target_os = "linux")]
 use libc;
@@ -226,7 +227,7 @@ async fn spawn_process_with_stdin_mode(
     let wait_exit_code = Arc::clone(&exit_code);
     let wait_handle: JoinHandle<()> = tokio::spawn(async move {
         let code = match child.wait().await {
-            Ok(status) => status.code().unwrap_or(-1),
+            Ok(status) => exit_code_from_status(status),
             Err(_) => -1,
         };
         wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
