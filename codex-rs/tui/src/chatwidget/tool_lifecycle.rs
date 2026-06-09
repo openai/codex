@@ -144,6 +144,13 @@ impl ChatWidget {
         }
     }
 
+    pub(super) fn on_sub_agent_activity(&mut self, item: ThreadItem) {
+        self.record_visible_turn_activity();
+        if let Some(cell) = multi_agents::sub_agent_activity_history_cell(&item) {
+            self.on_collab_event(cell);
+        }
+    }
+
     pub(crate) fn handle_file_change_completed_now(&mut self, item: ThreadItem) {
         let ThreadItem::FileChange { status, .. } = item else {
             return;

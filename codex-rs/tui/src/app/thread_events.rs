@@ -31,6 +31,12 @@ pub(super) struct FeedbackThreadEvent {
     pub(super) result: Result<String, String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ThreadEventAttachment {
+    Live,
+    ReplayOnly,
+}
+
 #[derive(Debug)]
 pub(super) struct ThreadEventStore {
     pub(super) session: Option<ThreadSessionState>,
@@ -285,6 +291,7 @@ pub(super) struct ThreadEventChannel {
     pub(super) sender: mpsc::Sender<ThreadBufferedEvent>,
     pub(super) receiver: Option<mpsc::Receiver<ThreadBufferedEvent>>,
     pub(super) store: Arc<Mutex<ThreadEventStore>>,
+    attachment: ThreadEventAttachment,
 }
 
 impl ThreadEventChannel {
@@ -294,7 +301,16 @@ impl ThreadEventChannel {
             sender,
             receiver: Some(receiver),
             store: Arc::new(Mutex::new(ThreadEventStore::new(capacity))),
+            attachment: ThreadEventAttachment::Live,
         }
+    }
+
+    pub(super) fn mark_replay_only(&mut self) {
+        self.attachment = ThreadEventAttachment::ReplayOnly;
+    }
+
+    pub(super) fn attachment(&self) -> ThreadEventAttachment {
+        self.attachment
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -310,6 +326,7 @@ impl ThreadEventChannel {
             store: Arc::new(Mutex::new(ThreadEventStore::new_with_session(
                 capacity, session, turns,
             ))),
+            attachment: ThreadEventAttachment::Live,
         }
     }
 }

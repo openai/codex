@@ -178,6 +178,20 @@ pub fn item_event_to_server_notification(
                 completed_at_ms: end_event.completed_at_ms,
             })
         }
+        EventMsg::SubAgentActivity(activity) => {
+            let item = ThreadItem::SubAgentActivity {
+                id: activity.event_id,
+                kind: activity.kind.into(),
+                agent_thread_id: activity.agent_thread_id.to_string(),
+                agent_path: String::from(activity.agent_path),
+            };
+            ServerNotification::ItemCompleted(ItemCompletedNotification {
+                thread_id,
+                turn_id,
+                item,
+                completed_at_ms: activity.occurred_at_ms,
+            })
+        }
         EventMsg::CollabWaitingBegin(begin_event) => {
             let receiver_thread_ids = begin_event
                 .receiver_thread_ids

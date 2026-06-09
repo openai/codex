@@ -896,6 +896,14 @@ impl App {
         &mut self,
         notification: &ServerNotification,
     ) {
+        if let Some(activity) =
+            sub_agent_activity_item(notification).and_then(sub_agent_activity_display)
+        {
+            self.agent_navigation.record_sub_agent_activity(activity);
+            self.sync_active_agent_label();
+            return;
+        }
+
         let Some(receiver_thread_ids) = collab_receiver_thread_ids(notification) else {
             return;
         };

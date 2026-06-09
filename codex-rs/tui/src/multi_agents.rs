@@ -11,6 +11,7 @@ use codex_app_server_protocol::CollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
+use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::ThreadItem;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -35,8 +36,19 @@ pub(crate) struct AgentPickerThreadEntry {
     pub(crate) agent_nickname: Option<String>,
     /// Agent type shown in brackets when present, for example `worker`.
     pub(crate) agent_role: Option<String>,
+    /// Canonical v2 agent path, when the thread was observed through v2 activity.
+    pub(crate) agent_path: Option<String>,
+    /// Whether the latest liveness refresh says the agent thread is actively working.
+    pub(crate) is_running: bool,
     /// Whether the thread has emitted a close event and should render dimmed.
     pub(crate) is_closed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SubAgentActivityDisplay {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) agent_path: String,
+    pub(crate) is_running_hint: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -264,6 +276,56 @@ pub(crate) fn tool_call_history_cell(
                 .map(|receiver_thread_id| close_end(receiver_thread_id, &mut agent_metadata))
         }
     }
+}
+
+pub(crate) fn sub_agent_activity_display(item: &ThreadItem) -> Option<SubAgentActivityDisplay> {
+    let ThreadItem::SubAgentActivity {
+        kind,
+        agent_thread_id,
+        agent_path,
+        ..
+    } = item
+    else {
+        return None;
+    };
+    Some(SubAgentActivityDisplay {
+        thread_id: parse_thread_id(agent_thread_id)?,
+        agent_path: agent_path.clone(),
+        is_running_hint: !matches!(kind, SubAgentActivityKind::Interrupted),
+    })
+}
+
+pub(crate) fn sub_agent_activity_history_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
+    let ThreadItem::SubAgentActivity {
+        kind, agent_path, ..
+    } = item
+    else {
+        return None;
+    };
+    Some(collab_event(
+        sub_agent_activity_title(*kind, agent_path),
+        Vec::new(),
+    ))
+}
+
+pub(crate) fn sub_agent_activity_summary(kind: SubAgentActivityKind, agent_path: &str) -> String {
+    match kind {
+        SubAgentActivityKind::Started => format!("Started `{agent_path}`"),
+        SubAgentActivityKind::Interacted => format!("Interacted with `{agent_path}`"),
+        SubAgentActivityKind::Interrupted => format!("Interrupted `{agent_path}`"),
+    }
+}
+
+fn sub_agent_activity_title(kind: SubAgentActivityKind, agent_path: &str) -> Line<'static> {
+    let (prefix, path) = match kind {
+        SubAgentActivityKind::Started => ("Started ", agent_path),
+        SubAgentActivityKind::Interacted => ("Interacted with ", agent_path),
+        SubAgentActivityKind::Interrupted => ("Interrupted ", agent_path),
+    };
+    title_spans_line(vec![
+        Span::from(prefix).bold(),
+        Span::from(format!("`{path}`")).cyan(),
+    ])
 }
 
 fn spawn_end(
