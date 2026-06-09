@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Iterator
 
 from ._approval_mode import (
     ApprovalMode as ApprovalMode,
     _approval_mode_override_settings,
     _approval_mode_settings,
+)
+from ._goal_handle import (
+    _AsyncGoalTurnHandleAdapter,
+    _GoalTurnHandleAdapter,
 )
 from ._initialize_metadata import validate_initialize_metadata
 from ._inputs import (
@@ -721,9 +725,17 @@ class TurnHandle:
     _client: CodexClient
     thread_id: str
     id: str
+    _goal: _GoalTurnHandleAdapter | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def steer(self, input: RunInput) -> TurnSteerResponse:
         """Send additional input to this active turn."""
+        if self._goal is not None:
+            return self._goal.steer(input)
         return self._client.turn_steer(
             self.thread_id,
             self.id,
@@ -732,10 +744,15 @@ class TurnHandle:
 
     def interrupt(self) -> TurnInterruptResponse:
         """Request interruption of this active turn."""
+        if self._goal is not None:
+            return self._goal.interrupt()
         return self._client.turn_interrupt(self.thread_id, self.id)
 
     def stream(self) -> Iterator[Notification]:
         """Yield only notifications routed to this turn handle."""
+        if self._goal is not None:
+            yield from self._goal.stream()
+            return
         self._client.register_turn_notifications(self.id)
         try:
             while True:
@@ -766,10 +783,18 @@ class AsyncTurnHandle:
     _codex: AsyncCodex
     thread_id: str
     id: str
+    _goal: _AsyncGoalTurnHandleAdapter | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     async def steer(self, input: RunInput) -> TurnSteerResponse:
         """Send additional input to this active turn."""
         await self._codex._ensure_initialized()
+        if self._goal is not None:
+            return await self._goal.steer(input)
         return await self._codex._client.turn_steer(
             self.thread_id,
             self.id,
@@ -779,11 +804,21 @@ class AsyncTurnHandle:
     async def interrupt(self) -> TurnInterruptResponse:
         """Request interruption of this active turn."""
         await self._codex._ensure_initialized()
+        if self._goal is not None:
+            return await self._goal.interrupt()
         return await self._codex._client.turn_interrupt(self.thread_id, self.id)
 
     async def stream(self) -> AsyncIterator[Notification]:
         """Yield only notifications routed to this async turn handle."""
         await self._codex._ensure_initialized()
+        if self._goal is not None:
+            stream = self._goal.stream()
+            try:
+                async for event in stream:
+                    yield event
+            finally:
+                await stream.aclose()
+            return
         self._codex._client.register_turn_notifications(self.id)
         try:
             while True:

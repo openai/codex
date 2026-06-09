@@ -174,7 +174,12 @@ class _GoalOperationState:
         """Adopt a server-reported active id when routed state is still stale."""
         with self._condition:
             if self.current_turn_id in {None, expected}:
-                self.current_turn_id = active
+                if self.completed_turn is not None and self.completed_turn.id == active:
+                    self.current_turn_id = None
+                    if self.cleared or _terminal_goal_status(self.status):
+                        self._finished = True
+                else:
+                    self.current_turn_id = active
                 self._condition.notify_all()
 
     def turn_for_interrupt(self) -> str | None:
