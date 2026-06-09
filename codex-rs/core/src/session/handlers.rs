@@ -55,6 +55,7 @@ use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use serde_json::Value;
 use std::sync::Arc;
+use tokio::sync::OwnedMutexGuard;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -85,7 +86,19 @@ pub async fn user_input_or_turn(
     op: Op,
     client_user_message_id: Option<String>,
 ) {
-    user_input_or_turn_inner(sess, sub_id, op, client_user_message_id).await;
+    user_input_or_turn_inner(
+        sess,
+        sub_id,
+        op,
+        client_user_message_id,
+        UserInputRoute::Default,
+    )
+    .await;
+}
+
+pub(super) enum UserInputRoute {
+    Default,
+    RealtimeHandoff(OwnedMutexGuard<()>),
 }
 
 pub async fn update_thread_settings(
@@ -184,6 +197,7 @@ pub(super) async fn user_input_or_turn_inner(
     sub_id: String,
     op: Op,
     client_user_message_id: Option<String>,
+    route: UserInputRoute,
 ) {
     let Op::UserInput {
         items,
@@ -256,12 +270,25 @@ pub(super) async fn user_input_or_turn_inner(
                     client_id: client_user_message_id,
                 });
             }
-            sess.spawn_task(
-                Arc::clone(&current_context),
-                task_input,
-                crate::tasks::RegularTask::new(),
-            )
-            .await;
+            match route {
+                UserInputRoute::Default => {
+                    sess.spawn_task(
+                        Arc::clone(&current_context),
+                        task_input,
+                        crate::tasks::RegularTask::new(),
+                    )
+                    .await;
+                }
+                UserInputRoute::RealtimeHandoff(handoff_transition) => {
+                    sess.spawn_realtime_task(
+                        Arc::clone(&current_context),
+                        task_input,
+                        crate::tasks::RegularTask::new(),
+                        handoff_transition,
+                    )
+                    .await;
+                }
+            }
         }
         Err(err) => {
             sess.send_event_raw(Event {

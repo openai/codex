@@ -11,11 +11,14 @@ use std::time::Instant;
 use codex_extension_api::ExtensionData;
 use futures::future::BoxFuture;
 use tokio::select;
+use tokio::sync::MutexGuard;
 use tokio::sync::Notify;
+use tokio::sync::OwnedMutexGuard;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 use tracing::Span;
+use tracing::debug;
 use tracing::field;
 use tracing::info_span;
 use tracing::trace;
@@ -68,6 +71,12 @@ pub(crate) enum InterruptedTurnHistoryMarker {
     Disabled,
     ContextualUser,
     Developer,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RealtimeHandoffAfterAbort {
+    Resolve,
+    Preserve,
 }
 
 impl InterruptedTurnHistoryMarker {
@@ -308,9 +317,38 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
-        self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        let realtime_handoff_transition = self.conversation.lock_handoff_transition().await;
+        let task_transition = self.task_transition.lock().await;
+        self.abort_all_tasks_inner(
+            TurnAbortReason::Replaced,
+            RealtimeHandoffAfterAbort::Resolve,
+        )
+        .await;
         self.clear_connector_selection().await;
-        self.start_task(turn_context, input, task).await;
+        self.start_task(turn_context, input, task, &task_transition)
+            .await;
+        drop(task_transition);
+        drop(realtime_handoff_transition);
+    }
+
+    pub(crate) async fn spawn_realtime_task<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<TurnInput>,
+        task: T,
+        handoff_transition: OwnedMutexGuard<()>,
+    ) {
+        let task_transition = self.task_transition.lock().await;
+        self.abort_all_tasks_inner(
+            TurnAbortReason::Replaced,
+            RealtimeHandoffAfterAbort::Preserve,
+        )
+        .await;
+        self.clear_connector_selection().await;
+        self.start_task(turn_context, input, task, &task_transition)
+            .await;
+        drop(task_transition);
+        drop(handoff_transition);
     }
 
     pub(crate) async fn start_task<T: SessionTask>(
@@ -318,6 +356,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
         task: T,
+        _task_transition: &MutexGuard<'_, ()>,
     ) {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -464,6 +503,7 @@ impl Session {
             return;
         }
 
+        let task_transition = self.task_transition.lock().await;
         {
             let mut active_turn = self.active_turn.lock().await;
             if active_turn.is_some() {
@@ -475,11 +515,44 @@ impl Session {
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
-            .await;
+        self.start_task(
+            turn_context,
+            Vec::new(),
+            RegularTask::new(),
+            &task_transition,
+        )
+        .await;
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
+        let realtime_handoff_transition = self.conversation.lock_handoff_transition().await;
+        let task_transition = self.task_transition.lock().await;
+        let aborted_turn = self
+            .abort_all_tasks_inner(reason.clone(), RealtimeHandoffAfterAbort::Resolve)
+            .await;
+        drop(task_transition);
+        drop(realtime_handoff_transition);
+        if reason == TurnAbortReason::Interrupted && aborted_turn {
+            self.maybe_start_turn_for_pending_work().await;
+        }
+    }
+
+    async fn abort_all_tasks_inner(
+        self: &Arc<Self>,
+        reason: TurnAbortReason,
+        realtime_handoff_after_abort: RealtimeHandoffAfterAbort,
+    ) -> bool {
+        if reason == TurnAbortReason::Replaced {
+            let mut active_turn = self.active_turn.lock().await;
+            if active_turn
+                .as_ref()
+                .and_then(|active_turn| active_turn.task.as_ref())
+                .is_none()
+            {
+                active_turn.take();
+                return false;
+            }
+        }
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
@@ -495,6 +568,12 @@ impl Session {
             }
         }
 
+        if aborted_turn
+            && realtime_handoff_after_abort == RealtimeHandoffAfterAbort::Resolve
+            && let Err(err) = self.conversation.finish_turn(None).await
+        {
+            debug!("failed to cancel realtime handoff after abort: {err}");
+        }
         if let Some(turn_context) = turn_context.as_deref() {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
                 .await;
@@ -504,9 +583,7 @@ impl Session {
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             self.input_queue.clear_pending(&active_turn).await;
         }
-        if reason == TurnAbortReason::Interrupted && aborted_turn {
-            self.maybe_start_turn_for_pending_work().await;
-        }
+        aborted_turn
     }
 
     pub(crate) async fn abort_turn_if_active(
@@ -514,6 +591,8 @@ impl Session {
         turn_id: &str,
         reason: TurnAbortReason,
     ) -> bool {
+        let realtime_handoff_transition = self.conversation.lock_handoff_transition().await;
+        let task_transition = self.task_transition.lock().await;
         let active_turn = {
             let mut active = self.active_turn.lock().await;
             if active
@@ -535,6 +614,11 @@ impl Session {
         if let Some(task) = task {
             self.handle_task_abort(task, reason.clone()).await;
         }
+        if turn_context.is_some()
+            && let Err(err) = self.conversation.finish_turn(None).await
+        {
+            debug!("failed to cancel realtime handoff after abort: {err}");
+        }
         if let Some(turn_context) = turn_context.as_deref() {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
                 .await;
@@ -542,6 +626,8 @@ impl Session {
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
         self.input_queue.clear_pending(&active_turn).await;
+        drop(task_transition);
+        drop(realtime_handoff_transition);
 
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;

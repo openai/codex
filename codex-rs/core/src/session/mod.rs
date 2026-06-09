@@ -156,6 +156,7 @@ use rmcp::model::RequestId;
 use rmcp::model::UrlElicitationCapability;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::OwnedMutexGuard;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -1113,7 +1114,11 @@ impl Session {
         format!("auto-compact-{id}")
     }
 
-    pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
+    pub(crate) async fn route_realtime_text_input(
+        self: &Arc<Self>,
+        text: String,
+        handoff_transition: OwnedMutexGuard<()>,
+    ) {
         handlers::user_input_or_turn_inner(
             self,
             self.next_internal_sub_id(),
@@ -1128,6 +1133,7 @@ impl Session {
                 thread_settings: Default::default(),
             },
             /*client_user_message_id*/ None,
+            handlers::UserInputRoute::RealtimeHandoff(handoff_transition),
         )
         .await;
     }

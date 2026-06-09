@@ -53,6 +53,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
+use tokio::sync::OwnedMutexGuard;
 use tokio::task::JoinHandle;
 use tracing::debug;
 use tracing::error;
@@ -69,6 +70,7 @@ pub(crate) const REALTIME_USER_TEXT_PREFIX: &str = "[USER] ";
 pub(crate) const REALTIME_BACKEND_TEXT_PREFIX: &str = "[BACKEND] ";
 const REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
     "Background agent finished. Use the preceding [BACKEND] messages as the result.";
+const REALTIME_V2_HANDOFF_CANCELLED_ACKNOWLEDGEMENT: &str = "Background agent task was cancelled.";
 const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
@@ -100,6 +102,7 @@ enum RealtimeSessionKind {
 struct RealtimeHandoffState {
     terminal_output_tx: Sender<RealtimeTerminalOutput>,
     active_handoff: Arc<Mutex<Option<String>>>,
+    transition: Arc<Mutex<()>>,
     session_kind: RealtimeSessionKind,
 }
 
@@ -112,6 +115,23 @@ enum RealtimeTerminalOutput {
         handoff_id: String,
         output_text: String,
     },
+    Cancelled {
+        handoff_id: String,
+    },
+}
+
+struct RealtimeOutputEvent {
+    event: RealtimeEvent,
+    handoff_transition: Option<OwnedMutexGuard<()>>,
+}
+
+impl From<RealtimeEvent> for RealtimeOutputEvent {
+    fn from(event: RealtimeEvent) -> Self {
+        Self {
+            event,
+            handoff_transition: None,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -130,7 +150,7 @@ impl RealtimeResponseCreateQueue {
     async fn request_create(
         &mut self,
         writer: &RealtimeWebsocketWriter,
-        events_tx: &Sender<RealtimeEvent>,
+        events_tx: &Sender<RealtimeOutputEvent>,
         reason: &str,
     ) -> anyhow::Result<()> {
         if self.active_default_response {
@@ -147,7 +167,7 @@ impl RealtimeResponseCreateQueue {
     async fn mark_finished(
         &mut self,
         writer: &RealtimeWebsocketWriter,
-        events_tx: &Sender<RealtimeEvent>,
+        events_tx: &Sender<RealtimeOutputEvent>,
         reason: &str,
     ) -> anyhow::Result<()> {
         self.active_default_response = false;
@@ -161,7 +181,7 @@ impl RealtimeResponseCreateQueue {
     async fn send_create_now(
         &mut self,
         writer: &RealtimeWebsocketWriter,
-        events_tx: &Sender<RealtimeEvent>,
+        events_tx: &Sender<RealtimeOutputEvent>,
         reason: &str,
     ) -> anyhow::Result<()> {
         if let Err(err) = writer.send_response_create().await {
@@ -174,7 +194,9 @@ impl RealtimeResponseCreateQueue {
                 return Ok(());
             }
             warn!("failed to send {reason} response.create: {mapped_error}");
-            let _ = events_tx.send(RealtimeEvent::Error(error_message)).await;
+            let _ = events_tx
+                .send(RealtimeEvent::Error(error_message).into())
+                .await;
             return Err(mapped_error.into());
         }
         self.active_default_response = true;
@@ -188,7 +210,7 @@ struct RealtimeInputTask {
     user_text_rx: Receiver<String>,
     terminal_output_rx: Receiver<RealtimeTerminalOutput>,
     audio_rx: Receiver<RealtimeAudioFrame>,
-    events_tx: Sender<RealtimeEvent>,
+    events_tx: Sender<RealtimeOutputEvent>,
     handoff_state: RealtimeHandoffState,
     session_kind: RealtimeSessionKind,
     event_parser: RealtimeEventParser,
@@ -208,6 +230,7 @@ impl RealtimeHandoffState {
         Self {
             terminal_output_tx,
             active_handoff: Arc::new(Mutex::new(None)),
+            transition: Arc::new(Mutex::new(())),
             session_kind,
         }
     }
@@ -217,9 +240,8 @@ impl RealtimeHandoffState {
         output_text: Option<String>,
     ) -> Option<RealtimeTerminalOutput> {
         let handoff_id = self.active_handoff.lock().await.take();
-        let output_text = output_text?;
-        match handoff_id {
-            Some(handoff_id) => Some(RealtimeTerminalOutput::Handoff {
+        match (handoff_id, output_text) {
+            (Some(handoff_id), Some(output_text)) => Some(RealtimeTerminalOutput::Handoff {
                 handoff_id,
                 output_text: prefix_realtime_text(
                     output_text,
@@ -227,7 +249,23 @@ impl RealtimeHandoffState {
                     self.session_kind,
                 ),
             }),
-            None => Some(RealtimeTerminalOutput::Direct { output_text }),
+            (None, Some(output_text)) => Some(RealtimeTerminalOutput::Direct { output_text }),
+            (Some(handoff_id), None) if self.session_kind == RealtimeSessionKind::V2 => {
+                Some(RealtimeTerminalOutput::Cancelled { handoff_id })
+            }
+            _ => None,
+        }
+    }
+
+    async fn lock_transition_for_event(
+        &self,
+        event: &RealtimeEvent,
+    ) -> Option<OwnedMutexGuard<()>> {
+        match event {
+            RealtimeEvent::HandoffRequested(_) => {
+                Some(Arc::clone(&self.transition).lock_owned().await)
+            }
+            _ => None,
         }
     }
 }
@@ -253,7 +291,7 @@ struct RealtimeStart {
 
 struct RealtimeStartOutput {
     realtime_active: Arc<AtomicBool>,
-    events_rx: Receiver<RealtimeEvent>,
+    events_rx: Receiver<RealtimeOutputEvent>,
     sdp: Option<String>,
 }
 
@@ -315,7 +353,7 @@ impl RealtimeConversationManager {
         let (terminal_output_tx, terminal_output_rx) =
             async_channel::bounded::<RealtimeTerminalOutput>(TERMINAL_OUTPUT_QUEUE_CAPACITY);
         let (events_tx, events_rx) =
-            async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
+            async_channel::bounded::<RealtimeOutputEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
         let realtime_active = Arc::new(AtomicBool::new(true));
         let handoff = RealtimeHandoffState::new(terminal_output_tx, session_kind);
@@ -486,6 +524,16 @@ impl RealtimeConversationManager {
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         Ok(())
+    }
+
+    pub(crate) async fn lock_handoff_transition(&self) -> Option<OwnedMutexGuard<()>> {
+        let transition = {
+            let guard = self.state.lock().await;
+            guard
+                .as_ref()
+                .map(|state| Arc::clone(&state.handoff.transition))
+        }?;
+        Some(transition.lock_owned().await)
     }
 
     pub(crate) async fn shutdown(&self) -> CodexResult<()> {
@@ -782,7 +830,11 @@ async fn handle_start_inner(
             msg,
         };
         let mut end = RealtimeConversationEnd::TransportClosed;
-        while let Ok(event) = events_rx.recv().await {
+        while let Ok(output_event) = events_rx.recv().await {
+            let RealtimeOutputEvent {
+                event,
+                handoff_transition,
+            } = output_event;
             if !fanout_realtime_active.load(Ordering::Relaxed) {
                 break;
             }
@@ -804,10 +856,13 @@ async fn handle_start_inner(
                 }
                 _ => None,
             };
-            if let Some(text) = maybe_routed_text {
+            if let (Some(text), Some(handoff_transition)) = (maybe_routed_text, handoff_transition)
+            {
                 debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
-                sess_for_routed_text.route_realtime_text_input(text).await;
+                sess_for_routed_text
+                    .route_realtime_text_input(text, handoff_transition)
+                    .await;
             }
             if !fanout_realtime_active.load(Ordering::Relaxed) {
                 break;
@@ -984,7 +1039,7 @@ struct RealtimeWebrtcSidebandInputTask {
     call_id: String,
     sideband_headers: HeaderMap,
     input_channels: RealtimeInputChannels,
-    events_tx: Sender<RealtimeEvent>,
+    events_tx: Sender<RealtimeOutputEvent>,
     handoff_state: RealtimeHandoffState,
     session_kind: RealtimeSessionKind,
     event_parser: RealtimeEventParser,
@@ -1025,7 +1080,7 @@ fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> J
                     let mapped_error = map_api_error(err);
                     warn!("failed to connect realtime sideband: {mapped_error}");
                     let _ = events_tx
-                        .send(RealtimeEvent::Error(mapped_error.to_string()))
+                        .send(RealtimeEvent::Error(mapped_error.to_string()).into())
                         .await;
                 }
                 return;
@@ -1117,7 +1172,7 @@ async fn run_realtime_input_task(input: RealtimeInputTask) {
 async fn handle_user_text_input(
     text: Result<String, RecvError>,
     writer: &RealtimeWebsocketWriter,
-    events_tx: &Sender<RealtimeEvent>,
+    events_tx: &Sender<RealtimeOutputEvent>,
 ) -> anyhow::Result<()> {
     let text = text.context("user text input channel closed")?;
 
@@ -1125,7 +1180,7 @@ async fn handle_user_text_input(
         let mapped_error = map_api_error(err);
         warn!("failed to send input text: {mapped_error}");
         let _ = events_tx
-            .send(RealtimeEvent::Error(mapped_error.to_string()))
+            .send(RealtimeEvent::Error(mapped_error.to_string()).into())
             .await;
         return Err(mapped_error.into());
     }
@@ -1135,7 +1190,7 @@ async fn handle_user_text_input(
 async fn handle_terminal_output(
     terminal_output: Result<RealtimeTerminalOutput, RecvError>,
     writer: &RealtimeWebsocketWriter,
-    events_tx: &Sender<RealtimeEvent>,
+    events_tx: &Sender<RealtimeOutputEvent>,
     event_parser: RealtimeEventParser,
     response_create_queue: &mut RealtimeResponseCreateQueue,
 ) -> anyhow::Result<()> {
@@ -1172,12 +1227,21 @@ async fn handle_terminal_output(
                 true,
             ),
         },
+        RealtimeTerminalOutput::Cancelled { handoff_id } => (
+            writer
+                .send_conversation_function_call_output(
+                    handoff_id,
+                    REALTIME_V2_HANDOFF_CANCELLED_ACKNOWLEDGEMENT.to_string(),
+                )
+                .await,
+            true,
+        ),
     };
     if let Err(err) = result {
         let mapped_error = map_api_error(err);
         warn!("failed to send terminal output: {mapped_error}");
         let _ = events_tx
-            .send(RealtimeEvent::Error(mapped_error.to_string()))
+            .send(RealtimeEvent::Error(mapped_error.to_string()).into())
             .await;
         return Err(mapped_error.into());
     }
@@ -1193,7 +1257,7 @@ async fn handle_terminal_output(
 async fn handle_realtime_server_event(
     event: Result<Option<RealtimeEvent>, ApiError>,
     writer: &RealtimeWebsocketWriter,
-    events_tx: &Sender<RealtimeEvent>,
+    events_tx: &Sender<RealtimeOutputEvent>,
     handoff_state: &RealtimeHandoffState,
     session_kind: RealtimeSessionKind,
     output_audio_state: &mut Option<OutputAudioState>,
@@ -1205,7 +1269,7 @@ async fn handle_realtime_server_event(
         Err(err) => {
             let mapped_error = map_api_error(err);
             if events_tx
-                .send(RealtimeEvent::Error(mapped_error.to_string()))
+                .send(RealtimeEvent::Error(mapped_error.to_string()).into())
                 .await
                 .is_err()
             {
@@ -1215,6 +1279,7 @@ async fn handle_realtime_server_event(
             return Err(mapped_error.into());
         }
     };
+    let handoff_transition = handoff_state.lock_transition_for_event(&event).await;
 
     let should_stop = match &event {
         RealtimeEvent::AudioOut(frame) => {
@@ -1288,7 +1353,7 @@ async fn handle_realtime_server_event(
                                     "failed to send handoff steering acknowledgement: {mapped_error}"
                                 );
                                 let _ = events_tx
-                                    .send(RealtimeEvent::Error(mapped_error.to_string()))
+                                    .send(RealtimeEvent::Error(mapped_error.to_string()).into())
                                     .await;
                                 return Err(mapped_error.into());
                             }
@@ -1318,7 +1383,7 @@ async fn handle_realtime_server_event(
                         let mapped_error = map_api_error(err);
                         warn!("failed to send realtime noop function output: {mapped_error}");
                         let _ = events_tx
-                            .send(RealtimeEvent::Error(mapped_error.to_string()))
+                            .send(RealtimeEvent::Error(mapped_error.to_string()).into())
                             .await;
                         return Err(mapped_error.into());
                     }
@@ -1342,7 +1407,14 @@ async fn handle_realtime_server_event(
         | RealtimeEvent::ConversationItemDone { .. } => false,
     };
 
-    if events_tx.send(event).await.is_err() {
+    if events_tx
+        .send(RealtimeOutputEvent {
+            event,
+            handoff_transition,
+        })
+        .await
+        .is_err()
+    {
         anyhow::bail!("realtime output event channel closed");
     }
     if should_stop {
@@ -1355,7 +1427,7 @@ async fn handle_realtime_server_event(
 async fn handle_user_audio_input(
     frame: Result<RealtimeAudioFrame, RecvError>,
     writer: &RealtimeWebsocketWriter,
-    events_tx: &Sender<RealtimeEvent>,
+    events_tx: &Sender<RealtimeOutputEvent>,
 ) -> anyhow::Result<()> {
     let frame = frame.context("user audio input channel closed")?;
 
@@ -1363,7 +1435,7 @@ async fn handle_user_audio_input(
         let mapped_error = map_api_error(err);
         error!("failed to send input audio: {mapped_error}");
         let _ = events_tx
-            .send(RealtimeEvent::Error(mapped_error.to_string()))
+            .send(RealtimeEvent::Error(mapped_error.to_string()).into())
             .await;
         return Err(mapped_error.into());
     }

@@ -36,6 +36,7 @@ use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -81,6 +82,7 @@ const V2_STEERING_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
 const V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
     "Background agent finished. Use the preceding [BACKEND] messages as the result.";
+const V2_HANDOFF_CANCELLED_ACKNOWLEDGEMENT: &str = "Background agent task was cancelled.";
 
 #[derive(Debug, Clone, Copy)]
 enum StartupContextConfig<'a> {
@@ -1430,6 +1432,174 @@ async fn webrtc_terminal_output_without_handoff_reaches_realtime() -> Result<()>
                     .sideband_outbound_request(/*request_index*/ 2 + turn_index * 2)
                     .await,
             );
+        }
+
+        harness.shutdown().await;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn webrtc_handoff_during_abort_starts_after_old_handoff_is_cancelled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    #[cfg(windows)]
+    let long_running_command = vec![
+        "powershell.exe".to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        "Start-Sleep -Seconds 60".to_string(),
+    ];
+    #[cfg(not(windows))]
+    let long_running_command = vec!["sleep".to_string(), "60".to_string()];
+
+    for version in [RealtimeTestVersion::V1, RealtimeTestVersion::V2] {
+        let first_handoff_events = match version {
+            RealtimeTestVersion::V1 => vec![
+                session_updated("sess_aborted_handoff"),
+                json!({
+                    "type": "conversation.input_transcript.delta",
+                    "delta": "start a long task"
+                }),
+                json!({
+                    "type": "conversation.handoff.requested",
+                    "handoff_id": "stale_handoff",
+                    "item_id": "item_stale_handoff",
+                    "input_transcript": "start a long task"
+                }),
+            ],
+            RealtimeTestVersion::V2 => vec![
+                session_updated("sess_aborted_handoff"),
+                v2_background_agent_tool_call("stale_handoff", "start a long task"),
+            ],
+        };
+        let second_handoff_events = match version {
+            RealtimeTestVersion::V1 => vec![
+                json!({
+                    "type": "conversation.input_transcript.delta",
+                    "delta": "start the replacement task"
+                }),
+                json!({
+                    "type": "conversation.handoff.requested",
+                    "handoff_id": "replacement_handoff",
+                    "item_id": "item_replacement_handoff",
+                    "input_transcript": "start the replacement task"
+                }),
+            ],
+            RealtimeTestVersion::V2 => vec![v2_background_agent_tool_call(
+                "replacement_handoff",
+                "start the replacement task",
+            )],
+        };
+        let mut harness = RealtimeE2eHarness::new_with_sandbox(
+            version,
+            main_loop_responses(vec![
+                create_shell_command_sse_response(
+                    long_running_command.clone(),
+                    /*workdir*/ None,
+                    /*timeout_ms*/ Some(60_000),
+                    "call_abort",
+                )?,
+                create_final_assistant_message_sse_response("direct result after abort")?,
+            ]),
+            realtime_sideband(vec![realtime_sideband_connection(vec![
+                first_handoff_events,
+                second_handoff_events,
+                vec![],
+                vec![json!({
+                    "type": "response.done",
+                    "response": { "id": "abort_response" }
+                })],
+                vec![],
+                vec![],
+                vec![],
+            ])]),
+            RealtimeTestSandbox::DangerFullAccess,
+        )
+        .await?;
+
+        let _ = harness.start_webrtc_realtime("v=offer\r\n").await?;
+        let delegated_turn = harness
+            .read_notification::<TurnStartedNotification>("turn/started")
+            .await?;
+        let started_command = wait_for_started_command_execution(&mut harness.mcp).await?;
+        let ThreadItem::CommandExecution { id, status, .. } = started_command.item else {
+            unreachable!("helper returns command execution items");
+        };
+        assert_eq!(
+            (id.as_str(), status),
+            ("call_abort", CommandExecutionStatus::InProgress)
+        );
+
+        let interrupt_request_id = harness
+            .mcp
+            .send_turn_interrupt_request(TurnInterruptParams {
+                thread_id: harness.thread_id.clone(),
+                turn_id: delegated_turn.turn.id.clone(),
+            })
+            .await?;
+        let _ = wait_for_completed_command_execution(&mut harness.mcp).await?;
+
+        harness
+            .append_text(harness.thread_id.clone(), "inject replacement handoff")
+            .await?;
+        let injected_during_abort = harness.sideband_outbound_request(/*request_index*/ 1).await;
+        assert_eq!(injected_during_abort["item"]["role"], "user");
+
+        let _: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            harness
+                .mcp
+                .read_stream_until_response_message(RequestId::Integer(interrupt_request_id)),
+        )
+        .await??;
+        let aborted_turn = harness
+            .read_notification::<TurnCompletedNotification>("turn/completed")
+            .await?;
+        assert_eq!(aborted_turn.turn.id, delegated_turn.turn.id);
+        let replacement_turn = harness
+            .read_notification::<TurnStartedNotification>("turn/started")
+            .await?;
+        assert_ne!(replacement_turn.turn.id, delegated_turn.turn.id);
+        let completed_replacement_turn = harness
+            .read_notification::<TurnCompletedNotification>("turn/completed")
+            .await?;
+        assert_eq!(completed_replacement_turn.turn.id, replacement_turn.turn.id);
+
+        match version {
+            RealtimeTestVersion::V1 => {
+                assert_eq!(
+                    harness.sideband_outbound_request(/*request_index*/ 2).await,
+                    json!({
+                        "type": "conversation.handoff.append",
+                        "handoff_id": "replacement_handoff",
+                        "output_text": "direct result after abort",
+                    })
+                );
+            }
+            RealtimeTestVersion::V2 => {
+                assert_v2_function_call_output(
+                    &harness.sideband_outbound_request(/*request_index*/ 2).await,
+                    "stale_handoff",
+                    V2_HANDOFF_CANCELLED_ACKNOWLEDGEMENT,
+                );
+                assert_v2_response_create(
+                    &harness.sideband_outbound_request(/*request_index*/ 3).await,
+                );
+                assert_v2_terminal_output(
+                    &harness.sideband_outbound_request(/*request_index*/ 4).await,
+                    "direct result after abort",
+                );
+                assert_v2_function_call_output(
+                    &harness.sideband_outbound_request(/*request_index*/ 5).await,
+                    "replacement_handoff",
+                    V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+                );
+                assert_v2_response_create(
+                    &harness.sideband_outbound_request(/*request_index*/ 6).await,
+                );
+            }
         }
 
         harness.shutdown().await;

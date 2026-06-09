@@ -182,14 +182,25 @@ async fn terminal_output_without_handoff_stays_plain() {
 }
 
 #[tokio::test]
-async fn terminal_output_without_message_still_consumes_handoff() {
-    for session_kind in [RealtimeSessionKind::V1, RealtimeSessionKind::V2] {
+async fn aborted_terminal_output_only_resolves_v2_handoff() {
+    for (session_kind, expected_output) in [
+        (RealtimeSessionKind::V1, None),
+        (
+            RealtimeSessionKind::V2,
+            Some(RealtimeTerminalOutput::Cancelled {
+                handoff_id: "handoff_1".to_string(),
+            }),
+        ),
+    ] {
         let (tx, _rx) = bounded(1);
         let state = RealtimeHandoffState::new(tx, session_kind);
 
         *state.active_handoff.lock().await = Some("handoff_1".to_string());
 
-        assert_eq!(state.take_terminal_output(/*output_text*/ None).await, None);
+        assert_eq!(
+            state.take_terminal_output(/*output_text*/ None).await,
+            expected_output
+        );
         assert_eq!(state.active_handoff.lock().await.clone(), None);
     }
 }
