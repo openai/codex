@@ -61,7 +61,6 @@ pub use runtime::RuntimeDbBackup;
 pub use runtime::RuntimeDbPath;
 pub use runtime::ThreadFilterOptions;
 pub use runtime::backup_runtime_db_for_fresh_start;
-pub use runtime::backup_runtime_dbs_for_fresh_start;
 pub use runtime::goals_db_filename;
 pub use runtime::goals_db_path;
 pub use runtime::is_sqlite_corruption_error;

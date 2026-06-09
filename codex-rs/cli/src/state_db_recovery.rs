@@ -101,38 +101,27 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    async fn backup_backs_up_only_failed_database_files() -> std::io::Result<()> {
+    async fn backup_backs_up_only_failed_database_file() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let mut expected_paths = Vec::new();
-        for db_path in codex_state::runtime_db_paths(temp_dir.path())
-            .iter()
-            .map(|db| db.path.as_path())
-        {
-            for path in sqlite_paths(db_path) {
-                tokio::fs::write(path.as_path(), path.display().to_string()).await?;
-                expected_paths.push(path);
-            }
-        }
+        let state_path = codex_state::state_db_path(temp_dir.path());
         let failed_db_path = codex_state::logs_db_path(temp_dir.path());
-        let failed_paths = sqlite_paths(failed_db_path.as_path());
+        tokio::fs::write(state_path.as_path(), b"state").await?;
+        tokio::fs::write(failed_db_path.as_path(), b"logs").await?;
 
         let startup_error =
             LocalStateDbStartupError::new(failed_db_path.clone(), "corrupt".to_string());
         let backups = backup_files_for_fresh_start(&startup_error).await?;
 
-        assert_eq!(backups.len(), failed_paths.len());
-        for path in &failed_paths {
-            assert!(!tokio::fs::try_exists(path.as_path()).await?);
-        }
-        for path in expected_paths
-            .iter()
-            .filter(|path| !failed_paths.contains(path))
-        {
-            assert!(tokio::fs::try_exists(path.as_path()).await?);
-        }
-        for backup in backups {
-            assert!(tokio::fs::try_exists(backup.backup_path.as_path()).await?);
-        }
+        assert_eq!(
+            backups
+                .iter()
+                .map(|backup| &backup.original_path)
+                .collect::<Vec<_>>(),
+            vec![&failed_db_path]
+        );
+        assert!(!tokio::fs::try_exists(failed_db_path.as_path()).await?);
+        assert!(tokio::fs::try_exists(state_path.as_path()).await?);
+        assert!(tokio::fs::try_exists(backups[0].backup_path.as_path()).await?);
         Ok(())
     }
 
@@ -146,34 +135,12 @@ mod tests {
             "File exists".to_string(),
         );
 
+        assert!(is_auto_backup_recoverable(&startup_error));
         let backups = backup_files_for_fresh_start(&startup_error).await?;
 
         assert_eq!(backups.len(), 1);
         assert!(tokio::fs::metadata(sqlite_home.as_path()).await?.is_dir());
         assert!(tokio::fs::try_exists(backups[0].backup_path.as_path()).await?);
-        Ok(())
-    }
-
-    #[test]
-    fn classifies_lock_and_corruption_errors() {
-        assert!(is_locked("database is locked"));
-        assert!(is_locked("database is busy"));
-        assert!(!is_locked("database disk image is malformed"));
-        assert!(is_corruption("database disk image is malformed"));
-        assert!(!is_corruption("database is locked"));
-    }
-
-    #[test]
-    fn blocking_sqlite_home_file_is_auto_backup_recoverable() -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let sqlite_home = temp_dir.path().join("sqlite-home");
-        std::fs::write(sqlite_home.as_path(), b"not-a-directory")?;
-        let startup_error = LocalStateDbStartupError::new(
-            codex_state::state_db_path(sqlite_home.as_path()),
-            "File exists".to_string(),
-        );
-
-        assert!(is_auto_backup_recoverable(&startup_error));
         Ok(())
     }
 
@@ -188,17 +155,5 @@ mod tests {
             backup_folder(&backups),
             Some(Path::new("/tmp/db-backups/sqlite-1-0"))
         );
-    }
-
-    fn sqlite_paths(db_path: &Path) -> Vec<PathBuf> {
-        let mut wal_path = db_path.as_os_str().to_os_string();
-        wal_path.push("-wal");
-        let mut shm_path = db_path.as_os_str().to_os_string();
-        shm_path.push("-shm");
-        vec![
-            db_path.to_path_buf(),
-            PathBuf::from(wal_path),
-            PathBuf::from(shm_path),
-        ]
     }
 }

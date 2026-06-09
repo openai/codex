@@ -5,7 +5,6 @@
 //! moves only that database file and its sidecars into a backup folder so the
 //! other databases keep their data.
 
-use super::RUNTIME_DBS;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -91,27 +90,6 @@ pub async fn backup_runtime_db_for_fresh_start(
     }
 }
 
-/// Move every Codex runtime SQLite file out of the way.
-///
-/// This is intended for explicit full-reset flows. Automatic corruption
-/// recovery should use [`backup_runtime_db_for_fresh_start`] so unrelated
-/// runtime databases are preserved.
-pub async fn backup_runtime_dbs_for_fresh_start(
-    sqlite_home: &Path,
-) -> std::io::Result<Vec<RuntimeDbBackup>> {
-    match tokio::fs::metadata(sqlite_home).await {
-        Ok(metadata) if metadata.is_dir() => backup_all_runtime_db_files(sqlite_home).await,
-        Ok(_) => backup_blocking_sqlite_home(sqlite_home).await,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            tokio::fs::create_dir_all(sqlite_home).await?;
-            Err(std::io::Error::other(
-                "no Codex runtime database files were found to back up",
-            ))
-        }
-        Err(err) => Err(err),
-    }
-}
-
 pub fn runtime_db_path_for_corruption_error(err: &anyhow::Error) -> Option<PathBuf> {
     if !is_sqlite_corruption_error(err) {
         return None;
@@ -153,14 +131,6 @@ async fn backup_runtime_db_files(db_path: &Path) -> std::io::Result<Vec<RuntimeD
         ))
     })?;
     backup_sqlite_paths(sqlite_home, sqlite_paths(db_path)).await
-}
-
-async fn backup_all_runtime_db_files(sqlite_home: &Path) -> std::io::Result<Vec<RuntimeDbBackup>> {
-    let paths = RUNTIME_DBS
-        .iter()
-        .map(|spec| spec.path(sqlite_home))
-        .flat_map(|path| sqlite_paths(path.as_path()));
-    backup_sqlite_paths(sqlite_home, paths).await
 }
 
 async fn backup_sqlite_paths(
@@ -251,130 +221,5 @@ fn file_name(path: &Path) -> std::io::Result<&std::ffi::OsStr> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runtime::test_support::unique_temp_dir;
-    use pretty_assertions::assert_eq;
-
-    #[tokio::test]
-    async fn backup_moves_only_requested_runtime_db_files_to_backup_folder() -> std::io::Result<()>
-    {
-        let sqlite_home = unique_temp_dir();
-        tokio::fs::create_dir_all(sqlite_home.as_path()).await?;
-        let runtime_paths = super::super::runtime_db_paths(sqlite_home.as_path());
-        let mut expected_paths = Vec::new();
-        for db_path in runtime_paths.iter().map(|db| db.path.as_path()) {
-            for path in sqlite_paths(db_path) {
-                tokio::fs::write(path.as_path(), path.display().to_string()).await?;
-                expected_paths.push(path);
-            }
-        }
-        let failed_db_path = super::super::logs_db_path(sqlite_home.as_path());
-        let failed_paths = sqlite_paths(failed_db_path.as_path());
-
-        let backups = backup_runtime_db_for_fresh_start(failed_db_path.as_path()).await?;
-
-        assert_eq!(backups.len(), failed_paths.len());
-        for path in &failed_paths {
-            assert!(!tokio::fs::try_exists(path.as_path()).await?);
-        }
-        for path in expected_paths
-            .iter()
-            .filter(|path| !failed_paths.contains(path))
-        {
-            assert!(tokio::fs::try_exists(path.as_path()).await?);
-        }
-        for backup in backups {
-            assert!(
-                backup
-                    .backup_path
-                    .starts_with(sqlite_home.join(BACKUP_DIR_NAME))
-            );
-            assert!(tokio::fs::try_exists(backup.backup_path.as_path()).await?);
-        }
-        let _ = tokio::fs::remove_dir_all(sqlite_home).await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn backup_all_runtime_db_files_to_backup_folder() -> std::io::Result<()> {
-        let sqlite_home = unique_temp_dir();
-        tokio::fs::create_dir_all(sqlite_home.as_path()).await?;
-        let runtime_paths = super::super::runtime_db_paths(sqlite_home.as_path());
-        let mut expected_paths = Vec::new();
-        for db_path in runtime_paths.iter().map(|db| db.path.as_path()) {
-            for path in sqlite_paths(db_path) {
-                tokio::fs::write(path.as_path(), path.display().to_string()).await?;
-                expected_paths.push(path);
-            }
-        }
-
-        let backups = backup_runtime_dbs_for_fresh_start(sqlite_home.as_path()).await?;
-
-        assert_eq!(backups.len(), expected_paths.len());
-        for path in &expected_paths {
-            assert!(!tokio::fs::try_exists(path.as_path()).await?);
-        }
-        for backup in backups {
-            assert!(
-                backup
-                    .backup_path
-                    .starts_with(sqlite_home.join(BACKUP_DIR_NAME))
-            );
-            assert!(tokio::fs::try_exists(backup.backup_path.as_path()).await?);
-        }
-        let _ = tokio::fs::remove_dir_all(sqlite_home).await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn backup_replaces_blocking_sqlite_home_file() -> std::io::Result<()> {
-        let temp_dir = unique_temp_dir();
-        tokio::fs::create_dir_all(temp_dir.as_path()).await?;
-        let sqlite_home = temp_dir.join("sqlite-home");
-        tokio::fs::write(sqlite_home.as_path(), b"not-a-directory").await?;
-
-        let backups = backup_runtime_dbs_for_fresh_start(sqlite_home.as_path()).await?;
-
-        assert_eq!(backups.len(), 1);
-        assert!(tokio::fs::metadata(sqlite_home.as_path()).await?.is_dir());
-        assert!(
-            backups[0]
-                .backup_path
-                .starts_with(temp_dir.join(format!("sqlite-home.{BACKUP_DIR_NAME}")))
-        );
-        assert!(tokio::fs::try_exists(backups[0].backup_path.as_path()).await?);
-        let _ = tokio::fs::remove_dir_all(temp_dir).await;
-        Ok(())
-    }
-
-    #[test]
-    fn sqlite_error_detail_classifies_corruption_and_lock_errors() {
-        assert!(sqlite_error_detail_is_corruption(
-            "database disk image is malformed"
-        ));
-        assert!(sqlite_error_detail_is_corruption("file is not a database"));
-        assert!(sqlite_error_detail_is_corruption(
-            "error returned from database: (code: 11) database disk image is malformed"
-        ));
-        assert!(!sqlite_error_detail_is_corruption("database is locked"));
-        assert!(sqlite_error_detail_is_lock("database is locked"));
-        assert!(sqlite_error_detail_is_lock("database is busy"));
-        assert!(!sqlite_error_detail_is_lock(
-            "database disk image is malformed"
-        ));
-    }
-
-    #[test]
-    fn runtime_db_path_for_corruption_error_returns_failed_database_path() {
-        let path = PathBuf::from("/tmp/logs_2.sqlite");
-        let err = anyhow::Error::new(RuntimeDbInitError::new(
-            "log DB",
-            "open",
-            path.as_path(),
-            anyhow::anyhow!("database disk image is malformed"),
-        ));
-
-        assert_eq!(runtime_db_path_for_corruption_error(&err), Some(path));
-    }
-}
+#[path = "recovery_tests.rs"]
+mod tests;
