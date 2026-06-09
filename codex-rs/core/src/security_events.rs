@@ -45,7 +45,12 @@ impl SandboxViolationAuditContext {
             .auth_mode()
             .map(|mode| mode.to_string());
         let metadata = NetworkProxyAuditMetadata {
-            conversation_id: Some(ctx.session.conversation_id.to_string()),
+            conversation_id: ctx
+                .session
+                .services
+                .network_proxy_audit_metadata
+                .conversation_id
+                .clone(),
             app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             user_account_id: auth.as_ref().and_then(CodexAuth::get_account_id),
             auth_mode,
@@ -116,6 +121,7 @@ fn security_event_create_params(
             port: None,
             protocol: None,
             method: None,
+            network_mode: None,
             decision: None,
             source: None,
             review_id: None,
@@ -138,6 +144,7 @@ fn security_event_create_params(
             port: violation.port,
             protocol: Some(violation.protocol.clone()),
             method: violation.method.clone(),
+            network_mode: violation.mode.map(|mode| mode.as_str().to_string()),
             decision: violation.decision.clone(),
             source: violation.source.clone(),
             review_id: None,
@@ -184,6 +191,7 @@ fn emit_sandbox_violation_audit_event(
         server.port = fields.port,
         network.transport.protocol = fields.protocol,
         http.request.method = fields.method,
+        network.mode = fields.network_mode,
         network.policy.decision = fields.decision,
         network.policy.source = fields.source,
     );
@@ -198,6 +206,7 @@ struct SandboxViolationAuditFields<'a> {
     port: Option<i64>,
     protocol: Option<&'a str>,
     method: Option<&'a str>,
+    network_mode: Option<&'a str>,
     decision: Option<&'a str>,
     source: Option<&'a str>,
 }
@@ -214,6 +223,7 @@ impl<'a> SandboxViolationAuditFields<'a> {
                 port: None,
                 protocol: None,
                 method: None,
+                network_mode: None,
                 decision: None,
                 source: None,
             },
@@ -226,6 +236,7 @@ impl<'a> SandboxViolationAuditFields<'a> {
                 port: violation.port.map(i64::from),
                 protocol: Some(violation.protocol.as_str()),
                 method: violation.method.as_deref(),
+                network_mode: violation.mode.map(codex_network_proxy::NetworkMode::as_str),
                 decision: violation.decision.as_deref(),
                 source: violation.source.as_deref(),
             },
