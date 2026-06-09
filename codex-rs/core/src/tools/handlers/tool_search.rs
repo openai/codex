@@ -4,7 +4,9 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
+use crate::tools::lazy_mcp;
 use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::LateToolRegistry;
 use crate::tools::registry::ToolExecutor;
 use bm25::Document;
 use bm25::Language;
@@ -24,10 +26,19 @@ pub struct ToolSearchHandler {
     entries: Vec<ToolSearchEntry>,
     search_source_infos: Vec<ToolSearchSourceInfo>,
     search_engine: SearchEngine<usize>,
+    late_mcp_tools: Option<LateToolRegistry>,
 }
 
 impl ToolSearchHandler {
+    #[cfg(test)]
     pub(crate) fn new(search_infos: Vec<ToolSearchInfo>) -> Self {
+        Self::new_with_late_mcp_tools(search_infos, /*late_mcp_tools*/ None)
+    }
+
+    pub(crate) fn new_with_late_mcp_tools(
+        search_infos: Vec<ToolSearchInfo>,
+        late_mcp_tools: Option<LateToolRegistry>,
+    ) -> Self {
         let mut entries = Vec::with_capacity(search_infos.len());
         let mut search_source_infos = Vec::new();
         for search_info in search_infos {
@@ -36,19 +47,19 @@ impl ToolSearchHandler {
                 search_source_infos.push(source_info);
             }
         }
-        let documents: Vec<Document<usize>> = entries
-            .iter()
-            .map(|entry| entry.search_text.clone())
-            .enumerate()
-            .map(|(idx, search_text)| Document::new(idx, search_text))
-            .collect();
-        let search_engine =
-            SearchEngineBuilder::<usize>::with_documents(Language::English, documents).build();
+        if late_mcp_tools.is_some() {
+            search_source_infos.push(ToolSearchSourceInfo {
+                name: "MCP servers".to_string(),
+                description: Some("Tools provided by configured MCP servers.".to_string()),
+            });
+        }
+        let search_engine = Self::build_search_engine(&entries);
 
         Self {
             entries,
             search_source_infos,
             search_engine,
+            late_mcp_tools,
         }
     }
 }
@@ -71,7 +82,12 @@ impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            ..
+        } = invocation;
 
         let args = match payload {
             ToolPayload::ToolSearch { arguments } => arguments,
@@ -96,11 +112,27 @@ impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
             ));
         }
 
-        if self.entries.is_empty() {
+        let mut late_entries = Vec::new();
+        if let Some(late_mcp_tools) = &self.late_mcp_tools {
+            late_entries.extend(
+                lazy_mcp::register_eligible_tools(&session, &turn, late_mcp_tools)
+                    .await
+                    .into_iter()
+                    .map(|search_info| search_info.entry),
+            );
+        }
+
+        if self.entries.is_empty() && late_entries.is_empty() {
             return Ok(boxed_tool_output(ToolSearchOutput { tools: Vec::new() }));
         }
 
-        let tools = self.search(query, limit)?;
+        let tools = if late_entries.is_empty() {
+            self.search(query, limit)?
+        } else {
+            let mut entries = self.entries.clone();
+            entries.extend(late_entries);
+            Self::search_entries(&entries, query, limit)?
+        };
 
         Ok(boxed_tool_output(ToolSearchOutput { tools }))
     }
@@ -109,6 +141,16 @@ impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
 impl CoreToolRuntime for ToolSearchHandler {}
 
 impl ToolSearchHandler {
+    fn build_search_engine(entries: &[ToolSearchEntry]) -> SearchEngine<usize> {
+        let documents: Vec<Document<usize>> = entries
+            .iter()
+            .map(|entry| entry.search_text.clone())
+            .enumerate()
+            .map(|(idx, search_text)| Document::new(idx, search_text))
+            .collect();
+        SearchEngineBuilder::<usize>::with_documents(Language::English, documents).build()
+    }
+
     fn search(
         &self,
         query: &str,
@@ -121,6 +163,22 @@ impl ToolSearchHandler {
             .map(|result| result.document.id)
             .filter_map(|id| self.entries.get(id));
         self.search_output_tools(results)
+    }
+
+    fn search_entries(
+        entries: &[ToolSearchEntry],
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
+        let search_engine = Self::build_search_engine(entries);
+        let results = search_engine
+            .search(query, limit)
+            .into_iter()
+            .map(|result| result.document.id)
+            .filter_map(|id| entries.get(id));
+        Ok(coalesce_loadable_tool_specs(
+            results.map(|entry| entry.output.clone()),
+        ))
     }
 
     fn search_output_tools<'a>(

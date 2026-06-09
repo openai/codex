@@ -331,6 +331,7 @@ async fn refresh_missing_requested_connectors(
 
     match manager.hard_refresh_codex_apps_tools_cache().await {
         Ok(mcp_tools) => {
+            session.late_mcp_tools.clear();
             let accessible_connectors = connectors::with_app_enabled_state(
                 connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
                 &turn.config,

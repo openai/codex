@@ -34,6 +34,7 @@ use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
+use crate::plugins::PluginCapabilityResolution;
 use crate::plugins::build_plugin_injections;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
@@ -53,6 +54,7 @@ use crate::stream_events_utils::record_completed_response_item_with_finalized_fa
 use crate::tasks::emit_compact_metric;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::lazy_mcp;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
@@ -457,34 +459,41 @@ async fn build_skills_and_plugins(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
-    let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
-        // Plugin mentions need raw MCP/app inventory even when app tools
-        // are normally hidden so we can describe the plugin's currently
-        // usable capabilities for this turn.
-        match sess
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .list_all_tools()
-            .or_cancel(cancellation_token)
-            .await
-        {
-            Ok(mcp_tools) => mcp_tools,
-            Err(_) if turn_context.apps_enabled() => return None,
-            Err(_) => Vec::new(),
-        }
-    } else {
-        Vec::new()
-    };
+    let lazy_mcp_enabled = lazy_mcp::enabled(turn_context);
+    let mcp_tools =
+        if !lazy_mcp_enabled && (turn_context.apps_enabled() || !mentioned_plugins.is_empty()) {
+            // Plugin mentions need raw MCP/app inventory even when app tools
+            // are normally hidden so we can describe the plugin's currently
+            // usable capabilities for this turn.
+            match sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .list_all_tools()
+                .or_cancel(cancellation_token)
+                .await
+            {
+                Ok(mcp_tools) => mcp_tools,
+                Err(_) if turn_context.apps_enabled() => return None,
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
     let available_connectors = if turn_context.apps_enabled() {
-        let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
-            loaded_plugins
-                .effective_apps()
-                .into_iter()
-                .map(|connector_id| connector_id.0),
-            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-        );
+        let plugin_app_ids = loaded_plugins
+            .effective_apps()
+            .into_iter()
+            .map(|connector_id| connector_id.0);
+        let connectors = if lazy_mcp_enabled {
+            codex_connectors::merge::merge_plugin_connectors(Vec::new(), plugin_app_ids)
+        } else {
+            codex_connectors::merge::merge_plugin_connectors_with_accessible(
+                plugin_app_ids,
+                connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            )
+        };
         connectors::with_app_enabled_state(connectors, &turn_context.config)
     } else {
         Vec::new()
@@ -540,8 +549,16 @@ async fn build_skills_and_plugins(
         &available_connectors,
         &skill_name_counts_lower,
     );
-    let plugin_items =
-        build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    let plugin_items = build_plugin_injections(
+        &mentioned_plugins,
+        &mcp_tools,
+        &available_connectors,
+        if lazy_mcp_enabled {
+            PluginCapabilityResolution::Declared
+        } else {
+            PluginCapabilityResolution::Runtime
+        },
+    );
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&user_input);
     explicitly_enabled_connectors.extend(skill_connector_ids);
     let connector_names_by_id = available_connectors
@@ -1086,10 +1103,14 @@ pub(crate) async fn built_tools(
         .instrument(trace_span!("read_mcp_connection_manager"))
         .await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
-    let all_mcp_tools = mcp_connection_manager
-        .list_all_tools()
-        .or_cancel(cancellation_token)
-        .await?;
+    let all_mcp_tools = if lazy_mcp::enabled(turn_context) {
+        Vec::new()
+    } else {
+        mcp_connection_manager
+            .list_all_tools()
+            .or_cancel(cancellation_token)
+            .await?
+    };
     drop(mcp_connection_manager);
     let loaded_plugins = sess
         .services
@@ -1171,6 +1192,7 @@ pub(crate) async fn built_tools(
             discoverable_tools,
             extension_tool_executors: extension_tool_executors(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            late_mcp_tools: lazy_mcp::enabled(turn_context).then(|| sess.late_mcp_tools.clone()),
         },
     )))
 }

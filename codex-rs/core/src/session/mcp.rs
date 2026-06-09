@@ -373,6 +373,7 @@ impl Session {
             let mut manager = self.services.mcp_connection_manager.write().await;
             std::mem::replace(&mut *manager, refreshed_manager)
         };
+        self.late_mcp_tools.clear();
         old_manager.shutdown().await;
     }
 

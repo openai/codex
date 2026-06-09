@@ -11,6 +11,7 @@ use codex_login::CodexAuth;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::configure_search_capable_model;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -23,6 +24,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
 use tempfile::TempDir;
+use tokio::time::timeout;
 use wiremock::MockServer;
 
 const SAMPLE_PLUGIN_CONFIG_NAME: &str = "sample@test";
@@ -322,6 +324,96 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
         calendar_description.contains("This tool is part of plugin `sample`."),
         "expected plugin app provenance in tool description: {calendar_description:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lazy_explicit_plugin_mentions_use_declared_capabilities() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps_mock_server = MockServer::start().await;
+    let (apps_server, tools_list_gate) =
+        AppsTestServer::mount_with_tools_gate(&apps_mock_server).await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let rmcp_test_server_bin = match stdio_server_bin() {
+        Ok(bin) => bin,
+        Err(err) => {
+            eprintln!("test_stdio_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
+    write_plugin_skill_plugin(codex_home.as_ref());
+    write_plugin_mcp_plugin(codex_home.as_ref(), &rmcp_test_server_bin);
+    write_plugin_app_plugin(codex_home.as_ref());
+
+    let chatgpt_base_url = apps_server.chatgpt_base_url;
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
+                .expect("test config should allow feature update");
+            configure_search_capable_model(config);
+            config.chatgpt_base_url = chatgpt_base_url;
+        });
+    let test = builder.build(&server).await?;
+
+    timeout(Duration::from_secs(/*secs*/ 10), async {
+        test.codex
+            .submit(Op::UserInput {
+                items: vec![codex_protocol::user_input::UserInput::Mention {
+                    name: "sample".into(),
+                    path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
+            })
+            .await?;
+        wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+        Result::<()>::Ok(())
+    })
+    .await
+    .expect("plugin mention should not wait for uncached MCP tools")?;
+    timeout(
+        Duration::from_secs(/*secs*/ 10),
+        tools_list_gate.wait_until_started(),
+    )
+    .await
+    .expect("background MCP tools/list should reach the deliberate gate");
+    tools_list_gate.release();
+
+    let request = mock.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    assert!(
+        developer_messages
+            .iter()
+            .any(|text| text.contains("MCP servers from this plugin")),
+        "expected declared plugin MCP guidance: {developer_messages:?}"
+    );
+    assert!(
+        developer_messages
+            .iter()
+            .any(|text| text.contains("Apps from this plugin")),
+        "expected declared plugin app guidance: {developer_messages:?}"
+    );
+    let request_tools = tool_names(&request.body_json());
+    assert!(request_tools.iter().any(|name| name == "tool_search"));
+    assert!(!request_tools.iter().any(|name| name == "mcp__sample"));
 
     Ok(())
 }

@@ -48,6 +48,7 @@ use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
 use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::LateToolRegistry;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::registry::override_tool_exposure;
@@ -146,6 +147,7 @@ struct CoreToolPlanContext<'a> {
     dynamic_tools: &'a [DynamicToolSpec],
     default_agent_type_description: &'a str,
     wait_agent_timeouts: WaitAgentTimeoutOptions,
+    late_mcp_tools: Option<&'a LateToolRegistry>,
 }
 
 pub(crate) fn build_tool_router(
@@ -166,6 +168,7 @@ fn build_tool_specs_and_registry(
         discoverable_tools,
         extension_tool_executors,
         dynamic_tools,
+        late_mcp_tools,
     } = params;
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
@@ -178,17 +181,19 @@ fn build_tool_specs_and_registry(
         dynamic_tools,
         default_agent_type_description: &default_agent_type_description,
         wait_agent_timeouts: wait_agent_timeout_options(turn_context),
+        late_mcp_tools: late_mcp_tools.as_ref(),
     };
     let mut planned_tools = PlannedTools::default();
     add_tool_sources(&context, &mut planned_tools);
     append_tool_search_executor(&context, &mut planned_tools);
     prepend_code_mode_executors(&context, &mut planned_tools);
-    build_model_visible_specs_and_registry(turn_context, planned_tools)
+    build_model_visible_specs_and_registry(turn_context, planned_tools, late_mcp_tools)
 }
 
 fn build_model_visible_specs_and_registry(
     turn_context: &TurnContext,
     planned_tools: PlannedTools,
+    late_mcp_tools: Option<LateToolRegistry>,
 ) -> (Vec<ToolSpec>, ToolRegistry) {
     let PlannedTools {
         runtimes,
@@ -215,7 +220,12 @@ fn build_model_visible_specs_and_registry(
     }
     specs.extend(hosted_specs);
 
-    let registry = ToolRegistry::from_tools(runtimes);
+    let registry = match late_mcp_tools {
+        Some(late_mcp_tools) => {
+            ToolRegistry::from_tools_with_late_registry(runtimes, late_mcp_tools)
+        }
+        None => ToolRegistry::from_tools(runtimes),
+    };
     let model_visible_specs = merge_into_namespaces(specs)
         .into_iter()
         .filter(|spec| {
@@ -852,11 +862,14 @@ fn append_tool_search_executor(
         .filter(|executor| executor.exposure() == ToolExposure::Deferred)
         .filter_map(|executor| executor.search_info())
         .collect::<Vec<_>>();
-    if search_infos.is_empty() {
+    if search_infos.is_empty() && context.late_mcp_tools.is_none() {
         return;
     }
 
-    planned_tools.add(ToolSearchHandler::new(search_infos));
+    planned_tools.add(ToolSearchHandler::new_with_late_mcp_tools(
+        search_infos,
+        context.late_mcp_tools.cloned(),
+    ));
 }
 
 fn prepend_code_mode_executors(

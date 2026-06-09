@@ -33,6 +33,7 @@ use serde_json::json;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
+use crate::tools::registry::LateToolRegistry;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 
@@ -43,6 +44,7 @@ struct ToolPlanInputs {
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     dynamic_tools: Vec<DynamicToolSpec>,
+    late_mcp_tools: Option<LateToolRegistry>,
 }
 
 struct ToolPlanProbe {
@@ -183,6 +185,7 @@ async fn probe_with(
             discoverable_tools: inputs.discoverable_tools,
             extension_tool_executors: inputs.extension_tool_executors,
             dynamic_tools: inputs.dynamic_tools.as_slice(),
+            late_mcp_tools: inputs.late_mcp_tools,
         },
     );
     ToolPlanProbe::from_router(router)
@@ -684,6 +687,24 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "list_mcp_resource_templates",
         "read_mcp_resource",
     ]);
+
+    let lazy_mcp = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = true;
+            set_feature(
+                turn,
+                Feature::ToolSearchAlwaysDeferMcpTools,
+                /*enabled*/ true,
+            );
+        },
+        ToolPlanInputs {
+            late_mcp_tools: Some(LateToolRegistry::default()),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    lazy_mcp.assert_visible_contains(&["tool_search"]);
+    lazy_mcp.assert_registered_contains(&["tool_search"]);
 
     let bedrock_namespace_capability = probe_with(
         |turn| {

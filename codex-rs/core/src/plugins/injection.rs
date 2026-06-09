@@ -11,10 +11,17 @@ use crate::plugins::render_explicit_plugin_instructions;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
 
+#[derive(Clone, Copy)]
+pub(crate) enum PluginCapabilityResolution {
+    Runtime,
+    Declared,
+}
+
 pub(crate) fn build_plugin_injections(
     mentioned_plugins: &[PluginCapabilitySummary],
     mcp_tools: &[ToolInfo],
     available_connectors: &[connectors::AppInfo],
+    resolution: PluginCapabilityResolution,
 ) -> Vec<ResponseItem> {
     if mentioned_plugins.is_empty() {
         return Vec::new();
@@ -25,27 +32,36 @@ pub(crate) fn build_plugin_injections(
     mentioned_plugins
         .iter()
         .filter_map(|plugin| {
-            let available_mcp_servers = mcp_tools
-                .iter()
-                .filter(|tool| {
-                    tool.server_name != CODEX_APPS_MCP_SERVER_NAME
-                        && tool
-                            .plugin_display_names
-                            .iter()
-                            .any(|plugin_name| plugin_name == &plugin.display_name)
-                })
-                .map(|tool| tool.server_name.clone())
-                .collect::<BTreeSet<String>>()
-                .into_iter()
-                .collect::<Vec<_>>();
+            let available_mcp_servers = match resolution {
+                PluginCapabilityResolution::Runtime => mcp_tools
+                    .iter()
+                    .filter(|tool| {
+                        tool.server_name != CODEX_APPS_MCP_SERVER_NAME
+                            && tool
+                                .plugin_display_names
+                                .iter()
+                                .any(|plugin_name| plugin_name == &plugin.display_name)
+                    })
+                    .map(|tool| tool.server_name.clone())
+                    .collect::<BTreeSet<String>>()
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                PluginCapabilityResolution::Declared => plugin.mcp_server_names.clone(),
+            };
             let available_apps = available_connectors
                 .iter()
                 .filter(|connector| {
                     connector.is_enabled
-                        && connector
-                            .plugin_display_names
-                            .iter()
-                            .any(|plugin_name| plugin_name == &plugin.display_name)
+                        && match resolution {
+                            PluginCapabilityResolution::Runtime => connector
+                                .plugin_display_names
+                                .iter()
+                                .any(|plugin_name| plugin_name == &plugin.display_name),
+                            PluginCapabilityResolution::Declared => plugin
+                                .app_connector_ids
+                                .iter()
+                                .any(|connector_id| connector_id.0 == connector.id),
+                        }
                 })
                 .map(connector_display_label)
                 .collect::<BTreeSet<String>>()

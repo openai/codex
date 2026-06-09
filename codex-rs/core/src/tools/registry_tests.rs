@@ -27,6 +27,48 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
 
 impl CoreToolRuntime for TestHandler {}
 
+#[test]
+fn late_tool_registry_adds_tools_after_static_registry_creation() {
+    let static_name = codex_tools::ToolName::plain("static");
+    let late_name = codex_tools::ToolName::namespaced("mcp__late", "lookup");
+    let late_tools = LateToolRegistry::default();
+    let registry = ToolRegistry::from_tools_with_late_registry(
+        [Arc::new(TestHandler {
+            tool_name: static_name.clone(),
+        }) as Arc<dyn CoreToolRuntime>],
+        late_tools.clone(),
+    );
+
+    assert!(registry.tool(&static_name).is_some());
+    assert!(registry.tool(&late_name).is_none());
+
+    let generation = late_tools.generation();
+    assert!(late_tools.replace_if_generation(
+        generation,
+        [Arc::new(TestHandler {
+            tool_name: late_name.clone(),
+        }) as Arc<dyn CoreToolRuntime>],
+    ));
+
+    assert!(registry.tool(&late_name).is_some());
+    assert_eq!(
+        registry.tool_names_for_test(),
+        vec![late_name.clone(), static_name.clone()]
+    );
+
+    late_tools.clear();
+    assert!(registry.tool(&late_name).is_none());
+    assert_eq!(registry.tool_names_for_test(), vec![static_name]);
+
+    assert!(!late_tools.replace_if_generation(
+        generation,
+        [Arc::new(TestHandler {
+            tool_name: late_name.clone(),
+        }) as Arc<dyn CoreToolRuntime>],
+    ));
+    assert!(registry.tool(&late_name).is_none());
+}
+
 #[derive(Clone)]
 enum LifecycleTestResult {
     Ok { success: bool },

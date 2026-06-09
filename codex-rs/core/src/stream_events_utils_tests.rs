@@ -273,6 +273,7 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
             discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            late_mcp_tools: None,
         },
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));

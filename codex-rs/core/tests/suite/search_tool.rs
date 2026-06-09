@@ -53,6 +53,8 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio::time::timeout;
+use wiremock::MockServer;
 
 const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
     "You have access to tools from the following sources",
@@ -180,7 +182,9 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
+    let apps_mock_server = MockServer::start().await;
+    let (apps_server, tools_list_gate) =
+        AppsTestServer::mount_with_tools_gate(&apps_mock_server).await?;
     let mock = mount_sse_once(
         &server,
         sse(vec![
@@ -200,12 +204,23 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_approval_and_permission_profile(
-        "list tools",
-        AskForApproval::Never,
-        PermissionProfile::Disabled,
+    timeout(
+        Duration::from_secs(/*secs*/ 10),
+        test.submit_turn_with_approval_and_permission_profile(
+            "list tools",
+            AskForApproval::Never,
+            PermissionProfile::Disabled,
+        ),
     )
-    .await?;
+    .await
+    .expect("first turn should not wait for uncached MCP tools")?;
+    timeout(
+        Duration::from_secs(/*secs*/ 10),
+        tools_list_gate.wait_until_started(),
+    )
+    .await
+    .expect("background MCP tools/list should reach the deliberate gate");
+    tools_list_gate.release();
 
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
@@ -1239,7 +1254,6 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
                 .expect("test mcp servers should accept any configuration");
         });
     let test = builder.build(&server).await?;
-    wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.codex
         .submit(Op::UserInput {

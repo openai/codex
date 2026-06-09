@@ -7,6 +7,13 @@ use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use serde_json::Value;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::sync::Notify;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -52,6 +59,69 @@ pub struct AppsTestServer {
     pub chatgpt_base_url: String,
 }
 
+#[derive(Clone)]
+pub struct ToolsListGate {
+    inner: Arc<ToolsListGateInner>,
+}
+
+struct ToolsListGateInner {
+    started: AtomicBool,
+    started_notify: Notify,
+    released: Mutex<bool>,
+    released_notify: Condvar,
+}
+
+impl ToolsListGate {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(ToolsListGateInner {
+                started: AtomicBool::new(false),
+                started_notify: Notify::new(),
+                released: Mutex::new(false),
+                released_notify: Condvar::new(),
+            }),
+        }
+    }
+
+    pub async fn wait_until_started(&self) {
+        while !self.inner.started.load(Ordering::Acquire) {
+            self.inner.started_notify.notified().await;
+        }
+    }
+
+    pub fn release(&self) {
+        *self
+            .inner
+            .released
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        self.inner.released_notify.notify_all();
+    }
+
+    fn block(&self) {
+        self.inner.started.store(true, Ordering::Release);
+        self.inner.started_notify.notify_waiters();
+        let mut released = self
+            .inner
+            .released
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !*released {
+            released = self
+                .inner
+                .released_notify
+                .wait(released)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+}
+
+impl Drop for ToolsListGate {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum AppsTestToolLoading {
     Direct,
@@ -63,7 +133,47 @@ impl AppsTestServer {
         Self::mount_with_connector_name(server, CONNECTOR_NAME).await
     }
 
+    pub async fn mount_with_tools_delay(
+        server: &MockServer,
+        tools_list_delay: Duration,
+    ) -> Result<Self> {
+        mount_oauth_metadata(server).await;
+        mount_connectors_directory(server).await;
+        mount_streamable_http_json_rpc(
+            server,
+            CONNECTOR_NAME.to_string(),
+            CONNECTOR_DESCRIPTION.to_string(),
+            /*searchable*/ false,
+            /*include_app_only_tool*/ false,
+            tools_list_delay,
+        )
+        .await;
+        Ok(Self {
+            chatgpt_base_url: server.uri(),
+        })
+    }
+
+    pub async fn mount_with_tools_gate(server: &MockServer) -> Result<(Self, ToolsListGate)> {
+        let gate = ToolsListGate::new();
+        mount_oauth_metadata(server).await;
+        mount_connectors_directory(server).await;
+        mount_streamable_http_json_rpc_with_gate(server, gate.clone()).await;
+        Ok((
+            Self {
+                chatgpt_base_url: server.uri(),
+            },
+            gate,
+        ))
+    }
+
     pub async fn mount_searchable(server: &MockServer) -> Result<Self> {
+        Self::mount_searchable_with_tools_delay(server, Duration::ZERO).await
+    }
+
+    pub async fn mount_searchable_with_tools_delay(
+        server: &MockServer,
+        tools_list_delay: Duration,
+    ) -> Result<Self> {
         mount_oauth_metadata(server).await;
         mount_connectors_directory(server).await;
         mount_streamable_http_json_rpc(
@@ -72,6 +182,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
+            tools_list_delay,
         )
         .await;
         Ok(Self {
@@ -91,6 +202,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ false,
             /*include_app_only_tool*/ false,
+            Duration::ZERO,
         )
         .await;
         Ok(Self {
@@ -110,6 +222,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             matches!(tool_loading, AppsTestToolLoading::Searchable),
             /*include_app_only_tool*/ true,
+            Duration::ZERO,
         )
         .await;
         Ok(Self {
@@ -264,6 +377,7 @@ async fn mount_streamable_http_json_rpc(
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    tools_list_delay: Duration,
 ) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
@@ -272,6 +386,23 @@ async fn mount_streamable_http_json_rpc(
             connector_description,
             searchable,
             include_app_only_tool,
+            tools_list_delay,
+            tools_list_gate: None,
+        })
+        .mount(server)
+        .await;
+}
+
+async fn mount_streamable_http_json_rpc_with_gate(server: &MockServer, gate: ToolsListGate) {
+    Mock::given(method("POST"))
+        .and(path_regex("^/api/codex/apps/?$"))
+        .respond_with(CodexAppsJsonRpcResponder {
+            connector_name: CONNECTOR_NAME.to_string(),
+            connector_description: CONNECTOR_DESCRIPTION.to_string(),
+            searchable: false,
+            include_app_only_tool: false,
+            tools_list_delay: Duration::ZERO,
+            tools_list_gate: Some(gate),
         })
         .mount(server)
         .await;
@@ -282,6 +413,8 @@ struct CodexAppsJsonRpcResponder {
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    tools_list_delay: Duration,
+    tools_list_gate: Option<ToolsListGate>,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -327,6 +460,9 @@ impl Respond for CodexAppsJsonRpcResponder {
             }
             "notifications/initialized" => ResponseTemplate::new(202),
             "tools/list" => {
+                if let Some(gate) = &self.tools_list_gate {
+                    gate.block();
+                }
                 let id = body.get("id").cloned().unwrap_or(Value::Null);
                 let mut response = json!({
                     "jsonrpc": "2.0",
@@ -475,7 +611,9 @@ impl Respond for CodexAppsJsonRpcResponder {
                         }
                     }));
                 }
-                ResponseTemplate::new(200).set_body_json(response)
+                ResponseTemplate::new(200)
+                    .set_body_json(response)
+                    .set_delay(self.tools_list_delay)
             }
             "tools/call" => {
                 let id = body.get("id").cloned().unwrap_or(Value::Null);

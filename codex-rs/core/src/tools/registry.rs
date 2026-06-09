@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -324,11 +325,84 @@ impl CoreToolRuntime for ExposureOverride {
 
 pub struct ToolRegistry {
     tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>,
+    late_tools: Option<LateToolRegistry>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct LateToolRegistry {
+    state: Arc<RwLock<LateToolRegistryState>>,
+}
+
+#[derive(Default)]
+struct LateToolRegistryState {
+    generation: u64,
+    tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>,
+}
+
+impl LateToolRegistry {
+    pub(crate) fn generation(&self) -> u64 {
+        self.state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .generation
+    }
+
+    pub(crate) fn replace_if_generation(
+        &self,
+        generation: u64,
+        tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>,
+    ) -> bool {
+        let tools = tools
+            .into_iter()
+            .map(|tool| (tool.tool_name(), tool))
+            .collect();
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.generation != generation {
+            return false;
+        }
+        state.tools = tools;
+        true
+    }
+
+    pub(crate) fn clear(&self) {
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.generation = state.generation.wrapping_add(1);
+        state.tools.clear();
+    }
+
+    fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
+        self.state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tools
+            .get(name)
+            .map(Arc::clone)
+    }
+
+    #[cfg(test)]
+    fn tool_names(&self) -> Vec<ToolName> {
+        self.state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tools
+            .keys()
+            .cloned()
+            .collect()
+    }
 }
 
 impl ToolRegistry {
     fn new(tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>) -> Self {
-        Self { tools }
+        Self {
+            tools,
+            late_tools: None,
+        }
     }
 
     pub(crate) fn from_tools(tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>) -> Self {
@@ -342,6 +416,15 @@ impl ToolRegistry {
             tools_by_name.insert(name, tool);
         }
         Self::new(tools_by_name)
+    }
+
+    pub(crate) fn from_tools_with_late_registry(
+        tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>,
+        late_tools: LateToolRegistry,
+    ) -> Self {
+        let mut registry = Self::from_tools(tools);
+        registry.late_tools = Some(late_tools);
+        registry
     }
 
     #[cfg(test)]
@@ -359,19 +442,26 @@ impl ToolRegistry {
     }
 
     fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        self.tools.get(name).map(Arc::clone)
+        self.tools
+            .get(name)
+            .map(Arc::clone)
+            .or_else(|| self.late_tools.as_ref()?.tool(name))
     }
 
     #[cfg(test)]
     pub(crate) fn tool_names_for_test(&self) -> Vec<ToolName> {
         let mut names = self.tools.keys().cloned().collect::<Vec<_>>();
+        if let Some(late_tools) = &self.late_tools {
+            names.extend(late_tools.tool_names());
+        }
         names.sort();
+        names.dedup();
         names
     }
 
     #[cfg(test)]
     pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
-        self.tools.get(name).map(|tool| tool.exposure())
+        self.tool(name).map(|tool| tool.exposure())
     }
 
     pub(crate) fn create_diff_consumer(

@@ -681,6 +681,7 @@ async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &
 
     match mcp_tools_result {
         Ok(mcp_tools) => {
+            sess.late_mcp_tools.clear();
             let auth = sess.services.auth_manager.auth().await;
             connectors::refresh_accessible_connectors_cache_from_mcp_tools(
                 &turn_context.config,
