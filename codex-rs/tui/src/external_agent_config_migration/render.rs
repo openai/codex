@@ -44,6 +44,9 @@ impl ExternalAgentConfigMigrationScreen {
                 self.focus == FocusArea::Items && self.selected_item_idx == entry.item_idx;
             let mut line = entry.line.clone();
             if selected {
+                if let Some(cursor) = line.spans.first_mut() {
+                    cursor.content = "› ".into();
+                }
                 line.spans.iter_mut().for_each(|span| {
                     span.style = span.style.cyan().bold();
                 });
@@ -174,6 +177,17 @@ impl WidgetRef for &ExternalAgentConfigMigrationScreen {
                 " to select, ".dim(),
                 "c".cyan(),
                 " to customize".dim(),
+            ]),
+            MigrationView::Customize if self.focus == FocusArea::Actions => Line::from(vec![
+                "Press ".dim(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " to continue, ".dim(),
+                key_hint::plain(KeyCode::Up).into(),
+                "/".dim(),
+                key_hint::plain(KeyCode::Down).into(),
+                " to move, ".dim(),
+                "b".cyan(),
+                " to go back".dim(),
             ]),
             MigrationView::Customize => Line::from(vec![
                 "Use ".dim(),

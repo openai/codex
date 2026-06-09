@@ -8,7 +8,7 @@ expression: rendered
   Codex may add files to your current project folder.
   Your existing Claude Code setup will not be changed.
   Home
-    [x] Settings (settings.json -> config.toml)
+  › [x] Settings (settings.json -> config.toml)
         Import /Users/alex/.claude/settings.json into /Users/alex/.codex/conf…
     [x] Recent chat sessions
         Import recent Claude Code sessions
@@ -25,5 +25,5 @@ expression: rendered
         Import CLAUDE.md to AGENTS.md
 
   Selected 4 of 4 items.
-    1. Done customizing
+    1. Review selection
   Use ↑/↓ to move, space to toggle, b to go back
