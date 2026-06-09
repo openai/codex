@@ -87,7 +87,25 @@ class RunBazelCiTest(unittest.TestCase):
         self.assertIn("--host_platform=//:local_windows_msvc", invocation.command)
         self.assertIn("--jobs=8", invocation.command)
         self.assertIn(r"--test_env=PATH=C:\Windows", invocation.command)
-        self.assertEqual(invocation.child_env["MSYS2_ARG_CONV_EXCL"], "*")
+        self.assertEqual(
+            invocation.child_env,
+            {
+                "CODEX_BAZEL_BIN": "fake-bazel",
+                "CODEX_BAZEL_WINDOWS_PATH": r"C:\Windows",
+                "RUNNER_OS": "Windows",
+            },
+        )
+
+    def test_runtime_invocation_inherits_the_process_environment(self) -> None:
+        invocation = run_bazel_ci.build_invocation(
+            run_bazel_ci.Options(),
+            ["build"],
+            ["//codex-rs/cli:codex"],
+            os.environ,
+            pid=123,
+        )
+
+        self.assertIsNone(invocation.child_env)
 
     def test_remote_windows_cross_compile_uses_linux_build_environment(self) -> None:
         invocation = run_bazel_ci.build_invocation(

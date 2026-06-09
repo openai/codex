@@ -65,7 +65,7 @@ class Options:
 @dataclass(frozen=True)
 class Invocation:
     command: list[str]
-    child_env: dict[str, str]
+    child_env: dict[str, str] | None
     ci_config: str
     post_config_args: list[str]
     remote_enabled: bool
@@ -205,9 +205,7 @@ def build_invocation(
         "--",
         *targets,
     )
-    child_env = dict(env)
-    if env.get("RUNNER_OS") == "Windows":
-        child_env["MSYS2_ARG_CONV_EXCL"] = "*"
+    child_env = None if env is os.environ else dict(env)
     return Invocation(command, child_env, config, post_args, remote_enabled)
 
 

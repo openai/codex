@@ -40,9 +40,7 @@ def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
         print(exc, file=sys.stderr)
         return 1
 
-    child_env = dict(env)
-    if env.get("RUNNER_OS") == "Windows":
-        child_env["MSYS2_ARG_CONV_EXCL"] = "*"
+    child_env = None if env is os.environ else dict(env)
     return subprocess.run(command, env=child_env, check=False).returncode
 
 
