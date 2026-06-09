@@ -751,21 +751,24 @@ class TurnHandle:
     def stream(self) -> Iterator[Notification]:
         """Yield only notifications routed to this turn handle."""
         if self._goal is not None:
-            yield from self._goal.stream()
-            return
-        self._client.register_turn_notifications(self.id)
-        try:
-            while True:
-                event = self._client.next_turn_notification(self.id)
-                yield event
-                if (
-                    event.method == "turn/completed"
-                    and isinstance(event.payload, TurnCompletedNotification)
-                    and event.payload.turn.id == self.id
-                ):
-                    break
-        finally:
-            self._client.unregister_turn_notifications(self.id)
+            return self._goal.stream()
+
+        def notifications() -> Iterator[Notification]:
+            self._client.register_turn_notifications(self.id)
+            try:
+                while True:
+                    event = self._client.next_turn_notification(self.id)
+                    yield event
+                    if (
+                        event.method == "turn/completed"
+                        and isinstance(event.payload, TurnCompletedNotification)
+                        and event.payload.turn.id == self.id
+                    ):
+                        break
+            finally:
+                self._client.unregister_turn_notifications(self.id)
+
+        return notifications()
 
     def run(self) -> TurnResult:
         """Consume the turn stream and return its completed result."""
@@ -808,30 +811,28 @@ class AsyncTurnHandle:
             return await self._goal.interrupt()
         return await self._codex._client.turn_interrupt(self.thread_id, self.id)
 
-    async def stream(self) -> AsyncIterator[Notification]:
+    def stream(self) -> AsyncIterator[Notification]:
         """Yield only notifications routed to this async turn handle."""
-        await self._codex._ensure_initialized()
         if self._goal is not None:
-            stream = self._goal.stream()
+            return self._goal.stream()
+
+        async def notifications() -> AsyncIterator[Notification]:
+            await self._codex._ensure_initialized()
+            self._codex._client.register_turn_notifications(self.id)
             try:
-                async for event in stream:
+                while True:
+                    event = await self._codex._client.next_turn_notification(self.id)
                     yield event
+                    if (
+                        event.method == "turn/completed"
+                        and isinstance(event.payload, TurnCompletedNotification)
+                        and event.payload.turn.id == self.id
+                    ):
+                        break
             finally:
-                await stream.aclose()
-            return
-        self._codex._client.register_turn_notifications(self.id)
-        try:
-            while True:
-                event = await self._codex._client.next_turn_notification(self.id)
-                yield event
-                if (
-                    event.method == "turn/completed"
-                    and isinstance(event.payload, TurnCompletedNotification)
-                    and event.payload.turn.id == self.id
-                ):
-                    break
-        finally:
-            self._codex._client.unregister_turn_notifications(self.id)
+                self._codex._client.unregister_turn_notifications(self.id)
+
+        return notifications()
 
     async def run(self) -> TurnResult:
         """Consume the turn stream and return its completed result."""
