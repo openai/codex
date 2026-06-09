@@ -118,6 +118,74 @@ def test_recommend_actions_prioritizes_review_comments():
     ]
 
 
+def test_pending_review_feedback_surfaces_only_after_publication(monkeypatch):
+    state = {
+        "seen_review_comment_ids": ["20"],
+        "seen_review_ids": ["10"],
+    }
+    review = {
+        "id": 10,
+        "user": {"login": "octocat"},
+        "author_association": "MEMBER",
+        "state": "PENDING",
+        "body": "Please rename this.",
+        "created_at": "2026-06-08T10:00:00Z",
+        "submitted_at": None,
+        "html_url": "https://github.com/openai/codex/pull/123#pullrequestreview-10",
+    }
+    review_comment = {
+        "id": 20,
+        "pull_request_review_id": 10,
+        "user": {"login": "octocat"},
+        "author_association": "MEMBER",
+        "body": "Please rename this.",
+        "created_at": "2026-06-08T10:00:00Z",
+        "path": "src/example.rs",
+        "line": 7,
+        "html_url": "https://github.com/openai/codex/pull/123#discussion_r20",
+    }
+
+    def fake_list(endpoint, **kwargs):
+        if endpoint.endswith("/issues/123/comments"):
+            return []
+        if endpoint.endswith("/pulls/123/comments"):
+            return [review_comment]
+        if endpoint.endswith("/pulls/123/reviews"):
+            return [review]
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(gh_pr_watch, "gh_api_list_paginated", fake_list)
+
+    assert (
+        gh_pr_watch.fetch_new_review_items(
+            sample_pr(),
+            state,
+            fresh_state=True,
+            authenticated_login="octocat",
+        )
+        == []
+    )
+    assert state["seen_review_comment_ids"] == []
+    assert state["seen_review_ids"] == []
+
+    review["state"] = "COMMENTED"
+    review["submitted_at"] = "2026-06-08T10:05:00Z"
+
+    published_items = gh_pr_watch.fetch_new_review_items(
+        sample_pr(),
+        state,
+        fresh_state=False,
+        authenticated_login="octocat",
+    )
+
+    assert {(item["kind"], item["id"]) for item in published_items} == {
+        ("review", "10"),
+        ("review_comment", "20"),
+    }
+    assert state["seen_review_comment_ids"] == ["20"]
+    assert state["seen_review_ids"] == ["10"]
+
+
 def test_run_watch_keeps_polling_open_ready_to_merge_pr(monkeypatch):
     sleeps = []
     events = []
