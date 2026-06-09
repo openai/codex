@@ -238,6 +238,7 @@ class _GoalStreamCursor:
     state: _GoalOperationState
     started: Turn | None = None
     last_completed: TurnCompletedNotification | None = None
+    failed_completion: TurnCompletedNotification | None = None
     status: ThreadGoalStatus | None = None
     active: bool = False
     cleared: bool = False
@@ -259,8 +260,14 @@ class _GoalStreamCursor:
             self.active = False
             self.last_completed = payload
             if payload.turn.status == TurnStatus.interrupted:
-                return [self._completion(notification.method, payload)], True
+                return [
+                    self._completion(
+                        notification.method,
+                        self.failed_completion or payload,
+                    )
+                ], True
             if payload.turn.status == TurnStatus.failed:
+                self.failed_completion = payload
                 if self.cleared or _terminal_goal_status(self.status):
                     self.state.finish()
                     return [self._completion(notification.method, payload)], True
@@ -271,7 +278,12 @@ class _GoalStreamCursor:
                 )
             if self.cleared or _terminal_goal_status(self.status):
                 self.state.finish()
-                return [self._completion(notification.method, payload)], True
+                return [
+                    self._completion(
+                        notification.method,
+                        self.failed_completion or payload,
+                    )
+                ], True
             return [], False
 
         events = [_logical_notification(notification, logical_turn_id)]
@@ -290,7 +302,12 @@ class _GoalStreamCursor:
             and (self.cleared or _terminal_goal_status(self.status))
         ):
             self.state.finish()
-            events.append(self._completion("turn/completed", self.last_completed))
+            events.append(
+                self._completion(
+                    "turn/completed",
+                    self.failed_completion or self.last_completed,
+                )
+            )
             return events, True
         return events, False
 
