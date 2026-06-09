@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Bounded bytes returned by `fs/readFile/read`.",
+  "properties": {
+    "dataBase64": {
+      "type": "string"
+    },
+    "eof": {
+      "description": "No bytes beyond this response were available at the time of the read.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "dataBase64",
+    "eof"
+  ],
+  "title": "FsReadFileReadResponse",
+  "type": "object"
+}

@@ -50,9 +50,17 @@ use crate::protocol::FS_GET_METADATA_METHOD;
 use crate::protocol::FS_JOIN_METHOD;
 use crate::protocol::FS_PARENT_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
+use crate::protocol::FS_READ_FILE_CLOSE_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FS_READ_FILE_OPEN_METHOD;
+use crate::protocol::FS_READ_FILE_READ_METHOD;
+use crate::protocol::FS_READ_FILE_STAT_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WRITE_FILE_CLOSE_METHOD;
+use crate::protocol::FS_WRITE_FILE_COMMIT_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FS_WRITE_FILE_OPEN_METHOD;
+use crate::protocol::FS_WRITE_FILE_WRITE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCopyParams;
@@ -67,12 +75,28 @@ use crate::protocol::FsParentParams;
 use crate::protocol::FsParentResponse;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
+use crate::protocol::FsReadFileCloseParams;
+use crate::protocol::FsReadFileCloseResponse;
+use crate::protocol::FsReadFileOpenParams;
+use crate::protocol::FsReadFileOpenResponse;
 use crate::protocol::FsReadFileParams;
+use crate::protocol::FsReadFileReadParams;
+use crate::protocol::FsReadFileReadResponse;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsReadFileStatParams;
+use crate::protocol::FsReadFileStatResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsWriteFileCloseParams;
+use crate::protocol::FsWriteFileCloseResponse;
+use crate::protocol::FsWriteFileCommitParams;
+use crate::protocol::FsWriteFileCommitResponse;
+use crate::protocol::FsWriteFileOpenParams;
+use crate::protocol::FsWriteFileOpenResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::FsWriteFileWriteParams;
+use crate::protocol::FsWriteFileWriteResponse;
 use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
 use crate::protocol::HttpRequestBodyDeltaNotification;
 use crate::protocol::INITIALIZE_METHOD;
@@ -419,6 +443,62 @@ impl ExecServerClient {
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, ExecServerError> {
         self.call(FS_WRITE_FILE_METHOD, &params).await
+    }
+
+    pub async fn fs_read_file_open(
+        &self,
+        params: FsReadFileOpenParams,
+    ) -> Result<FsReadFileOpenResponse, ExecServerError> {
+        self.call(FS_READ_FILE_OPEN_METHOD, &params).await
+    }
+
+    pub async fn fs_read_file_read(
+        &self,
+        params: FsReadFileReadParams,
+    ) -> Result<FsReadFileReadResponse, ExecServerError> {
+        self.call(FS_READ_FILE_READ_METHOD, &params).await
+    }
+
+    pub async fn fs_read_file_stat(
+        &self,
+        params: FsReadFileStatParams,
+    ) -> Result<FsReadFileStatResponse, ExecServerError> {
+        self.call(FS_READ_FILE_STAT_METHOD, &params).await
+    }
+
+    pub async fn fs_read_file_close(
+        &self,
+        params: FsReadFileCloseParams,
+    ) -> Result<FsReadFileCloseResponse, ExecServerError> {
+        self.call(FS_READ_FILE_CLOSE_METHOD, &params).await
+    }
+
+    pub async fn fs_write_file_open(
+        &self,
+        params: FsWriteFileOpenParams,
+    ) -> Result<FsWriteFileOpenResponse, ExecServerError> {
+        self.call(FS_WRITE_FILE_OPEN_METHOD, &params).await
+    }
+
+    pub async fn fs_write_file_write(
+        &self,
+        params: FsWriteFileWriteParams,
+    ) -> Result<FsWriteFileWriteResponse, ExecServerError> {
+        self.call(FS_WRITE_FILE_WRITE_METHOD, &params).await
+    }
+
+    pub async fn fs_write_file_commit(
+        &self,
+        params: FsWriteFileCommitParams,
+    ) -> Result<FsWriteFileCommitResponse, ExecServerError> {
+        self.call(FS_WRITE_FILE_COMMIT_METHOD, &params).await
+    }
+
+    pub async fn fs_write_file_close(
+        &self,
+        params: FsWriteFileCloseParams,
+    ) -> Result<FsWriteFileCloseResponse, ExecServerError> {
+        self.call(FS_WRITE_FILE_CLOSE_METHOD, &params).await
     }
 
     pub async fn fs_create_directory(

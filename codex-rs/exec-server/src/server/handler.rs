@@ -31,12 +31,28 @@ use crate::protocol::FsParentParams;
 use crate::protocol::FsParentResponse;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
+use crate::protocol::FsReadFileCloseParams;
+use crate::protocol::FsReadFileCloseResponse;
+use crate::protocol::FsReadFileOpenParams;
+use crate::protocol::FsReadFileOpenResponse;
 use crate::protocol::FsReadFileParams;
+use crate::protocol::FsReadFileReadParams;
+use crate::protocol::FsReadFileReadResponse;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsReadFileStatParams;
+use crate::protocol::FsReadFileStatResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsWriteFileCloseParams;
+use crate::protocol::FsWriteFileCloseResponse;
+use crate::protocol::FsWriteFileCommitParams;
+use crate::protocol::FsWriteFileCommitResponse;
+use crate::protocol::FsWriteFileOpenParams;
+use crate::protocol::FsWriteFileOpenResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::FsWriteFileWriteParams;
+use crate::protocol::FsWriteFileWriteResponse;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
@@ -89,6 +105,7 @@ impl ExecServerHandler {
         self.background_task_shutdown.cancel();
         self.background_tasks.close();
         self.background_tasks.wait().await;
+        self.file_system.shutdown().await;
         if let Some(session) = self.session() {
             session.detach().await;
         }
@@ -234,6 +251,70 @@ impl ExecServerHandler {
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.write_file(params).await
+    }
+
+    pub(crate) async fn fs_read_file_open(
+        &self,
+        params: FsReadFileOpenParams,
+    ) -> Result<FsReadFileOpenResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.read_file_open(params).await
+    }
+
+    pub(crate) async fn fs_read_file_read(
+        &self,
+        params: FsReadFileReadParams,
+    ) -> Result<FsReadFileReadResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.read_file_read(params).await
+    }
+
+    pub(crate) async fn fs_read_file_stat(
+        &self,
+        params: FsReadFileStatParams,
+    ) -> Result<FsReadFileStatResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.read_file_stat(params).await
+    }
+
+    pub(crate) async fn fs_read_file_close(
+        &self,
+        params: FsReadFileCloseParams,
+    ) -> Result<FsReadFileCloseResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.read_file_close(params).await
+    }
+
+    pub(crate) async fn fs_write_file_open(
+        &self,
+        params: FsWriteFileOpenParams,
+    ) -> Result<FsWriteFileOpenResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.write_file_open(params).await
+    }
+
+    pub(crate) async fn fs_write_file_write(
+        &self,
+        params: FsWriteFileWriteParams,
+    ) -> Result<FsWriteFileWriteResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.write_file_write(params).await
+    }
+
+    pub(crate) async fn fs_write_file_commit(
+        &self,
+        params: FsWriteFileCommitParams,
+    ) -> Result<FsWriteFileCommitResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.write_file_commit(params).await
+    }
+
+    pub(crate) async fn fs_write_file_close(
+        &self,
+        params: FsWriteFileCloseParams,
+    ) -> Result<FsWriteFileCloseResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.write_file_close(params).await
     }
 
     pub(crate) async fn fs_create_directory(

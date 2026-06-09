@@ -117,7 +117,7 @@ If the server receives any notification other than `initialized`, it replies
 with an error using request id `-1`.
 
 If the websocket connection closes, the server terminates any remaining managed
-processes for that client connection.
+processes and closes any remaining file handles for that client connection.
 
 ## API
 
@@ -343,6 +343,14 @@ or unavailable paths:
 
 - `fs/readFile`
 - `fs/writeFile`
+- `fs/readFile/open`
+- `fs/readFile/read`
+- `fs/readFile/stat`
+- `fs/readFile/close`
+- `fs/writeFile/open`
+- `fs/writeFile/write`
+- `fs/writeFile/commit`
+- `fs/writeFile/close`
 - `fs/createDirectory`
 - `fs/getMetadata`
 - `fs/readDirectory`

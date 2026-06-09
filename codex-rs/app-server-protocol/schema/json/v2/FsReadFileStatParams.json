@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Request metadata for an open read handle.",
+  "properties": {
+    "handleId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "handleId"
+  ],
+  "title": "FsReadFileStatParams",
+  "type": "object"
+}

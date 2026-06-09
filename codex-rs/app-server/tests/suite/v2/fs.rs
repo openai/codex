@@ -8,9 +8,14 @@ use codex_app_server_protocol::FsChangedNotification;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsGetMetadataResponse;
 use codex_app_server_protocol::FsReadDirectoryEntry;
+use codex_app_server_protocol::FsReadFileOpenResponse;
+use codex_app_server_protocol::FsReadFileReadResponse;
 use codex_app_server_protocol::FsReadFileResponse;
+use codex_app_server_protocol::FsReadFileStatResponse;
 use codex_app_server_protocol::FsUnwatchParams;
 use codex_app_server_protocol::FsWatchResponse;
+use codex_app_server_protocol::FsWriteFileCommitResponse;
+use codex_app_server_protocol::FsWriteFileOpenResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
@@ -389,6 +394,186 @@ async fn fs_write_file_rejects_invalid_base64() -> Result<()> {
         "unexpected error message: {}",
         error.error.message
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_streaming_read_supports_stat_and_positional_reads() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let file_path = codex_home.path().join("stream.txt");
+    std::fs::write(&file_path, "0123456789")?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let open_id = mcp
+        .send_raw_request(
+            "fs/readFile/open",
+            Some(json!({
+                "handleId": "read-1",
+                "path": absolute_path(file_path),
+            })),
+        )
+        .await?;
+    let open: FsReadFileOpenResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(open_id)),
+        )
+        .await??,
+    )?;
+    assert!(open.max_chunk_bytes >= 4);
+
+    let wrong_type_id = mcp
+        .send_raw_request(
+            "fs/writeFile/write",
+            Some(json!({
+                "handleId": "read-1",
+                "dataBase64": STANDARD.encode("wrong"),
+            })),
+        )
+        .await?;
+    expect_error_message(
+        &mut mcp,
+        wrong_type_id,
+        "file handle `read-1` is not open for write",
+    )
+    .await?;
+
+    let stat_id = mcp
+        .send_raw_request("fs/readFile/stat", Some(json!({ "handleId": "read-1" })))
+        .await?;
+    let stat: FsReadFileStatResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(stat_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(stat.size_bytes, 10);
+
+    let read_id = mcp
+        .send_raw_request(
+            "fs/readFile/read",
+            Some(json!({
+                "handleId": "read-1",
+                "offset": 3,
+                "maxBytes": 4,
+            })),
+        )
+        .await?;
+    let read: FsReadFileReadResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(
+        read,
+        FsReadFileReadResponse {
+            data_base64: STANDARD.encode("3456"),
+            eof: false,
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_streaming_write_is_atomic_and_protocol_errors_keep_handle_open() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let file_path = codex_home.path().join("stream.txt");
+    std::fs::write(&file_path, "old")?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let open_id = mcp
+        .send_raw_request(
+            "fs/writeFile/open",
+            Some(json!({
+                "handleId": "write-1",
+                "path": absolute_path(file_path.clone()),
+            })),
+        )
+        .await?;
+    let open: FsWriteFileOpenResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(open_id)),
+        )
+        .await??,
+    )?;
+    assert!(open.max_chunk_bytes >= 3);
+
+    let wrong_type_id = mcp
+        .send_raw_request(
+            "fs/readFile/read",
+            Some(json!({
+                "handleId": "write-1",
+                "offset": 0,
+            })),
+        )
+        .await?;
+    expect_error_message(
+        &mut mcp,
+        wrong_type_id,
+        "file handle `write-1` is not open for read",
+    )
+    .await?;
+
+    let invalid_id = mcp
+        .send_raw_request(
+            "fs/writeFile/write",
+            Some(json!({
+                "handleId": "write-1",
+                "dataBase64": "%%%",
+            })),
+        )
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(invalid_id)),
+    )
+    .await??;
+    assert!(
+        error
+            .error
+            .message
+            .starts_with("fs/writeFile/write requires valid base64 dataBase64:")
+    );
+
+    let write_id = mcp
+        .send_raw_request(
+            "fs/writeFile/write",
+            Some(json!({
+                "handleId": "write-1",
+                "dataBase64": STANDARD.encode("new"),
+            })),
+        )
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(write_id)),
+    )
+    .await??;
+    assert_eq!(std::fs::read_to_string(&file_path)?, "old");
+
+    let commit_id = mcp
+        .send_raw_request(
+            "fs/writeFile/commit",
+            Some(json!({
+                "handleId": "write-1",
+            })),
+        )
+        .await?;
+    let commit: FsWriteFileCommitResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(commit_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(commit.size_bytes, 3);
+    assert_eq!(std::fs::read_to_string(&file_path)?, "new");
 
     Ok(())
 }

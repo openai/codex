@@ -13,9 +13,17 @@ use crate::protocol::FS_GET_METADATA_METHOD;
 use crate::protocol::FS_JOIN_METHOD;
 use crate::protocol::FS_PARENT_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
+use crate::protocol::FS_READ_FILE_CLOSE_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FS_READ_FILE_OPEN_METHOD;
+use crate::protocol::FS_READ_FILE_READ_METHOD;
+use crate::protocol::FS_READ_FILE_STAT_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WRITE_FILE_CLOSE_METHOD;
+use crate::protocol::FS_WRITE_FILE_COMMIT_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FS_WRITE_FILE_OPEN_METHOD;
+use crate::protocol::FS_WRITE_FILE_WRITE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
@@ -23,9 +31,17 @@ use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsJoinParams;
 use crate::protocol::FsParentParams;
 use crate::protocol::FsReadDirectoryParams;
+use crate::protocol::FsReadFileCloseParams;
+use crate::protocol::FsReadFileOpenParams;
 use crate::protocol::FsReadFileParams;
+use crate::protocol::FsReadFileReadParams;
+use crate::protocol::FsReadFileStatParams;
 use crate::protocol::FsRemoveParams;
+use crate::protocol::FsWriteFileCloseParams;
+use crate::protocol::FsWriteFileCommitParams;
+use crate::protocol::FsWriteFileOpenParams;
 use crate::protocol::FsWriteFileParams;
+use crate::protocol::FsWriteFileWriteParams;
 use crate::protocol::HTTP_REQUEST_METHOD;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::INITIALIZE_METHOD;
@@ -93,6 +109,54 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         FS_WRITE_FILE_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsWriteFileParams| async move {
             handler.fs_write_file(params).await
+        },
+    );
+    router.request(
+        FS_READ_FILE_OPEN_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsReadFileOpenParams| async move {
+            handler.fs_read_file_open(params).await
+        },
+    );
+    router.request(
+        FS_READ_FILE_READ_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsReadFileReadParams| async move {
+            handler.fs_read_file_read(params).await
+        },
+    );
+    router.request(
+        FS_READ_FILE_STAT_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsReadFileStatParams| async move {
+            handler.fs_read_file_stat(params).await
+        },
+    );
+    router.request(
+        FS_READ_FILE_CLOSE_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsReadFileCloseParams| async move {
+            handler.fs_read_file_close(params).await
+        },
+    );
+    router.request(
+        FS_WRITE_FILE_OPEN_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsWriteFileOpenParams| async move {
+            handler.fs_write_file_open(params).await
+        },
+    );
+    router.request(
+        FS_WRITE_FILE_WRITE_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsWriteFileWriteParams| async move {
+            handler.fs_write_file_write(params).await
+        },
+    );
+    router.request(
+        FS_WRITE_FILE_COMMIT_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsWriteFileCommitParams| async move {
+            handler.fs_write_file_commit(params).await
+        },
+    );
+    router.request(
+        FS_WRITE_FILE_CLOSE_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsWriteFileCloseParams| async move {
+            handler.fs_write_file_close(params).await
         },
     );
     router.request(

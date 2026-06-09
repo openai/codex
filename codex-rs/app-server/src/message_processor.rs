@@ -974,6 +974,46 @@ impl MessageProcessor {
                 .write_file(params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::FsReadFileOpen { params, .. } => self
+                .fs_processor
+                .read_file_open(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsReadFileRead { params, .. } => self
+                .fs_processor
+                .read_file_read(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsReadFileStat { params, .. } => self
+                .fs_processor
+                .read_file_stat(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsReadFileClose { params, .. } => self
+                .fs_processor
+                .read_file_close(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsWriteFileOpen { params, .. } => self
+                .fs_processor
+                .write_file_open(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsWriteFileWrite { params, .. } => self
+                .fs_processor
+                .write_file_write(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsWriteFileCommit { params, .. } => self
+                .fs_processor
+                .write_file_commit(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsWriteFileClose { params, .. } => self
+                .fs_processor
+                .write_file_close(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::FsCreateDirectory { params, .. } => self
                 .fs_processor
                 .create_directory(params)

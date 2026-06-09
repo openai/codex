@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Metadata for the opened file object.",
+  "properties": {
+    "createdAtMs": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "modifiedAtMs": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "sizeBytes": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "createdAtMs",
+    "modifiedAtMs",
+    "sizeBytes"
+  ],
+  "title": "FsReadFileStatResponse",
+  "type": "object"
+}

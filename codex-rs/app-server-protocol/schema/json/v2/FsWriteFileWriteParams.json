@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Append one complete bounded chunk to an open write handle.",
+  "properties": {
+    "dataBase64": {
+      "type": "string"
+    },
+    "handleId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "dataBase64",
+    "handleId"
+  ],
+  "title": "FsWriteFileWriteParams",
+  "type": "object"
+}

@@ -1,6 +1,10 @@
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use codex_file_system::FileReadHandle;
+use codex_file_system::FileWriteCommitResult;
+use codex_file_system::FileWriteHandle;
+use codex_file_system::OpenFileMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use tokio::io;
@@ -23,9 +27,17 @@ use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsJoinParams;
 use crate::protocol::FsParentParams;
 use crate::protocol::FsReadDirectoryParams;
+use crate::protocol::FsReadFileCloseParams;
+use crate::protocol::FsReadFileOpenParams;
 use crate::protocol::FsReadFileParams;
+use crate::protocol::FsReadFileReadParams;
+use crate::protocol::FsReadFileStatParams;
 use crate::protocol::FsRemoveParams;
+use crate::protocol::FsWriteFileCloseParams;
+use crate::protocol::FsWriteFileCommitParams;
+use crate::protocol::FsWriteFileOpenParams;
 use crate::protocol::FsWriteFileParams;
+use crate::protocol::FsWriteFileWriteParams;
 
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const NOT_FOUND_ERROR_CODE: i64 = -32004;
@@ -126,6 +138,50 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .await
             .map_err(map_remote_error)?;
         Ok(())
+    }
+
+    async fn open_file_for_read(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Box<dyn FileReadHandle>> {
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        let handle_id = uuid::Uuid::new_v4().to_string();
+        let response = client
+            .fs_read_file_open(FsReadFileOpenParams {
+                handle_id: handle_id.clone(),
+                path: path.clone(),
+                sandbox: remote_sandbox_context(sandbox),
+            })
+            .await
+            .map_err(map_remote_error)?;
+        Ok(Box::new(RemoteFileReadHandle {
+            client,
+            handle_id,
+            max_chunk_bytes: response.max_chunk_bytes,
+        }))
+    }
+
+    async fn open_file_for_write(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Box<dyn FileWriteHandle>> {
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        let handle_id = uuid::Uuid::new_v4().to_string();
+        let response = client
+            .fs_write_file_open(FsWriteFileOpenParams {
+                handle_id: handle_id.clone(),
+                path: path.clone(),
+                sandbox: remote_sandbox_context(sandbox),
+            })
+            .await
+            .map_err(map_remote_error)?;
+        Ok(Box::new(RemoteFileWriteHandle {
+            client,
+            handle_id,
+            max_chunk_bytes: response.max_chunk_bytes,
+        }))
     }
 
     async fn create_directory(
@@ -234,6 +290,141 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .await
             .map_err(map_remote_error)?;
         Ok(())
+    }
+}
+
+struct RemoteFileReadHandle {
+    client: crate::ExecServerClient,
+    handle_id: String,
+    max_chunk_bytes: usize,
+}
+
+impl FileReadHandle for RemoteFileReadHandle {
+    fn max_chunk_bytes(&self) -> usize {
+        self.max_chunk_bytes
+    }
+
+    fn read(
+        &self,
+        offset: u64,
+        max_bytes: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = FileSystemResult<Vec<u8>>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let response = self
+                .client
+                .fs_read_file_read(FsReadFileReadParams {
+                    handle_id: self.handle_id.clone(),
+                    offset,
+                    max_bytes: Some(max_bytes),
+                })
+                .await
+                .map_err(map_remote_error)?;
+            STANDARD.decode(response.data_base64).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("remote fs/readFile/read returned invalid base64 dataBase64: {err}"),
+                )
+            })
+        })
+    }
+
+    fn metadata(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = FileSystemResult<OpenFileMetadata>> + Send + '_>,
+    > {
+        Box::pin(async move {
+            let response = self
+                .client
+                .fs_read_file_stat(FsReadFileStatParams {
+                    handle_id: self.handle_id.clone(),
+                })
+                .await
+                .map_err(map_remote_error)?;
+            Ok(OpenFileMetadata {
+                size_bytes: response.size_bytes,
+                created_at_ms: response.created_at_ms,
+                modified_at_ms: response.modified_at_ms,
+            })
+        })
+    }
+}
+
+impl Drop for RemoteFileReadHandle {
+    fn drop(&mut self) {
+        let client = self.client.clone();
+        let handle_id = self.handle_id.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = client
+                    .fs_read_file_close(FsReadFileCloseParams { handle_id })
+                    .await;
+            });
+        }
+    }
+}
+
+struct RemoteFileWriteHandle {
+    client: crate::ExecServerClient,
+    handle_id: String,
+    max_chunk_bytes: usize,
+}
+
+impl FileWriteHandle for RemoteFileWriteHandle {
+    fn max_chunk_bytes(&self) -> usize {
+        self.max_chunk_bytes
+    }
+
+    fn write<'a>(
+        &'a self,
+        data: &'a [u8],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = FileSystemResult<()>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.client
+                .fs_write_file_write(FsWriteFileWriteParams {
+                    handle_id: self.handle_id.clone(),
+                    data_base64: STANDARD.encode(data),
+                })
+                .await
+                .map_err(map_remote_error)?;
+            Ok(())
+        })
+    }
+
+    fn commit(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = FileSystemResult<FileWriteCommitResult>> + Send + '_>,
+    > {
+        Box::pin(async move {
+            let response = self
+                .client
+                .fs_write_file_commit(FsWriteFileCommitParams {
+                    handle_id: self.handle_id.clone(),
+                })
+                .await
+                .map_err(map_remote_error)?;
+            Ok(FileWriteCommitResult {
+                size_bytes: response.size_bytes,
+                modified_at_ms: response.modified_at_ms,
+            })
+        })
+    }
+}
+
+impl Drop for RemoteFileWriteHandle {
+    fn drop(&mut self) {
+        let client = self.client.clone();
+        let handle_id = self.handle_id.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = client
+                    .fs_write_file_close(FsWriteFileCloseParams { handle_id })
+                    .await;
+            });
+        }
     }
 }
 

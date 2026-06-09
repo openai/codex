@@ -2033,6 +2033,198 @@
             },
             "method": {
               "enum": [
+                "fs/readFile/open"
+              ],
+              "title": "Fs/readFile/openRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsReadFileOpenParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/readFile/openRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/readFile/read"
+              ],
+              "title": "Fs/readFile/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsReadFileReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/readFile/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/readFile/stat"
+              ],
+              "title": "Fs/readFile/statRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsReadFileStatParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/readFile/statRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/readFile/close"
+              ],
+              "title": "Fs/readFile/closeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsReadFileCloseParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/readFile/closeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/writeFile/open"
+              ],
+              "title": "Fs/writeFile/openRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsWriteFileOpenParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/writeFile/openRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/writeFile/write"
+              ],
+              "title": "Fs/writeFile/writeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsWriteFileWriteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/writeFile/writeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/writeFile/commit"
+              ],
+              "title": "Fs/writeFile/commitRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsWriteFileCommitParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/writeFile/commitRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/writeFile/close"
+              ],
+              "title": "Fs/writeFile/closeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsWriteFileCloseParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/writeFile/closeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "fs/createDirectory"
               ],
               "title": "Fs/createDirectoryRequestMethod",
@@ -5743,6 +5935,67 @@
       "title": "FsReadDirectoryResponse",
       "type": "object"
     },
+    "FsReadFileCloseParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Close an open read handle.",
+      "properties": {
+        "handleId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "handleId"
+      ],
+      "title": "FsReadFileCloseParams",
+      "type": "object"
+    },
+    "FsReadFileCloseResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/readFile/close`.",
+      "title": "FsReadFileCloseResponse",
+      "type": "object"
+    },
+    "FsReadFileOpenParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Open a file for bounded positional reads.",
+      "properties": {
+        "handleId": {
+          "description": "Client-supplied handle identifier scoped to this connection.",
+          "type": "string"
+        },
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute path to open."
+        }
+      },
+      "required": [
+        "handleId",
+        "path"
+      ],
+      "title": "FsReadFileOpenParams",
+      "type": "object"
+    },
+    "FsReadFileOpenResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/readFile/open`.",
+      "properties": {
+        "maxChunkBytes": {
+          "description": "Maximum decoded bytes returned by one read.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxChunkBytes"
+      ],
+      "title": "FsReadFileOpenResponse",
+      "type": "object"
+    },
     "FsReadFileParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Read a file from the host filesystem.",
@@ -5762,6 +6015,54 @@
       "title": "FsReadFileParams",
       "type": "object"
     },
+    "FsReadFileReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Read a bounded chunk from an open file at an absolute byte offset.",
+      "properties": {
+        "handleId": {
+          "type": "string"
+        },
+        "maxBytes": {
+          "description": "Requested upper bound. Values above `maxChunkBytes` are capped.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "handleId",
+        "offset"
+      ],
+      "title": "FsReadFileReadParams",
+      "type": "object"
+    },
+    "FsReadFileReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Bounded bytes returned by `fs/readFile/read`.",
+      "properties": {
+        "dataBase64": {
+          "type": "string"
+        },
+        "eof": {
+          "description": "No bytes beyond this response were available at the time of the read.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "dataBase64",
+        "eof"
+      ],
+      "title": "FsReadFileReadResponse",
+      "type": "object"
+    },
     "FsReadFileResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Base64-encoded file contents returned by `fs/readFile`.",
@@ -5775,6 +6076,46 @@
         "dataBase64"
       ],
       "title": "FsReadFileResponse",
+      "type": "object"
+    },
+    "FsReadFileStatParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Request metadata for an open read handle.",
+      "properties": {
+        "handleId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "handleId"
+      ],
+      "title": "FsReadFileStatParams",
+      "type": "object"
+    },
+    "FsReadFileStatResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Metadata for the opened file object.",
+      "properties": {
+        "createdAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "modifiedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "sizeBytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAtMs",
+        "modifiedAtMs",
+        "sizeBytes"
+      ],
+      "title": "FsReadFileStatResponse",
       "type": "object"
     },
     "FsRemoveParams": {
@@ -5880,6 +6221,102 @@
       "title": "FsWatchResponse",
       "type": "object"
     },
+    "FsWriteFileCloseParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Close an open write handle and discard its temporary file.",
+      "properties": {
+        "handleId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "handleId"
+      ],
+      "title": "FsWriteFileCloseParams",
+      "type": "object"
+    },
+    "FsWriteFileCloseResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/writeFile/close`.",
+      "title": "FsWriteFileCloseResponse",
+      "type": "object"
+    },
+    "FsWriteFileCommitParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Atomically publish an open write handle.",
+      "properties": {
+        "handleId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "handleId"
+      ],
+      "title": "FsWriteFileCommitParams",
+      "type": "object"
+    },
+    "FsWriteFileCommitResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Metadata returned after a successful write commit.",
+      "properties": {
+        "modifiedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "sizeBytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "modifiedAtMs",
+        "sizeBytes"
+      ],
+      "title": "FsWriteFileCommitResponse",
+      "type": "object"
+    },
+    "FsWriteFileOpenParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Open a destination-local temporary file for streamed writes.",
+      "properties": {
+        "handleId": {
+          "description": "Client-supplied handle identifier scoped to this connection.",
+          "type": "string"
+        },
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute destination path."
+        }
+      },
+      "required": [
+        "handleId",
+        "path"
+      ],
+      "title": "FsWriteFileOpenParams",
+      "type": "object"
+    },
+    "FsWriteFileOpenResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/writeFile/open`.",
+      "properties": {
+        "maxChunkBytes": {
+          "description": "Maximum decoded bytes accepted by one write.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxChunkBytes"
+      ],
+      "title": "FsWriteFileOpenResponse",
+      "type": "object"
+    },
     "FsWriteFileParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Write a file on the host filesystem.",
@@ -5908,6 +6345,30 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Successful response for `fs/writeFile`.",
       "title": "FsWriteFileResponse",
+      "type": "object"
+    },
+    "FsWriteFileWriteParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Append one complete bounded chunk to an open write handle.",
+      "properties": {
+        "dataBase64": {
+          "type": "string"
+        },
+        "handleId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataBase64",
+        "handleId"
+      ],
+      "title": "FsWriteFileWriteParams",
+      "type": "object"
+    },
+    "FsWriteFileWriteResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/writeFile/write`.",
+      "title": "FsWriteFileWriteResponse",
       "type": "object"
     },
     "FunctionCallOutputBody": {

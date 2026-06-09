@@ -35,6 +35,10 @@ pub(crate) enum RequestSerializationQueueKey {
     FuzzyFileSearchSession {
         session_id: String,
     },
+    FileHandle {
+        connection_id: ConnectionId,
+        handle_id: String,
+    },
     FsWatch {
         connection_id: ConnectionId,
         watch_id: String,
@@ -86,6 +90,13 @@ impl RequestSerializationQueueKey {
             ),
             ClientRequestSerializationScope::FuzzyFileSearchSession { session_id } => (
                 Self::FuzzyFileSearchSession { session_id },
+                RequestSerializationAccess::Exclusive,
+            ),
+            ClientRequestSerializationScope::FileHandle { handle_id } => (
+                Self::FileHandle {
+                    connection_id,
+                    handle_id,
+                },
                 RequestSerializationAccess::Exclusive,
             ),
             ClientRequestSerializationScope::FsWatch { watch_id } => (

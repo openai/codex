@@ -39,6 +39,152 @@ pub struct FsWriteFileParams {
 #[ts(export_to = "v2/")]
 pub struct FsWriteFileResponse {}
 
+/// Open a file for bounded positional reads.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileOpenParams {
+    /// Client-supplied handle identifier scoped to this connection.
+    pub handle_id: String,
+    /// Absolute path to open.
+    pub path: AbsolutePathBuf,
+}
+
+/// Successful response for `fs/readFile/open`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileOpenResponse {
+    /// Maximum decoded bytes returned by one read.
+    pub max_chunk_bytes: u32,
+}
+
+/// Read a bounded chunk from an open file at an absolute byte offset.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileReadParams {
+    pub handle_id: String,
+    #[ts(type = "number")]
+    pub offset: u64,
+    /// Requested upper bound. Values above `maxChunkBytes` are capped.
+    #[ts(optional = nullable)]
+    pub max_bytes: Option<u32>,
+}
+
+/// Bounded bytes returned by `fs/readFile/read`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileReadResponse {
+    pub data_base64: String,
+    /// No bytes beyond this response were available at the time of the read.
+    pub eof: bool,
+}
+
+/// Request metadata for an open read handle.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileStatParams {
+    pub handle_id: String,
+}
+
+/// Metadata for the opened file object.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileStatResponse {
+    #[ts(type = "number")]
+    pub size_bytes: u64,
+    #[ts(type = "number")]
+    pub created_at_ms: i64,
+    #[ts(type = "number")]
+    pub modified_at_ms: i64,
+}
+
+/// Close an open read handle.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileCloseParams {
+    pub handle_id: String,
+}
+
+/// Successful response for `fs/readFile/close`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileCloseResponse {}
+
+/// Open a destination-local temporary file for streamed writes.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileOpenParams {
+    /// Client-supplied handle identifier scoped to this connection.
+    pub handle_id: String,
+    /// Absolute destination path.
+    pub path: AbsolutePathBuf,
+}
+
+/// Successful response for `fs/writeFile/open`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileOpenResponse {
+    /// Maximum decoded bytes accepted by one write.
+    pub max_chunk_bytes: u32,
+}
+
+/// Append one complete bounded chunk to an open write handle.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileWriteParams {
+    pub handle_id: String,
+    pub data_base64: String,
+}
+
+/// Successful response for `fs/writeFile/write`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileWriteResponse {}
+
+/// Atomically publish an open write handle.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileCommitParams {
+    pub handle_id: String,
+}
+
+/// Metadata returned after a successful write commit.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileCommitResponse {
+    #[ts(type = "number")]
+    pub size_bytes: u64,
+    #[ts(type = "number")]
+    pub modified_at_ms: i64,
+}
+
+/// Close an open write handle and discard its temporary file.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileCloseParams {
+    pub handle_id: String,
+}
+
+/// Successful response for `fs/writeFile/close`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileCloseResponse {}
+
 /// Create a directory on the host filesystem.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

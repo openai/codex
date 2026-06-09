@@ -1,4 +1,9 @@
 use async_trait::async_trait;
+use codex_file_system::DEFAULT_FILE_STREAM_CHUNK_BYTES;
+use codex_file_system::FileReadHandle;
+use codex_file_system::FileWriteCommitResult;
+use codex_file_system::FileWriteHandle;
+use codex_file_system::OpenFileMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
@@ -6,6 +11,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use tempfile::NamedTempFile;
 use tokio::io;
 
 use crate::CopyOptions;
@@ -20,6 +26,7 @@ use crate::RemoveOptions;
 use crate::sandboxed_file_system::SandboxedFileSystem;
 
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
+const STREAMING_WRITE_TEMP_FILE_PREFIX: &str = ".codex-tmp-";
 
 pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
     LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem::unsandboxed()) });
@@ -119,6 +126,24 @@ impl ExecutorFileSystem for LocalFileSystem {
         file_system.write_file(path, contents, sandbox).await
     }
 
+    async fn open_file_for_read(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Box<dyn FileReadHandle>> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.open_file_for_read(path, sandbox).await
+    }
+
+    async fn open_file_for_write(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Box<dyn FileWriteHandle>> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.open_file_for_write(path, sandbox).await
+    }
+
     async fn create_directory(
         &self,
         path: &AbsolutePathBuf,
@@ -212,6 +237,28 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system
             .write_file(path, contents, /*sandbox*/ None)
+            .await
+    }
+
+    async fn open_file_for_read(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Box<dyn FileReadHandle>> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .open_file_for_read(path, /*sandbox*/ None)
+            .await
+    }
+
+    async fn open_file_for_write(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Box<dyn FileWriteHandle>> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .open_file_for_write(path, /*sandbox*/ None)
             .await
     }
 
@@ -325,6 +372,42 @@ impl ExecutorFileSystem for DirectFileSystem {
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
         tokio::fs::write(path.as_path(), contents).await
+    }
+
+    async fn open_file_for_read(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Box<dyn FileReadHandle>> {
+        reject_sandbox_context(sandbox)?;
+        let file = std::fs::File::open(path.as_path())?;
+        Ok(Box::new(DirectFileReadHandle { file }))
+    }
+
+    async fn open_file_for_write(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Box<dyn FileWriteHandle>> {
+        reject_sandbox_context(sandbox)?;
+        let destination = path.as_path().to_path_buf();
+        let parent = destination.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "streaming file destination must have a parent directory",
+            )
+        })?;
+        let temp_file = tempfile::Builder::new()
+            .prefix(STREAMING_WRITE_TEMP_FILE_PREFIX)
+            .tempfile_in(parent)?;
+        let file = temp_file.as_file().try_clone()?;
+        Ok(Box::new(DirectFileWriteHandle {
+            state: std::sync::Mutex::new(Some(DirectFileWriteState {
+                destination,
+                temp_file,
+                file,
+            })),
+        }))
     }
 
     async fn create_directory(
@@ -457,6 +540,157 @@ impl ExecutorFileSystem for DirectFileSystem {
         })
         .await
         .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))?
+    }
+}
+
+struct DirectFileReadHandle {
+    file: std::fs::File,
+}
+
+impl FileReadHandle for DirectFileReadHandle {
+    fn max_chunk_bytes(&self) -> usize {
+        DEFAULT_FILE_STREAM_CHUNK_BYTES
+    }
+
+    fn read(
+        &self,
+        offset: u64,
+        max_bytes: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = FileSystemResult<Vec<u8>>> + Send + '_>>
+    {
+        let file = self.file.try_clone();
+        Box::pin(async move {
+            let file = file?;
+            let mut bytes = vec![0; max_bytes.min(DEFAULT_FILE_STREAM_CHUNK_BYTES)];
+            let (bytes_read, mut bytes) =
+                tokio::task::spawn_blocking(move || -> io::Result<(usize, Vec<u8>)> {
+                    let bytes_read = read_file_at(&file, &mut bytes, offset)?;
+                    Ok((bytes_read, bytes))
+                })
+                .await
+                .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))??;
+            bytes.truncate(bytes_read);
+            Ok(bytes)
+        })
+    }
+
+    fn metadata(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = FileSystemResult<OpenFileMetadata>> + Send + '_>,
+    > {
+        let file = self.file.try_clone();
+        Box::pin(async move {
+            let file = file?;
+            let metadata = tokio::task::spawn_blocking(move || file.metadata())
+                .await
+                .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))??;
+            Ok(OpenFileMetadata {
+                size_bytes: metadata.len(),
+                created_at_ms: metadata.created().ok().map_or(0, system_time_to_unix_ms),
+                modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
+            })
+        })
+    }
+}
+
+#[cfg(unix)]
+fn read_file_at(file: &std::fs::File, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
+    std::os::unix::fs::FileExt::read_at(file, bytes, offset)
+}
+
+#[cfg(windows)]
+fn read_file_at(file: &std::fs::File, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
+    std::os::windows::fs::FileExt::seek_read(file, bytes, offset)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_file_at(file: &std::fs::File, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
+    let mut file = file.try_clone()?;
+    std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(offset))?;
+    std::io::Read::read(&mut file, bytes)
+}
+
+struct DirectFileWriteState {
+    destination: PathBuf,
+    temp_file: NamedTempFile,
+    file: std::fs::File,
+}
+
+struct DirectFileWriteHandle {
+    state: std::sync::Mutex<Option<DirectFileWriteState>>,
+}
+
+impl FileWriteHandle for DirectFileWriteHandle {
+    fn max_chunk_bytes(&self) -> usize {
+        DEFAULT_FILE_STREAM_CHUNK_BYTES
+    }
+
+    fn write<'a>(
+        &'a self,
+        data: &'a [u8],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = FileSystemResult<()>> + Send + 'a>>
+    {
+        let file = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "file write handle is closed"))
+            .and_then(|state| state.file.try_clone());
+        Box::pin(async move {
+            if data.len() > DEFAULT_FILE_STREAM_CHUNK_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "file write chunk exceeds maximum of {DEFAULT_FILE_STREAM_CHUNK_BYTES} bytes"
+                    ),
+                ));
+            }
+            let file = file?;
+            let data = data.to_vec();
+            tokio::task::spawn_blocking(move || {
+                let mut file = file;
+                std::io::Write::write_all(&mut file, &data)
+            })
+            .await
+            .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))?
+        })
+    }
+
+    fn commit(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = FileSystemResult<FileWriteCommitResult>> + Send + '_>,
+    > {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let Some(state) = state else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "file write handle is closed",
+                    ));
+                };
+                state.file.sync_all()?;
+                drop(state.file);
+                let persisted_file = state
+                    .temp_file
+                    .persist(&state.destination)
+                    .map_err(|err| err.error)?;
+                let metadata = persisted_file.metadata()?;
+                Ok(FileWriteCommitResult {
+                    size_bytes: metadata.len(),
+                    modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
+                })
+            })
+            .await
+            .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))?
+        })
     }
 }
 

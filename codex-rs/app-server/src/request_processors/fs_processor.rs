@@ -13,29 +13,49 @@ use codex_app_server_protocol::FsGetMetadataResponse;
 use codex_app_server_protocol::FsReadDirectoryEntry;
 use codex_app_server_protocol::FsReadDirectoryParams;
 use codex_app_server_protocol::FsReadDirectoryResponse;
+use codex_app_server_protocol::FsReadFileCloseParams;
+use codex_app_server_protocol::FsReadFileCloseResponse;
+use codex_app_server_protocol::FsReadFileOpenParams;
+use codex_app_server_protocol::FsReadFileOpenResponse;
 use codex_app_server_protocol::FsReadFileParams;
+use codex_app_server_protocol::FsReadFileReadParams;
+use codex_app_server_protocol::FsReadFileReadResponse;
 use codex_app_server_protocol::FsReadFileResponse;
+use codex_app_server_protocol::FsReadFileStatParams;
+use codex_app_server_protocol::FsReadFileStatResponse;
 use codex_app_server_protocol::FsRemoveParams;
 use codex_app_server_protocol::FsRemoveResponse;
 use codex_app_server_protocol::FsUnwatchParams;
 use codex_app_server_protocol::FsUnwatchResponse;
 use codex_app_server_protocol::FsWatchParams;
 use codex_app_server_protocol::FsWatchResponse;
+use codex_app_server_protocol::FsWriteFileCloseParams;
+use codex_app_server_protocol::FsWriteFileCloseResponse;
+use codex_app_server_protocol::FsWriteFileCommitParams;
+use codex_app_server_protocol::FsWriteFileCommitResponse;
+use codex_app_server_protocol::FsWriteFileOpenParams;
+use codex_app_server_protocol::FsWriteFileOpenResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
+use codex_app_server_protocol::FsWriteFileWriteParams;
+use codex_app_server_protocol::FsWriteFileWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileHandleManager;
 use codex_exec_server::RemoveOptions;
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub(crate) struct FsRequestProcessor {
     environment_manager: Arc<EnvironmentManager>,
     fs_watch_manager: FsWatchManager,
+    handles: Arc<Mutex<HashMap<ConnectionId, FileHandleManager>>>,
 }
 
 impl FsRequestProcessor {
@@ -46,6 +66,7 @@ impl FsRequestProcessor {
         Self {
             environment_manager,
             fs_watch_manager,
+            handles: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -57,7 +78,24 @@ impl FsRequestProcessor {
     }
 
     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+        let handles = self.handles.lock().await.remove(&connection_id);
+        if let Some(handles) = handles {
+            handles.close_all().await;
+        }
         self.fs_watch_manager.connection_closed(connection_id).await;
+    }
+
+    async fn handles(&self, connection_id: ConnectionId) -> FileHandleManager {
+        self.handles
+            .lock()
+            .await
+            .entry(connection_id)
+            .or_default()
+            .clone()
+    }
+
+    async fn existing_handles(&self, connection_id: ConnectionId) -> Option<FileHandleManager> {
+        self.handles.lock().await.get(&connection_id).cloned()
     }
 
     pub(crate) async fn read_file(
@@ -88,6 +126,146 @@ impl FsRequestProcessor {
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
+    }
+
+    pub(crate) async fn read_file_open(
+        &self,
+        connection_id: ConnectionId,
+        params: FsReadFileOpenParams,
+    ) -> Result<FsReadFileOpenResponse, JSONRPCErrorError> {
+        let max_chunk_bytes = self
+            .handles(connection_id)
+            .await
+            .open_read(
+                self.file_system()?,
+                params.handle_id,
+                &params.path,
+                /*sandbox*/ None,
+            )
+            .await
+            .map_err(map_file_handle_error)?;
+        Ok(FsReadFileOpenResponse {
+            max_chunk_bytes: u32::try_from(max_chunk_bytes)
+                .map_err(|_| internal_error("file read chunk limit exceeds u32"))?,
+        })
+    }
+
+    pub(crate) async fn read_file_read(
+        &self,
+        connection_id: ConnectionId,
+        params: FsReadFileReadParams,
+    ) -> Result<FsReadFileReadResponse, JSONRPCErrorError> {
+        let chunk = self
+            .handles(connection_id)
+            .await
+            .read(
+                &params.handle_id,
+                params.offset,
+                params.max_bytes.map(|value| value as usize),
+            )
+            .await
+            .map_err(map_file_handle_error)?;
+        Ok(FsReadFileReadResponse {
+            data_base64: STANDARD.encode(chunk.data),
+            eof: chunk.eof,
+        })
+    }
+
+    pub(crate) async fn read_file_stat(
+        &self,
+        connection_id: ConnectionId,
+        params: FsReadFileStatParams,
+    ) -> Result<FsReadFileStatResponse, JSONRPCErrorError> {
+        let metadata = self
+            .handles(connection_id)
+            .await
+            .stat_read(&params.handle_id)
+            .await
+            .map_err(map_file_handle_error)?;
+        Ok(FsReadFileStatResponse {
+            size_bytes: metadata.size_bytes,
+            created_at_ms: metadata.created_at_ms,
+            modified_at_ms: metadata.modified_at_ms,
+        })
+    }
+
+    pub(crate) async fn read_file_close(
+        &self,
+        connection_id: ConnectionId,
+        params: FsReadFileCloseParams,
+    ) -> Result<FsReadFileCloseResponse, JSONRPCErrorError> {
+        if let Some(handles) = self.existing_handles(connection_id).await {
+            handles.close(&params.handle_id).await;
+        }
+        Ok(FsReadFileCloseResponse {})
+    }
+
+    pub(crate) async fn write_file_open(
+        &self,
+        connection_id: ConnectionId,
+        params: FsWriteFileOpenParams,
+    ) -> Result<FsWriteFileOpenResponse, JSONRPCErrorError> {
+        let max_chunk_bytes = self
+            .handles(connection_id)
+            .await
+            .open_write(
+                self.file_system()?,
+                params.handle_id,
+                &params.path,
+                /*sandbox*/ None,
+            )
+            .await
+            .map_err(map_file_handle_error)?;
+        Ok(FsWriteFileOpenResponse {
+            max_chunk_bytes: u32::try_from(max_chunk_bytes)
+                .map_err(|_| internal_error("file write chunk limit exceeds u32"))?,
+        })
+    }
+
+    pub(crate) async fn write_file_write(
+        &self,
+        connection_id: ConnectionId,
+        params: FsWriteFileWriteParams,
+    ) -> Result<FsWriteFileWriteResponse, JSONRPCErrorError> {
+        let data = STANDARD.decode(params.data_base64).map_err(|err| {
+            invalid_request(format!(
+                "fs/writeFile/write requires valid base64 dataBase64: {err}"
+            ))
+        })?;
+        self.handles(connection_id)
+            .await
+            .write(&params.handle_id, &data)
+            .await
+            .map_err(map_file_handle_error)?;
+        Ok(FsWriteFileWriteResponse {})
+    }
+
+    pub(crate) async fn write_file_commit(
+        &self,
+        connection_id: ConnectionId,
+        params: FsWriteFileCommitParams,
+    ) -> Result<FsWriteFileCommitResponse, JSONRPCErrorError> {
+        let result = self
+            .handles(connection_id)
+            .await
+            .commit_write(&params.handle_id)
+            .await
+            .map_err(map_file_handle_error)?;
+        Ok(FsWriteFileCommitResponse {
+            size_bytes: result.size_bytes,
+            modified_at_ms: result.modified_at_ms,
+        })
+    }
+
+    pub(crate) async fn write_file_close(
+        &self,
+        connection_id: ConnectionId,
+        params: FsWriteFileCloseParams,
+    ) -> Result<FsWriteFileCloseResponse, JSONRPCErrorError> {
+        if let Some(handles) = self.existing_handles(connection_id).await {
+            handles.close(&params.handle_id).await;
+        }
+        Ok(FsWriteFileCloseResponse {})
     }
 
     pub(crate) async fn create_directory(
@@ -206,5 +384,14 @@ fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
         invalid_request(err.to_string())
     } else {
         internal_error(err.to_string())
+    }
+}
+
+fn map_file_handle_error(err: io::Error) -> JSONRPCErrorError {
+    match err.kind() {
+        io::ErrorKind::AlreadyExists | io::ErrorKind::InvalidInput | io::ErrorKind::NotFound => {
+            invalid_request(err.to_string())
+        }
+        _ => internal_error(err.to_string()),
     }
 }

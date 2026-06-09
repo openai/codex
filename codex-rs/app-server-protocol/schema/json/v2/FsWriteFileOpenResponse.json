@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Successful response for `fs/writeFile/open`.",
+  "properties": {
+    "maxChunkBytes": {
+      "description": "Maximum decoded bytes accepted by one write.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "maxChunkBytes"
+  ],
+  "title": "FsWriteFileOpenResponse",
+  "type": "object"
+}

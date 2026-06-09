@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    }
+  },
+  "description": "Open a destination-local temporary file for streamed writes.",
+  "properties": {
+    "handleId": {
+      "description": "Client-supplied handle identifier scoped to this connection.",
+      "type": "string"
+    },
+    "path": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Absolute destination path."
+    }
+  },
+  "required": [
+    "handleId",
+    "path"
+  ],
+  "title": "FsWriteFileOpenParams",
+  "type": "object"
+}
