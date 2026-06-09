@@ -27,7 +27,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-const ANALYTICS_CAPTURE_ENV_VAR: &str = "CODEX_ANALYTICS_EVENTS_CAPTURE_FILE";
+pub(super) const ANALYTICS_CAPTURE_ENV_VAR: &str = "CODEX_ANALYTICS_EVENTS_CAPTURE_FILE";
 const TEST_USER_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_TEST_USER_CONFIG_FILE";
 const CAPTURE_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -282,7 +282,7 @@ fn quoted(value: &str) -> Result<String> {
     serde_json::to_string(value).context("serialize config string")
 }
 
-fn prepare_capture_file(path: &Path) -> Result<()> {
+pub(super) fn prepare_capture_file(path: &Path) -> Result<()> {
     let parent = path
         .parent()
         .context("capture file must have a parent directory")?;
