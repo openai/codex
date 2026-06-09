@@ -815,12 +815,15 @@ def test_async_goal_start_cancellation_interrupts_work_and_releases_routing(tmp_
                     await startup
 
                 deadline = time.monotonic() + 5
+                while codex._client._sync._router._goal_operations:
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("cancelled goal routing was not released")
+                    await asyncio.sleep(0.01)
+
                 while True:
                     current = await thread.read()
                     registered_goals = dict(codex._client._sync._router._goal_operations)
-                    if isinstance(current.thread.status.root, IdleThreadStatus) and not (
-                        registered_goals
-                    ):
+                    if isinstance(current.thread.status.root, IdleThreadStatus):
                         break
                     if time.monotonic() >= deadline:
                         raise AssertionError("cancelled goal turn did not stop")
