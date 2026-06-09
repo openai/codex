@@ -116,6 +116,16 @@ pub struct NetworkUnixSocketPermissions {
     pub entries: BTreeMap<String, NetworkUnixSocketPermission>,
 }
 
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UpstreamProxyMode {
+    Auto,
+    #[default]
+    Env,
+    System,
+    Direct,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct NetworkProxySettings {
@@ -128,6 +138,8 @@ pub struct NetworkProxySettings {
     pub socks_url: String,
     pub enable_socks5_udp: bool,
     pub allow_upstream_proxy: bool,
+    #[serde(default)]
+    pub upstream_proxy_mode: UpstreamProxyMode,
     #[serde(default)]
     pub dangerously_allow_non_loopback_proxy: bool,
     #[serde(default)]
@@ -154,6 +166,7 @@ impl Default for NetworkProxySettings {
             socks_url: default_socks_url(),
             enable_socks5_udp: true,
             allow_upstream_proxy: true,
+            upstream_proxy_mode: UpstreamProxyMode::default(),
             dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_all_unix_sockets: false,
             mode: NetworkMode::default(),
@@ -586,6 +599,7 @@ mod tests {
                 socks_url: "http://127.0.0.1:8081".to_string(),
                 enable_socks5_udp: true,
                 allow_upstream_proxy: true,
+                upstream_proxy_mode: UpstreamProxyMode::Env,
                 dangerously_allow_non_loopback_proxy: false,
                 dangerously_allow_all_unix_sockets: false,
                 mode: NetworkMode::Full,

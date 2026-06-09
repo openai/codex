@@ -109,6 +109,14 @@ impl fmt::Display for RouteFailureClass {
     }
 }
 
+/// URL-specific system proxy decision from the platform resolver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SystemProxyRouteDecision {
+    Direct,
+    Proxy { url: String },
+    Unavailable { failure: RouteFailureClass },
+}
+
 /// How a resolver-aware client should choose an outbound proxy.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum OutboundProxyMode {
@@ -381,6 +389,36 @@ enum SystemProxyDecision {
     Direct,
     Proxy { url: String },
     Unavailable { failure: RouteFailureClass },
+}
+
+impl From<SystemProxyDecision> for SystemProxyRouteDecision {
+    fn from(decision: SystemProxyDecision) -> Self {
+        match decision {
+            SystemProxyDecision::Direct => Self::Direct,
+            SystemProxyDecision::Proxy { url } => Self::Proxy { url },
+            SystemProxyDecision::Unavailable { failure } => Self::Unavailable { failure },
+        }
+    }
+}
+
+/// Resolve system proxy/PAC routing for a single outbound URL.
+pub fn resolve_system_proxy_for_url(
+    request_url: &str,
+    include_auto_detect: bool,
+) -> SystemProxyRouteDecision {
+    if !SystemProxyEnvOverride::from_env().system_discovery_enabled() || !system_proxy_supported() {
+        return SystemProxyRouteDecision::Unavailable {
+            failure: RouteFailureClass::ProxyResolutionUnavailable,
+        };
+    }
+
+    let Some(origin) = RequestOrigin::parse(request_url) else {
+        return SystemProxyRouteDecision::Unavailable {
+            failure: RouteFailureClass::InvalidProxyConfig,
+        };
+    };
+
+    resolve_system_proxy(request_url, &origin, include_auto_detect).into()
 }
 
 fn resolve_system_proxy(

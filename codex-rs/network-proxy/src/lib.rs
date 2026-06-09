@@ -25,6 +25,7 @@ pub use config::NetworkMode;
 pub use config::NetworkProxyConfig;
 pub use config::NetworkUnixSocketPermission;
 pub use config::NetworkUnixSocketPermissions;
+pub use config::UpstreamProxyMode;
 pub use config::host_and_port_from_network_addr;
 pub use mitm_hook::InjectedHeaderConfig;
 pub use mitm_hook::MitmHookActionsConfig;

@@ -137,6 +137,7 @@ use crate::config_lock::config_without_lock_controls;
 use crate::config_lock::lock_layer_from_config;
 use crate::config_lock::read_config_lock_from_path;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::UpstreamProxyMode;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
@@ -2483,6 +2484,21 @@ fn resolved_system_proxy_config(
     resolved_system_proxy_config_from_features(cfg, features.get(), mode_requirement)
 }
 
+fn apply_system_proxy_feature_config_to_network_proxy(
+    config: &mut NetworkProxyConfig,
+    system_proxy: Option<&SystemProxyFeatureConfigToml>,
+) {
+    let Some(system_proxy) = system_proxy else {
+        return;
+    };
+    config.network.upstream_proxy_mode = match system_proxy.mode.unwrap_or_default() {
+        SystemProxyFeatureModeToml::Auto => UpstreamProxyMode::Auto,
+        SystemProxyFeatureModeToml::Env => UpstreamProxyMode::Env,
+        SystemProxyFeatureModeToml::System => UpstreamProxyMode::System,
+        SystemProxyFeatureModeToml::Direct => UpstreamProxyMode::Direct,
+    };
+}
+
 /// Resolves `[features.system_proxy]` for the initial cloud-config bootstrap.
 ///
 /// This runs before cloud-managed config can be fetched, so it can only use
@@ -3081,6 +3097,10 @@ impl Config {
                     network_proxy,
                 );
             }
+            apply_system_proxy_feature_config_to_network_proxy(
+                &mut configured_network_proxy_config,
+                system_proxy.as_ref(),
+            );
             configured_network_proxy_config.network.enabled = true;
         }
         let approval_policy_was_explicit =
@@ -3841,6 +3861,10 @@ impl Config {
                         network_proxy,
                     );
                 }
+                apply_system_proxy_feature_config_to_network_proxy(
+                    &mut configured_network_proxy_config,
+                    self.system_proxy.as_ref(),
+                );
                 configured_network_proxy_config.network.enabled = true;
             }
             configured_network_proxy_config

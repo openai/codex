@@ -546,6 +546,12 @@ impl NetworkProxyState {
         Ok(guard.config.network.allow_upstream_proxy)
     }
 
+    pub async fn upstream_proxy_mode(&self) -> Result<crate::config::UpstreamProxyMode> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.config.network.upstream_proxy_mode)
+    }
+
     pub async fn allow_local_binding(&self) -> Result<bool> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;

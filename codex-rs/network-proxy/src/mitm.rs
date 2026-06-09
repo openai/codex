@@ -1,5 +1,6 @@
 use crate::certs::ManagedMitmCa;
 use crate::config::NetworkMode;
+use crate::config::UpstreamProxyMode;
 use crate::mitm_hook::HookEvaluation;
 use crate::mitm_hook::MitmHookActions;
 use crate::policy::normalize_host;
@@ -61,6 +62,7 @@ pub struct MitmState {
 
 pub(crate) struct MitmUpstreamConfig {
     pub(crate) allow_upstream_proxy: bool,
+    pub(crate) upstream_proxy_mode: UpstreamProxyMode,
     pub(crate) allow_local_binding: bool,
 }
 
@@ -109,7 +111,10 @@ impl MitmState {
         let ca = ManagedMitmCa::load_or_create()?;
 
         let upstream = if config.allow_upstream_proxy {
-            UpstreamClient::from_env_proxy_with_allow_local_binding(config.allow_local_binding)
+            UpstreamClient::from_proxy_mode_with_allow_local_binding(
+                config.upstream_proxy_mode,
+                config.allow_local_binding,
+            )
         } else {
             UpstreamClient::direct_with_allow_local_binding(config.allow_local_binding)
         };
