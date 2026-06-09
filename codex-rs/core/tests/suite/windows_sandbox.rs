@@ -403,7 +403,8 @@ async fn windows_unified_exec_managed_network_enforces_deny_read() -> anyhow::Re
 
     let call_id = "windows-unified-exec-managed-network-deny-read";
     let command = format!(
-        r#"cmd.exe /D /C "(type "{}" 1>NUL 2>NUL && echo SECRET-READ || echo SECRET-DENIED) & type "{}""#,
+        "if (Get-Content -LiteralPath '{}' -ErrorAction SilentlyContinue) {{ \
+         'SECRET-READ' }} else {{ 'SECRET-DENIED' }}; Get-Content -LiteralPath '{}'",
         secret_path.display(),
         public_path.display()
     );
