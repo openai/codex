@@ -1,5 +1,11 @@
+use std::marker::PhantomData;
 use std::sync::Arc;
 
+use crate::backend::MemoriesBackend;
+use crate::local::LocalMemoriesBackend;
+use crate::prompt_source::MemoryPromptSource;
+use crate::prompts::build_memory_tool_developer_instructions;
+use crate::tools;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
@@ -11,21 +17,31 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
 use codex_features::Feature;
 use codex_otel::MetricsClient;
-use codex_utils_absolute_path::AbsolutePathBuf;
-
-use crate::local::LocalMemoriesBackend;
-use crate::prompts::build_memory_tool_developer_instructions;
-use crate::tools;
 
 /// Contributes Codex memory read-path prompt context and memory read tools.
-#[derive(Clone, Default)]
-pub(crate) struct MemoriesExtension {
+#[derive(Clone)]
+pub(crate) struct MemoriesExtension<B = LocalMemoriesBackend, S = LocalMemoriesBackend> {
     metrics_client: Option<MetricsClient>,
+    storage: PhantomData<fn() -> (B, S)>,
 }
 
-impl MemoriesExtension {
-    fn new(metrics_client: Option<MetricsClient>) -> Self {
-        Self { metrics_client }
+impl Default for MemoriesExtension {
+    fn default() -> Self {
+        Self::new(/*metrics_client*/ None)
+    }
+}
+
+impl<B, S> MemoriesExtension<B, S> {
+    pub(crate) fn new(metrics_client: Option<MetricsClient>) -> Self {
+        Self {
+            metrics_client,
+            storage: PhantomData,
+        }
+    }
+
+    fn store_thread_state(thread_store: &ExtensionData, config: &Config) {
+        thread_store.insert(MemoriesExtensionConfig::from_config(config));
+        thread_store.insert(MemoriesExtensionStorageDeps::local(config));
     }
 }
 
@@ -33,7 +49,6 @@ impl MemoriesExtension {
 pub(crate) struct MemoriesExtensionConfig {
     pub(crate) enabled: bool,
     pub(crate) dedicated_tools: bool,
-    pub(crate) codex_home: AbsolutePathBuf,
 }
 
 impl MemoriesExtensionConfig {
@@ -41,12 +56,37 @@ impl MemoriesExtensionConfig {
         Self {
             enabled: config.features.enabled(Feature::MemoryTool) && config.memories.use_memories,
             dedicated_tools: config.memories.dedicated_tools,
-            codex_home: config.codex_home.clone(),
         }
     }
 }
 
-impl ContextContributor for MemoriesExtension {
+#[derive(Clone)]
+pub(crate) struct MemoriesExtensionStorageDeps<B = LocalMemoriesBackend, S = LocalMemoriesBackend> {
+    pub(crate) backend: B,
+    pub(crate) prompt_source: S,
+}
+
+impl MemoriesExtensionStorageDeps {
+    fn local(config: &Config) -> Self {
+        let backend = LocalMemoriesBackend::from_codex_home(&config.codex_home);
+        Self::new(backend.clone(), backend)
+    }
+}
+
+impl<B, S> MemoriesExtensionStorageDeps<B, S> {
+    pub(crate) fn new(backend: B, prompt_source: S) -> Self {
+        Self {
+            backend,
+            prompt_source,
+        }
+    }
+}
+
+impl<B, S> ContextContributor for MemoriesExtension<B, S>
+where
+    B: MemoriesBackend,
+    S: MemoryPromptSource,
+{
     fn contribute<'a>(
         &'a self,
         _session_store: &'a ExtensionData,
@@ -59,8 +99,11 @@ impl ContextContributor for MemoriesExtension {
             if !config.enabled {
                 return Vec::new();
             }
+            let Some(deps) = thread_store.get::<MemoriesExtensionStorageDeps<B, S>>() else {
+                return Vec::new();
+            };
 
-            build_memory_tool_developer_instructions(&config.codex_home)
+            build_memory_tool_developer_instructions(&deps.prompt_source)
                 .await
                 .map(PromptFragment::developer_policy)
                 .into_iter()
@@ -72,9 +115,7 @@ impl ContextContributor for MemoriesExtension {
 #[async_trait::async_trait]
 impl ThreadLifecycleContributor<Config> for MemoriesExtension {
     async fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
-        input
-            .thread_store
-            .insert(MemoriesExtensionConfig::from_config(input.config));
+        Self::store_thread_state(input.thread_store, input.config);
     }
 }
 
@@ -86,11 +127,15 @@ impl ConfigContributor<Config> for MemoriesExtension {
         _previous_config: &Config,
         new_config: &Config,
     ) {
-        thread_store.insert(MemoriesExtensionConfig::from_config(new_config));
+        Self::store_thread_state(thread_store, new_config);
     }
 }
 
-impl ToolContributor for MemoriesExtension {
+impl<B, S> ToolContributor for MemoriesExtension<B, S>
+where
+    B: MemoriesBackend,
+    S: MemoryPromptSource,
+{
     fn tools(
         &self,
         _session_store: &ExtensionData,
@@ -102,11 +147,11 @@ impl ToolContributor for MemoriesExtension {
         if !config.enabled || !config.dedicated_tools {
             return Vec::new();
         }
+        let Some(deps) = thread_store.get::<MemoriesExtensionStorageDeps<B, S>>() else {
+            return Vec::new();
+        };
 
-        tools::memory_tools(
-            LocalMemoriesBackend::from_codex_home(&config.codex_home),
-            self.metrics_client.clone(),
-        )
+        tools::memory_tools(deps.backend.clone(), self.metrics_client.clone())
     }
 }
 

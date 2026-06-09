@@ -1,10 +1,10 @@
 use crate::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use crate::prompt_source::MemoryPromptSource;
+use crate::prompt_source::MemoryPromptSummary;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use codex_utils_template::Template;
 use std::sync::LazyLock;
-use tokio::fs;
 
 static MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
@@ -24,16 +24,12 @@ fn parse_embedded_template(source: &'static str, template_name: &str) -> Templat
 ///
 /// Large `memory_summary.md` files are truncated at
 /// [MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT].
-pub(crate) async fn build_memory_tool_developer_instructions(
-    codex_home: &AbsolutePathBuf,
-) -> Option<String> {
-    let base_path = codex_home.join("memories");
-    let memory_summary_path = base_path.join("memory_summary.md");
-    let memory_summary = fs::read_to_string(&memory_summary_path)
-        .await
-        .ok()?
-        .trim()
-        .to_string();
+pub(crate) async fn build_memory_tool_developer_instructions<S>(source: &S) -> Option<String>
+where
+    S: MemoryPromptSource,
+{
+    let MemoryPromptSummary { base_path, content } = source.read_summary().await?;
+    let memory_summary = content.trim().to_string();
     let memory_summary = truncate_text(
         &memory_summary,
         TruncationPolicy::Tokens(MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT),

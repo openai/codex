@@ -14,6 +14,8 @@ use crate::backend::ReadMemoryRequest;
 use crate::backend::ReadMemoryResponse;
 use crate::backend::SearchMemoriesRequest;
 use crate::backend::SearchMemoriesResponse;
+use crate::prompt_source::MemoryPromptSource;
+use crate::prompt_source::MemoryPromptSummary;
 
 mod ad_hoc_note;
 mod list;
@@ -125,5 +127,17 @@ impl MemoriesBackend for LocalMemoriesBackend {
         request: SearchMemoriesRequest,
     ) -> Result<SearchMemoriesResponse, MemoriesBackendError> {
         search::search(self, request).await
+    }
+}
+
+impl MemoryPromptSource for LocalMemoriesBackend {
+    async fn read_summary(&self) -> Option<MemoryPromptSummary> {
+        let content = tokio::fs::read_to_string(self.root.join("memory_summary.md"))
+            .await
+            .ok()?;
+        Some(MemoryPromptSummary {
+            base_path: self.root.clone(),
+            content,
+        })
     }
 }
