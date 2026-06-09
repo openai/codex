@@ -178,6 +178,7 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
         ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ItemCompleted(_)
+            | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::AgentMessageDelta(_)
             | ServerNotification::PlanDelta(_)
             | ServerNotification::ReasoningSummaryTextDelta(_)
@@ -2156,6 +2157,13 @@ mod tests {
                             memory_citation: None,
                         },
                     }
+                )
+            )
+        ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::ExternalAgentConfigImportCompleted(
+                    codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {},
                 )
             )
         ));

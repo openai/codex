@@ -22,6 +22,11 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ExternalAgentConfigDetectParams;
+use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
+use codex_app_server_protocol::ExternalAgentConfigImportParams;
+use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
@@ -123,12 +128,16 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use uuid::Uuid;
 
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
+pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str =
+    "A previous Claude Code import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
@@ -171,6 +180,7 @@ pub(crate) struct AppServerSession {
     thread_settings_update_supported: bool,
     default_model: Option<String>,
     available_models: Vec<ModelPreset>,
+    external_agent_config_import_completion_pending: AtomicBool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,6 +224,7 @@ impl AppServerSession {
             thread_settings_update_supported: true,
             default_model: None,
             available_models: Vec::new(),
+            external_agent_config_import_completion_pending: AtomicBool::new(false),
         }
     }
 
@@ -228,6 +239,10 @@ impl AppServerSession {
 
     pub(crate) fn uses_remote_workspace(&self) -> bool {
         matches!(self.thread_params_mode, ThreadParamsMode::Remote)
+    }
+
+    pub(crate) fn uses_embedded_app_server(&self) -> bool {
+        matches!(&self.client, AppServerClient::InProcess(_))
     }
 
     pub(crate) fn server_version(&self) -> Option<&str> {
@@ -342,6 +357,58 @@ impl AppServerSession {
             })
             .await
             .map_err(|err| bootstrap_request_error("account/read failed during TUI bootstrap", err))
+    }
+
+    pub(crate) async fn external_agent_config_detect(
+        &mut self,
+        params: ExternalAgentConfigDetectParams,
+    ) -> Result<ExternalAgentConfigDetectResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ExternalAgentConfigDetect { request_id, params })
+            .await
+            .wrap_err("externalAgentConfig/detect failed during Claude Code import")
+    }
+
+    pub(crate) async fn external_agent_config_import(
+        &mut self,
+        migration_items: Vec<ExternalAgentConfigMigrationItem>,
+    ) -> Result<()> {
+        // Mark the import active before sending the request so a fast completion notification
+        // cannot arrive before the TUI records it.
+        if self
+            .external_agent_config_import_completion_pending
+            .swap(true, Ordering::Relaxed)
+        {
+            color_eyre::eyre::bail!(EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE);
+        }
+        let request_id = self.next_request_id();
+        let response: Result<ExternalAgentConfigImportResponse> = self
+            .client
+            .request_typed(ClientRequest::ExternalAgentConfigImport {
+                request_id,
+                params: ExternalAgentConfigImportParams { migration_items },
+            })
+            .await
+            .wrap_err("externalAgentConfig/import failed during Claude Code import");
+        match response {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                self.external_agent_config_import_completion_pending
+                    .store(false, Ordering::Relaxed);
+                Err(err)
+            }
+        }
+    }
+
+    pub(crate) fn external_agent_config_import_in_progress(&self) -> bool {
+        self.external_agent_config_import_completion_pending
+            .load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn consume_external_agent_config_import_completion(&self) -> bool {
+        self.external_agent_config_import_completion_pending
+            .swap(false, Ordering::Relaxed)
     }
 
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
