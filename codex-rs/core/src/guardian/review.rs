@@ -44,7 +44,6 @@ use super::approval_request::guardian_reviewed_action;
 use super::metrics::emit_guardian_review_metrics;
 use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
-use super::review_session::GuardianReviewRetryCleanup;
 use super::review_session::GuardianReviewSessionOutcome;
 use super::review_session::GuardianReviewSessionParams;
 use super::review_session::build_guardian_review_session_config;
@@ -684,11 +683,7 @@ async fn run_guardian_review_session_before_deadline(
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
     deadline: Instant,
-) -> (
-    GuardianReviewOutcome,
-    GuardianReviewAnalyticsResult,
-    GuardianReviewRetryCleanup,
-) {
+) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
     let network_proxy = session.services.network_proxy.load_full();
     let live_network_config = match network_proxy.as_ref() {
         Some(network_proxy) => match network_proxy.proxy().current_cfg().await {
@@ -697,7 +692,6 @@ async fn run_guardian_review_session_before_deadline(
                 return (
                     GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
                     GuardianReviewAnalyticsResult::without_session(),
-                    GuardianReviewRetryCleanup::NoAction,
                 );
             }
         },
@@ -759,12 +753,11 @@ async fn run_guardian_review_session_before_deadline(
             return (
                 GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
                 GuardianReviewAnalyticsResult::without_session(),
-                GuardianReviewRetryCleanup::NoAction,
             );
         }
     };
 
-    let (session_outcome, session_analytics_result, retry_cleanup) = Box::pin(
+    let (session_outcome, session_analytics_result) = Box::pin(
         session
             .guardian_review_session
             .run_review(GuardianReviewSessionParams {
@@ -831,7 +824,7 @@ async fn run_guardian_review_session_before_deadline(
             session_analytics_result,
         ),
     };
-    (outcome, analytics_result, retry_cleanup)
+    (outcome, analytics_result)
 }
 
 pub(super) async fn run_guardian_review_session_with_retry(
@@ -846,29 +839,19 @@ pub(super) async fn run_guardian_review_session_with_retry(
     assert!(max_attempts > 0, "guardian review must run at least once");
     let deadline = Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
     for attempt_count in 1..=max_attempts {
-        let (outcome, mut analytics_result, retry_cleanup) =
-            run_guardian_review_session_before_deadline(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                request.clone(),
-                retry_reason.clone(),
-                schema.clone(),
-                external_cancel.clone(),
-                deadline,
-            )
-            .await;
+        let (outcome, mut analytics_result) = run_guardian_review_session_before_deadline(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            request.clone(),
+            retry_reason.clone(),
+            schema.clone(),
+            external_cancel.clone(),
+            deadline,
+        )
+        .await;
         analytics_result.attempt_count = attempt_count;
         if !should_retry_guardian_review(&outcome, attempt_count, max_attempts) {
             return (outcome, analytics_result);
-        }
-        match retry_cleanup {
-            GuardianReviewRetryCleanup::NoAction => {}
-            GuardianReviewRetryCleanup::ResetTrunk => {
-                session
-                    .guardian_review_session
-                    .reset_trunk_for_retry()
-                    .await;
-            }
         }
         if let Some(error) =
             wait_before_guardian_retry(attempt_count, deadline, external_cancel.as_ref()).await

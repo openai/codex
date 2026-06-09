@@ -67,12 +67,6 @@ pub(crate) enum GuardianReviewSessionOutcome {
     Aborted,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum GuardianReviewRetryCleanup {
-    NoAction,
-    ResetTrunk,
-}
-
 pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_session: Arc<Session>,
     pub(crate) parent_turn: Arc<TurnContext>,
@@ -313,12 +307,6 @@ impl GuardianReviewSessionManager {
         }
     }
 
-    pub(super) async fn reset_trunk_for_retry(&self) {
-        if let Some(review_session) = self.state.lock().await.trunk.take() {
-            review_session.shutdown_in_background();
-        }
-    }
-
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "review session selection and trunk spawning must stay serialized"
@@ -326,11 +314,7 @@ impl GuardianReviewSessionManager {
     pub(super) async fn run_review(
         &self,
         params: GuardianReviewSessionParams,
-    ) -> (
-        GuardianReviewSessionOutcome,
-        GuardianReviewAnalyticsResult,
-        GuardianReviewRetryCleanup,
-    ) {
+    ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
         let deadline = params.deadline;
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
         let mut stale_trunk_to_shutdown = None;
@@ -371,15 +355,10 @@ impl GuardianReviewSessionManager {
                             return (
                                 GuardianReviewSessionOutcome::PromptBuildFailed(err),
                                 GuardianReviewAnalyticsResult::without_session(),
-                                GuardianReviewRetryCleanup::NoAction,
                             );
                         }
                         Err(outcome) => {
-                            return (
-                                outcome,
-                                GuardianReviewAnalyticsResult::without_session(),
-                                GuardianReviewRetryCleanup::NoAction,
-                            );
+                            return (outcome, GuardianReviewAnalyticsResult::without_session());
                         }
                     };
                     state.trunk = Some(Arc::clone(&review_session));
@@ -389,11 +368,7 @@ impl GuardianReviewSessionManager {
                 state.trunk.as_ref().cloned()
             }
             Err(outcome) => {
-                return (
-                    outcome,
-                    GuardianReviewAnalyticsResult::without_session(),
-                    GuardianReviewRetryCleanup::NoAction,
-                );
+                return (outcome, GuardianReviewAnalyticsResult::without_session());
             }
         };
 
@@ -407,7 +382,6 @@ impl GuardianReviewSessionManager {
                     "guardian review session was not available after spawn"
                 ))),
                 GuardianReviewAnalyticsResult::without_session(),
-                GuardianReviewRetryCleanup::NoAction,
             );
         };
 
@@ -452,20 +426,12 @@ impl GuardianReviewSessionManager {
         drop(trunk_guard);
 
         if keep_review_session {
-            (
-                outcome,
-                analytics_result,
-                GuardianReviewRetryCleanup::ResetTrunk,
-            )
+            (outcome, analytics_result)
         } else {
             if let Some(review_session) = self.remove_trunk_if_current(&trunk).await {
                 review_session.shutdown_in_background();
             }
-            (
-                outcome,
-                analytics_result,
-                GuardianReviewRetryCleanup::NoAction,
-            )
+            (outcome, analytics_result)
         }
     }
 
@@ -574,11 +540,7 @@ impl GuardianReviewSessionManager {
         reuse_key: GuardianReviewSessionReuseKey,
         deadline: tokio::time::Instant,
         fork_snapshot: Option<GuardianReviewForkSnapshot>,
-    ) -> (
-        GuardianReviewSessionOutcome,
-        GuardianReviewAnalyticsResult,
-        GuardianReviewRetryCleanup,
-    ) {
+    ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
         let spawn_cancel_token = CancellationToken::new();
         let mut fork_config = params.spawn_config.clone();
         fork_config.ephemeral = true;
@@ -601,15 +563,10 @@ impl GuardianReviewSessionManager {
                 return (
                     GuardianReviewSessionOutcome::PromptBuildFailed(err),
                     GuardianReviewAnalyticsResult::without_session(),
-                    GuardianReviewRetryCleanup::NoAction,
                 );
             }
             Err(outcome) => {
-                return (
-                    outcome,
-                    GuardianReviewAnalyticsResult::without_session(),
-                    GuardianReviewRetryCleanup::NoAction,
-                );
+                return (outcome, GuardianReviewAnalyticsResult::without_session());
             }
         };
         self.register_active_ephemeral(Arc::clone(&review_session))
@@ -628,11 +585,7 @@ impl GuardianReviewSessionManager {
             cleanup.disarm();
             review_session.shutdown_in_background();
         }
-        (
-            outcome,
-            analytics_result,
-            GuardianReviewRetryCleanup::NoAction,
-        )
+        (outcome, analytics_result)
     }
 }
 
@@ -1538,6 +1491,29 @@ mod tests {
         assert_eq!(last_agent_message.as_deref(), Some("fresh"));
         assert_eq!(analytics_result.time_to_first_token_ms, Some(42));
         assert!(keep_review_session);
+    }
+
+    #[tokio::test]
+    async fn run_review_removes_trunk_when_event_stream_is_broken() {
+        let (mut review_session, tx_event, _rx_sub) = test_review_session().await;
+        let params = test_review_params().await;
+        review_session.reuse_key =
+            GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
+        let manager = GuardianReviewSessionManager {
+            state: Arc::new(Mutex::new(GuardianReviewSessionState {
+                trunk: Some(Arc::new(review_session)),
+                ephemeral_reviews: Vec::new(),
+            })),
+        };
+        drop(tx_event);
+
+        let (outcome, _) = manager.run_review(params).await;
+
+        assert!(matches!(
+            outcome,
+            GuardianReviewSessionOutcome::Completed(Err(_))
+        ));
+        assert!(manager.state.lock().await.trunk.is_none());
     }
 
     #[tokio::test]

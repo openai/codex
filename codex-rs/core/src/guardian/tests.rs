@@ -2167,16 +2167,27 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
     let (session, turn) = guardian_test_session_and_turn(&server).await;
     seed_guardian_parent_history(&session, &turn).await;
 
-    let decision = review_approval_request(
-        &session,
-        &turn,
-        "review-session-retry".to_string(),
+    let (outcome, metadata) = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
         guardian_shell_request("shell-session-retry"),
         /*retry_reason*/ None,
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+        /*max_attempts*/ 3,
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Approved);
+    let GuardianReviewOutcome::Completed(assessment) = outcome else {
+        panic!("expected guardian assessment");
+    };
+    assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert_eq!(assessment.rationale, "retry succeeded");
+    assert_eq!(metadata.attempt_count, 2);
+    assert!(matches!(
+        metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
+    ));
     assert_eq!(request_log.requests().len(), 2);
     Ok(())
 }
@@ -2247,16 +2258,27 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
     let (session, turn) = guardian_test_session_and_turn(&server).await;
     seed_guardian_parent_history(&session, &turn).await;
 
-    let decision = review_approval_request(
-        &session,
-        &turn,
-        "review-parse-retry".to_string(),
+    let (outcome, metadata) = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
         guardian_shell_request("shell-parse-retry"),
         /*retry_reason*/ None,
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+        /*max_attempts*/ 3,
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Approved);
+    let GuardianReviewOutcome::Completed(assessment) = outcome else {
+        panic!("expected guardian assessment");
+    };
+    assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert_eq!(assessment.rationale, "retry succeeded");
+    assert_eq!(metadata.attempt_count, 3);
+    assert!(matches!(
+        metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
+    ));
     assert_eq!(request_log.requests().len(), 3);
     Ok(())
 }
