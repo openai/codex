@@ -399,14 +399,9 @@ ON CONFLICT(child_thread_id) DO NOTHING
         filters: ThreadFilterOptions<'_>,
     ) -> anyhow::Result<crate::ThreadsPage> {
         let limit = page_size.saturating_add(1);
-        let sort_key = filters.sort_key;
-        let sort_direction = filters.sort_direction;
 
         let mut builder = QueryBuilder::<Sqlite>::new("");
-        push_thread_select_columns(&mut builder);
-        builder.push(" FROM threads");
-        push_thread_filters(&mut builder, filters);
-        push_thread_order_and_limit(&mut builder, sort_key, sort_direction, limit);
+        push_list_threads_query(&mut builder, filters, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         let mut items = rows
@@ -418,7 +413,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
             items.pop();
             items
                 .last()
-                .and_then(|item| anchor_from_item(item, sort_key))
+                .and_then(|item| anchor_from_item(item, filters.sort_key))
         } else {
             None
         };
@@ -917,6 +912,17 @@ fn one_thread_id_from_rows(
     }
 }
 
+fn push_list_threads_query(
+    builder: &mut QueryBuilder<Sqlite>,
+    filters: ThreadFilterOptions<'_>,
+    limit: usize,
+) {
+    push_thread_select_columns(builder);
+    builder.push(" FROM threads");
+    push_thread_filters(builder, filters);
+    push_thread_order_and_limit(builder, filters.sort_key, filters.sort_direction, limit);
+}
+
 pub(super) fn push_thread_select_columns(builder: &mut QueryBuilder<Sqlite>) {
     builder.push(
         r#"
@@ -1293,6 +1299,57 @@ mod tests {
             .expect("list with empty cwd filters should succeed");
 
         assert_eq!(page.items, Vec::new());
+    }
+
+    #[tokio::test]
+    async fn list_threads_uses_visible_sort_indexes() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home, "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+
+        let model_providers = ["test-provider".to_string()];
+        for (sort_key, expected_index) in [
+            (SortKey::CreatedAt, "idx_threads_visible_created_at_ms"),
+            (SortKey::UpdatedAt, "idx_threads_visible_updated_at_ms"),
+        ] {
+            let mut builder = QueryBuilder::<Sqlite>::new("EXPLAIN QUERY PLAN ");
+            push_list_threads_query(
+                &mut builder,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: Some(&model_providers),
+                    cwd_filters: None,
+                    anchor: None,
+                    sort_key,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+                /*limit*/ 201,
+            );
+            let plan_details = builder
+                .build()
+                .fetch_all(runtime.pool.as_ref())
+                .await
+                .expect("query plan should load")
+                .into_iter()
+                .map(|row| row.get::<String, _>("detail"))
+                .collect::<Vec<_>>();
+
+            assert!(
+                plan_details
+                    .iter()
+                    .any(|detail| detail.contains(expected_index)),
+                "query plan did not use {expected_index}: {plan_details:?}"
+            );
+            assert!(
+                plan_details
+                    .iter()
+                    .all(|detail| !detail.contains("TEMP B-TREE")),
+                "query plan used a temporary B-tree: {plan_details:?}"
+            );
+        }
     }
 
     #[tokio::test]
