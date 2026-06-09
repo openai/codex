@@ -931,14 +931,36 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
         "before_first_sampling_ms",
         "sampling_ms",
         "between_sampling_overhead_ms",
+        "between_sampling_post_response_ms",
+        "between_sampling_retry_ms",
+        "between_sampling_compaction_ms",
+        "between_sampling_follow_up_ms",
+        "between_sampling_request_preparation_ms",
+        "between_sampling_other_ms",
         "tool_blocking_ms",
         "after_last_sampling_ms",
     ]
     .into_iter()
     .all(|field| params[field].as_u64().is_some());
+    let between_sampling_breakdown_ms = [
+        "between_sampling_post_response_ms",
+        "between_sampling_retry_ms",
+        "between_sampling_compaction_ms",
+        "between_sampling_follow_up_ms",
+        "between_sampling_request_preparation_ms",
+        "between_sampling_other_ms",
+    ]
+    .into_iter()
+    .filter_map(|field| params[field].as_u64())
+    .sum::<u64>();
     assert_eq!(
         json!({
             "timingsAreNumbers": timings_are_numbers,
+            "betweenSamplingBreakdownCloses":
+                params["between_sampling_overhead_ms"] == between_sampling_breakdown_ms,
+            "retryTimingIsPositive": params["between_sampling_retry_ms"]
+                .as_u64()
+                .is_some_and(|duration| duration > 0),
             "toolBlockingMs": params["tool_blocking_ms"],
             "samplingRequestCount": params["sampling_request_count"],
             "samplingRetryCount": params["sampling_retry_count"],
@@ -946,6 +968,8 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
         }),
         json!({
             "timingsAreNumbers": true,
+            "betweenSamplingBreakdownCloses": true,
+            "retryTimingIsPositive": true,
             "toolBlockingMs": 0,
             "samplingRequestCount": 2,
             "samplingRetryCount": 1,
@@ -1040,8 +1064,23 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
 
     let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
     let params = &event["event_params"];
+    let between_sampling_breakdown_ms = [
+        "between_sampling_post_response_ms",
+        "between_sampling_retry_ms",
+        "between_sampling_compaction_ms",
+        "between_sampling_follow_up_ms",
+        "between_sampling_request_preparation_ms",
+        "between_sampling_other_ms",
+    ]
+    .into_iter()
+    .filter_map(|field| params[field].as_u64())
+    .sum::<u64>();
     assert_eq!(
         json!({
+            "betweenSamplingBreakdownCloses":
+                params["between_sampling_overhead_ms"] == between_sampling_breakdown_ms,
+            "retryMs": params["between_sampling_retry_ms"],
+            "compactionMs": params["between_sampling_compaction_ms"],
             "toolBlockingIsPositive": params["tool_blocking_ms"]
                 .as_u64()
                 .is_some_and(|duration| duration > 0),
@@ -1050,9 +1089,156 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
             "status": params["status"],
         }),
         json!({
+            "betweenSamplingBreakdownCloses": true,
+            "retryMs": 0,
+            "compactionMs": 0,
             "toolBlockingIsPositive": true,
             "samplingRequestCount": 2,
             "samplingRetryCount": 0,
+            "status": "completed",
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turn_profile_attributes_mid_turn_compaction() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let tool_call_arguments = serde_json::to_string(&json!({
+        "questions": [{
+            "id": "confirm_path",
+            "header": "Confirm",
+            "question": "Proceed with the plan?",
+            "options": [{
+                "label": "Yes (Recommended)",
+                "description": "Continue the current plan."
+            }]
+        }]
+    }))?;
+    let tool_response = responses::sse(vec![
+        responses::ev_response_created("tool-response"),
+        responses::ev_function_call("call1", "request_user_input", &tool_call_arguments),
+        responses::ev_completed_with_tokens("tool-response", /*total_tokens*/ 500_000),
+    ]);
+    let compact_response = responses::sse(vec![
+        responses::ev_assistant_message("compact-message", "Summary"),
+        responses::ev_completed_with_tokens("compact-response", /*total_tokens*/ 200),
+    ]);
+    let response_mock = responses::mount_response_sequence(
+        &server,
+        vec![
+            responses::sse_response(tool_response),
+            responses::sse_response(compact_response)
+                .set_delay(std::time::Duration::from_millis(25)),
+            responses::sse_response(create_final_assistant_message_sse_response("Done")?),
+        ],
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            client_user_message_id: None,
+            input: vec![V2UserInput::Text {
+                text: "trigger compaction".to_string(),
+                text_elements: Vec::new(),
+            }],
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: "mock-model".to_string(),
+                    reasoning_effort: Some(ReasoningEffort::Medium),
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::ToolRequestUserInput { request_id, .. } = server_req else {
+        panic!("expected ToolRequestUserInput request, got: {server_req:?}");
+    };
+    mcp.send_response(
+        request_id,
+        json!({
+            "answers": {
+                "confirm_path": { "answers": ["yes"] }
+            }
+        }),
+    )
+    .await?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
+    let params = &event["event_params"];
+    let between_sampling_breakdown_ms = [
+        "between_sampling_post_response_ms",
+        "between_sampling_retry_ms",
+        "between_sampling_compaction_ms",
+        "between_sampling_follow_up_ms",
+        "between_sampling_request_preparation_ms",
+        "between_sampling_other_ms",
+    ]
+    .into_iter()
+    .filter_map(|field| params[field].as_u64())
+    .sum::<u64>();
+    assert_eq!(
+        json!({
+            "betweenSamplingBreakdownCloses":
+                params["between_sampling_overhead_ms"] == between_sampling_breakdown_ms,
+            "compactionIncludesResponseDelay": params["between_sampling_compaction_ms"]
+                .as_u64()
+                .is_some_and(|duration| duration >= 20),
+            "samplingRequestCount": params["sampling_request_count"],
+            "samplingRetryCount": params["sampling_retry_count"],
+            "responseRequestCount": response_mock.requests().len(),
+            "status": params["status"],
+        }),
+        json!({
+            "betweenSamplingBreakdownCloses": true,
+            "compactionIncludesResponseDelay": true,
+            "samplingRequestCount": 2,
+            "samplingRetryCount": 0,
+            "responseRequestCount": 3,
             "status": "completed",
         })
     );

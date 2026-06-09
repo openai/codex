@@ -60,6 +60,7 @@ use crate::tools::router::extension_tool_executors;
 use crate::tools::spec_plan::search_tool_enabled;
 use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::turn_timing::BetweenSamplingPhase;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::error_or_panic;
 use codex_analytics::AppInvocation;
@@ -200,6 +201,9 @@ pub(crate) async fn run_turn(
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
 
     loop {
+        turn_context
+            .turn_timing_state
+            .mark_between_sampling_phase(BetweenSamplingPhase::RequestPreparation);
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
@@ -237,6 +241,9 @@ pub(crate) async fn run_turn(
         .await
         {
             Ok(sampling_request_output) => {
+                turn_context
+                    .turn_timing_state
+                    .mark_between_sampling_phase(BetweenSamplingPhase::FollowUp);
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -271,6 +278,9 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
+                    turn_context
+                        .turn_timing_state
+                        .mark_between_sampling_phase(BetweenSamplingPhase::Compaction);
                     if let Err(err) = run_auto_compact(
                         &sess,
                         &turn_context,
@@ -1048,6 +1058,9 @@ async fn run_sampling_request(
             return Err(err);
         }
 
+        turn_context
+            .turn_timing_state
+            .mark_between_sampling_phase(BetweenSamplingPhase::Retry);
         handle_retryable_response_stream_error(
             &mut retries,
             max_retries,
@@ -1059,6 +1072,9 @@ async fn run_sampling_request(
         )
         .await?;
         turn_context.turn_timing_state.record_sampling_retry();
+        turn_context
+            .turn_timing_state
+            .mark_between_sampling_phase(BetweenSamplingPhase::RequestPreparation);
     }
 }
 
