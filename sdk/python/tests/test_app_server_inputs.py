@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import base64
+
 from app_server_harness import AppServerHarness
 from app_server_helpers import TINY_PNG_BYTES
 
 from openai_codex import Codex, ImageInput, LocalImageInput, SkillInput, TextInput
 
 
-def test_remote_image_input_reaches_responses_api(
+def test_remote_image_input_is_materialized_before_responses_api(
     tmp_path,
 ) -> None:
-    """Remote image inputs should survive the SDK and app-server boundary."""
-    remote_image_url = "https://example.com/codex.png"
+    """Remote image inputs should be inlined by the app-server."""
 
     with AppServerHarness(tmp_path) as harness:
+        remote_image_url = harness.responses.serve_bytes(
+            "/codex.png",
+            TINY_PNG_BYTES,
+            content_type="image/png",
+        )
         harness.responses.enqueue_assistant_message(
             "remote image received",
             response_id="remote-image",
@@ -34,7 +40,7 @@ def test_remote_image_input_reaches_responses_api(
     } == {
         "final_response": "remote image received",
         "contains_user_prompt": True,
-        "image_urls": [remote_image_url],
+        "image_urls": [f"data:image/png;base64,{base64.b64encode(TINY_PNG_BYTES).decode('ascii')}"],
     }
 
 

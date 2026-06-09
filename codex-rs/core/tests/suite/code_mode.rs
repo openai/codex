@@ -2486,19 +2486,29 @@ text(circular);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_output_images_via_global_helper() -> Result<()> {
+async fn code_mode_materializes_http_images_before_responses_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn(
-        &server,
-        "use exec to return images",
+    let image_bytes = BASE64_STANDARD.decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/image.png"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(image_bytes.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let image_url = format!("{}/image.png", server.uri());
+    let image_url_json = serde_json::to_string(&image_url)?;
+    let code = format!(
         r#"
-image("https://example.com/image.jpg");
+image({image_url_json});
 image("data:image/png;base64,AAA");
-"#,
-    )
-    .await?;
+"#
+    );
+    let (_test, second_mock) =
+        run_code_mode_turn(&server, "use exec to return images", &code).await?;
 
     let req = second_mock.single_request();
     let items = custom_tool_output_items(&req, "call-1");
@@ -2520,7 +2530,10 @@ image("data:image/png;base64,AAA");
         items[1],
         serde_json::json!({
             "type": "input_image",
-            "image_url": "https://example.com/image.jpg",
+            "image_url": format!(
+                "data:image/png;base64,{}",
+                BASE64_STANDARD.encode(image_bytes)
+            ),
             "detail": "high"
         }),
     );

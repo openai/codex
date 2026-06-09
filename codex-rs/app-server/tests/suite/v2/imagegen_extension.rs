@@ -7,6 +7,8 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -148,7 +150,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
 
 #[tokio::test]
 async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()> {
-    let edit_request = run_image_edit_test(|codex_home| {
+    let edit_request = run_image_edit_test(|codex_home, _server_uri| {
         let image_path = codex_home.join("attached.png");
         std::fs::write(&image_path, TINY_PNG_BYTES)?;
         Ok((
@@ -180,9 +182,9 @@ async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()>
 }
 
 #[tokio::test]
-async fn standalone_image_edit_uses_recent_pathless_image() -> Result<()> {
-    let image_url = "https://example.com/reference.png";
-    let edit_request = run_image_edit_test(|_| {
+async fn standalone_image_edit_uses_materialized_recent_pathless_image() -> Result<()> {
+    let edit_request = run_image_edit_test(|_, server_uri| {
+        let image_url = format!("{server_uri}/reference.png");
         Ok((
             json!({
                 "prompt": "add a red hat",
@@ -194,7 +196,7 @@ async fn standalone_image_edit_uses_recent_pathless_image() -> Result<()> {
                     text_elements: Vec::new(),
                 },
                 V2UserInput::Image {
-                    url: image_url.to_string(),
+                    url: image_url,
                     detail: None,
                 },
             ],
@@ -202,7 +204,13 @@ async fn standalone_image_edit_uses_recent_pathless_image() -> Result<()> {
     })
     .await?;
     assert_eq!(edit_request["prompt"], "add a red hat");
-    assert_eq!(edit_request["images"][0]["image_url"], image_url);
+    assert_eq!(
+        edit_request["images"][0]["image_url"],
+        format!(
+            "data:image/png;base64,{}",
+            BASE64_STANDARD.encode(TINY_PNG_BYTES)
+        )
+    );
 
     Ok(())
 }
@@ -338,14 +346,19 @@ async fn start_image_generation_turn(mcp: &mut TestAppServer) -> Result<()> {
 }
 
 async fn run_image_edit_test(
-    input: impl FnOnce(&Path) -> Result<(serde_json::Value, Vec<V2UserInput>)>,
+    input: impl FnOnce(&Path, &str) -> Result<(serde_json::Value, Vec<V2UserInput>)>,
 ) -> Result<serde_json::Value> {
     let call_id = "image-edit-1";
     let server = responses::start_mock_server().await;
     mount_image_edit_response(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/reference.png"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(TINY_PNG_BYTES))
+        .mount(&server)
+        .await;
 
     let codex_home = TempDir::new()?;
-    let (arguments, input) = input(codex_home.path())?;
+    let (arguments, input) = input(codex_home.path(), &server.uri())?;
     let response_mock = responses::mount_sse_sequence(
         &server,
         vec![

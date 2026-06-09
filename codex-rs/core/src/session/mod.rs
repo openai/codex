@@ -2588,6 +2588,9 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
+        let items =
+            crate::image_url_materializer::materialize_conversation_item_images(items).await;
+        let items = items.as_ref();
         {
             let mut state = self.state.lock().await;
             state.record_items(items.iter(), turn_context.truncation_policy);

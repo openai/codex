@@ -106,6 +106,7 @@ class MockResponsesServer:
         self._responses: queue.Queue[MockSseResponse] = queue.Queue()
         self._requests: list[CapturedResponsesRequest] = []
         self._requests_lock = threading.Lock()
+        self._get_responses: dict[str, tuple[bytes, str]] = {}
         self._server = _ResponsesHttpServer(("127.0.0.1", 0), _ResponsesHandler, self)
         self._thread = threading.Thread(
             target=self._server.serve_forever,
@@ -158,6 +159,13 @@ class MockResponsesServer:
             )
         )
 
+    def serve_bytes(self, path: str, body: bytes, *, content_type: str) -> str:
+        """Serve bytes from a GET path and return its absolute URL."""
+        if not path.startswith("/"):
+            raise ValueError("GET response path must start with '/'")
+        self._get_responses[path] = (body, content_type)
+        return f"{self.url}{path}"
+
     def requests(self) -> list[CapturedResponsesRequest]:
         """Return all recorded Responses API requests."""
         with self._requests_lock:
@@ -201,6 +209,9 @@ class MockResponsesServer:
     def _next_response(self) -> MockSseResponse:
         """Return the next queued SSE response or fail the HTTP request."""
         return self._responses.get_nowait()
+
+    def _get_response(self, path: str) -> tuple[bytes, str] | None:
+        return self._get_responses.get(path)
 
 
 class AppServerHarness:
@@ -283,6 +294,14 @@ class _ResponsesHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """Serve a minimal `/v1/models` response if app-server asks for models."""
+        if response := self.server.mock._get_response(self.path):
+            body, content_type = response
+            self.send_response(200)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.endswith("/v1/models") or self.path.endswith("/models"):
             self._send_json(
                 {
