@@ -263,6 +263,14 @@ impl ChatWidget {
         &mut self,
         notification: McpServerStatusUpdatedNotification,
     ) {
+        // Keep transcript ownership intact even if routing state delivers a child update here.
+        if let (Some(notification_thread_id), Some(thread_id)) =
+            (notification.thread_id.as_deref(), self.thread_id())
+            && notification_thread_id != thread_id.to_string()
+        {
+            return;
+        }
+
         let status = match notification.status {
             McpServerStartupState::Starting => McpStartupStatus::Starting,
             McpServerStartupState::Ready => McpStartupStatus::Ready,

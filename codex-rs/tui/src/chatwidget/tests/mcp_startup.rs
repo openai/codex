@@ -26,6 +26,36 @@ fn notify_mcp_status_error(chat: &mut ChatWidget, name: &str, error: &str) {
 }
 
 #[tokio::test]
+async fn mcp_startup_ignores_status_for_other_thread() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["sentry".to_string()]);
+    let parent_thread_id = ThreadId::new();
+    let child_thread_id = ThreadId::new();
+    chat.thread_id = Some(parent_thread_id);
+
+    for status in [
+        McpServerStartupState::Starting,
+        McpServerStartupState::Failed,
+    ] {
+        chat.handle_server_notification(
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some(child_thread_id.to_string()),
+                name: "sentry".to_string(),
+                status,
+                error: matches!(status, McpServerStartupState::Failed)
+                    .then(|| "sentry is not logged in".to_string()),
+            }),
+            /*replay_kind*/ None,
+        );
+    }
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.mcp_startup_status.is_none());
+}
+
+#[tokio::test]
 async fn mcp_startup_dedupes_same_round_duplicate_failure_warning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
