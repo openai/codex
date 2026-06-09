@@ -2,6 +2,7 @@ mod discoverable;
 mod injection;
 mod mentions;
 mod render;
+mod routing;
 #[cfg(test)]
 pub(crate) mod test_support;
 
