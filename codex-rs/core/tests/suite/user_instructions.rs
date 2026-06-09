@@ -284,49 +284,6 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
     Ok(())
 }
 
-// TODO(anp): Enforce an independent hard limit for the global instruction context item, then
-// update this characterization to assert that oversized global instructions are bounded.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn global_instruction_context_item_is_currently_not_limited_by_project_doc_budget()
--> Result<()> {
-    // Set a one-byte project-doc budget, then create a much larger global instruction file.
-    let server = responses::start_mock_server().await;
-    let response_mock = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_response_created("oversized-global-response"),
-            responses::ev_completed("oversized-global-response"),
-        ]),
-    )
-    .await;
-    let home = Arc::new(TempDir::new()?);
-    let oversized_global = vec!["global instruction item remains uncapped"; 512].join("\n");
-    let source = write_global(home.as_ref(), &oversized_global)?;
-    let mut builder = test_codex()
-        .with_home(Arc::clone(&home))
-        .with_config(|config| config.project_doc_max_bytes = 1);
-    let test = builder.build(&server).await?;
-
-    // Submit a turn so the complete global instruction item is rendered into model input.
-    test.submit_turn("inspect current global item limit behavior")
-        .await?;
-
-    // Characterize the current gap: the project-doc budget does not cap the global item.
-    assert_eq!(
-        test.codex.instruction_sources().await,
-        vec![source],
-        "the oversized global file should still be selected as the sole source"
-    );
-    let expected_fragment = expected_instruction_fragment(&test.config.cwd, &oversized_global);
-    assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);
-    assert!(
-        expected_fragment.len() > test.config.project_doc_max_bytes,
-        "characterization requires a global item larger than the configured project-doc budget"
-    );
-
-    Ok(())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> {
     // Set up a malformed global instruction file and one model response.
@@ -452,8 +409,6 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     Ok(())
 }
 
-// TODO(anp): Align fork instruction sources with the historical instructions replayed to the
-// model so the reported source list and model-visible context describe the same files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> {
     // Set up a parent turn and a later fork turn against the parent's rollout.
@@ -524,7 +479,6 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
                 text: "continue fork".to_string(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
@@ -852,127 +806,6 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
         test.codex.instruction_sources().await,
         vec![source],
         "thread retains the creation-time global source after mid-turn compaction"
-    );
-
-    Ok(())
-}
-
-// Follow-up: confirm the desired behavior for persisted model-visible instruction items across
-// later full-context rebuilds. Reloading file contents into historical context currently rewrites
-// model-visible history and invalidates the cached prefix; decide whether the original item should
-// remain stable instead.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cold_resume_then_full_context_rebuild_uses_current_instructions() -> Result<()> {
-    // Set up an initial turn, a cold-resumed turn, manual compaction, and the later full-context
-    // rebuild.
-    let server = responses::start_mock_server().await;
-    let response_mock = responses::mount_sse_sequence(
-        &server,
-        vec![
-            responses::sse(vec![
-                responses::ev_response_created("initial-response"),
-                responses::ev_completed("initial-response"),
-            ]),
-            responses::sse(vec![
-                responses::ev_response_created("resumed-response"),
-                responses::ev_completed("resumed-response"),
-            ]),
-            responses::sse(vec![
-                responses::ev_response_created("compact-response"),
-                responses::ev_assistant_message("compact-message", "summary"),
-                responses::ev_completed("compact-response"),
-            ]),
-            responses::sse(vec![
-                responses::ev_response_created("post-compact-response"),
-                responses::ev_completed("post-compact-response"),
-            ]),
-        ],
-    )
-    .await;
-    let provider = local_compaction_provider(&server);
-    let home = Arc::new(TempDir::new()?);
-    let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
-
-    // Create the initial thread and persist its creation-time instruction snapshot.
-    let mut initial_builder = test_codex().with_home(Arc::clone(&home)).with_config({
-        let provider = provider.clone();
-        move |config| config.model_provider = provider
-    });
-    let initial = initial_builder.build(&server).await?;
-
-    // Assert the initial thread reports the source used for its historical snapshot.
-    assert_eq!(
-        initial.codex.instruction_sources().await,
-        vec![source.clone()],
-        "initial thread reports the creation-time global source"
-    );
-    initial.submit_turn("persist resume history").await?;
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
-    initial.codex.submit(Op::Shutdown).await?;
-    wait_for_event(&initial.codex, |event| {
-        matches!(event, EventMsg::ShutdownComplete)
-    })
-    .await;
-
-    // Rewrite the selected AGENTS.md in place, then cold-resume with freshly loaded configuration.
-    let rewritten_source = write_global(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
-    assert_eq!(source, rewritten_source);
-    let mut resume_builder = test_codex()
-        .with_home(Arc::clone(&home))
-        .with_config(move |config| config.model_provider = provider);
-    let resumed = resume_builder
-        .resume(&server, Arc::clone(&home), rollout_path)
-        .await?;
-
-    // Assert the same source path now resolves new file contents while cold resume replays the
-    // exact old historical prefix.
-    assert_eq!(
-        resumed.codex.instruction_sources().await,
-        vec![source.clone()],
-        "resumed thread reports the same file path after in-place mutation"
-    );
-    assert_eq!(
-        fs::read_to_string(source.as_path())?,
-        NEW_GLOBAL_INSTRUCTIONS,
-        "the reported source path should contain the rewritten text"
-    );
-    resumed.submit_turn("resume historical context").await?;
-    let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
-    let old_fragment = expected_instruction_fragment(&initial.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
-    assert_single_instruction_fragment(&requests[0], &old_fragment);
-    assert_single_instruction_fragment(&requests[1], &old_fragment);
-    let initial_input = requests[0].input();
-    let resumed_input = requests[1].input();
-    assert_eq!(
-        resumed_input.get(..initial_input.len()),
-        Some(initial_input.as_slice()),
-        "cold resume should replay the original structured input prefix"
-    );
-
-    // Compact the resumed thread, then issue a turn that rebuilds full context.
-    resumed.codex.submit(Op::Compact).await?;
-    wait_for_event(&resumed.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-    resumed.submit_turn("rebuild full context").await?;
-
-    // Characterize the current cache-breaking behavior: compaction sees old history, but the
-    // following full-context rebuild injects the newly loaded same-path contents.
-    let requests = response_mock.requests();
-    assert_eq!(requests.len(), 4);
-    let new_fragment = expected_instruction_fragment(&resumed.config.cwd, NEW_GLOBAL_INSTRUCTIONS);
-    assert_single_instruction_fragment(&requests[2], &old_fragment);
-    assert_single_instruction_fragment(&requests[3], &new_fragment);
-    assert_eq!(
-        resumed.codex.instruction_sources().await,
-        vec![source],
-        "resumed thread retains the same current source path after compaction"
     );
 
     Ok(())

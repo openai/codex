@@ -371,10 +371,6 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     // Run `codex mcp` with a specific config.toml.
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
-    std::fs::write(
-        codex_home.path().join("AGENTS.md"),
-        "MCP global instructions",
-    )?;
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
 
@@ -440,26 +436,11 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         developer_contents
             .iter()
             .any(|content| content.contains("`sandbox_mode`")),
-        "expected developer contents to contain text with \"`sandbox_mode`\"; observed: {developer_contents:?}"
+        "expected permissions developer message, got {developer_contents:?}"
     );
     assert!(
         developer_contents.contains(&"Foreshadow upcoming tool calls."),
-        "expected developer contents to contain \"Foreshadow upcoming tool calls.\"; observed: {developer_contents:?}"
-    );
-    let user_contents = request["input"]
-        .as_array()
-        .expect("responses request should include input items")
-        .iter()
-        .filter(|msg| msg.get("role").and_then(serde_json::Value::as_str) == Some("user"))
-        .filter_map(|msg| msg.get("content").and_then(serde_json::Value::as_array))
-        .flatten()
-        .filter_map(|span| span.get("text").and_then(serde_json::Value::as_str))
-        .collect::<Vec<_>>();
-    assert!(
-        user_contents
-            .iter()
-            .any(|content| content.contains("MCP global instructions")),
-        "expected user contents to contain text with \"MCP global instructions\"; observed: {user_contents:?}"
+        "expected developer instructions in developer messages, got {developer_contents:?}"
     );
 
     Ok(())

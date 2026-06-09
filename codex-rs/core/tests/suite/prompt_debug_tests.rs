@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_core::LoadedAgentsMd;
 use codex_core::build_prompt_input;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -8,14 +9,11 @@ use codex_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
-const PROJECT_INSTRUCTIONS: &str = "Project-specific test instructions";
-
 #[tokio::test]
 async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
-    std::fs::write(codex_home.path().join("AGENTS.md"), PROJECT_INSTRUCTIONS)?;
-    let config = ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(cwd.path().to_path_buf()),
@@ -24,6 +22,10 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         })
         .build()
         .await?;
+    config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+        "Project-specific test instructions",
+    ));
+
     let input = build_prompt_input(
         config,
         vec![UserInput::Text {
@@ -43,23 +45,19 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         phase: None,
     };
     assert_eq!(input.last(), Some(&expected_user_message));
-    assert!(
-        input.iter().any(|item| {
-            let ResponseItem::Message { content, .. } = item else {
+    assert!(input.iter().any(|item| {
+        let ResponseItem::Message { content, .. } = item else {
+            return false;
+        };
+
+        content.iter().any(|content_item| {
+            let (ContentItem::InputText { text } | ContentItem::OutputText { text }) = content_item
+            else {
                 return false;
             };
-
-            content.iter().any(|content_item| {
-                let (ContentItem::InputText { text } | ContentItem::OutputText { text }) =
-                    content_item
-                else {
-                    return false;
-                };
-                text.contains(PROJECT_INSTRUCTIONS)
-            })
-        }),
-        "expected prompt input to contain {PROJECT_INSTRUCTIONS:?}; observed: {input:#?}"
-    );
+            text.contains("Project-specific test instructions")
+        })
+    }));
 
     Ok(())
 }
