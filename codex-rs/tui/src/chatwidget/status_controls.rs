@@ -263,7 +263,11 @@ impl ChatWidget {
         for (pending_request_id, handle) in self.refreshing_status_outputs.drain(..) {
             if pending_request_id == request_id {
                 updated_any = true;
-                handle.finish_rate_limit_refresh(rate_limit_snapshots.as_slice(), now);
+                handle.finish_rate_limit_refresh(
+                    rate_limit_snapshots.as_slice(),
+                    self.plan_type,
+                    now,
+                );
             } else {
                 remaining.push((pending_request_id, handle));
             }

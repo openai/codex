@@ -837,8 +837,13 @@ async fn rolling_rate_limit_snapshot_preserves_prior_individual_limit() {
 }
 
 #[tokio::test]
-async fn rate_limit_snapshot_updates_and_retains_plan_type() {
+async fn rate_limit_snapshots_do_not_override_account_plan() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.update_account_state(
+        /*status_account_display*/ None,
+        Some(PlanType::Pro),
+        /*has_chatgpt_account*/ true,
+    );
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
         limit_id: None,
@@ -855,10 +860,10 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         }),
         credits: None,
         individual_limit: None,
-        plan_type: Some(PlanType::Plus),
+        plan_type: Some(PlanType::Free),
         rate_limit_reached_type: None,
     }));
-    assert_eq!(chat.plan_type, Some(PlanType::Plus));
+    assert_eq!(chat.plan_type, Some(PlanType::Pro));
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
         limit_id: None,
@@ -875,29 +880,21 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         }),
         credits: None,
         individual_limit: None,
-        plan_type: Some(PlanType::Pro),
+        plan_type: None,
         rate_limit_reached_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
 
-    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+    chat.on_rolling_rate_limit_snapshot(RateLimitSnapshot {
         limit_id: None,
         limit_name: None,
-        primary: Some(RateLimitWindow {
-            used_percent: 30,
-            window_duration_mins: Some(60),
-            resets_at: Some(456),
-        }),
-        secondary: Some(RateLimitWindow {
-            used_percent: 18,
-            window_duration_mins: Some(300),
-            resets_at: Some(567),
-        }),
+        primary: None,
+        secondary: None,
         credits: None,
         individual_limit: None,
-        plan_type: None,
+        plan_type: Some(PlanType::Free),
         rate_limit_reached_type: None,
-    }));
+    });
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
 }
 

@@ -201,8 +201,6 @@ impl ChatWidget {
                 } else {
                     None
                 };
-            self.plan_type = snapshot.plan_type.or(self.plan_type);
-
             let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
             if is_codex_limit
                 && let Some(rate_limit_reached_type) = snapshot.rate_limit_reached_type

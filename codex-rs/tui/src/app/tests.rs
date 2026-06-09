@@ -23,6 +23,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::history_cell::new_session_info;
 use crate::multi_agents::AgentPickerThreadEntry;
 use assert_matches::assert_matches;
+use base64::Engine as _;
 
 use crate::app_command::AppCommand as Op;
 use crate::diff_model::FileChange;
@@ -30,6 +31,7 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
+use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AdditionalFileSystemPermissions;
 use codex_app_server_protocol::AdditionalNetworkPermissions;
 use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -74,6 +76,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::UserInput as AppServerUserInput;
 use codex_app_server_protocol::WarningNotification;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -111,6 +114,37 @@ macro_rules! assert_app_snapshot {
 
 fn test_absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+}
+
+fn write_pro_chatgpt_auth(codex_home: &Path) {
+    let encode = |value: &serde_json::Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(value).expect("serialize JWT segment"))
+    };
+    let token = format!(
+        "{}.{}.sig",
+        encode(&serde_json::json!({"alg": "none", "typ": "JWT"})),
+        encode(&serde_json::json!({
+            "email": "user@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "workspace-1",
+                "chatgpt_plan_type": "pro",
+            },
+        })),
+    );
+    let auth = serde_json::json!({
+        "tokens": {
+            "id_token": token,
+            "access_token": "test-access-token",
+            "refresh_token": "test-refresh-token",
+            "account_id": "workspace-1",
+        },
+    });
+    std::fs::write(
+        codex_home.join("auth.json"),
+        serde_json::to_vec_pretty(&auth).expect("serialize auth.json"),
+    )
+    .expect("write auth.json");
 }
 
 async fn next_thread_settings_updated(
@@ -3349,6 +3383,62 @@ async fn side_thread_snapshot_skips_session_header_preamble() {
     assert_eq!(
         app.chat_widget.active_cell_transcript_lines(/*width*/ 120),
         None
+    );
+}
+
+#[tokio::test]
+async fn account_updated_reads_canonical_account_for_status() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+    app.config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
+    write_pro_chatgpt_auth(app.config.codex_home.as_path());
+    let app_server = crate::start_embedded_app_server_for_picker(&app.config)
+        .await
+        .expect("embedded app server");
+    app.chat_widget.update_account_state(
+        Some(crate::status::StatusAccountDisplay::ChatGpt {
+            email: Some("user@example.com".to_string()),
+            plan: Some("Free".to_string()),
+        }),
+        Some(codex_protocol::account::PlanType::Free),
+        /*has_chatgpt_account*/ true,
+    );
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::AccountUpdated(AccountUpdatedNotification {
+                auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
+                plan_type: Some(codex_protocol::account::PlanType::Pro),
+            }),
+        ),
+    )
+    .await;
+
+    match app.chat_widget.status_account_display() {
+        Some(crate::status::StatusAccountDisplay::ChatGpt { email, plan }) => {
+            assert_eq!(email.as_deref(), Some("user@example.com"));
+            assert_eq!(plan.as_deref(), Some("Pro"));
+        }
+        other => panic!("expected ChatGPT account display, got {other:?}"),
+    }
+    assert_eq!(
+        app.chat_widget.current_plan_type(),
+        Some(codex_protocol::account::PlanType::Pro)
+    );
+
+    app.chat_widget.add_status_output(
+        /*refreshing_rate_limits*/ false, /*request_id*/ None,
+    );
+    let rendered = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.display_lines(/*width*/ 80))
+        }
+        other => panic!("expected status output, got {other:?}"),
+    };
+    assert!(
+        rendered.contains("user@example.com (Pro)"),
+        "expected canonical account/read state in /status, got: {rendered}"
     );
 }
 

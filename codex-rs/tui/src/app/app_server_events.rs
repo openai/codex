@@ -9,10 +9,18 @@ use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
+use crate::status::StatusAccountDisplay;
+use crate::status::plan_type_display_name;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::GetAccountParams;
+use codex_app_server_protocol::GetAccountResponse;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use uuid::Uuid;
 
 impl App {
     pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
@@ -80,16 +88,52 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
-                self.chat_widget.update_account_state(
-                    status_account_display_from_auth_mode(
-                        notification.auth_mode,
-                        notification.plan_type,
-                    ),
-                    notification.plan_type,
-                    notification
-                        .auth_mode
-                        .is_some_and(AuthMode::has_chatgpt_account),
-                );
+                let request_id = RequestId::String(format!("account-read-{}", Uuid::new_v4()));
+                let account: Result<GetAccountResponse, _> = app_server_client
+                    .request_handle()
+                    .request_typed(ClientRequest::GetAccount {
+                        request_id,
+                        params: GetAccountParams {
+                            refresh_token: false,
+                        },
+                    })
+                    .await;
+                match account {
+                    Ok(account) => {
+                        let (display, plan_type, has_chatgpt_account) = match account.account {
+                            Some(Account::ApiKey {}) => {
+                                (Some(StatusAccountDisplay::ApiKey), None, false)
+                            }
+                            Some(Account::Chatgpt { email, plan_type }) => (
+                                Some(StatusAccountDisplay::ChatGpt {
+                                    email: Some(email),
+                                    plan: Some(plan_type_display_name(plan_type)),
+                                }),
+                                Some(plan_type),
+                                true,
+                            ),
+                            Some(Account::AmazonBedrock {}) | None => (None, None, false),
+                        };
+                        self.chat_widget.update_account_state(
+                            display,
+                            plan_type,
+                            has_chatgpt_account,
+                        );
+                    }
+                    Err(err) => {
+                        tracing::warn!("account/read failed after account/updated: {err}");
+                        self.chat_widget.update_account_state(
+                            status_account_display_from_auth_mode(
+                                notification.auth_mode,
+                                notification.plan_type,
+                            ),
+                            notification.plan_type,
+                            notification
+                                .auth_mode
+                                .is_some_and(AuthMode::has_chatgpt_account),
+                        );
+                    }
+                }
                 return;
             }
             ServerNotification::ExternalAgentConfigImportCompleted(_) => {

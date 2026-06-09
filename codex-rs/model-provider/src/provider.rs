@@ -202,20 +202,20 @@ impl ModelProvider for ConfiguredModelProvider {
             self.auth_manager
                 .as_ref()
                 .and_then(|auth_manager| {
-                    let auth = auth_manager.auth_cached()?;
+                    let (auth, plan_type) = auth_manager.auth_cached_with_effective_account_plan();
+                    let auth = auth?;
                     if auth_manager.refresh_failure_for_auth(&auth).is_some() {
                         return None;
                     }
-                    Some(auth)
+                    Some((auth, plan_type))
                 })
-                .map(|auth| match &auth {
+                .map(|(auth, plan_type)| match &auth {
                     CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
                     | CodexAuth::AgentIdentity(_)
                     | CodexAuth::PersonalAccessToken(_) => {
                         let email = auth.get_account_email();
-                        let plan_type = auth.account_plan_type();
 
                         match (email, plan_type) {
                             (Some(email), Some(plan_type)) => {

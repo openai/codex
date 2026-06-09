@@ -700,6 +700,39 @@ fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result
     Ok(fake_jwt)
 }
 
+async fn test_chatgpt_auth(account_id: &str, plan_type: &str) -> CodexAuth {
+    let codex_home = tempdir().expect("tempdir");
+    let fake_jwt = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some(plan_type.to_string()),
+        chatgpt_account_id: Some(account_id.to_string()),
+    })
+    .expect("encode auth token");
+    let auth_json = json!({
+        "tokens": {
+            "id_token": fake_jwt,
+            "access_token": "test-access-token",
+            "refresh_token": "test-refresh-token",
+            "account_id": account_id,
+        },
+        "last_refresh": Utc::now(),
+    });
+    std::fs::write(
+        get_auth_file(codex_home.path()),
+        serde_json::to_string_pretty(&auth_json).expect("serialize auth file"),
+    )
+    .expect("write auth file");
+    super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("load auth")
+    .expect("auth available")
+}
+
 fn fake_jwt_for_auth_file_params(params: &AuthFileParams) -> std::io::Result<String> {
     #[derive(Serialize)]
     struct Header {
@@ -1374,6 +1407,60 @@ async fn plan_type_maps_known_plan() {
     .expect("auth available");
 
     pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Pro));
+}
+
+#[tokio::test]
+async fn usage_plan_overrides_token_for_current_account_only() {
+    let auth = test_chatgpt_auth("account-a", "free").await;
+    let manager = AuthManager::from_auth_for_testing(auth);
+
+    assert_eq!(
+        manager.effective_account_plan_type(),
+        Some(AccountPlanType::Free)
+    );
+    assert!(!manager.record_account_plan_type_from_usage("account-b", AccountPlanType::Pro));
+    assert_eq!(
+        manager.effective_account_plan_type(),
+        Some(AccountPlanType::Free)
+    );
+    assert!(manager.record_account_plan_type_from_usage("account-a", AccountPlanType::Pro));
+    assert_eq!(
+        manager.effective_account_plan_type(),
+        Some(AccountPlanType::Pro)
+    );
+}
+
+#[tokio::test]
+async fn usage_plan_survives_same_account_reload_and_clears_on_account_change() {
+    let manager = AuthManager::from_auth_for_testing(test_chatgpt_auth("account-a", "free").await);
+    assert!(manager.record_account_plan_type_from_usage("account-a", AccountPlanType::Pro));
+
+    manager.set_cached_auth(Some(test_chatgpt_auth("account-a", "plus").await));
+    assert_eq!(
+        manager.effective_account_plan_type(),
+        Some(AccountPlanType::Pro)
+    );
+
+    manager.set_cached_auth(Some(test_chatgpt_auth("account-b", "team").await));
+    assert_eq!(
+        manager.effective_account_plan_type(),
+        Some(AccountPlanType::Team)
+    );
+
+    manager.set_cached_auth(None);
+    assert_eq!(manager.effective_account_plan_type(), None);
+}
+
+#[tokio::test]
+async fn matching_usage_plan_remains_authoritative_after_same_account_reload() {
+    let manager = AuthManager::from_auth_for_testing(test_chatgpt_auth("account-a", "free").await);
+    assert!(!manager.record_account_plan_type_from_usage("account-a", AccountPlanType::Free));
+
+    manager.set_cached_auth(Some(test_chatgpt_auth("account-a", "pro").await));
+    assert_eq!(
+        manager.effective_account_plan_type(),
+        Some(AccountPlanType::Free)
+    );
 }
 
 #[tokio::test]

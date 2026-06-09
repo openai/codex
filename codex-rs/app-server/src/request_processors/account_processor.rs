@@ -161,10 +161,10 @@ impl AccountRequestProcessor {
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
-        let auth = self.auth_manager.auth_cached();
+        let (auth, plan_type) = self.auth_manager.auth_cached_with_effective_account_plan();
         AccountUpdatedNotification {
             auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-            plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+            plan_type,
         }
     }
 
@@ -663,12 +663,13 @@ impl AccountRequestProcessor {
             Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
                 &config_manager,
                 &thread_manager,
-                auth.clone(),
+                auth,
             )
             .await;
+            let (auth, plan_type) = auth_manager.auth_cached_with_effective_account_plan();
             let payload_v2 = AccountUpdatedNotification {
                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+                plan_type,
             };
             outgoing
                 .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -842,19 +843,27 @@ impl AccountRequestProcessor {
     async fn get_account_rate_limits_response(
         &self,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
-        self.fetch_account_rate_limits()
-            .await
-            .map(
-                |(rate_limits, rate_limits_by_limit_id)| GetAccountRateLimitsResponse {
-                    rate_limits: rate_limits.into(),
-                    rate_limits_by_limit_id: Some(
-                        rate_limits_by_limit_id
-                            .into_iter()
-                            .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
-                            .collect(),
-                    ),
-                },
-            )
+        let (rate_limits, rate_limits_by_limit_id, account_plan_changed) =
+            self.fetch_account_rate_limits().await?;
+        let response = GetAccountRateLimitsResponse {
+            rate_limits: rate_limits.into(),
+            rate_limits_by_limit_id: Some(
+                rate_limits_by_limit_id
+                    .into_iter()
+                    .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
+                    .collect(),
+            ),
+        };
+
+        if account_plan_changed {
+            self.outgoing
+                .send_server_notification(ServerNotification::AccountUpdated(
+                    self.current_account_updated_notification(),
+                ))
+                .await;
+        }
+
+        Ok(response)
     }
 
     async fn get_account_token_usage_response(
@@ -961,6 +970,7 @@ impl AccountRequestProcessor {
         (
             CoreRateLimitSnapshot,
             HashMap<String, CoreRateLimitSnapshot>,
+            bool,
         ),
         JSONRPCErrorError,
     > {
@@ -975,6 +985,7 @@ impl AccountRequestProcessor {
                 "chatgpt authentication required to read rate limits",
             ));
         }
+        let account_id = auth.get_account_id();
 
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
             .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
@@ -1006,8 +1017,16 @@ impl AccountRequestProcessor {
             .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
             .cloned()
             .unwrap_or_else(|| snapshots[0].clone());
+        let account_plan_changed = if let (Some(account_id), Some(plan_type)) =
+            (account_id.as_deref(), primary.plan_type)
+        {
+            self.auth_manager
+                .record_account_plan_type_from_usage(account_id, plan_type)
+        } else {
+            false
+        };
 
-        Ok((primary, rate_limits_by_limit_id))
+        Ok((primary, rate_limits_by_limit_id, account_plan_changed))
     }
 }
 

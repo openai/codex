@@ -3,9 +3,14 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
+use codex_app_server_protocol::AuthMode;
+use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
+use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
@@ -15,8 +20,10 @@ use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailResponse;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SpendControlLimitSnapshot;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::load_auth_dot_json;
 use codex_protocol::account::PlanType as AccountPlanType;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -260,6 +267,131 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
     };
     assert_eq!(received, expected);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn usage_plan_change_updates_account_once_without_persisting_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .email("user@example.com")
+            .plan_type("free"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let auth_before = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)?
+        .expect("auth.json should exist");
+
+    let server = MockServer::start().await;
+    write_chatgpt_base_url(codex_home.path(), &server.uri())?;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plan_type": "pro",
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let account_params = GetAccountParams {
+        refresh_token: false,
+    };
+    let initial_request_id = mcp.send_get_account_request(account_params.clone()).await?;
+    let initial_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(initial_request_id)),
+    )
+    .await??;
+    let initial_account: GetAccountResponse = to_response(initial_response)?;
+    assert_eq!(
+        initial_account,
+        GetAccountResponse {
+            account: Some(Account::Chatgpt {
+                email: "user@example.com".to_string(),
+                plan_type: AccountPlanType::Free,
+            }),
+            requires_openai_auth: true,
+        }
+    );
+
+    let rate_limits_request_id = mcp.send_get_account_rate_limits_request().await?;
+    let rate_limits_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(rate_limits_request_id)),
+    )
+    .await??;
+    let rate_limits: GetAccountRateLimitsResponse = to_response(rate_limits_response)?;
+    assert_eq!(
+        rate_limits.rate_limits.plan_type,
+        Some(AccountPlanType::Pro)
+    );
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+    let notification: ServerNotification = notification.try_into()?;
+    let ServerNotification::AccountUpdated(account_updated) = notification else {
+        panic!("unexpected notification: {notification:?}");
+    };
+    assert_eq!(
+        account_updated,
+        AccountUpdatedNotification {
+            auth_mode: Some(AuthMode::Chatgpt),
+            plan_type: Some(AccountPlanType::Pro),
+        }
+    );
+
+    let updated_request_id = mcp.send_get_account_request(account_params).await?;
+    let updated_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(updated_request_id)),
+    )
+    .await??;
+    let updated_account: GetAccountResponse = to_response(updated_response)?;
+    assert_eq!(
+        updated_account,
+        GetAccountResponse {
+            account: Some(Account::Chatgpt {
+                email: "user@example.com".to_string(),
+                plan_type: AccountPlanType::Pro,
+            }),
+            requires_openai_auth: true,
+        }
+    );
+
+    let repeated_request_id = mcp.send_get_account_rate_limits_request().await?;
+    let repeated_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(repeated_request_id)),
+    )
+    .await??;
+    let repeated_rate_limits: GetAccountRateLimitsResponse = to_response(repeated_response)?;
+    assert_eq!(
+        repeated_rate_limits.rate_limits.plan_type,
+        Some(AccountPlanType::Pro)
+    );
+    assert!(
+        !mcp.pending_notification_methods()
+            .iter()
+            .any(|method| method == "account/updated"),
+        "identical usage plan should not emit another account/updated"
+    );
+
+    let auth_after = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)?
+        .expect("auth.json should still exist");
+    assert_eq!(auth_after, auth_before);
+
+    server.verify().await;
     Ok(())
 }
 

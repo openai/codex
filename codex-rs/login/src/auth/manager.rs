@@ -1088,9 +1088,17 @@ impl AuthDotJson {
 #[derive(Clone)]
 struct CachedAuth {
     auth: Option<CodexAuth>,
+    /// Latest plan reported by `/usage` for the current ChatGPT account.
+    usage_account_plan: Option<AccountScopedPlan>,
     /// Permanent refresh failure cached for the current auth snapshot so
     /// later refresh attempts for the same credentials fail fast without network.
     permanent_refresh_failure: Option<AuthScopedRefreshFailure>,
+}
+
+#[derive(Clone, Debug)]
+struct AccountScopedPlan {
+    account_id: String,
+    plan_type: AccountPlanType,
 }
 
 #[derive(Clone)]
@@ -1420,6 +1428,7 @@ impl AuthManager {
             codex_home,
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
+                usage_account_plan: None,
                 permanent_refresh_failure: None,
             }),
             auth_change_tx,
@@ -1436,6 +1445,7 @@ impl AuthManager {
     pub fn from_auth_for_testing(auth: CodexAuth) -> Arc<Self> {
         let cached = CachedAuth {
             auth: Some(auth),
+            usage_account_plan: None,
             permanent_refresh_failure: None,
         };
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
@@ -1457,6 +1467,7 @@ impl AuthManager {
     pub fn from_auth_for_testing_with_home(auth: CodexAuth, codex_home: PathBuf) -> Arc<Self> {
         let cached = CachedAuth {
             auth: Some(auth),
+            usage_account_plan: None,
             permanent_refresh_failure: None,
         };
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
@@ -1479,6 +1490,7 @@ impl AuthManager {
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(CachedAuth {
                 auth: None,
+                usage_account_plan: None,
                 permanent_refresh_failure: None,
             }),
             auth_change_tx,
@@ -1496,6 +1508,65 @@ impl AuthManager {
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
         self.inner.read().ok().and_then(|c| c.auth.clone())
+    }
+
+    /// Returns cached auth and its effective account plan from one state snapshot.
+    pub fn auth_cached_with_effective_account_plan(
+        &self,
+    ) -> (Option<CodexAuth>, Option<AccountPlanType>) {
+        let Ok(cached) = self.inner.read() else {
+            return (None, None);
+        };
+        let plan_type = Self::effective_account_plan_type_from_cached(&cached);
+        (cached.auth.clone(), plan_type)
+    }
+
+    /// Returns the latest plan reported by `/usage` for the current account,
+    /// falling back to the plan embedded in the cached auth token.
+    pub fn effective_account_plan_type(&self) -> Option<AccountPlanType> {
+        self.inner
+            .read()
+            .ok()
+            .and_then(|cached| Self::effective_account_plan_type_from_cached(&cached))
+    }
+
+    /// Records a plan returned by `/usage` only when it belongs to the account
+    /// that is still current. Returns whether the effective plan changed.
+    pub fn record_account_plan_type_from_usage(
+        &self,
+        account_id: &str,
+        plan_type: AccountPlanType,
+    ) -> bool {
+        let Ok(mut cached) = self.inner.write() else {
+            return false;
+        };
+        if cached
+            .auth
+            .as_ref()
+            .and_then(CodexAuth::get_account_id)
+            .as_deref()
+            != Some(account_id)
+        {
+            return false;
+        }
+
+        let previous = Self::effective_account_plan_type_from_cached(&cached);
+        cached.usage_account_plan = Some(AccountScopedPlan {
+            account_id: account_id.to_string(),
+            plan_type,
+        });
+        previous != Some(plan_type)
+    }
+
+    fn effective_account_plan_type_from_cached(cached: &CachedAuth) -> Option<AccountPlanType> {
+        let auth = cached.auth.as_ref()?;
+        let account_id = auth.get_account_id();
+        cached
+            .usage_account_plan
+            .as_ref()
+            .filter(|usage| account_id.as_deref() == Some(usage.account_id.as_str()))
+            .map(|usage| usage.plan_type)
+            .or_else(|| auth.account_plan_type())
     }
 
     /// Subscribes to cached auth changes that can affect request recovery.
@@ -1638,11 +1709,16 @@ impl AuthManager {
     fn set_cached_auth(&self, new_auth: Option<CodexAuth>) -> bool {
         if let Ok(mut guard) = self.inner.write() {
             let previous = guard.auth.as_ref();
+            let previous_account_id = previous.and_then(CodexAuth::get_account_id);
+            let new_account_id = new_auth.as_ref().and_then(CodexAuth::get_account_id);
             let changed = !AuthManager::auths_equal(previous, new_auth.as_ref());
             let auth_changed_for_refresh =
                 !Self::auths_equal_for_refresh(previous, new_auth.as_ref());
             if auth_changed_for_refresh {
                 guard.permanent_refresh_failure = None;
+            }
+            if previous_account_id != new_account_id {
+                guard.usage_account_plan = None;
             }
             tracing::info!("Reloaded auth, changed: {changed}");
             guard.auth = new_auth;

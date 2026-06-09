@@ -1,5 +1,7 @@
 use super::*;
+use crate::status::StatusAccountDisplay;
 use assert_matches::assert_matches;
+use codex_protocol::account::PlanType;
 
 #[tokio::test]
 async fn status_command_renders_immediately_and_refreshes_rate_limits_for_chatgpt_auth() {
@@ -28,16 +30,26 @@ async fn status_command_renders_immediately_and_refreshes_rate_limits_for_chatgp
 }
 
 #[tokio::test]
-async fn status_command_refresh_updates_cached_limits_for_future_status_outputs() {
+async fn status_command_refresh_updates_existing_and_future_status_outputs() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
+    chat.status_account_display = Some(StatusAccountDisplay::ChatGpt {
+        email: Some("user@example.com".to_string()),
+        plan: Some("Free".to_string()),
+    });
+    chat.plan_type = Some(PlanType::Free);
 
     chat.dispatch_command(SlashCommand::Status);
 
-    match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(_)) => {}
+    let status_cell = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
         other => panic!("expected status output before refresh request, got {other:?}"),
-    }
+    };
+    let initial = lines_to_single_string(&status_cell.display_lines(/*width*/ 80));
+    assert!(
+        initial.contains("user@example.com (Free)"),
+        "expected initial /status output to use the reconciled account plan, got: {initial}"
+    );
     let first_request_id = match rx.try_recv() {
         Ok(AppEvent::RefreshRateLimits {
             origin: RateLimitRefreshOrigin::StatusCommand { request_id },
@@ -45,9 +57,29 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
         other => panic!("expected rate-limit refresh request, got {other:?}"),
     };
 
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
+    let mut usage_snapshot = snapshot(/*percent*/ 92.0);
+    usage_snapshot.plan_type = Some(PlanType::Pro);
+    chat.update_account_state(
+        Some(StatusAccountDisplay::ChatGpt {
+            email: Some("user@example.com".to_string()),
+            plan: Some("Pro".to_string()),
+        }),
+        Some(PlanType::Pro),
+        /*has_chatgpt_account*/ true,
+    );
+    chat.on_rate_limit_snapshot(Some(usage_snapshot));
     chat.finish_status_rate_limit_refresh(first_request_id);
     drain_insert_history(&mut rx);
+
+    let refreshed_existing = lines_to_single_string(&status_cell.display_lines(/*width*/ 80));
+    assert!(
+        refreshed_existing.contains("8% left"),
+        "expected the existing /status output to use refreshed limits, got: {refreshed_existing}"
+    );
+    assert!(
+        refreshed_existing.contains("user@example.com (Pro)"),
+        "expected the existing /status output to use the plan from /usage, got: {refreshed_existing}"
+    );
 
     chat.dispatch_command(SlashCommand::Status);
     let refreshed = match rx.try_recv() {
@@ -59,6 +91,10 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
     assert!(
         refreshed.contains("8% left"),
         "expected a future /status output to use refreshed cached limits, got: {refreshed}"
+    );
+    assert!(
+        refreshed.contains("user@example.com (Pro)"),
+        "expected a future /status output to use the plan from /usage, got: {refreshed}"
     );
 }
 

@@ -38,6 +38,7 @@ use super::helpers::compose_account_display;
 use super::helpers::compose_model_display;
 use super::helpers::format_directory_display;
 use super::helpers::format_tokens_compact;
+use super::helpers::plan_type_display_name;
 use super::rate_limits::RateLimitSnapshotDisplay;
 use super::rate_limits::StatusRateLimitData;
 use super::rate_limits::StatusRateLimitRow;
@@ -74,6 +75,7 @@ pub(crate) struct StatusTokenUsageData {
 struct StatusRateLimitState {
     rate_limits: StatusRateLimitData,
     refreshing_rate_limits: bool,
+    plan_type: Option<PlanType>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +87,7 @@ impl StatusHistoryHandle {
     pub(crate) fn finish_rate_limit_refresh(
         &self,
         rate_limits: &[RateLimitSnapshotDisplay],
+        plan_type: Option<PlanType>,
         now: DateTime<Local>,
     ) {
         let rate_limits = if rate_limits.len() <= 1 {
@@ -99,6 +102,7 @@ impl StatusHistoryHandle {
             .expect("status history rate-limit state poisoned");
         state.rate_limits = rate_limits;
         state.refreshing_rate_limits = false;
+        state.plan_type = plan_type.or(state.plan_type);
     }
 }
 
@@ -209,7 +213,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     rate_limits: &[RateLimitSnapshotDisplay],
-    _plan_type: Option<PlanType>,
+    plan_type: Option<PlanType>,
     now: DateTime<Local>,
     model_name: &str,
     collaboration_mode: Option<&str>,
@@ -229,7 +233,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         thread_name,
         forked_from,
         rate_limits,
-        _plan_type,
+        plan_type,
         now,
         model_name,
         collaboration_mode,
@@ -257,7 +261,7 @@ impl StatusHistoryCell {
         thread_name: Option<String>,
         forked_from: Option<ThreadId>,
         rate_limits: &[RateLimitSnapshotDisplay],
-        _plan_type: Option<PlanType>,
+        plan_type: Option<PlanType>,
         now: DateTime<Local>,
         model_name: &str,
         collaboration_mode: Option<&str>,
@@ -348,6 +352,7 @@ impl StatusHistoryCell {
         let rate_limit_state = Arc::new(RwLock::new(StatusRateLimitState {
             rate_limits,
             refreshing_rate_limits,
+            plan_type,
         }));
         let agents_summary = Arc::new(RwLock::new(agents_summary));
 
@@ -720,13 +725,24 @@ impl HistoryCell for StatusHistoryCell {
             return Vec::new();
         }
 
+        #[expect(clippy::expect_used)]
+        let rate_limit_state = self
+            .rate_limit_state
+            .read()
+            .expect("status history rate-limit state poisoned");
         let account_value = self.account.as_ref().map(|account| match account {
-            StatusAccountDisplay::ChatGpt { email, plan } => match (email, plan) {
-                (Some(email), Some(plan)) => format!("{email} ({plan})"),
-                (Some(email), None) => email.clone(),
-                (None, Some(plan)) => plan.clone(),
-                (None, None) => "ChatGPT".to_string(),
-            },
+            StatusAccountDisplay::ChatGpt { email, plan } => {
+                let plan = rate_limit_state
+                    .plan_type
+                    .map(plan_type_display_name)
+                    .or_else(|| plan.clone());
+                match (email, plan) {
+                    (Some(email), Some(plan)) => format!("{email} ({plan})"),
+                    (Some(email), None) => email.clone(),
+                    (None, Some(plan)) => plan,
+                    (None, None) => "ChatGPT".to_string(),
+                }
+            }
             StatusAccountDisplay::ApiKey => {
                 "API key configured (run codex login to use ChatGPT)".to_string()
             }
@@ -738,11 +754,6 @@ impl HistoryCell for StatusHistoryCell {
             .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
-        #[expect(clippy::expect_used)]
-        let rate_limit_state = self
-            .rate_limit_state
-            .read()
-            .expect("status history rate-limit state poisoned");
         #[expect(clippy::expect_used)]
         let agents_summary = self
             .agents_summary
