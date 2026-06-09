@@ -1153,7 +1153,7 @@ mod tests {
             reasoning_effort,
             reasoning_summary,
             personality,
-            review_timeout: super::GUARDIAN_REVIEW_TIMEOUT,
+            review_timeout: super::super::GUARDIAN_REVIEW_TIMEOUT,
             external_cancel: None,
         }
     }

@@ -1342,6 +1342,7 @@ async fn guardian_request_model_for_auto_review_override(
         },
         Some("Sandbox denied outbound git push to github.com.".to_string()),
         guardian_output_schema(),
+        GUARDIAN_REVIEW_TIMEOUT,
         /*external_cancel*/ None,
     )
     .await;
@@ -1453,6 +1454,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         request,
         Some("Sandbox denied outbound git push to github.com.".to_string()),
         guardian_output_schema(),
+        GUARDIAN_REVIEW_TIMEOUT,
         /*external_cancel*/ None,
     )
     .await;
@@ -1631,6 +1633,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         first_request,
         Some("First retry reason".to_string()),
         guardian_output_schema(),
+        GUARDIAN_REVIEW_TIMEOUT,
         /*external_cancel*/ None,
     )
     .await;
@@ -1675,6 +1678,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         second_request,
         Some("Second retry reason".to_string()),
         guardian_output_schema(),
+        GUARDIAN_REVIEW_TIMEOUT,
         /*external_cancel*/ None,
     )
     .await;
@@ -1715,6 +1719,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         third_request,
         Some("Third retry reason".to_string()),
         guardian_output_schema(),
+        GUARDIAN_REVIEW_TIMEOUT,
         /*external_cancel*/ None,
     )
     .await;
@@ -1906,6 +1911,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
         },
         /*retry_reason*/ None,
         guardian_output_schema(),
+        GUARDIAN_REVIEW_TIMEOUT,
         /*external_cancel*/ None,
     )
     .await;
@@ -1948,6 +1954,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
         },
         /*retry_reason*/ None,
         guardian_output_schema(),
+        GUARDIAN_REVIEW_TIMEOUT,
         /*external_cancel*/ None,
     )
     .await;
