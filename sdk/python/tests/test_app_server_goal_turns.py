@@ -1,4 +1,6 @@
+import _thread
 import asyncio
+import threading
 import time
 
 import pytest
@@ -18,6 +20,7 @@ from app_server_helpers import (
 )
 
 from openai_codex import AsyncCodex, Codex
+from openai_codex._goal import _GoalOperationState
 from openai_codex.errors import InvalidRequestError, TransportClosedError
 from openai_codex.generated.notification_registry import notification_turn_id
 from openai_codex.generated.v2_all import (
@@ -467,14 +470,72 @@ def test_goal_interrupt_pauses_continuation_and_leaves_thread_usable(tmp_path) -
     }
 
 
-def test_terminal_goal_failure_stops_continuation_and_releases_routing(tmp_path) -> None:
+def test_cancel_goal_retries_the_server_reported_active_turn(tmp_path) -> None:
+    """Cancellation should survive notification lag while a continuation rolls over."""
+    with AppServerHarness(tmp_path, enable_goals=True) as harness:
+        _enqueue_interruptible_goal(
+            harness,
+            "cancel-rollover",
+            initial_text="Initial work complete.",
+            continuation_chunks=["continuation ", "still ", "running ", "now"],
+            follow_up_text="Rollover follow-up complete.",
+        )
+
+        with Codex(config=harness.app_server_config()) as codex:
+            thread = codex.thread_start()
+            turn = thread.start_goal("Cancel while continuation routing catches up")
+            harness.responses.wait_for_requests(2)
+
+            stale_state = _GoalOperationState(
+                thread_id=thread.id,
+                current_turn_id=turn.id,
+            )
+            codex._client.cancel_goal_operation(stale_state)
+            interrupted = turn.run()
+            follow_up = thread.run("Continue after rollover cancellation")
+            requests = harness.responses.wait_for_requests(3)
+            persisted = codex._client.request(
+                "thread/goal/get",
+                {"threadId": thread.id},
+                response_model=ThreadGoalGetResponse,
+            ).goal
+
+    assert {
+        "goal_status": persisted.status if persisted else None,
+        "interrupted": (interrupted.id, interrupted.status),
+        "follow_up": (follow_up.status, follow_up.final_response),
+        "request_count": len(requests),
+    } == {
+        "goal_status": ThreadGoalStatus.paused,
+        "interrupted": (turn.id, TurnStatus.interrupted),
+        "follow_up": (TurnStatus.completed, "Rollover follow-up complete."),
+        "request_count": 3,
+    }
+
+
+@pytest.mark.parametrize(
+    ("error_code", "expected_status"),
+    [
+        ("server_error", ThreadGoalStatus.blocked),
+        ("insufficient_quota", ThreadGoalStatus.usage_limited),
+    ],
+)
+def test_terminal_goal_failure_preserves_status_and_releases_routing(
+    tmp_path,
+    error_code,
+    expected_status,
+) -> None:
     """A failed server turn should stop rollover work and leave the thread usable."""
     with AppServerHarness(tmp_path, enable_goals=True) as harness:
         harness.responses.enqueue_sse(
             sse(
                 [
                     ev_response_created("goal-terminal-failure"),
-                    ev_failed("goal-terminal-failure", "goal model failed"),
+                    ev_failed(
+                        "goal-terminal-failure",
+                        "goal model failed",
+                        code=error_code,
+                    ),
                 ]
             )
         )
@@ -483,6 +544,11 @@ def test_terminal_goal_failure_stops_continuation_and_releases_routing(tmp_path)
             with pytest.raises(RuntimeError, match="goal model failed"):
                 thread.run_goal("Fail this goal turn")
 
+            persisted = codex._client.request(
+                "thread/goal/get",
+                {"threadId": thread.id},
+                response_model=ThreadGoalGetResponse,
+            ).goal
             harness.responses.enqueue_assistant_message(
                 "Recovered with an ordinary turn.",
                 response_id="goal-failure-follow-up",
@@ -492,13 +558,85 @@ def test_terminal_goal_failure_stops_continuation_and_releases_routing(tmp_path)
             requests = harness.responses.requests()
 
     assert {
+        "goal_status": persisted.status if persisted else None,
         "follow_up": (follow_up.status, follow_up.final_response),
         "request_count": len(requests),
         "follow_up_input": requests[1].message_input_texts("user")[-1:],
     } == {
+        "goal_status": expected_status,
         "follow_up": (TurnStatus.completed, "Recovered with an ordinary turn."),
         "request_count": 2,
         "follow_up_input": ["Run after the goal failure"],
+    }
+
+
+def test_sync_goal_run_cancellation_stops_work_and_releases_routing(tmp_path) -> None:
+    """Keyboard interruption should pause and interrupt a running logical goal."""
+    with AppServerHarness(tmp_path, enable_goals=True) as harness:
+        harness.responses.enqueue_sse(
+            streaming_response(
+                "cancelled-sync-run",
+                "msg-cancelled-sync-run",
+                ["cancelled ", "sync ", "goal"],
+            ),
+            delay_between_events_s=0.5,
+        )
+        harness.responses.enqueue_assistant_message(
+            "Sync follow-up complete.",
+            response_id="cancelled-sync-run-follow-up",
+        )
+
+        with Codex(config=harness.app_server_config()) as codex:
+            thread = codex.thread_start()
+            turn = thread.start_goal("Cancel this running sync goal")
+            goal_state = turn._goal
+            assert goal_state is not None
+
+            def interrupt_when_collecting() -> None:
+                harness.responses.wait_for_requests(1)
+                deadline = time.monotonic() + 5
+                while not goal_state._notifications.empty():
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("goal stream did not begin collecting")
+                    time.sleep(0.01)
+                _thread.interrupt_main()
+
+            interrupter = threading.Thread(target=interrupt_when_collecting, daemon=True)
+            interrupter.start()
+            try:
+                with pytest.raises(KeyboardInterrupt):
+                    turn.run()
+            finally:
+                interrupter.join(timeout=5)
+
+            deadline = time.monotonic() + 5
+            while True:
+                current = thread.read()
+                if isinstance(current.thread.status.root, IdleThreadStatus):
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError("cancelled sync goal turn did not stop")
+                time.sleep(0.01)
+
+            persisted = codex._client.request(
+                "thread/goal/get",
+                {"threadId": thread.id},
+                response_model=ThreadGoalGetResponse,
+            ).goal
+            registered_goals = dict(codex._client._router._goal_operations)
+            follow_up = thread.run("Continue after cancelling the sync goal")
+            requests = harness.responses.wait_for_requests(2)
+
+    assert {
+        "goal_status": persisted.status if persisted else None,
+        "follow_up": (follow_up.status, follow_up.final_response),
+        "request_count": len(requests),
+        "registered_goals": registered_goals,
+    } == {
+        "goal_status": ThreadGoalStatus.paused,
+        "follow_up": (TurnStatus.completed, "Sync follow-up complete."),
+        "request_count": 2,
+        "registered_goals": {},
     }
 
 
@@ -774,6 +912,67 @@ def test_async_goal_interrupts_an_active_continuation(tmp_path) -> None:
             "follow_up": (TurnStatus.completed, "Async ordinary follow-up complete."),
             "request_count": 3,
             "follow_up_input": ["Continue with an async ordinary turn"],
+        }
+
+    asyncio.run(scenario())
+
+
+def test_async_goal_run_cancellation_stops_work_and_releases_routing(tmp_path) -> None:
+    """Task cancellation should pause and interrupt a running logical goal."""
+
+    async def scenario() -> None:
+        with AppServerHarness(tmp_path, enable_goals=True) as harness:
+            harness.responses.enqueue_sse(
+                streaming_response(
+                    "cancelled-async-run",
+                    "msg-cancelled-async-run",
+                    ["cancelled ", "async ", "goal"],
+                ),
+                delay_between_events_s=0.5,
+            )
+            harness.responses.enqueue_assistant_message(
+                "Async run follow-up complete.",
+                response_id="cancelled-async-run-follow-up",
+            )
+
+            async with AsyncCodex(config=harness.app_server_config()) as codex:
+                thread = await codex.thread_start()
+                turn = await thread.start_goal("Cancel this running async goal")
+                running = asyncio.create_task(turn.run())
+                await asyncio.sleep(0)
+                await asyncio.to_thread(harness.responses.wait_for_requests, 1)
+                running.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await running
+
+                deadline = time.monotonic() + 5
+                while True:
+                    current = await thread.read()
+                    if isinstance(current.thread.status.root, IdleThreadStatus):
+                        break
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("cancelled async goal turn did not stop")
+                    await asyncio.sleep(0.01)
+
+                persisted = await codex._client.request(
+                    "thread/goal/get",
+                    {"threadId": thread.id},
+                    response_model=ThreadGoalGetResponse,
+                )
+                registered_goals = dict(codex._client._sync._router._goal_operations)
+                follow_up = await thread.run("Continue after cancelling the async goal")
+                requests = await asyncio.to_thread(harness.responses.wait_for_requests, 2)
+
+        assert {
+            "goal_status": persisted.goal.status if persisted.goal else None,
+            "follow_up": (follow_up.status, follow_up.final_response),
+            "request_count": len(requests),
+            "registered_goals": registered_goals,
+        } == {
+            "goal_status": ThreadGoalStatus.paused,
+            "follow_up": (TurnStatus.completed, "Async run follow-up complete."),
+            "request_count": 2,
+            "registered_goals": {},
         }
 
     asyncio.run(scenario())

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import threading
 import uuid
@@ -63,6 +64,11 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 ApprovalHandler = Callable[[str, JsonObject | None], JsonObject]
 RUNTIME_PKG_NAME = "openai-codex-cli-bin"
 _GOAL_START_TIMEOUT_S = 30.0
+
+
+def _active_turn_id_from_error(exc: InvalidRequestError) -> str | None:
+    match = re.search(r" but found `?([^`]+)`?$", exc.message)
+    return match.group(1) if match is not None else None
 
 
 def _params_dict(
@@ -501,8 +507,8 @@ class CodexClient:
         """Pause the active goal used by a logical goal turn."""
         return self.thread_goal_set(thread_id, status=ThreadGoalStatus.paused)
 
-    def stop_failed_goal(self, state: _GoalOperationState) -> None:
-        """Best-effort cleanup after a physical goal turn fails."""
+    def cancel_goal_operation(self, state: _GoalOperationState) -> None:
+        """Best-effort cleanup after a logical goal operation is cancelled."""
         try:
             self.pause_goal(state.thread_id)
         except Exception:
@@ -515,7 +521,7 @@ class CodexClient:
         except InvalidRequestError as exc:
             if not exc.message.startswith("expected active turn id"):
                 return
-            next_turn_id = state.current_turn()
+            next_turn_id = _active_turn_id_from_error(exc) or state.current_turn()
             if next_turn_id is None or next_turn_id == turn_id:
                 return
             try:
@@ -560,12 +566,9 @@ class CodexClient:
                     f"{int(_GOAL_START_TIMEOUT_S)} seconds"
                 )
             return state, turn_id
-        except BaseException:
-            if activated:
-                try:
-                    self.pause_goal(thread_id)
-                except Exception:
-                    pass
+        except BaseException as exc:
+            if activated or not isinstance(exc, InvalidRequestError):
+                self.cancel_goal_operation(state)
             state.finish()
             self.unregister_goal_operation(state)
             raise

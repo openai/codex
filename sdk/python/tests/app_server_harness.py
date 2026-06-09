@@ -448,12 +448,12 @@ def ev_function_call(call_id: str, name: str, arguments: str) -> Json:
     }
 
 
-def ev_failed(response_id: str, message: str) -> Json:
+def ev_failed(response_id: str, message: str, *, code: str = "server_error") -> Json:
     """Return a failed model response event."""
     return {
         "type": "response.failed",
         "response": {
             "id": response_id,
-            "error": {"code": "server_error", "message": message},
+            "error": {"code": code, "message": message},
         },
     }

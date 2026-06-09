@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from dataclasses import dataclass
 from typing import AsyncIterator, Iterator
 
@@ -45,7 +44,7 @@ from ._run import (
 )
 from ._sandbox import Sandbox as Sandbox, _sandbox_mode, _sandbox_policy
 from .async_client import AsyncCodexClient
-from .client import CodexClient, CodexConfig
+from .client import CodexClient, CodexConfig, _active_turn_id_from_error
 from .errors import InvalidRequestError
 from .generated.v2_all import (
     ApiKeyLoginAccountParams,
@@ -90,11 +89,6 @@ def _normalize_goal_objective(objective: str) -> str:
     if len(objective) > _MAX_GOAL_OBJECTIVE_CHARS:
         raise ValueError(f"goal objective must be at most {_MAX_GOAL_OBJECTIVE_CHARS} characters")
     return objective
-
-
-def _active_turn_id_from_error(exc: InvalidRequestError) -> str | None:
-    match = re.search(r" but found `?([^`]+)`?$", exc.message)
-    return match.group(1) if match is not None else None
 
 
 def _inactive_turn_error() -> InvalidRequestError:
@@ -845,7 +839,7 @@ class TurnHandle:
                 self._goal,
                 lambda: self._client.next_goal_notification(self._goal),
                 lambda: self._client.unregister_goal_operation(self._goal),
-                lambda: self._client.stop_failed_goal(self._goal),
+                lambda: self._client.cancel_goal_operation(self._goal),
             )
 
         def ordinary_stream() -> Iterator[Notification]:
@@ -870,6 +864,10 @@ class TurnHandle:
         stream = self.stream()
         try:
             return _collect_turn_result(stream, turn_id=self.id)
+        except KeyboardInterrupt:
+            if self._goal is not None and not self._goal.is_finished():
+                self._client.cancel_goal_operation(self._goal)
+            raise
         finally:
             stream.close()
 
@@ -968,7 +966,7 @@ class AsyncTurnHandle:
                 self._goal,
                 next_goal_notification,
                 lambda: self._codex._client.unregister_goal_operation(self._goal),
-                lambda: self._codex._client.stop_failed_goal(self._goal),
+                lambda: self._codex._client.cancel_goal_operation(self._goal),
             )
 
         async def ordinary_stream() -> AsyncIterator[Notification]:
@@ -994,5 +992,9 @@ class AsyncTurnHandle:
         stream = self.stream()
         try:
             return await _collect_async_turn_result(stream, turn_id=self.id)
+        except asyncio.CancelledError:
+            if self._goal is not None and not self._goal.is_finished():
+                await self._codex._client.cancel_goal_operation(self._goal)
+            raise
         finally:
             await stream.aclose()
