@@ -911,6 +911,10 @@ fn event_matches_turn(event: &Event, expected_turn_id: &str) -> bool {
     }
 }
 
+/// Builds the locked-down config used by Guardian review sessions.
+///
+/// Provider-level retries are disabled because the Guardian retry wrapper owns
+/// the complete retry budget and must issue at most one additional review.
 pub(crate) fn build_guardian_review_session_config(
     parent_config: &Config,
     live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,

@@ -668,6 +668,11 @@ async fn run_guardian_review(
     }
 }
 
+/// Runs one Guardian review attempt and, for transient failures, one bounded retry.
+///
+/// Availability failures wait with full jitter before retrying with the normal
+/// deadline. Model timeouts retry immediately with a shorter deadline.
+/// Cancellation stops the retry without converting it into a denial.
 async fn run_guardian_review_session_with_retry(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
