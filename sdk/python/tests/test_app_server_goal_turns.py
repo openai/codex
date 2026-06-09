@@ -199,7 +199,7 @@ def test_goal_stream_exposes_one_logical_lifecycle(tmp_path) -> None:
     ]
     assert {
         "lifecycle": [event.method for event in lifecycle],
-        "routed_ids": routed_ids,
+        "routed_ids": sorted(set(routed_ids)),
         "deltas": [
             event.payload.delta
             for event in events
@@ -213,7 +213,7 @@ def test_goal_stream_exposes_one_logical_lifecycle(tmp_path) -> None:
         ],
     } == {
         "lifecycle": ["turn/started", "turn/completed"],
-        "routed_ids": [turn.id] * len(routed_ids),
+        "routed_ids": [turn.id],
         "deltas": ["initial ", "pass", "goal ", "complete"],
         "messages": ["initial pass", "goal complete"],
         "completion_statuses": [TurnStatus.completed],
