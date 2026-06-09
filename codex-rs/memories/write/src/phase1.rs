@@ -9,7 +9,6 @@ use codex_config::types::MemoriesConfig;
 use codex_core::Prompt;
 use codex_core::RolloutRecorder;
 use codex_core::config::Config;
-use codex_model_provider::ModelProvider;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -191,18 +190,15 @@ async fn build_request_context(
     context: &MemoryStartupContext,
     config: &Config,
 ) -> StageOneRequestContext {
-    let model_name = extract_model(config, context.provider());
+    let model_name = config.memories.extract_model.clone().unwrap_or_else(|| {
+        context
+            .provider()
+            .memory_extraction_preferred_model()
+            .to_string()
+    });
     context
         .stage_one_request_context(config, &model_name, crate::stage_one::REASONING_EFFORT)
         .await
-}
-
-pub(crate) fn extract_model(config: &Config, provider: &dyn ModelProvider) -> String {
-    config
-        .memories
-        .extract_model
-        .clone()
-        .unwrap_or_else(|| provider.memory_extraction_preferred_model().to_string())
 }
 
 async fn run_jobs(
