@@ -514,15 +514,20 @@ def test_cancel_goal_retries_the_server_reported_active_turn(tmp_path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("error_code", "expected_status"),
+    ("error_code", "expected_error", "expected_status"),
     [
-        ("server_error", ThreadGoalStatus.blocked),
-        ("insufficient_quota", ThreadGoalStatus.usage_limited),
+        ("server_error", "goal model failed", ThreadGoalStatus.blocked),
+        (
+            "insufficient_quota",
+            "Quota exceeded. Check your plan and billing details.",
+            ThreadGoalStatus.usage_limited,
+        ),
     ],
 )
 def test_terminal_goal_failure_preserves_status_and_releases_routing(
     tmp_path,
     error_code,
+    expected_error,
     expected_status,
 ) -> None:
     """A failed server turn should stop rollover work and leave the thread usable."""
@@ -541,7 +546,7 @@ def test_terminal_goal_failure_preserves_status_and_releases_routing(
         )
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
-            with pytest.raises(RuntimeError, match="goal model failed"):
+            with pytest.raises(RuntimeError) as error:
                 thread.run_goal("Fail this goal turn")
 
             persisted = codex._client.request(
@@ -558,11 +563,13 @@ def test_terminal_goal_failure_preserves_status_and_releases_routing(
             requests = harness.responses.requests()
 
     assert {
+        "error": str(error.value),
         "goal_status": persisted.status if persisted else None,
         "follow_up": (follow_up.status, follow_up.final_response),
         "request_count": len(requests),
         "follow_up_input": requests[1].message_input_texts("user")[-1:],
     } == {
+        "error": expected_error,
         "goal_status": expected_status,
         "follow_up": (TurnStatus.completed, "Recovered with an ordinary turn."),
         "request_count": 2,

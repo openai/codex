@@ -250,8 +250,13 @@ class _GoalStreamCursor:
         if isinstance(payload, TurnCompletedNotification):
             self.active = False
             self.last_completed = payload
-            if payload.turn.status in {TurnStatus.failed, TurnStatus.interrupted}:
+            if payload.turn.status == TurnStatus.interrupted:
                 return [self._completion(notification.method, payload)], True
+            if payload.turn.status == TurnStatus.failed:
+                if self.cleared or _terminal_goal_status(self.status):
+                    self.state.finish()
+                    return [self._completion(notification.method, payload)], True
+                return [], False
             if self.status is None and not self.cleared:
                 raise RuntimeError(
                     "the connected Codex runtime did not activate goal mode for this turn"
