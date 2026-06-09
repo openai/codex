@@ -14,6 +14,7 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::agents_md::LoadedAgentsMd;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
@@ -55,6 +56,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::PromptSlot;
+use codex_extension_api::UserInstructionsLoadOutcome;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
@@ -399,6 +401,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) user_instructions: UserInstructionsLoadOutcome,
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
@@ -484,6 +487,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            user_instructions,
             installation_id,
             auth_manager,
             models_manager,
@@ -515,16 +519,24 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
+        let UserInstructionsLoadOutcome {
+            instructions: user_instructions,
+            warnings: user_instruction_provider_warnings,
+        } = user_instructions;
+        config
+            .startup_warnings
+            .extend(user_instruction_provider_warnings);
         let primary_environment = environment_selections.primary_environment();
-        let mut user_instruction_warnings = Vec::new();
-        let user_instructions = if let Some(primary_environment) = primary_environment {
-            AgentsMdManager::new(&config)
-                .user_instructions(primary_environment.as_ref(), &mut user_instruction_warnings)
-                .await
-        } else {
-            None
-        };
-        config.startup_warnings.extend(user_instruction_warnings);
+        let primary_fs = primary_environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem());
+        let mut agents_md_warnings = Vec::new();
+        let mut agents_md_manager = AgentsMdManager::new(&config, user_instructions);
+        agents_md_manager
+            .load_project_instructions(primary_fs.as_deref(), &mut agents_md_warnings)
+            .await;
+        let loaded_agents_md = agents_md_manager.into_loaded_agents_md();
+        config.startup_warnings.extend(agents_md_warnings);
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -604,7 +616,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
-            user_instructions,
+            loaded_agents_md,
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
@@ -818,7 +830,7 @@ impl Codex {
         let state = self.session.state.lock().await;
         state
             .session_configuration
-            .user_instructions
+            .loaded_agents_md
             .as_ref()
             .map_or_else(Vec::new, |instructions| {
                 instructions.sources().cloned().collect()
@@ -1505,6 +1517,16 @@ impl Session {
             .session_configuration
             .original_config_do_not_use
             .clone()
+    }
+
+    pub(crate) async fn user_instructions(&self) -> Option<codex_extension_api::UserInstructions> {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .loaded_agents_md
+            .as_ref()
+            .and_then(LoadedAgentsMd::user_instructions)
+            .cloned()
     }
 
     pub(crate) async fn provider(&self) -> ModelProviderInfo {

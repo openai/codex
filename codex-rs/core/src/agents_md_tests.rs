@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::ConfigBuilder;
 use codex_exec_server::LOCAL_FS;
+use codex_extension_api::UserInstructions;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
@@ -8,20 +9,48 @@ use core_test_support::TempDirExt;
 use core_test_support::create_directory_symlink;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-async fn get_user_instructions(config: &Config) -> Option<String> {
+struct TestConfig {
+    config: Config,
+    user_instructions: Option<UserInstructions>,
+}
+
+impl Deref for TestConfig {
+    type Target = Config;
+
+    fn deref(&self) -> &Self::Target {
+        &self.config
+    }
+}
+
+impl DerefMut for TestConfig {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.config
+    }
+}
+
+async fn get_user_instructions(config: &TestConfig) -> Option<String> {
     let mut warnings = Vec::new();
-    AgentsMdManager::new(config)
-        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+    load_agents_md(config, &mut warnings)
         .await
         .map(|loaded| loaded.text())
 }
 
-async fn agents_md_paths(config: &Config) -> std::io::Result<Vec<AbsolutePathBuf>> {
-    AgentsMdManager::new(config)
+async fn load_agents_md(config: &TestConfig, warnings: &mut Vec<String>) -> Option<LoadedAgentsMd> {
+    let mut manager = AgentsMdManager::new(&config.config, config.user_instructions.clone());
+    manager
+        .load_project_instructions(Some(LOCAL_FS.as_ref()), warnings)
+        .await;
+    manager.into_loaded_agents_md()
+}
+
+async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    AgentsMdManager::new(&config.config, /*user_instructions*/ None)
         .agents_md_paths(LOCAL_FS.as_ref())
         .await
 }
@@ -44,7 +73,7 @@ fn assert_invalid_utf8_warning(warnings: &[String], source: &str, path: &Path) {
 /// optionally specify a custom `instructions` string – when `None` the
 /// value is cleared to mimic a scenario where no system instructions have
 /// been configured.
-async fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -> Config {
+async fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -> TestConfig {
     let codex_home = TempDir::new().unwrap();
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -55,13 +84,14 @@ async fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -
     config.cwd = root.abs();
     config.project_doc_max_bytes = limit;
 
-    config.user_instructions = instructions.map(|text| {
-        LoadedAgentsMd::new_user(
-            text.to_owned(),
-            config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
-        )
+    let user_instructions = instructions.map(|text| UserInstructions {
+        text: text.to_owned(),
+        source: config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
     });
-    config
+    TestConfig {
+        config,
+        user_instructions,
+    }
 }
 
 async fn make_config_with_fallback(
@@ -69,7 +99,7 @@ async fn make_config_with_fallback(
     limit: usize,
     instructions: Option<&str>,
     fallbacks: &[&str],
-) -> Config {
+) -> TestConfig {
     let mut config = make_config(root, limit, instructions).await;
     config.project_doc_fallback_filenames = fallbacks
         .iter()
@@ -83,7 +113,7 @@ async fn make_config_with_project_root_markers(
     limit: usize,
     instructions: Option<&str>,
     markers: &[&str],
-) -> Config {
+) -> TestConfig {
     let codex_home = TempDir::new().unwrap();
     let cli_overrides = vec![(
         "project_root_markers".to_string(),
@@ -103,13 +133,14 @@ async fn make_config_with_project_root_markers(
 
     config.cwd = root.abs();
     config.project_doc_max_bytes = limit;
-    config.user_instructions = instructions.map(|text| {
-        LoadedAgentsMd::new_user(
-            text.to_owned(),
-            config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
-        )
+    let user_instructions = instructions.map(|text| UserInstructions {
+        text: text.to_owned(),
+        source: config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
     });
-    config
+    TestConfig {
+        config,
+        user_instructions,
+    }
 }
 
 /// AGENTS.md missing – should yield `None`.
@@ -153,12 +184,14 @@ fn empty_loaded_instructions_are_empty() {
 #[test]
 fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
     let empty = LoadedAgentsMd {
+        user_instructions: None,
         entries: vec![InstructionEntry {
             contents: String::new(),
             provenance: InstructionProvenance::Internal,
         }],
     };
     let whitespace = LoadedAgentsMd {
+        user_instructions: None,
         entries: vec![InstructionEntry {
             contents: " \n\t".to_string(),
             provenance: InstructionProvenance::Internal,
@@ -187,29 +220,6 @@ async fn doc_smaller_than_limit_is_returned() {
 }
 
 #[tokio::test]
-async fn global_doc_invalid_utf8_warns_and_uses_lossy_text() {
-    let codex_home = tempfile::tempdir().expect("tempdir");
-    let codex_home_abs = codex_home.abs();
-    let path = codex_home_abs.join(DEFAULT_AGENTS_MD_FILENAME);
-    fs::write(&path, b"global\xFF doc").unwrap();
-
-    let mut warnings = Vec::new();
-    let loaded = AgentsMdManager::load_global_instructions(
-        LOCAL_FS.as_ref(),
-        Some(&codex_home_abs),
-        &mut warnings,
-    )
-    .await
-    .expect("global doc expected");
-
-    assert_eq!(
-        loaded,
-        LoadedAgentsMd::new_user("global\u{FFFD} doc".to_string(), path.clone())
-    );
-    assert_invalid_utf8_warning(&warnings, "Global", path.as_path());
-}
-
-#[tokio::test]
 async fn project_doc_invalid_utf8_warns_and_uses_lossy_text() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("AGENTS.md");
@@ -217,8 +227,7 @@ async fn project_doc_invalid_utf8_warns_and_uses_lossy_text() {
 
     let config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
     let mut warnings = Vec::new();
-    let res = AgentsMdManager::new(&config)
-        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+    let res = load_agents_md(&config, &mut warnings)
         .await
         .expect("doc expected")
         .text();
@@ -315,30 +324,6 @@ async fn merges_existing_instructions_with_agents_md() {
     assert_eq!(res, expected);
 }
 
-#[tokio::test]
-async fn sourceless_user_instructions_preserve_separator_without_reporting_a_source() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
-
-    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
-    cfg.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-        "user instructions".to_string(),
-    ));
-
-    let mut warnings = Vec::new();
-    let loaded = AgentsMdManager::new(&cfg)
-        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
-        .await
-        .expect("instructions expected");
-    let project_agents = cfg.cwd.join("AGENTS.md");
-
-    assert_eq!(
-        loaded.text(),
-        format!("user instructions{AGENTS_MD_SEPARATOR}project doc")
-    );
-    assert_eq!(loaded.sources().collect::<Vec<_>>(), vec![&project_agents]);
-}
-
 /// If there are existing system instructions but AGENTS.md docs are
 /// missing we expect the original instructions to be returned unchanged.
 #[tokio::test]
@@ -378,13 +363,13 @@ async fn concatenates_root_and_cwd_docs() {
     cfg.cwd = nested.abs();
 
     let mut warnings = Vec::new();
-    let loaded = AgentsMdManager::new(&cfg)
-        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+    let loaded = load_agents_md(&cfg, &mut warnings)
         .await
         .expect("doc expected");
     let root_agents = repo.path().join("AGENTS.md").abs();
     let crate_agents = cfg.cwd.join("AGENTS.md");
     let expected = LoadedAgentsMd {
+        user_instructions: None,
         entries: vec![
             InstructionEntry {
                 contents: "root doc".to_string(),
@@ -462,22 +447,19 @@ async fn child_agents_message_after_global_instructions_uses_plain_separator() {
     cfg.features.enable(Feature::ChildAgentsMd).unwrap();
 
     let mut warnings = Vec::new();
-    let loaded = AgentsMdManager::new(&cfg)
-        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+    let loaded = load_agents_md(&cfg, &mut warnings)
         .await
         .expect("instructions expected");
     let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
     let expected = LoadedAgentsMd {
-        entries: vec![
-            InstructionEntry {
-                contents: "global doc".to_string(),
-                provenance: InstructionProvenance::User(global_agents),
-            },
-            InstructionEntry {
-                contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-                provenance: InstructionProvenance::Internal,
-            },
-        ],
+        user_instructions: Some(UserInstructions {
+            text: "global doc".to_string(),
+            source: global_agents,
+        }),
+        entries: vec![InstructionEntry {
+            contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
+            provenance: InstructionProvenance::Internal,
+        }],
     };
 
     assert_eq!(loaded, expected);
@@ -498,25 +480,23 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     fs::write(&global_agents, "global doc").unwrap();
 
     let mut warnings = Vec::new();
-    let loaded = AgentsMdManager::new(&cfg)
-        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+    let loaded = load_agents_md(&cfg, &mut warnings)
         .await
         .expect("instructions expected");
     let project_agents = cfg.cwd.join("AGENTS.md");
 
     let expected = LoadedAgentsMd {
-        entries: vec![
-            InstructionEntry {
-                contents: "global doc".to_string(),
-                provenance: InstructionProvenance::User(global_agents.clone()),
-            },
-            InstructionEntry {
-                contents: "project doc".to_string(),
-                provenance: InstructionProvenance::Project(project_agents.clone()),
-            },
-        ],
+        user_instructions: Some(UserInstructions {
+            text: "global doc".to_string(),
+            source: global_agents.clone(),
+        }),
+        entries: vec![InstructionEntry {
+            contents: "project doc".to_string(),
+            provenance: InstructionProvenance::Project(project_agents.clone()),
+        }],
     };
     assert_eq!(loaded, expected);
+    assert_eq!(loaded.user_instructions(), cfg.user_instructions.as_ref());
     assert_eq!(
         loaded.sources().collect::<Vec<_>>(),
         vec![&global_agents, &project_agents]
@@ -539,18 +519,17 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
     fs::write(&global_agents, "global doc").unwrap();
 
     let mut warnings = Vec::new();
-    let loaded = AgentsMdManager::new(&cfg)
-        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+    let loaded = load_agents_md(&cfg, &mut warnings)
         .await
         .expect("instructions expected");
     let project_agents = cfg.cwd.join("AGENTS.md");
 
     let expected = LoadedAgentsMd {
+        user_instructions: Some(UserInstructions {
+            text: "global doc".to_string(),
+            source: global_agents.clone(),
+        }),
         entries: vec![
-            InstructionEntry {
-                contents: "global doc".to_string(),
-                provenance: InstructionProvenance::User(global_agents.clone()),
-            },
             InstructionEntry {
                 contents: "project doc".to_string(),
                 provenance: InstructionProvenance::Project(project_agents.clone()),

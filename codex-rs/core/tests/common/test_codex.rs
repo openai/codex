@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -24,7 +25,10 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::UserInstructionsLoadFuture;
+use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
+use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -71,6 +75,31 @@ const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
 const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
 static REMOTE_TEST_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const SUBMIT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub struct RecordingUserInstructionsProvider {
+    inner: Arc<dyn UserInstructionsProvider>,
+    load_count: AtomicUsize,
+}
+
+impl RecordingUserInstructionsProvider {
+    pub fn new(inner: Arc<dyn UserInstructionsProvider>) -> Self {
+        Self {
+            inner,
+            load_count: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn load_count(&self) -> usize {
+        self.load_count.load(Ordering::SeqCst)
+    }
+}
+
+impl UserInstructionsProvider for RecordingUserInstructionsProvider {
+    fn load(&self) -> UserInstructionsLoadFuture<'_> {
+        self.load_count.fetch_add(1, Ordering::SeqCst);
+        self.inner.load()
+    }
+}
 
 pub fn local(cwd: AbsolutePathBuf) -> TurnEnvironmentSelection {
     TurnEnvironmentSelection {
@@ -233,6 +262,7 @@ pub struct TestCodexBuilder {
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
     extensions: Arc<ExtensionRegistry<Config>>,
+    user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
 }
 
 impl TestCodexBuilder {
@@ -319,6 +349,14 @@ impl TestCodexBuilder {
 
     pub fn with_extensions(mut self, extensions: Arc<ExtensionRegistry<Config>>) -> Self {
         self.extensions = extensions;
+        self
+    }
+
+    pub fn with_user_instructions_provider(
+        mut self,
+        provider: Arc<dyn UserInstructionsProvider>,
+    ) -> Self {
+        self.user_instructions_provider = Some(provider);
         self
     }
 
@@ -510,12 +548,19 @@ impl TestCodexBuilder {
         let state_db = codex_core::init_state_db(&config).await;
         let thread_store = thread_store_from_config(&config, state_db.clone());
         let installation_id = resolve_installation_id(&config.codex_home).await?;
+        let user_instructions_provider =
+            self.user_instructions_provider.clone().unwrap_or_else(|| {
+                Arc::new(CodexHomeUserInstructionsProvider::new(
+                    config.codex_home.clone(),
+                ))
+            });
         let thread_manager = ThreadManager::new(
             &config,
             codex_core::test_support::auth_manager_from_auth(auth.clone()),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
             Arc::clone(&self.extensions),
+            user_instructions_provider,
             /*analytics_events_client*/ None,
             thread_store,
             state_db.clone(),
@@ -1103,6 +1148,7 @@ pub fn test_codex() -> TestCodexBuilder {
         user_shell_override: None,
         exec_server_url: None,
         extensions: empty_extension_registry(),
+        user_instructions_provider: None,
     }
 }
 

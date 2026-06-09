@@ -2,6 +2,7 @@ mod capabilities;
 mod contributors;
 mod registry;
 mod state;
+mod user_instructions;
 
 pub use capabilities::AgentSpawnFuture;
 pub use capabilities::AgentSpawner;
@@ -64,3 +65,7 @@ pub use registry::ExtensionRegistryBuilder;
 pub use registry::empty_extension_registry;
 pub use state::ExtensionData;
 pub use state::ExtensionDataInit;
+pub use user_instructions::UserInstructions;
+pub use user_instructions::UserInstructionsLoadFuture;
+pub use user_instructions::UserInstructionsLoadOutcome;
+pub use user_instructions::UserInstructionsProvider;

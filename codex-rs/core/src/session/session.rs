@@ -55,9 +55,9 @@ pub(crate) struct SessionConfiguration {
     /// Developer instructions that supplement the base instructions.
     pub(super) developer_instructions: Option<String>,
 
-    /// Model instructions that are appended to the base instructions and the
-    /// files that supplied them.
-    pub(super) user_instructions: Option<LoadedAgentsMd>,
+    /// Model instructions assembled from the provider snapshot and discovered
+    /// AGENTS.md files.
+    pub(super) loaded_agents_md: Option<LoadedAgentsMd>,
 
     /// Personality preference for the model.
     pub(super) personality: Option<Personality>,
