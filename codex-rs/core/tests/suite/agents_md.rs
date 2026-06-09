@@ -1,9 +1,12 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_core::ForkSnapshot;
+use codex_core::StartThreadOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -18,6 +21,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::RecordingUserInstructionsProvider;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -364,6 +368,88 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("no-primary-environment-response"),
+            ev_completed("no-primary-environment-response"),
+        ]),
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let global_source =
+        write_global_file(home.as_ref(), GLOBAL_AGENTS_FILENAME, GLOBAL_INSTRUCTIONS)?;
+    let provider = Arc::new(RecordingUserInstructionsProvider::new(Arc::new(
+        CodexHomeUserInstructionsProvider::new(AbsolutePathBuf::try_from(
+            home.path().to_path_buf(),
+        )?),
+    )));
+
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_user_instructions_provider(provider.clone())
+        .with_workspace_setup(|cwd, fs| async move {
+            fs.write_file(
+                &cwd.join(GLOBAL_AGENTS_FILENAME),
+                PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        });
+    let test = builder.build_with_remote_env(&server).await?;
+    assert_eq!(provider.load_count(), 1);
+
+    let no_environment_thread = test
+        .thread_manager
+        .start_thread_with_options(StartThreadOptions {
+            config: test.config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            thread_extension_init: Default::default(),
+        })
+        .await?;
+    assert_eq!(provider.load_count(), 2);
+    assert_eq!(
+        no_environment_thread.thread.instruction_sources().await,
+        vec![global_source]
+    );
+
+    no_environment_thread
+        .thread
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "inspect global instructions without an environment".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&no_environment_thread.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let instruction_fragments = instruction_fragments(&response_mock.single_request());
+    assert_eq!(instruction_fragments.len(), 1);
+    assert!(instruction_fragments[0].contains(GLOBAL_INSTRUCTIONS));
+    assert!(!instruction_fragments[0].contains(PROJECT_INSTRUCTIONS));
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Result<()> {
     // Set up one global source, one project source, and two ordinary model turns.
