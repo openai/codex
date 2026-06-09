@@ -887,8 +887,7 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     );
     assert!(
         policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_0")
-            && policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_1")
-            && policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_2"),
+            && policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_1"),
         "expected explicit writable root .git/.codex carveouts in policy:\n{policy_text}",
     );
     assert!(
@@ -949,10 +948,6 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         format!(
             "-DWRITABLE_ROOT_1_EXCLUDED_1={}",
             dot_codex_canonical.to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_1_EXCLUDED_2={}",
-            dot_codex_canonical.join("config.toml").display()
         ),
         format!(
             "-DWRITABLE_ROOT_2={}",

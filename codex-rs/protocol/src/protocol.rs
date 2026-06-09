@@ -4425,7 +4425,6 @@ mod tests {
         let cwd = TempDir::new().expect("tempdir");
         std::fs::create_dir_all(cwd.path().join(".agents")).expect("create .agents");
         std::fs::create_dir_all(cwd.path().join(".codex")).expect("create .codex");
-        std::fs::write(cwd.path().join(".codex/config.toml"), "").expect("create config.toml");
         let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
             .expect("canonicalize cwd");
         let cwd_absolute =
@@ -4437,9 +4436,6 @@ mod tests {
             .expect("canonical .agents");
         let expected_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
             .expect("canonical .codex");
-        let expected_codex_config =
-            AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex/config.toml"))
-                .expect("canonical .codex/config.toml");
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -4491,12 +4487,6 @@ mod tests {
                 .read_only_subpaths
                 .iter()
                 .any(|path| path.as_path() == expected_codex.as_path())
-        );
-        assert!(
-            writable_roots[0]
-                .read_only_subpaths
-                .iter()
-                .any(|path| path.as_path() == expected_codex_config.as_path())
         );
     }
 

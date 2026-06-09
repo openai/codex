@@ -98,30 +98,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .fs_read_file(FsReadFileParams {
                 path: path.clone(),
                 sandbox: remote_sandbox_context(sandbox),
-                no_follow_symlinks: false,
-            })
-            .await
-            .map_err(map_remote_error)?;
-        STANDARD.decode(response.data_base64).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("remote fs/readFile returned invalid base64 dataBase64: {err}"),
-            )
-        })
-    }
-
-    async fn read_file_no_follow(
-        &self,
-        path: &AbsolutePathBuf,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<Vec<u8>> {
-        trace!("remote fs read_file_no_follow");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        let response = client
-            .fs_read_file(FsReadFileParams {
-                path: path.clone(),
-                sandbox: remote_sandbox_context(sandbox),
-                no_follow_symlinks: true,
             })
             .await
             .map_err(map_remote_error)?;

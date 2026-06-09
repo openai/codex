@@ -1206,17 +1206,12 @@ async fn load_project_layers(
     let mut startup_warnings = Vec::new();
     for dir in dirs {
         let dot_codex_abs = dir.join(".codex");
-        let Ok(dot_codex_metadata) = fs.get_metadata(&dot_codex_abs, /*sandbox*/ None).await else {
-            continue;
-        };
-        if dot_codex_metadata.is_symlink {
-            let dot_codex_display = dot_codex_abs.as_path().display();
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("Project config directory {dot_codex_display} must not be a symlink"),
-            ));
-        }
-        if !dot_codex_metadata.is_directory {
+        if !fs
+            .get_metadata(&dot_codex_abs, /*sandbox*/ None)
+            .await
+            .map(|metadata| metadata.is_directory)
+            .unwrap_or(false)
+        {
             continue;
         }
 
@@ -1229,44 +1224,7 @@ async fn load_project_layers(
             continue;
         }
         let config_file = dot_codex_abs.join(CONFIG_TOML_FILE);
-        let config_file_for_read = fs
-            .canonicalize(&dir, /*sandbox*/ None)
-            .await
-            .map_err(|err| {
-                let dir_display = dir.as_path().display();
-                io::Error::new(
-                    err.kind(),
-                    format!("Failed to resolve project directory {dir_display}: {err}"),
-                )
-            })?
-            .join(".codex")
-            .join(CONFIG_TOML_FILE);
-        match fs.get_metadata(&config_file, /*sandbox*/ None).await {
-            Ok(metadata) => {
-                if metadata.is_symlink {
-                    let config_file_display = config_file.as_path().display();
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("Project config file {config_file_display} must not be a symlink"),
-                    ));
-                }
-            }
-            Err(err) => {
-                if err.kind() != io::ErrorKind::NotFound {
-                    let config_file_display = config_file.as_path().display();
-                    return Err(io::Error::new(
-                        err.kind(),
-                        format!(
-                            "Failed to inspect project config file {config_file_display}: {err}"
-                        ),
-                    ));
-                }
-            }
-        }
-        match fs
-            .read_file_text_no_follow(&config_file_for_read, /*sandbox*/ None)
-            .await
-        {
+        match fs.read_file_text(&config_file, /*sandbox*/ None).await {
             Ok(contents) => {
                 let config: TomlValue = match toml::from_str(&contents) {
                     Ok(config) => config,

@@ -1,9 +1,7 @@
 #[cfg(unix)]
 mod symlinks {
-    use super::super::open_file_for_read_no_follow;
     use super::super::resolve_symlink_write_paths;
     use pretty_assertions::assert_eq;
-    use std::io::Read;
     use std::os::unix::fs::symlink;
 
     #[test]
@@ -19,53 +17,6 @@ mod symlinks {
 
         assert_eq!(resolved.read_path, None);
         assert_eq!(resolved.write_path, a);
-        Ok(())
-    }
-
-    #[test]
-    fn no_follow_read_rejects_symlinked_parent_directory() -> std::io::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let dir = dir.path().canonicalize()?;
-        let target_dir = dir.join("target");
-        let symlinked_dir = dir.join("link");
-        std::fs::create_dir(&target_dir)?;
-        std::fs::write(target_dir.join("payload"), "secret")?;
-        symlink(&target_dir, &symlinked_dir)?;
-
-        let err = open_file_for_read_no_follow(&symlinked_dir.join("payload"))
-            .expect_err("symlinked parent should fail");
-
-        assert!(err.raw_os_error().is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn no_follow_read_rejects_symlinked_file() -> std::io::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let dir = dir.path().canonicalize()?;
-        let target = dir.join("target");
-        let symlink_path = dir.join("link");
-        std::fs::write(&target, "secret")?;
-        symlink(&target, &symlink_path)?;
-
-        let err =
-            open_file_for_read_no_follow(&symlink_path).expect_err("symlinked file should fail");
-
-        assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
-        Ok(())
-    }
-
-    #[test]
-    fn no_follow_read_reads_regular_file() -> std::io::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().canonicalize()?.join("payload");
-
-        std::fs::write(&path, "hello")?;
-        let mut reader = open_file_for_read_no_follow(&path)?;
-        let mut contents = String::new();
-        reader.read_to_string(&mut contents)?;
-
-        assert_eq!(contents, "hello");
         Ok(())
     }
 }

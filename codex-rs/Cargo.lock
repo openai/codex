@@ -2845,7 +2845,6 @@ dependencies = [
  "codex-shell-command",
  "codex-test-binary-support",
  "codex-utils-absolute-path",
- "codex-utils-path",
  "codex-utils-pty",
  "codex-utils-rustls-provider",
  "ctor 0.6.3",
@@ -4149,7 +4148,6 @@ version = "0.0.0"
 dependencies = [
  "codex-utils-absolute-path",
  "dunce",
- "libc",
  "pretty_assertions",
  "tempfile",
 ]

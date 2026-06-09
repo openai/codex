@@ -593,8 +593,15 @@ fn create_filesystem_args(
             &read_only_subpaths,
         );
         read_only_subpaths.sort_by_key(|path| path_depth(path));
+        let mut enforced_read_only_subpaths = Vec::new();
         for subpath in read_only_subpaths {
-            append_read_only_subpath_args(&mut bwrap_args, &subpath, &allowed_write_paths)?;
+            append_read_only_subpath_args(
+                &mut bwrap_args,
+                &subpath,
+                &allowed_write_paths,
+                &enforced_read_only_subpaths,
+            )?;
+            enforced_read_only_subpaths.push(subpath);
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
@@ -1022,8 +1029,15 @@ fn append_read_only_subpath_args(
     bwrap_args: &mut BwrapArgs,
     subpath: &Path,
     allowed_write_paths: &[PathBuf],
+    enforced_read_only_subpaths: &[PathBuf],
 ) -> Result<()> {
-    if let Some(symlink) = first_writable_symlink_component_in_path(subpath, allowed_write_paths) {
+    if let Some(symlink) = first_writable_symlink_component_in_path(subpath, allowed_write_paths)
+        && !read_only_ancestor_stabilizes_symlink_target(
+            &symlink,
+            allowed_write_paths,
+            enforced_read_only_subpaths,
+        )
+    {
         /*
          * A read-only carveout under a writable symlink cannot be made reliable
          * with bwrap path arguments. Binding the symlink's current target would
@@ -1069,6 +1083,36 @@ fn append_read_only_subpath_args(
         bwrap_args.args.push(path_to_string(subpath));
     }
     Ok(())
+}
+
+/// Returns whether an already-enforced read-only ancestor prevents `symlink`
+/// from being retargeted and its current target path contains no other writable
+/// symlink components.
+fn read_only_ancestor_stabilizes_symlink_target(
+    symlink: &Path,
+    allowed_write_paths: &[PathBuf],
+    enforced_read_only_subpaths: &[PathBuf],
+) -> bool {
+    if !enforced_read_only_subpaths.iter().any(|read_only_path| {
+        symlink.starts_with(read_only_path)
+            && is_within_allowed_write_paths(read_only_path, allowed_write_paths)
+    }) {
+        return false;
+    }
+
+    let Ok(target) = fs::read_link(symlink) else {
+        return false;
+    };
+    let target = if target.is_absolute() {
+        target
+    } else {
+        symlink
+            .parent()
+            .map_or(target.clone(), |parent| parent.join(target))
+    };
+
+    target.exists()
+        && first_writable_symlink_component_in_path(&target, allowed_write_paths).is_none()
 }
 
 fn append_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
@@ -2226,7 +2270,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn split_policy_rejects_symlinked_project_config_file() {
+    fn split_policy_protects_symlinked_project_config_file() {
         let temp_dir = TempDir::new().expect("temp dir");
         let writable_root = temp_dir.path().join("workspace");
         let dot_codex = writable_root.join(".codex");
@@ -2237,7 +2281,49 @@ mod tests {
         std::os::unix::fs::symlink(&payload, &config).expect("create config symlink");
         let writable_root =
             AbsolutePathBuf::from_absolute_path(&writable_root).expect("absolute writable root");
+        let dot_codex_str = path_to_string(&dot_codex);
         let config_str = path_to_string(&config);
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: writable_root,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+
+        let dot_codex_position = args
+            .args
+            .windows(3)
+            .position(|window| {
+                window == ["--ro-bind", dot_codex_str.as_str(), dot_codex_str.as_str()]
+            })
+            .expect(".codex should be remounted read-only");
+        let config_position = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--ro-bind", config_str.as_str(), config_str.as_str()])
+            .expect("config target should be remounted read-only");
+        assert!(dot_codex_position < config_position);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn split_policy_rejects_project_config_target_through_writable_symlink() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("workspace");
+        let dot_codex = writable_root.join(".codex");
+        let payload = writable_root.join("payload.toml");
+        let mutable_link = writable_root.join("mutable-link.toml");
+        let config = dot_codex.join("config.toml");
+        std::fs::create_dir_all(&dot_codex).expect("create .codex");
+        std::fs::write(&payload, "sandbox_mode = \"danger-full-access\"").expect("write payload");
+        std::os::unix::fs::symlink(&payload, &mutable_link).expect("create mutable symlink");
+        std::os::unix::fs::symlink("../mutable-link.toml", &config).expect("create config symlink");
+        let writable_root =
+            AbsolutePathBuf::from_absolute_path(&writable_root).expect("absolute writable root");
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: writable_root,
@@ -2247,14 +2333,42 @@ mod tests {
 
         let err =
             create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect_err("symlinked config should fail closed");
-        let message = err.to_string();
+                .expect_err("mutable target symlink should fail closed");
 
         assert!(
-            message.contains("cannot enforce sandbox read-only path"),
-            "{message}"
+            err.to_string()
+                .contains("cannot enforce sandbox read-only path"),
+            "{err}"
         );
-        assert!(message.contains(&config_str), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn split_policy_rejects_dangling_project_config_symlink() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("workspace");
+        let dot_codex = writable_root.join(".codex");
+        let config = dot_codex.join("config.toml");
+        std::fs::create_dir_all(&dot_codex).expect("create .codex");
+        std::os::unix::fs::symlink("../missing.toml", &config).expect("create config symlink");
+        let writable_root =
+            AbsolutePathBuf::from_absolute_path(&writable_root).expect("absolute writable root");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: writable_root,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let err =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect_err("dangling config symlink should fail closed");
+
+        assert!(
+            err.to_string()
+                .contains("cannot enforce sandbox read-only path"),
+            "{err}"
+        );
     }
 
     #[test]

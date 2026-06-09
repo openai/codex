@@ -183,9 +183,6 @@ pub struct TerminateResponse {
 pub struct FsReadFileParams {
     pub path: AbsolutePathBuf,
     pub sandbox: Option<FileSystemSandboxContext>,
-    /// Reject symlinks in every path component on Unix executors.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub no_follow_symlinks: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

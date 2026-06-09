@@ -3029,6 +3029,37 @@ wire_api = "responses"
 
 #[cfg(unix)]
 #[tokio::test]
+async fn symlinked_project_config_is_loaded() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let dot_codex = project_root.join(".codex");
+    let codex_home = tmp.path().join("home");
+    let config_target = project_root.join("project-config.toml");
+    tokio::fs::create_dir_all(&dot_codex).await?;
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(&config_target, "model = \"symlink-model\"\n").await?;
+    symlink("../project-config.toml", dot_codex.join(CONFIG_TOML_FILE))?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(project_root))
+        .build()
+        .await?;
+
+    assert_eq!(config.model.as_deref(), Some("symlink-model"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn project_trust_does_not_match_configured_alias_for_canonical_cwd() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
@@ -3264,84 +3295,6 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
     Ok(())
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn symlinked_project_config_is_rejected() -> std::io::Result<()> {
-    let tmp = tempdir()?;
-    let project_root = tmp.path().join("project");
-    let dot_codex = project_root.join(".codex");
-    let codex_home = tmp.path().join("home");
-    let payload = project_root.join("payload.toml");
-    tokio::fs::create_dir_all(&dot_codex).await?;
-    tokio::fs::create_dir_all(&codex_home).await?;
-    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
-    tokio::fs::write(&payload, "sandbox_mode = \"danger-full-access\"\n").await?;
-    symlink(&payload, dot_codex.join(CONFIG_TOML_FILE)).expect("create config symlink");
-    make_config_for_test(
-        &codex_home,
-        &project_root,
-        TrustLevel::Trusted,
-        /*project_root_markers*/ None,
-    )
-    .await?;
-
-    let err = ConfigBuilder::default()
-        .codex_home(codex_home)
-        .fallback_cwd(Some(project_root))
-        .build()
-        .await
-        .expect_err("symlinked project config should fail");
-
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(
-        err.to_string().contains("must not be a symlink"),
-        "unexpected error: {err}"
-    );
-
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn symlinked_project_config_directory_is_rejected() -> std::io::Result<()> {
-    let tmp = tempdir()?;
-    let project_root = tmp.path().join("project");
-    let codex_home = tmp.path().join("home");
-    let payload_dir = tmp.path().join("payload");
-    tokio::fs::create_dir_all(&project_root).await?;
-    tokio::fs::create_dir_all(&codex_home).await?;
-    tokio::fs::create_dir_all(&payload_dir).await?;
-    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
-    tokio::fs::write(
-        payload_dir.join(CONFIG_TOML_FILE),
-        "sandbox_mode = \"danger-full-access\"\n",
-    )
-    .await?;
-    symlink(&payload_dir, project_root.join(".codex")).expect("create config directory symlink");
-    make_config_for_test(
-        &codex_home,
-        &project_root,
-        TrustLevel::Trusted,
-        /*project_root_markers*/ None,
-    )
-    .await?;
-
-    let err = ConfigBuilder::default()
-        .codex_home(codex_home)
-        .fallback_cwd(Some(project_root))
-        .build()
-        .await
-        .expect_err("symlinked project config directory should fail");
-
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(
-        err.to_string().contains("must not be a symlink"),
-        "unexpected error: {err}"
-    );
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown()
 -> std::io::Result<()> {
@@ -3471,7 +3424,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         &codex_home,
         &project_root,
         TrustLevel::Trusted,
-        /*project_root_markers*/ Some(vec![".hg".to_string()]),
+        Some(vec![".hg".to_string()]),
     )
     .await?;
 
