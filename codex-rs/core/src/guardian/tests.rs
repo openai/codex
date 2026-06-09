@@ -2099,11 +2099,13 @@ async fn guardian_review_retries_reviewer_availability_failure() -> anyhow::Resu
     let request_log = mount_response_sequence(
         &server,
         vec![
-            wiremock::ResponseTemplate::new(503).set_body_json(serde_json::json!({
-                "error": {
-                    "message": "reviewer capacity temporarily unavailable"
-                }
-            })),
+            wiremock::ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(core_test_support::responses::sse_failed(
+                    "resp-guardian-failed",
+                    "server_error",
+                    "reviewer capacity temporarily unavailable",
+                )),
             wiremock::ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(sse(vec![
@@ -2137,12 +2139,12 @@ async fn guardian_review_retries_reviewer_availability_failure() -> anyhow::Resu
     assert_eq!(decision, ReviewDecision::Approved);
     let requests = request_log.requests();
     assert_eq!(requests.len(), 2);
-    let retry_request = requests[1].body_json().to_string();
-    assert!(retry_request.contains(PRIOR_RETRY_REASON));
-    assert!(retry_request.contains(
+    let retry_request = &requests[1];
+    assert!(retry_request.body_contains_text(PRIOR_RETRY_REASON));
+    assert!(retry_request.body_contains_text(
         "The previous automatic approval review was temporarily unavailable. Retry the review once before blocking the action."
     ));
-    assert!(!retry_request.contains("reviewer capacity temporarily unavailable"));
+    assert!(!retry_request.body_contains_text("reviewer capacity temporarily unavailable"));
 
     Ok(())
 }
