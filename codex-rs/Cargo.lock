@@ -3801,6 +3801,7 @@ dependencies = [
  "codex-extension-api",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-string",
  "pretty_assertions",
  "tokio",
 ]

@@ -2,6 +2,7 @@ use codex_core_skills::render_available_skills_body;
 use codex_extension_api::ContextualUserFragment;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
+use codex_utils_string::take_bytes_at_char_boundary;
 
 use crate::catalog::SkillCatalog;
 
@@ -85,13 +86,6 @@ pub(crate) fn truncate_main_prompt_contents(contents: &str) -> (String, bool) {
 }
 
 pub(crate) fn truncate_utf8_to_bytes(contents: &str, max_bytes: usize) -> (String, bool) {
-    if contents.len() <= max_bytes {
-        return (contents.to_string(), false);
-    }
-
-    let mut end = max_bytes;
-    while !contents.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    (contents[..end].to_string(), true)
+    let truncated = take_bytes_at_char_boundary(contents, max_bytes);
+    (truncated.to_string(), truncated.len() < contents.len())
 }
