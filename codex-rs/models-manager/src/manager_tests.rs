@@ -19,6 +19,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tempfile::tempdir;
+use tokio::sync::Notify;
 
 #[path = "model_info_overrides_tests.rs"]
 mod model_info_overrides_tests;
@@ -166,6 +167,54 @@ impl ModelsEndpointClient for TestModelsEndpoint {
             .pop_front()
             .unwrap_or_default();
         Ok((models, None))
+    }
+}
+
+#[derive(Debug)]
+struct BlockingModelsEndpoint {
+    first_models: Vec<ModelInfo>,
+    second_models: Vec<ModelInfo>,
+    fetch_count: AtomicUsize,
+    first_fetch_started: Notify,
+    release_first_fetch: Notify,
+}
+
+impl BlockingModelsEndpoint {
+    fn new(first_models: Vec<ModelInfo>, second_models: Vec<ModelInfo>) -> Arc<Self> {
+        Arc::new(Self {
+            first_models,
+            second_models,
+            fetch_count: AtomicUsize::new(0),
+            first_fetch_started: Notify::new(),
+            release_first_fetch: Notify::new(),
+        })
+    }
+}
+
+#[async_trait]
+impl ModelsEndpointClient for BlockingModelsEndpoint {
+    fn has_command_auth(&self) -> bool {
+        false
+    }
+
+    async fn uses_codex_backend(&self) -> bool {
+        true
+    }
+
+    async fn list_models(
+        &self,
+        _client_version: &str,
+    ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
+        let fetch_index = self.fetch_count.fetch_add(1, Ordering::SeqCst);
+        match fetch_index {
+            0 => {
+                self.first_fetch_started.notify_one();
+                self.release_first_fetch.notified().await;
+                Ok((self.first_models.clone(), Some("old".to_string())))
+            }
+            1 => Ok((self.second_models.clone(), Some("new".to_string()))),
+            _ => panic!("unexpected model catalog fetch {fetch_index}"),
+        }
     }
 }
 
@@ -658,6 +707,116 @@ async fn refresh_available_models_drops_removed_remote_models() {
         2,
         "second refresh should fetch models again"
     );
+}
+
+#[tokio::test]
+async fn current_default_model_falls_back_to_bundled_catalog_during_write_contention() {
+    let codex_home = tempdir().expect("temp dir");
+    let manager = openai_manager_for_tests(
+        codex_home.path().to_path_buf(),
+        TestModelsEndpoint::new(Vec::new()),
+    );
+    let bundled_models = crate::bundled_models_response()
+        .expect("bundled model catalog should parse")
+        .models;
+    let expected = default_model_from_available(manager.build_available_models(bundled_models));
+
+    let _write_guard = manager.remote_models.write().await;
+    let actual = manager.get_default_model_from_current_catalog(/*configured_model*/ None);
+
+    assert_eq!(actual, expected);
+    assert!(!actual.is_empty());
+}
+
+#[tokio::test]
+async fn model_refreshes_are_serialized_across_etag_updates() {
+    let old_model = remote_model("remote-old", "Remote Old", /*priority*/ 1);
+    let new_model = remote_model("remote-new", "Remote New", /*priority*/ 1);
+    let endpoint = BlockingModelsEndpoint::new(vec![old_model], vec![new_model.clone()]);
+    let codex_home = tempdir().expect("temp dir");
+    let manager = Arc::new(openai_manager_for_tests(
+        codex_home.path().to_path_buf(),
+        endpoint.clone(),
+    ));
+
+    let initial_refresh = {
+        let manager = Arc::clone(&manager);
+        tokio::spawn(async move {
+            manager
+                .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+                .await
+        })
+    };
+    endpoint.first_fetch_started.notified().await;
+    let etag_refresh = {
+        let manager = Arc::clone(&manager);
+        tokio::spawn(async move {
+            manager.refresh_if_new_etag("new".to_string()).await;
+        })
+    };
+    tokio::task::yield_now().await;
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 1);
+
+    endpoint.release_first_fetch.notify_one();
+    initial_refresh
+        .await
+        .expect("initial refresh task should finish")
+        .expect("initial refresh should succeed");
+    etag_refresh.await.expect("etag refresh task should finish");
+
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 2);
+    assert_eq!(manager.get_remote_models().await, vec![new_model]);
+    assert_eq!(manager.get_etag().await.as_deref(), Some("new"));
+}
+
+#[tokio::test]
+async fn concurrent_uncached_refreshes_share_the_first_fetch() {
+    let model = remote_model("remote", "Remote", /*priority*/ 1);
+    let endpoint = BlockingModelsEndpoint::new(vec![model.clone()], Vec::new());
+    let codex_home = tempdir().expect("temp dir");
+    let manager = Arc::new(openai_manager_for_tests(
+        codex_home.path().to_path_buf(),
+        endpoint.clone(),
+    ));
+
+    let first_refresh = {
+        let manager = Arc::clone(&manager);
+        tokio::spawn(async move {
+            manager
+                .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+                .await
+        })
+    };
+    endpoint.first_fetch_started.notified().await;
+    assert!(
+        !manager
+            .get_default_model_from_current_catalog(/*configured_model*/ None)
+            .is_empty(),
+        "current-catalog lookup should not wait for the in-flight refresh"
+    );
+    let second_refresh = {
+        let manager = Arc::clone(&manager);
+        tokio::spawn(async move {
+            manager
+                .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 1);
+
+    endpoint.release_first_fetch.notify_one();
+    first_refresh
+        .await
+        .expect("first refresh task should finish")
+        .expect("first refresh should succeed");
+    second_refresh
+        .await
+        .expect("second refresh task should finish")
+        .expect("second refresh should succeed");
+
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 1);
+    assert_eq!(manager.get_remote_models().await, vec![model]);
 }
 
 #[tokio::test]

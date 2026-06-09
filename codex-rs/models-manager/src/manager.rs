@@ -15,6 +15,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
 use tracing::Instrument as _;
@@ -157,6 +158,19 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         .await
     }
 
+    /// Resolve the configured or default model from the current in-memory catalog without waiting
+    /// for cache or network refresh work.
+    fn get_default_model_from_current_catalog(&self, configured_model: Option<&str>) -> String {
+        if let Some(model) = configured_model {
+            return model.to_string();
+        }
+        let available_models = self.try_list_models().unwrap_or_else(|_| {
+            let bundled_models = crate::bundled_models_response().unwrap_or_default().models;
+            self.build_available_models(bundled_models)
+        });
+        default_model_from_available(available_models)
+    }
+
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     async fn get_model_info(&self, model: &str, config: &ModelsManagerConfig) -> ModelInfo {
@@ -185,6 +199,7 @@ pub struct OpenAiModelsManager {
     cache_manager: ModelsCacheManager,
     endpoint_client: SharedModelsEndpointClient,
     auth_manager: Option<Arc<AuthManager>>,
+    refresh_lock: Mutex<()>,
 }
 
 /// Static model manager backed by an authoritative in-process catalog.
@@ -210,6 +225,7 @@ impl OpenAiModelsManager {
             cache_manager,
             endpoint_client,
             auth_manager,
+            refresh_lock: Mutex::new(()),
         }
     }
 }
@@ -251,7 +267,12 @@ impl ModelsManager for OpenAiModelsManager {
         builtin_collaboration_mode_presets()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the refresh lock must cover the full cache check and remote refresh"
+    )]
     async fn refresh_if_new_etag(&self, etag: String) {
+        let _refresh_guard = self.refresh_lock.lock().await;
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             if let Err(err) = self.cache_manager.renew_cache_ttl().await {
@@ -259,7 +280,10 @@ impl ModelsManager for OpenAiModelsManager {
             }
             return;
         }
-        if let Err(err) = self.refresh_available_models(RefreshStrategy::Online).await {
+        if let Err(err) = self
+            .refresh_available_models_locked(RefreshStrategy::Online)
+            .await
+        {
             error!("failed to refresh available models: {err}");
         }
     }
@@ -267,7 +291,19 @@ impl ModelsManager for OpenAiModelsManager {
 
 impl OpenAiModelsManager {
     /// Refresh available models according to the specified strategy.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the refresh lock serializes cache loading and remote catalog mutation"
+    )]
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
+        let _refresh_guard = self.refresh_lock.lock().await;
+        self.refresh_available_models_locked(refresh_strategy).await
+    }
+
+    async fn refresh_available_models_locked(
+        &self,
+        refresh_strategy: RefreshStrategy,
+    ) -> CoreResult<()> {
         if !self.should_refresh_models().await {
             if matches!(
                 refresh_strategy,
