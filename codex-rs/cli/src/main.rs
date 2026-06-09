@@ -1173,11 +1173,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                             codex_app_server::app_server_control_socket_path(&codex_home)?
                         }
                     };
-                    if let Err(err) =
-                        codex_app_server::refresh_ssh_auth_sock_for_proxy(socket_path.as_path())
-                    {
-                        eprintln!("WARNING: failed to refresh SSH agent forwarding: {err}");
-                    }
+                    let _ssh_agent_proxy_guard =
+                        codex_app_server::acquire_ssh_agent_proxy_guard(socket_path.as_path())?;
                     codex_stdio_to_uds::run(socket_path.as_path()).await?;
                 }
                 Some(AppServerSubcommand::GenerateTs(gen_cli)) => {

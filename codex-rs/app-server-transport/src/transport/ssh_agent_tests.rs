@@ -1,4 +1,5 @@
-use super::refresh_ssh_auth_sock_from_path;
+use super::acquire_ssh_agent_proxy_guard_from_path;
+use super::normalize_ssh_auth_sock_from_path;
 use super::stable_ssh_auth_sock_path;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -8,7 +9,7 @@ use std::os::unix::net::UnixListener;
 use tempfile::TempDir;
 
 #[test]
-fn refresh_retargets_stable_agent_symlink() {
+fn normalize_retargets_stable_agent_symlink() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let control_socket_path = temp_dir.path().join("app-server.sock");
     let first_agent_path = temp_dir.path().join("agent-1.sock");
@@ -17,7 +18,7 @@ fn refresh_retargets_stable_agent_symlink() {
     let _second_agent = UnixListener::bind(&second_agent_path).expect("bind second agent socket");
 
     let stable_path =
-        refresh_ssh_auth_sock_from_path(&control_socket_path, first_agent_path.as_os_str())
+        normalize_ssh_auth_sock_from_path(&control_socket_path, first_agent_path.as_os_str())
             .expect("refresh first agent")
             .expect("first agent should be valid");
     assert_eq!(stable_path, stable_ssh_auth_sock_path(&control_socket_path));
@@ -33,7 +34,7 @@ fn refresh_retargets_stable_agent_symlink() {
     );
 
     let refreshed_path =
-        refresh_ssh_auth_sock_from_path(&control_socket_path, second_agent_path.as_os_str())
+        normalize_ssh_auth_sock_from_path(&control_socket_path, second_agent_path.as_os_str())
             .expect("refresh second agent")
             .expect("second agent should be valid");
     assert_eq!(refreshed_path, stable_path);
@@ -44,14 +45,31 @@ fn refresh_retargets_stable_agent_symlink() {
 }
 
 #[test]
-fn refresh_ignores_non_socket_agent_path() {
+fn normalize_keeps_missing_agent_path_repairable() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let control_socket_path = temp_dir.path().join("app-server.sock");
+    let missing_agent_path = temp_dir.path().join("missing-agent.sock");
+
+    let stable_path =
+        normalize_ssh_auth_sock_from_path(&control_socket_path, missing_agent_path.as_os_str())
+            .expect("normalize missing agent")
+            .expect("missing agent should remain repairable");
+
+    assert_eq!(
+        fs::read_link(stable_path).expect("read stable agent symlink"),
+        missing_agent_path
+    );
+}
+
+#[test]
+fn normalize_ignores_non_socket_agent_path() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let control_socket_path = temp_dir.path().join("app-server.sock");
     let regular_file_path = temp_dir.path().join("not-an-agent");
     fs::write(&regular_file_path, "not a socket").expect("write regular file");
 
     assert_eq!(
-        refresh_ssh_auth_sock_from_path(&control_socket_path, regular_file_path.as_os_str())
+        normalize_ssh_auth_sock_from_path(&control_socket_path, regular_file_path.as_os_str())
             .expect("ignore regular file"),
         None
     );
@@ -59,7 +77,7 @@ fn refresh_ignores_non_socket_agent_path() {
 }
 
 #[test]
-fn refresh_refuses_to_replace_non_symlink_path() {
+fn normalize_refuses_to_replace_non_symlink_path() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let control_socket_path = temp_dir.path().join("app-server.sock");
     let agent_path = temp_dir.path().join("agent.sock");
@@ -67,7 +85,7 @@ fn refresh_refuses_to_replace_non_symlink_path() {
     let stable_path = stable_ssh_auth_sock_path(&control_socket_path);
     fs::write(&stable_path, "do not replace").expect("write stable path");
 
-    let err = refresh_ssh_auth_sock_from_path(&control_socket_path, agent_path.as_os_str())
+    let err = normalize_ssh_auth_sock_from_path(&control_socket_path, agent_path.as_os_str())
         .expect_err("non-symlink path should be preserved");
 
     assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
@@ -78,27 +96,87 @@ fn refresh_refuses_to_replace_non_symlink_path() {
 }
 
 #[test]
-fn refresh_preserves_inherited_stable_path_while_agent_is_disconnected() {
+fn normalize_preserves_inherited_stable_path_while_agent_is_disconnected() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let control_socket_path = temp_dir.path().join("app-server.sock");
     let stable_path = stable_ssh_auth_sock_path(&control_socket_path);
 
     assert_eq!(
-        refresh_ssh_auth_sock_from_path(&control_socket_path, stable_path.as_os_str())
+        normalize_ssh_auth_sock_from_path(&control_socket_path, stable_path.as_os_str())
             .expect("preserve stable path"),
         Some(stable_path)
     );
 }
 
 #[test]
-fn refresh_rejects_inherited_stable_path_when_it_is_not_a_symlink() {
+fn normalize_rejects_inherited_stable_path_when_it_is_not_a_symlink() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let control_socket_path = temp_dir.path().join("app-server.sock");
     let stable_path = stable_ssh_auth_sock_path(&control_socket_path);
     fs::write(&stable_path, "not a symlink").expect("write stable path");
 
-    let err = refresh_ssh_auth_sock_from_path(&control_socket_path, stable_path.as_os_str())
+    let err = normalize_ssh_auth_sock_from_path(&control_socket_path, stable_path.as_os_str())
         .expect_err("non-symlink stable path should be rejected");
 
     assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+}
+
+#[test]
+fn stable_path_appends_suffix_to_agent_extension() {
+    let control_socket_path = std::path::Path::new("/tmp/custom.agent");
+
+    assert_eq!(
+        stable_ssh_auth_sock_path(control_socket_path),
+        std::path::Path::new("/tmp/custom.agent.agent")
+    );
+}
+
+#[test]
+fn proxy_guard_rejects_overlap_and_transfers_after_drop() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let control_socket_path = temp_dir.path().join("app-server.sock");
+    let first_agent_path = temp_dir.path().join("agent-1.sock");
+    let second_agent_path = temp_dir.path().join("agent-2.sock");
+    let _first_agent = UnixListener::bind(&first_agent_path).expect("bind first agent socket");
+    let _second_agent = UnixListener::bind(&second_agent_path).expect("bind second agent socket");
+
+    let first_guard = acquire_ssh_agent_proxy_guard_from_path(
+        &control_socket_path,
+        Some(first_agent_path.as_os_str()),
+    )
+    .expect("acquire first proxy guard")
+    .expect("first proxy should coordinate agent forwarding");
+    let stable_path = stable_ssh_auth_sock_path(&control_socket_path);
+    assert_eq!(
+        fs::read_link(&stable_path).expect("read first target"),
+        first_agent_path
+    );
+
+    let second_err = match acquire_ssh_agent_proxy_guard_from_path(
+        &control_socket_path,
+        Some(second_agent_path.as_os_str()),
+    ) {
+        Ok(_) => panic!("overlapping proxy should be rejected"),
+        Err(err) => err,
+    };
+    assert_eq!(second_err.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(
+        fs::read_link(&stable_path).expect("first target should remain"),
+        first_agent_path
+    );
+
+    drop(first_guard);
+    assert!(fs::symlink_metadata(&stable_path).is_err());
+
+    let second_guard = acquire_ssh_agent_proxy_guard_from_path(
+        &control_socket_path,
+        Some(second_agent_path.as_os_str()),
+    )
+    .expect("acquire second proxy guard")
+    .expect("second proxy should coordinate agent forwarding");
+    assert_eq!(
+        fs::read_link(&stable_path).expect("read second target"),
+        second_agent_path
+    );
+    drop(second_guard);
 }
