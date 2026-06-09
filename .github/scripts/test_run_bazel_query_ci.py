@@ -69,6 +69,7 @@ class RunBazelQueryCiTest(unittest.TestCase):
                     "BUILDBUDDY_API_KEY": "token",
                     "CODEX_BAZEL_BIN": str(fake_bazel),
                     "GITHUB_ACTIONS": "true",
+                    "GITHUB_REPOSITORY": "contributor/codex",
                 }
             )
 
