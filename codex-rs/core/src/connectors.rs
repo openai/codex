@@ -40,7 +40,6 @@ use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
-use codex_mcp::compute_auth_statuses;
 use codex_mcp::host_owned_codex_apps_enabled;
 use codex_mcp::with_codex_apps_mcp;
 
@@ -260,20 +259,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         });
     }
 
-    let auth_status_entries = compute_auth_statuses(
-        mcp_servers.iter(),
-        config.mcp_oauth_credentials_store_mode,
-        auth.as_ref(),
-    )
-    .await;
-
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
     let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
-        auth_status_entries,
         &config.permissions.approval_policy,
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,

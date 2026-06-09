@@ -695,6 +695,47 @@ async fn thread_start_fails_when_required_mcp_server_fails_to_initialize() -> Re
 }
 
 #[tokio::test]
+async fn thread_start_does_not_wait_for_optional_mcp_oauth_discovery() -> Result<()> {
+    let model_server = create_mock_responses_server_repeating_assistant("Done").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let mcp_server_uri = format!("http://{}", listener.local_addr()?);
+    let (connection_accepted_tx, connection_accepted_rx) = tokio::sync::oneshot::channel();
+    let blocked_server = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await.expect("accept MCP connection");
+        let _ = connection_accepted_tx.send(());
+        std::future::pending::<()>().await;
+    });
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_optional_http_mcp(
+        codex_home.path(),
+        &model_server.uri(),
+        &mcp_server_uri,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let _: ThreadStartResponse = to_response(response)?;
+    timeout(DEFAULT_READ_TIMEOUT, connection_accepted_rx)
+        .await
+        .expect("optional MCP startup should reach the deliberately blocked server")
+        .expect("blocked MCP server should report its accepted connection");
+    blocked_server.abort();
+    let _ = blocked_server.await;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
@@ -1259,6 +1300,35 @@ stream_max_retries = 0
 {optional_broken_transport}
 "#,
             optional_broken_transport = broken_mcp_transport_toml()
+        ),
+    )
+}
+
+fn create_config_toml_with_optional_http_mcp(
+    codex_home: &Path,
+    server_uri: &str,
+    mcp_server_uri: &str,
+) -> std::io::Result<()> {
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+[mcp_servers.slow_optional]
+url = "{mcp_server_uri}/mcp"
+"#,
         ),
     )
 }

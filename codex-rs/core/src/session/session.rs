@@ -631,13 +631,7 @@ impl Session {
             let mcp_servers = mcp_manager_for_mcp
                 .effective_servers(&config_for_mcp, auth.as_ref())
                 .await;
-            let auth_statuses = compute_auth_statuses(
-                mcp_servers.iter(),
-                config_for_mcp.mcp_oauth_credentials_store_mode,
-                auth.as_ref(),
-            )
-            .await;
-            (auth, mcp_servers, auth_statuses)
+            (auth, mcp_servers)
         }
         .instrument(info_span!(
             "session_init.auth_mcp",
@@ -660,7 +654,7 @@ impl Session {
         let (
             thread_persistence_result,
             state_db_ctx,
-            (auth, mcp_servers, auth_statuses),
+            (auth, mcp_servers),
             plugin_skill_errors,
         ) = tokio::join!(
             thread_persistence_fut,
@@ -1173,7 +1167,6 @@ impl Session {
             let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
-                auth_statuses.clone(),
                 &session_configuration.approval_policy,
                 INITIAL_SUBMIT_ID.to_owned(),
                 tx_event.clone(),

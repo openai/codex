@@ -270,18 +270,11 @@ pub async fn read_mcp_resource(
     let mut mcp_servers = effective_mcp_servers(config, auth);
     let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(config, auth);
     mcp_servers.retain(|name, _| name == server);
-    let auth_statuses = compute_auth_statuses(
-        mcp_servers.iter(),
-        config.mcp_oauth_credentials_store_mode,
-        auth,
-    )
-    .await;
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
     let (manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
-        auth_statuses,
         &config.approval_policy,
         String::new(),
         tx_event,
@@ -351,7 +344,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
-        auth_status_entries.clone(),
         &config.approval_policy,
         submit_id,
         tx_event,

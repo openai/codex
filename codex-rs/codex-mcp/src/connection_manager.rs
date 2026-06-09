@@ -13,7 +13,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::McpAuthStatusEntry;
 use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::CodexAppsToolsCacheKey;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
@@ -213,7 +212,6 @@ impl McpConnectionManager {
     pub async fn new(
         mcp_servers: &HashMap<String, EffectiveMcpServer>,
         store_mode: OAuthCredentialsStoreMode,
-        auth_entries: HashMap<String, McpAuthStatusEntry>,
         approval_policy: &Constrained<AskForApproval>,
         submit_id: String,
         tx_event: Sender<Event>,
@@ -247,6 +245,7 @@ impl McpConnectionManager {
             .into_iter()
             .filter(|(_, server)| server.enabled())
         {
+            let configured_server = server.configured_config().cloned();
             server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
@@ -298,7 +297,6 @@ impl McpConnectionManager {
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
-            let auth_entry = auth_entries.get(&server_name).cloned();
             join_set.spawn(async move {
                 let mut outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
@@ -310,7 +308,7 @@ impl McpConnectionManager {
                     Err(error) => {
                         let error_str = mcp_init_error_display(
                             server_name.as_str(),
-                            auth_entry.as_ref(),
+                            configured_server.as_ref(),
                             error,
                         );
                         McpStartupStatus::Failed { error: error_str }
@@ -810,7 +808,7 @@ async fn emit_update(
 
 fn mcp_init_error_display(
     server_name: &str,
-    entry: Option<&McpAuthStatusEntry>,
+    config: Option<&codex_config::McpServerConfig>,
     err: &StartupOutcomeError,
 ) -> String {
     if let Some(McpServerTransportConfig::StreamableHttp {
@@ -818,7 +816,7 @@ fn mcp_init_error_display(
         bearer_token_env_var,
         http_headers,
         ..
-    }) = entry.and_then(|entry| entry.config.as_ref().map(|config| &config.transport))
+    }) = config.map(|config| &config.transport)
         && url == "https://api.githubcopilot.com/mcp/"
         && bearer_token_env_var.is_none()
         && http_headers.as_ref().map(HashMap::is_empty).unwrap_or(true)
@@ -831,17 +829,9 @@ fn mcp_init_error_display(
             "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
         )
     } else if is_mcp_client_startup_timeout_error(err) {
-        let startup_timeout_secs = match entry {
-            Some(entry) => match entry
-                .config
-                .as_ref()
-                .and_then(|config| config.startup_timeout_sec)
-            {
-                Some(timeout) => timeout,
-                None => DEFAULT_STARTUP_TIMEOUT,
-            },
-            None => DEFAULT_STARTUP_TIMEOUT,
-        }
+        let startup_timeout_secs = config
+            .and_then(|config| config.startup_timeout_sec)
+            .unwrap_or(DEFAULT_STARTUP_TIMEOUT)
         .as_secs();
         format!(
             "MCP client for `{server_name}` timed out after {startup_timeout_secs} seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.{server_name}]\nstartup_timeout_sec = XX"

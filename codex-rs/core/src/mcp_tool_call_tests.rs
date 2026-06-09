@@ -1259,7 +1259,6 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
     let (manager, _cancel_token) = codex_mcp::McpConnectionManager::new(
         &HashMap::new(),
         turn_context.config.mcp_oauth_credentials_store_mode,
-        HashMap::new(),
         &turn_context.approval_policy,
         turn_context.sub_id.clone(),
         session.get_tx_event(),
