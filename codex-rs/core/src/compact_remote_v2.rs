@@ -353,7 +353,7 @@ async fn run_remote_compaction_request_v2(
             Ok(compaction_output) => return Ok(compaction_output),
             Err(err) if !err.is_retryable() => return Err(err),
             Err(err) => {
-                if let Err(err) = handle_retryable_response_stream_error(
+                handle_retryable_response_stream_error(
                     &mut retries,
                     max_retries,
                     err,
@@ -362,10 +362,7 @@ async fn run_remote_compaction_request_v2(
                     turn_context,
                     ResponsesStreamRequest::RemoteCompactionV2,
                 )
-                .await
-                {
-                    return Err(err);
-                }
+                .await?;
             }
         }
     }
