@@ -1668,6 +1668,7 @@ async fn guardian_review_decision_maps_to_mcp_tool_decision() {
         crate::guardian::GuardianRejection {
             rationale: "too risky".to_string(),
             source: codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+            kind: crate::guardian::GuardianRejectionKind::PolicyDenial,
         },
     );
     let denial = mcp_tool_approval_decision_from_guardian(

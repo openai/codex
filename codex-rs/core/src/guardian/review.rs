@@ -33,6 +33,7 @@ use super::GuardianAssessment;
 use super::GuardianAssessmentOutcome;
 use super::GuardianRejection;
 use super::GuardianRejectionCircuitBreakerAction;
+use super::GuardianRejectionKind;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_target_item_id;
 use super::approval_request::guardian_request_turn_id;
@@ -73,13 +74,20 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
         .unwrap_or_else(|| GuardianRejection {
             rationale: "Auto-reviewer denied the action without a specific rationale.".to_string(),
             source: GuardianAssessmentDecisionSource::Agent,
+            kind: GuardianRejectionKind::PolicyDenial,
         });
     match rejection.source {
-        GuardianAssessmentDecisionSource::Agent => format!(
-            "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
-            rejection.rationale.trim(),
-            GUARDIAN_REJECTION_INSTRUCTIONS
-        ),
+        GuardianAssessmentDecisionSource::Agent => {
+            let rationale = rejection.rationale.trim();
+            match rejection.kind {
+                GuardianRejectionKind::PolicyDenial => format!(
+                    "This action was rejected due to unacceptable risk.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}"
+                ),
+                GuardianRejectionKind::ReviewFailure => format!(
+                    "Automatic approval review failed, so this action was not run.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}"
+                ),
+            }
+        }
     }
 }
 
@@ -346,7 +354,7 @@ async fn run_guardian_review(
     .await;
 
     let completed_at_ms = now_unix_timestamp_ms();
-    let (assessment, count_denial_for_circuit_breaker) = match outcome {
+    let (assessment, count_denial_for_circuit_breaker, rejection_kind) = match outcome {
         GuardianReviewOutcome::Completed(assessment) => {
             let approved = matches!(assessment.outcome, GuardianAssessmentOutcome::Allow);
             track_guardian_review(
@@ -375,7 +383,11 @@ async fn run_guardian_review(
             );
             let count_denial_for_circuit_breaker =
                 matches!(assessment.outcome, GuardianAssessmentOutcome::Deny);
-            (assessment, count_denial_for_circuit_breaker)
+            (
+                assessment,
+                count_denial_for_circuit_breaker,
+                GuardianRejectionKind::PolicyDenial,
+            )
         }
         GuardianReviewOutcome::Error(error) => match error {
             GuardianReviewError::Timeout => {
@@ -492,6 +504,7 @@ async fn run_guardian_review(
                         rationale,
                     },
                     false,
+                    GuardianRejectionKind::ReviewFailure,
                 )
             }
         },
@@ -532,6 +545,7 @@ async fn run_guardian_review(
             let rejection = GuardianRejection {
                 rationale: assessment.rationale.clone(),
                 source: GuardianAssessmentDecisionSource::Agent,
+                kind: rejection_kind,
             };
             rationales.insert(review_id.clone(), rejection);
         }

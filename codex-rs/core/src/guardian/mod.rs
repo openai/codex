@@ -72,6 +72,13 @@ pub(crate) struct GuardianAssessment {
 pub(crate) struct GuardianRejection {
     pub(crate) rationale: String,
     pub(crate) source: GuardianAssessmentDecisionSource,
+    pub(crate) kind: GuardianRejectionKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GuardianRejectionKind {
+    PolicyDenial,
+    ReviewFailure,
 }
 
 #[derive(Debug, Default)]

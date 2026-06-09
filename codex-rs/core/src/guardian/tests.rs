@@ -2072,10 +2072,59 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     let rejection_message =
         guardian_rejection_message(session.as_ref(), "review-shell-guardian-error").await;
     assert!(
-        rejection_message.contains("Reason: Automatic approval review failed:")
+        rejection_message.contains("Automatic approval review failed, so this action was not run.")
+            && rejection_message.contains("Reason: Automatic approval review failed:")
             && rejection_message.contains(error_message),
         "rejection message should include guardian rationale: {rejection_message}"
     );
+    assert!(!rejection_message.contains("rejected due to unacceptable risk"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_completed_denial_uses_policy_rejection_message() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian-deny"),
+            ev_assistant_message(
+                "msg-guardian-deny",
+                "{\"risk_level\":\"high\",\"user_authorization\":\"low\",\"outcome\":\"deny\",\"rationale\":\"Pushing without review is too risky.\"}",
+            ),
+            ev_completed("resp-guardian-deny"),
+        ]),
+    )
+    .await;
+
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-shell-guardian-deny".to_string(),
+        GuardianApprovalRequest::Shell {
+            id: "shell-guardian-deny".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the reviewed docs fix.".to_string()),
+        },
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Denied);
+    let rejection_message =
+        guardian_rejection_message(session.as_ref(), "review-shell-guardian-deny").await;
+    assert!(rejection_message.contains("This action was rejected due to unacceptable risk."));
+    assert!(rejection_message.contains("Reason: Pushing without review is too risky."));
+    assert!(!rejection_message.contains("Automatic approval review failed"));
 
     Ok(())
 }
