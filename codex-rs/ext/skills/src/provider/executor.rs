@@ -61,8 +61,7 @@ impl SkillProvider for ExecutorSkillProvider {
                 let Some(environment) = self.environment_manager.get_environment(&environment_id)
                 else {
                     catalog.warnings.push(format!(
-                        "Selected capability root `{}` references unavailable environment `{environment_id}`.",
-                        selected_root_id
+                        "Selected capability root `{selected_root_id}` references unavailable environment `{environment_id}`."
                     ));
                     continue;
                 };
@@ -70,8 +69,7 @@ impl SkillProvider for ExecutorSkillProvider {
                     Ok(root_path) => root_path,
                     Err(err) => {
                         catalog.warnings.push(format!(
-                            "Selected capability root `{}` has invalid path `{path}`: {err}",
-                            selected_root_id
+                            "Selected capability root `{selected_root_id}` has invalid path `{path}`: {err}"
                         ));
                         continue;
                     }

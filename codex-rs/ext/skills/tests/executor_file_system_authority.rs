@@ -204,7 +204,7 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
 
 #[tokio::test]
 async fn executor_provider_reads_from_the_environment_instance_used_for_listing() {
-    let test_root = create_local_skill_root("bound-instance");
+    let test_root = create_local_skill_root("bound-instance").expect("create local skill root");
     let root_path = test_root.to_string_lossy().into_owned();
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let provider = ExecutorSkillProvider::new_with_restriction_product(
@@ -260,7 +260,7 @@ async fn executor_provider_reads_from_the_environment_instance_used_for_listing(
 
 #[tokio::test]
 async fn selected_root_id_distinguishes_identical_executor_paths() {
-    let test_root = create_local_skill_root("root-identity");
+    let test_root = create_local_skill_root("root-identity").expect("create local skill root");
     let root_path = test_root.to_string_lossy().into_owned();
     let canonical_root = std::fs::canonicalize(&test_root)
         .expect("canonicalize skill root")
@@ -322,14 +322,14 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
     std::fs::remove_dir_all(test_root).expect("remove skill directory");
 }
 
-fn create_local_skill_root(label: &str) -> std::path::PathBuf {
+fn create_local_skill_root(label: &str) -> io::Result<std::path::PathBuf> {
     let id = NEXT_TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed);
     let test_root = std::env::temp_dir().join(format!(
         "codex-executor-skill-{label}-{}-{id}",
         std::process::id()
     ));
     let skill_dir = test_root.join("skill");
-    std::fs::create_dir_all(&skill_dir).expect("create skill directory");
-    std::fs::write(skill_dir.join("SKILL.md"), SKILL_CONTENTS).expect("write skill");
-    test_root
+    std::fs::create_dir_all(&skill_dir)?;
+    std::fs::write(skill_dir.join("SKILL.md"), SKILL_CONTENTS)?;
+    Ok(test_root)
 }
