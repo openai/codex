@@ -1189,8 +1189,10 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("cached guardian config");
-        let cached_reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config, None);
+        let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &cached_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         let mut changed_parent_config = parent_config;
         changed_parent_config.model_provider.base_url =
@@ -1202,13 +1204,18 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("next guardian config");
-        let next_reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config, None);
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &next_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         assert_ne!(cached_reuse_key, next_reuse_key);
         assert_eq!(
             cached_reuse_key,
-            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config, None)
+            GuardianReviewSessionReuseKey::from_spawn_config(
+                &cached_spawn_config,
+                /*user_instructions*/ None,
+            )
         );
     }
 
@@ -1262,8 +1269,10 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("cached guardian config");
-        let cached_reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config, None);
+        let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &cached_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         let mut changed_parent_config = parent_config;
         changed_parent_config.model_auto_compact_token_limit_scope =
@@ -1275,8 +1284,10 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("next guardian config");
-        let next_reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config, None);
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &next_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         assert_ne!(cached_reuse_key, next_reuse_key);
     }
