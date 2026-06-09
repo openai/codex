@@ -1132,7 +1132,6 @@ impl Session {
                 additional_context: Default::default(),
                 thread_settings: Default::default(),
             },
-            /*mirror_user_text_to_realtime*/ None,
             /*client_user_message_id*/ None,
         )
         .await;

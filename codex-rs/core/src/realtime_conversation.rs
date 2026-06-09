@@ -739,10 +739,6 @@ fn prefix_realtime_text(text: String, prefix: &str, session_kind: RealtimeSessio
     format!("{prefix}{text}")
 }
 
-pub(crate) fn prefix_realtime_v2_text(text: String, prefix: &str) -> String {
-    prefix_realtime_text(text, prefix, RealtimeSessionKind::V2)
-}
-
 fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> CodexResult<()> {
     let voices = RealtimeVoicesList::builtin();
     let allowed = match version {
