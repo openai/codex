@@ -289,7 +289,7 @@ impl ServerHandler for SlowInventoryServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(ListResourcesResult {
             resources: Vec::new(),
             next_cursor: None,
@@ -302,7 +302,7 @@ impl ServerHandler for SlowInventoryServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ListResourceTemplatesResult, rmcp::ErrorData> {
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(ListResourceTemplatesResult {
             resource_templates: Vec::new(),
             next_cursor: None,
@@ -348,7 +348,7 @@ url = "{mcp_server_url}/mcp"
         })
         .await?;
     let response = timeout(
-        DEFAULT_READ_TIMEOUT,
+        Duration::from_millis(500),
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;

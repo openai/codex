@@ -17,8 +17,10 @@ max-threads = 1
 [test-groups.app_server_integration]
 max-threads = 1
 
+# Higher concurrency causes integration test timeouts under resource contention
+# on common developer machines.
 [test-groups.app_server_integration_local]
-max-threads = 8
+max-threads = 4
 
 [test-groups.core_apply_patch_cli_integration]
 max-threads = 1
@@ -49,7 +51,7 @@ filter = 'package(codex-app-server) & kind(test)'
 test-group = 'app_server_integration'
 
 [[profile.local.overrides]]
-# Use up to eight app-server subprocesses locally. The global nextest pool still
+# Use up to four app-server subprocesses locally. The global nextest pool still
 # limits this to the machine's logical CPU count.
 filter = 'package(codex-app-server) & kind(test)'
 test-group = 'app_server_integration_local'
