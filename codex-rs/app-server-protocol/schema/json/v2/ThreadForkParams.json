@@ -73,29 +73,7 @@
       "type": "string"
     },
     "ThreadSource": {
-      "oneOf": [
-        {
-          "enum": [
-            "user",
-            "subagent",
-            "memory_consolidation"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "feature": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "feature"
-          ],
-          "title": "FeatureThreadSource",
-          "type": "object"
-        }
-      ]
+      "type": "string"
     }
   },
   "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using a non-empty path, the thread_id param will be ignored. Empty string path values are treated as absent.\n\nPrefer using thread_id whenever possible.",

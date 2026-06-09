@@ -15874,29 +15874,7 @@
       "type": "string"
     },
     "ThreadSource": {
-      "oneOf": [
-        {
-          "enum": [
-            "user",
-            "subagent",
-            "memory_consolidation"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "feature": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "feature"
-          ],
-          "title": "FeatureThreadSource",
-          "type": "object"
-        }
-      ]
+      "type": "string"
     },
     "ThreadSourceKind": {
       "enum": [
