@@ -107,9 +107,9 @@ When a request is blocked, the proxy responds with `403` and includes:
   - `blocked-by-method-policy`
   - `blocked-by-policy`
 
-In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` requests require
-MITM to enforce limited-mode method policy; otherwise they are blocked. SOCKS5 remains blocked in
-limited mode.
+In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` requests and
+HTTPS SOCKS5 TCP targets on `:443` require MITM to enforce limited-mode method policy; otherwise
+they are blocked. SOCKS5 UDP and non-HTTPS SOCKS5 TCP remain blocked in limited mode.
 
 Websocket clients typically tunnel `wss://` through HTTPS `CONNECT`; those CONNECT targets still go
 through the same host allowlist/denylist checks.
@@ -215,7 +215,8 @@ what it can reasonably guarantee.
   allowlisted (best-effort DNS lookup).
 - Limited mode enforcement:
   - only `GET`, `HEAD`, and `OPTIONS` are allowed
-  - HTTPS `CONNECT` remains a tunnel; limited-mode method enforcement does not apply to HTTPS
+  - HTTPS `CONNECT` requests and HTTPS SOCKS5 TCP targets on `:443` require MITM so the proxy can
+    enforce limited-mode method policy; SOCKS5 UDP and non-HTTPS SOCKS5 TCP remain blocked
 - Listener safety defaults:
   - the HTTP proxy listener clamps non-loopback binds unless explicitly enabled via
     `dangerously_allow_non_loopback_proxy`
