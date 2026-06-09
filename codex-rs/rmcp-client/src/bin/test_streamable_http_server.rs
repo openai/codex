@@ -64,14 +64,22 @@ const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
 const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
+const INITIALIZE_POST_FAILURE_CONTROL_PATH: &str = "/test/control/initialize-post-failure";
 
 #[derive(Clone, Default)]
-struct SessionFailureState {
+struct PostFailureState {
     armed_failure: Arc<Mutex<Option<ArmedFailure>>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ArmedFailureTarget {
+    Initialize,
+    Session,
 }
 
 #[derive(Clone, Debug)]
 struct ArmedFailure {
+    target: ArmedFailureTarget,
     status: StatusCode,
     remaining: usize,
     /// Raw `WWW-Authenticate` challenge header field values returned with the failure.
@@ -97,7 +105,7 @@ struct EchoArgs {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = parse_bind_addr()?;
-    let session_failure_state = SessionFailureState::default();
+    let post_failure_state = PostFailureState::default();
     const MAX_BIND_RETRIES: u32 = 20;
     const BIND_RETRY_DELAY: Duration = Duration::from_millis(50);
 
@@ -128,6 +136,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             SESSION_POST_FAILURE_CONTROL_PATH,
             post(arm_session_post_failure),
+        )
+        .route(
+            INITIALIZE_POST_FAILURE_CONTROL_PATH,
+            post(arm_initialize_post_failure),
         )
         .route(
             "/.well-known/oauth-authorization-server/mcp",
@@ -162,10 +174,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         )
         .layer(middleware::from_fn_with_state(
-            session_failure_state.clone(),
-            fail_session_post_when_armed,
+            post_failure_state.clone(),
+            fail_mcp_post_when_armed,
         ))
-        .with_state(session_failure_state);
+        .with_state(post_failure_state);
 
     let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
         let expected = Arc::new(format!("Bearer {token}"));
@@ -404,8 +416,23 @@ async fn require_bearer(
 }
 
 async fn arm_session_post_failure(
-    State(state): State<SessionFailureState>,
+    State(state): State<PostFailureState>,
     Json(request): Json<ArmSessionPostFailureRequest>,
+) -> Result<StatusCode, StatusCode> {
+    arm_post_failure(state, request, ArmedFailureTarget::Session).await
+}
+
+async fn arm_initialize_post_failure(
+    State(state): State<PostFailureState>,
+    Json(request): Json<ArmSessionPostFailureRequest>,
+) -> Result<StatusCode, StatusCode> {
+    arm_post_failure(state, request, ArmedFailureTarget::Initialize).await
+}
+
+async fn arm_post_failure(
+    state: PostFailureState,
+    request: ArmSessionPostFailureRequest,
+    target: ArmedFailureTarget,
 ) -> Result<StatusCode, StatusCode> {
     let status = StatusCode::from_u16(request.status).map_err(|_| StatusCode::BAD_REQUEST)?;
     let www_authenticate_headers = request
@@ -417,6 +444,7 @@ async fn arm_session_post_failure(
         None
     } else {
         Some(ArmedFailure {
+            target,
             status,
             remaining: request.remaining,
             www_authenticate_headers,
@@ -426,22 +454,24 @@ async fn arm_session_post_failure(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn fail_session_post_when_armed(
-    State(state): State<SessionFailureState>,
+async fn fail_mcp_post_when_armed(
+    State(state): State<PostFailureState>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if request.uri().path() != "/mcp"
-        || request.method() != Method::POST
-        || !request.headers().contains_key(MCP_SESSION_ID_HEADER)
-    {
+    if request.uri().path() != "/mcp" || request.method() != Method::POST {
         return next.run(request).await;
     }
+    let has_session_id = request.headers().contains_key(MCP_SESSION_ID_HEADER);
 
     {
         let mut armed_failure = state.armed_failure.lock().await;
         if let Some(failure) = armed_failure.as_mut()
             && failure.remaining > 0
+            && match failure.target {
+                ArmedFailureTarget::Initialize => !has_session_id,
+                ArmedFailureTarget::Session => has_session_id,
+            }
         {
             failure.remaining -= 1;
             let status = failure.status;

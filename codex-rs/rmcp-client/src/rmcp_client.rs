@@ -1000,12 +1000,13 @@ impl RmcpClient {
             .clone()
             .ok_or_else(|| anyhow!("MCP client cannot recover before initialize succeeds"))?;
         let pending_transport = Self::create_pending_transport(&self.transport_recipe).await?;
-        let (service, oauth_persistor) = Self::connect_pending_transport(
-            pending_transport,
-            initialize_context.client_service,
-            initialize_context.timeout,
-        )
-        .await?;
+        let (service, oauth_persistor) = self
+            .connect_pending_transport_with_initialize_retries(
+                pending_transport,
+                initialize_context.client_service,
+                initialize_context.timeout,
+            )
+            .await?;
 
         {
             let mut guard = self.state.lock().await;

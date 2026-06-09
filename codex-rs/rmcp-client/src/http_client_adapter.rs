@@ -185,6 +185,24 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
 
         let content_type = response_header(&response.headers, CONTENT_TYPE);
         let session_id = response_header(&response.headers, HEADER_SESSION_ID);
+        if !status_is_success(response.status) {
+            let body = collect_body(&mut body_stream).await?;
+            if content_type
+                .as_deref()
+                .is_some_and(|content_type| content_type.starts_with(JSON_MIME_TYPE))
+                && let Some(message) = parse_json_rpc_error(&body)
+            {
+                return Ok(StreamableHttpPostResponse::Json(message, session_id));
+            }
+            return Err(StreamableHttpError::UnexpectedServerResponse(
+                format!(
+                    "HTTP {}: {}",
+                    response.status,
+                    body_preview(String::from_utf8_lossy(&body).to_string())
+                )
+                .into(),
+            ));
+        }
         match content_type.as_deref() {
             Some(content_type) if content_type.starts_with(EVENT_STREAM_MIME_TYPE) => {
                 let event_stream = sse_stream_from_body(body_stream);
@@ -461,6 +479,13 @@ fn response_header(headers: &[HttpHeader], name: impl AsRef<str>) -> Option<Stri
 
 fn status_is_success(status: u16) -> bool {
     StatusCode::from_u16(status).is_ok_and(|status| status.is_success())
+}
+
+fn parse_json_rpc_error(body: &[u8]) -> Option<ServerJsonRpcMessage> {
+    match serde_json::from_slice::<ServerJsonRpcMessage>(body) {
+        Ok(message @ JsonRpcMessage::Error(_)) => Some(message),
+        _ => None,
+    }
 }
 
 async fn collect_body(

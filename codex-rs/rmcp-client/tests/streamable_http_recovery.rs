@@ -15,6 +15,7 @@ use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 
+use streamable_http_test_support::arm_initialize_post_failure;
 use streamable_http_test_support::arm_session_post_failure;
 use streamable_http_test_support::call_echo_tool;
 use streamable_http_test_support::create_client;
@@ -34,16 +35,20 @@ struct FailFirstInitializeHttpClient {
 }
 
 impl FailFirstInitializeHttpClient {
-    fn new(inner: Arc<dyn HttpClient>) -> Self {
+    fn new(inner: Arc<dyn HttpClient>, failures_remaining: usize) -> Self {
         Self {
             inner,
-            failures_remaining: Arc::new(AtomicUsize::new(1)),
+            failures_remaining: Arc::new(AtomicUsize::new(failures_remaining)),
             initialize_attempts: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     fn initialize_attempts(&self) -> usize {
         self.initialize_attempts.load(Ordering::SeqCst)
+    }
+
+    fn fail_next_initialize(&self) {
+        self.failures_remaining.store(1, Ordering::SeqCst);
     }
 }
 
@@ -97,14 +102,30 @@ fn is_initialize_post(params: &HttpRequestParams) -> bool {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn streamable_http_initialize_retries_remote_no_response_error() -> anyhow::Result<()> {
     let (_server, base_url) = spawn_streamable_http_server().await?;
-    let http_client =
-        FailFirstInitializeHttpClient::new(Environment::default_for_tests().get_http_client());
+    let http_client = FailFirstInitializeHttpClient::new(
+        Environment::default_for_tests().get_http_client(),
+        /*failures_remaining*/ 1,
+    );
 
     let client = create_client_with_http_client(&base_url, Arc::new(http_client.clone())).await?;
     let result = call_echo_tool(&client, "after-init-retry").await?;
 
     assert_eq!(http_client.initialize_attempts(), 2);
     assert_eq!(result, expected_echo_result("after-init-retry"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_initialize_retries_transient_http_status() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+
+    arm_initialize_post_failure(&base_url, /*status*/ 502, /*remaining*/ 1).await?;
+
+    let client = create_client(&base_url).await?;
+    let result = call_echo_tool(&client, "after-status-retry").await?;
+
+    assert_eq!(result, expected_echo_result("after-status-retry"));
 
     Ok(())
 }
@@ -127,6 +148,34 @@ async fn streamable_http_404_session_expiry_recovers_and_retries_once() -> anyho
 
     let recovered = call_echo_tool(&client, "recovered").await?;
     assert_eq!(recovered, expected_echo_result("recovered"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_session_recovery_retries_initialize_failure() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    let http_client = FailFirstInitializeHttpClient::new(
+        Environment::default_for_tests().get_http_client(),
+        /*failures_remaining*/ 0,
+    );
+    let client = create_client_with_http_client(&base_url, Arc::new(http_client.clone())).await?;
+
+    let warmup = call_echo_tool(&client, "warmup").await?;
+    assert_eq!(warmup, expected_echo_result("warmup"));
+
+    arm_session_post_failure(
+        &base_url,
+        /*status*/ 404,
+        /*remaining*/ 1,
+        /*www_authenticate_headers*/ &[],
+    )
+    .await?;
+    http_client.fail_next_initialize();
+
+    let recovered = call_echo_tool(&client, "recovered-after-retry").await?;
+    assert_eq!(http_client.initialize_attempts(), 3);
+    assert_eq!(recovered, expected_echo_result("recovered-after-retry"));
 
     Ok(())
 }

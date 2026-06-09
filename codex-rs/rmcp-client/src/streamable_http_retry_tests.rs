@@ -48,11 +48,13 @@ fn retryable_streamable_http_error_includes_remote_body_stream_failure() {
                 "http response stream `http-1` received seq 2, expected 1".to_string(),
             ),
         )),
+        StreamableHttpError::UnexpectedServerResponse("HTTP 502: upstream failure".into()),
+        StreamableHttpError::UnexpectedServerResponse("HTTP 400: bad request".into()),
     ];
 
     assert_eq!(
         errors.map(|error| RmcpClient::is_retryable_streamable_http_error(&error)),
-        [true, true, true, false],
+        [true, true, true, false, true, false],
     );
 }
 
