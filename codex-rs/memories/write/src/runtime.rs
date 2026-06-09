@@ -189,8 +189,10 @@ impl MemoryStartupContext {
         );
 
         let mut client_session = model_client.new_session();
+        let window_id = format!("{}:0", self.thread_id);
         let mut stream = client_session
             .stream(
+                &window_id,
                 prompt,
                 &context.model_info,
                 &context.session_telemetry,
