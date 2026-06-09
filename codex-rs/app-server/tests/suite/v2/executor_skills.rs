@@ -137,7 +137,9 @@ stream_max_retries = 0
         .filter(|text| text.starts_with("<skill>"))
         .collect::<Vec<_>>();
     assert_eq!(1, skill_fragments.len());
-    let skill_fragment = skill_fragments[0];
+    let skill_fragment = skill_fragments
+        .first()
+        .expect("executor skill instructions should be model-visible");
     assert!(skill_fragment.contains(&format!("<name>{SKILL_NAME}</name>")));
     assert!(skill_fragment.contains(SKILL_MARKER));
     assert!(!skill_fragment.contains(LOCAL_SKILL_MARKER));
