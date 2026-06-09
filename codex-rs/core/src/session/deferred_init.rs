@@ -90,7 +90,7 @@ impl Session {
             .await;
     }
 
-    pub(super) async fn ensure_deferred_initialization_ready(&self) {
+    pub(crate) async fn ensure_deferred_initialization_ready(&self) {
         self.deferred_initialization_ready
             .get_or_init(|| async {
                 self.ensure_model_catalog_ready().await;

@@ -919,7 +919,7 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
-        Box::pin(self.state.spawn_thread(
+        let new_thread = Box::pin(self.state.spawn_thread(
             config,
             history,
             Arc::clone(&self.state.auth_manager),
@@ -933,7 +933,10 @@ impl ThreadManager {
             environments,
             /*user_shell_override*/ None,
         ))
-        .await
+        .await?;
+        new_thread.thread.ensure_rollout_materialized().await;
+        new_thread.thread.flush_rollout().await?;
+        Ok(new_thread)
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {
