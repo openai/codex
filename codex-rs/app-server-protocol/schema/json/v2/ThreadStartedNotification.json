@@ -899,7 +899,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional source classification for this thread. `side` threads do not receive multi-agent collaboration tools."
+          "description": "Optional analytics source classification for this thread."
         },
         "turns": {
           "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
@@ -1647,7 +1647,6 @@
     "ThreadSource": {
       "enum": [
         "user",
-        "side",
         "subagent",
         "memory_consolidation"
       ],

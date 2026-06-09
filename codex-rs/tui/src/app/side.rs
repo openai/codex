@@ -565,7 +565,11 @@ impl App {
 
         let fork_config = self.side_fork_config();
         match app_server
-            .fork_thread(fork_config, parent_thread_id, ThreadSource::Side)
+            .fork_thread(
+                fork_config,
+                parent_thread_id,
+                MultiAgentToolsOverride::Disabled,
+            )
             .await
         {
             Ok(forked) => {

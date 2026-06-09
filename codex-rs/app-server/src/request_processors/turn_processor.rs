@@ -1100,6 +1100,7 @@ impl TurnRequestProcessor {
                     history: parent_history.items,
                     rollout_path: parent_thread.rollout_path(),
                 }),
+                /*multi_agent_version*/ None,
                 /*thread_source*/ None,
                 self.request_trace_context(request_id).await,
             )

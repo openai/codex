@@ -61,8 +61,8 @@ fn tool_names(body: &Value) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn side_threads_omit_multi_agent_tools_from_requests() -> Result<()> {
-    const ROOT_USAGE_HINT: &str = "side threads must not receive root multi-agent guidance";
+async fn multi_agent_version_override_omits_multi_agent_tools_from_requests() -> Result<()> {
+    const ROOT_USAGE_HINT: &str = "disabled threads must not receive root multi-agent guidance";
 
     skip_if_no_network!(Ok(()));
 
@@ -88,13 +88,14 @@ async fn side_threads_omit_multi_agent_tools_from_requests() -> Result<()> {
         config.multi_agent_v2.root_agent_usage_hint_text = Some(ROOT_USAGE_HINT.to_string());
     });
     let test = builder.build(&server).await?;
-    let side_thread = test
+    let thread = test
         .thread_manager
         .start_thread_with_options(StartThreadOptions {
             config: test.config.clone(),
             initial_history: InitialHistory::New,
             session_source: None,
-            thread_source: Some(ThreadSource::Side),
+            thread_source: Some(ThreadSource::User),
+            multi_agent_version: Some(MultiAgentVersion::Disabled),
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
@@ -102,11 +103,11 @@ async fn side_threads_omit_multi_agent_tools_from_requests() -> Result<()> {
         })
         .await?;
     assert_eq!(
-        side_thread.thread.multi_agent_version(),
+        thread.thread.multi_agent_version(),
         Some(MultiAgentVersion::Disabled)
     );
 
-    side_thread
+    thread
         .thread
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -119,7 +120,7 @@ async fn side_threads_omit_multi_agent_tools_from_requests() -> Result<()> {
             thread_settings: Default::default(),
         })
         .await?;
-    wait_for_event(&side_thread.thread, |event| {
+    wait_for_event(&thread.thread, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;

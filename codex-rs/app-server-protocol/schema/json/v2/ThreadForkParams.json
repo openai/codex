@@ -75,7 +75,6 @@
     "ThreadSource": {
       "enum": [
         "user",
-        "side",
         "subagent",
         "memory_consolidation"
       ],
@@ -130,6 +129,10 @@
         "null"
       ]
     },
+    "disableMultiAgentTools": {
+      "description": "When true, disable multi-agent collaboration tools for the forked thread.",
+      "type": "boolean"
+    },
     "ephemeral": {
       "type": "boolean"
     },
@@ -174,7 +177,7 @@
           "type": "null"
         }
       ],
-      "description": "Optional client-supplied source classification for this forked thread. Threads marked as `side` do not receive multi-agent collaboration tools."
+      "description": "Optional client-supplied analytics source classification for this forked thread."
     }
   },
   "required": [

@@ -178,6 +178,7 @@ pub struct StartThreadOptions {
     pub initial_history: InitialHistory,
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
+    pub multi_agent_version: Option<MultiAgentVersion>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
@@ -572,6 +573,7 @@ impl ThreadManager {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            multi_agent_version: None,
             dynamic_tools,
             metrics_service_name: None,
             parent_trace: None,
@@ -608,6 +610,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
+            options.multi_agent_version,
             options.dynamic_tools,
             options.metrics_service_name,
             /*inherited_shell_snapshot*/ None,
@@ -696,6 +699,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
+            /*multi_agent_version*/ None,
             Vec::new(),
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
@@ -724,6 +728,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
+            /*multi_agent_version*/ None,
             Vec::new(),
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
@@ -757,6 +762,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
+            /*multi_agent_version*/ None,
             Vec::new(),
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
@@ -843,8 +849,15 @@ impl ThreadManager {
     {
         let snapshot = snapshot.into();
         let history = self.initial_history_from_rollout_path(path).await?;
-        self.fork_thread_from_history(snapshot, config, history, thread_source, parent_trace)
-            .await
+        self.fork_thread_from_history(
+            snapshot,
+            config,
+            history,
+            /*multi_agent_version*/ None,
+            thread_source,
+            parent_trace,
+        )
+        .await
     }
 
     async fn initial_history_from_rollout_path(
@@ -871,6 +884,7 @@ impl ThreadManager {
         snapshot: S,
         config: Config,
         history: InitialHistory,
+        multi_agent_version: Option<MultiAgentVersion>,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread>
@@ -881,6 +895,7 @@ impl ThreadManager {
             snapshot.into(),
             config,
             history,
+            multi_agent_version,
             thread_source,
             parent_trace,
         )
@@ -892,6 +907,7 @@ impl ThreadManager {
         snapshot: ForkSnapshot,
         config: Config,
         history: InitialHistory,
+        multi_agent_version: Option<MultiAgentVersion>,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
@@ -902,16 +918,20 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let multi_agent_version = self
-            .state
-            .effective_multi_agent_version_for_spawn(
-                &history,
-                /*session_source*/ None,
-                /*parent_thread_id*/ None,
-                forked_from_thread_id,
-                &config,
-            )
-            .await;
+        let multi_agent_version = match multi_agent_version {
+            Some(multi_agent_version) => multi_agent_version,
+            None => {
+                self.state
+                    .effective_multi_agent_version_for_spawn(
+                        &history,
+                        /*session_source*/ None,
+                        /*parent_thread_id*/ None,
+                        forked_from_thread_id,
+                        &config,
+                    )
+                    .await
+            }
+        };
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
@@ -927,6 +947,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
+            Some(multi_agent_version),
             Vec::new(),
             /*metrics_service_name*/ None,
             parent_trace,
@@ -1130,6 +1151,7 @@ impl ThreadManagerState {
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
+            /*multi_agent_version*/ None,
             Vec::new(),
             metrics_service_name,
             inherited_shell_snapshot,
@@ -1166,6 +1188,7 @@ impl ThreadManagerState {
             parent_thread_id,
             /*forked_from_thread_id*/ None,
             thread_source,
+            /*multi_agent_version*/ None,
             Vec::new(),
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
@@ -1203,6 +1226,7 @@ impl ThreadManagerState {
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
+            /*multi_agent_version*/ None,
             Vec::new(),
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
@@ -1225,6 +1249,7 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
+        multi_agent_version: Option<MultiAgentVersion>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
@@ -1240,6 +1265,7 @@ impl ThreadManagerState {
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
+            multi_agent_version,
             dynamic_tools,
             metrics_service_name,
             /*inherited_shell_snapshot*/ None,
@@ -1262,6 +1288,7 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
+        multi_agent_version: Option<MultiAgentVersion>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -1298,16 +1325,17 @@ impl ThreadManagerState {
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
-        let multi_agent_version = if thread_source == Some(ThreadSource::Side) {
-            Some(MultiAgentVersion::Disabled)
-        } else {
-            self.initial_multi_agent_version_for_spawn(
-                &initial_history,
-                Some(&session_source),
-                parent_thread_id,
-                forked_from_thread_id,
-            )
-            .await
+        let inherited_multi_agent_version = match multi_agent_version {
+            Some(multi_agent_version) => Some(multi_agent_version),
+            None => {
+                self.initial_multi_agent_version_for_spawn(
+                    &initial_history,
+                    Some(&session_source),
+                    parent_thread_id,
+                    forked_from_thread_id,
+                )
+                .await
+            }
         };
         let CodexSpawnOk {
             codex, thread_id, ..
@@ -1338,7 +1366,7 @@ impl ThreadManagerState {
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
-            inherited_multi_agent_version: multi_agent_version,
+            inherited_multi_agent_version,
         }))
         .await?;
         let new_thread = self

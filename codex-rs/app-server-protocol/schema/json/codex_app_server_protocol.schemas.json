@@ -15879,7 +15879,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional source classification for this thread. `side` threads do not receive multi-agent collaboration tools."
+            "description": "Optional analytics source classification for this thread."
           },
           "turns": {
             "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
@@ -16051,6 +16051,10 @@
               "null"
             ]
           },
+          "disableMultiAgentTools": {
+            "description": "When true, disable multi-agent collaboration tools for the forked thread.",
+            "type": "boolean"
+          },
           "ephemeral": {
             "type": "boolean"
           },
@@ -16095,7 +16099,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional client-supplied source classification for this forked thread. Threads marked as `side` do not receive multi-agent collaboration tools."
+            "description": "Optional client-supplied analytics source classification for this forked thread."
           }
         },
         "required": [
@@ -18059,7 +18063,6 @@
       "ThreadSource": {
         "enum": [
           "user",
-          "side",
           "subagent",
           "memory_consolidation"
         ],
@@ -18128,6 +18131,10 @@
               "string",
               "null"
             ]
+          },
+          "disableMultiAgentTools": {
+            "description": "When true, disable multi-agent collaboration tools for this thread.",
+            "type": "boolean"
           },
           "ephemeral": {
             "type": [
@@ -18198,7 +18205,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional client-supplied source classification for this thread. Threads marked as `side` do not receive multi-agent collaboration tools."
+            "description": "Optional client-supplied analytics source classification for this thread."
           }
         },
         "title": "ThreadStartParams",

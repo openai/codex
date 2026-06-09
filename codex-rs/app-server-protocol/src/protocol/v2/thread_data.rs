@@ -66,7 +66,6 @@ impl From<SessionSource> for CoreSessionSource {
 #[ts(rename_all = "snake_case", export_to = "v2/")]
 pub enum ThreadSource {
     User,
-    Side,
     Subagent,
     MemoryConsolidation,
 }
@@ -75,7 +74,6 @@ impl From<CoreThreadSource> for ThreadSource {
     fn from(value: CoreThreadSource) -> Self {
         match value {
             CoreThreadSource::User => ThreadSource::User,
-            CoreThreadSource::Side => ThreadSource::Side,
             CoreThreadSource::Subagent => ThreadSource::Subagent,
             CoreThreadSource::MemoryConsolidation => ThreadSource::MemoryConsolidation,
         }
@@ -86,7 +84,6 @@ impl From<ThreadSource> for CoreThreadSource {
     fn from(value: ThreadSource) -> Self {
         match value {
             ThreadSource::User => CoreThreadSource::User,
-            ThreadSource::Side => CoreThreadSource::Side,
             ThreadSource::Subagent => CoreThreadSource::Subagent,
             ThreadSource::MemoryConsolidation => CoreThreadSource::MemoryConsolidation,
         }
@@ -135,8 +132,7 @@ pub struct Thread {
     pub cli_version: String,
     /// Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).
     pub source: SessionSource,
-    /// Optional source classification for this thread. `side` threads do not receive multi-agent
-    /// collaboration tools.
+    /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
     /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
     pub agent_nickname: Option<String>,

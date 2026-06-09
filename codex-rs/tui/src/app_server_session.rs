@@ -184,6 +184,12 @@ pub(crate) enum ThreadParamsMode {
     Remote,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MultiAgentToolsOverride {
+    Inherit,
+    Disabled,
+}
+
 impl ThreadParamsMode {
     fn model_provider_from_config(self, config: &Config) -> Option<String> {
         match self {
@@ -445,7 +451,7 @@ impl AppServerSession {
         &mut self,
         config: Config,
         thread_id: ThreadId,
-        thread_source: ThreadSource,
+        multi_agent_tools: MultiAgentToolsOverride,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
@@ -458,7 +464,7 @@ impl AppServerSession {
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
-                    thread_source,
+                    multi_agent_tools,
                 ),
             })
             .await
@@ -1463,7 +1469,7 @@ fn thread_fork_params_from_config(
     thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
-    thread_source: ThreadSource,
+    multi_agent_tools: MultiAgentToolsOverride,
 ) -> ThreadForkParams {
     let permissions = permissions_selection_from_config(&config, thread_params_mode);
     let sandbox = permissions
@@ -1493,7 +1499,8 @@ fn thread_fork_params_from_config(
             config.developer_instructions.clone(),
         ),
         ephemeral: config.ephemeral,
-        thread_source: Some(thread_source),
+        thread_source: Some(ThreadSource::User),
+        disable_multi_agent_tools: matches!(multi_agent_tools, MultiAgentToolsOverride::Disabled),
         ..ThreadForkParams::default()
     }
 }
@@ -2019,7 +2026,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
-            ThreadSource::User,
+            MultiAgentToolsOverride::Inherit,
         );
 
         assert_eq!(start.cwd, None);
@@ -2137,7 +2144,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
-            ThreadSource::User,
+            MultiAgentToolsOverride::Inherit,
         );
 
         assert_eq!(start.cwd.as_deref(), Some("repo/on/server"));
@@ -2189,7 +2196,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
-            ThreadSource::User,
+            MultiAgentToolsOverride::Inherit,
         );
 
         let expected_service_tier = Some(Some(ServiceTier::Fast.request_value().to_string()));
@@ -2232,7 +2239,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_fork_params_forward_instruction_overrides() {
+    async fn thread_fork_params_forward_instruction_and_multi_agent_overrides() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let mut config = build_config(&temp_dir).await;
         config.base_instructions = Some("Base override.".to_string());
@@ -2244,7 +2251,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
-            ThreadSource::Side,
+            MultiAgentToolsOverride::Disabled,
         );
 
         assert_eq!(params.base_instructions.as_deref(), Some("Base override."));
@@ -2252,7 +2259,8 @@ mod tests {
             params.developer_instructions.as_deref(),
             Some("Developer override.")
         );
-        assert_eq!(params.thread_source, Some(ThreadSource::Side));
+        assert_eq!(params.thread_source, Some(ThreadSource::User));
+        assert!(params.disable_multi_agent_tools);
     }
 
     #[tokio::test]
@@ -2279,7 +2287,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
-            ThreadSource::User,
+            MultiAgentToolsOverride::Inherit,
         );
 
         assert_eq!(control_start.developer_instructions, None);
@@ -2309,7 +2317,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
-            ThreadSource::User,
+            MultiAgentToolsOverride::Inherit,
         );
         let expected = format!(
             "Developer override.\n\n{}",

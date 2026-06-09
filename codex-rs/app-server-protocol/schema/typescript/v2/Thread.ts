@@ -62,8 +62,7 @@ cliVersion: string,
  */
 source: SessionSource,
 /**
- * Optional source classification for this thread. `side` threads do not receive multi-agent
- * collaboration tools.
+ * Optional analytics source classification for this thread.
  */
 threadSource: ThreadSource | null,
 /**

@@ -145,7 +145,11 @@ impl App {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
                     match app_server
-                        .fork_thread(self.config.clone(), thread_id, ThreadSource::User)
+                        .fork_thread(
+                            self.config.clone(),
+                            thread_id,
+                            MultiAgentToolsOverride::Inherit,
+                        )
                         .await
                     {
                         Ok(forked) => {
