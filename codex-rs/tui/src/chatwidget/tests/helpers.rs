@@ -1337,6 +1337,34 @@ pub(super) fn plugins_test_summary(
     }
 }
 
+pub(super) fn plugins_test_remote_summary(
+    remote_plugin_id: &str,
+    name: &str,
+    display_name: Option<&str>,
+    description: Option<&str>,
+    installed: bool,
+) -> PluginSummary {
+    PluginSummary {
+        id: remote_plugin_id.to_string(),
+        remote_plugin_id: Some(remote_plugin_id.to_string()),
+        local_version: None,
+        name: name.to_string(),
+        share_context: None,
+        source: PluginSource::Remote,
+        installed,
+        enabled: true,
+        install_policy: PluginInstallPolicy::Available,
+        auth_policy: PluginAuthPolicy::OnInstall,
+        availability: PluginAvailability::Available,
+        interface: Some(plugins_test_interface(
+            display_name,
+            description,
+            /*long_description*/ None,
+        )),
+        keywords: Vec::new(),
+    }
+}
+
 pub(super) fn plugins_test_curated_marketplace(
     plugins: Vec<PluginSummary>,
 ) -> PluginMarketplaceEntry {
