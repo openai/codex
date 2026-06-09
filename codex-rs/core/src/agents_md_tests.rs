@@ -42,17 +42,17 @@ async fn get_user_instructions(config: &TestConfig) -> Option<String> {
 }
 
 async fn load_agents_md(config: &TestConfig, warnings: &mut Vec<String>) -> Option<LoadedAgentsMd> {
-    let mut manager = AgentsMdManager::new(&config.config, config.user_instructions.clone());
-    manager
-        .load_project_instructions(Some(LOCAL_FS.as_ref()), warnings)
-        .await;
-    manager.into_loaded_agents_md()
+    load_project_instructions(
+        &config.config,
+        config.user_instructions.clone(),
+        Some(LOCAL_FS.as_ref()),
+        warnings,
+    )
+    .await
 }
 
 async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<AbsolutePathBuf>> {
-    AgentsMdManager::new(&config.config, /*user_instructions*/ None)
-        .agents_md_paths(LOCAL_FS.as_ref())
-        .await
+    super::agents_md_paths(&config.config, LOCAL_FS.as_ref()).await
 }
 
 fn assert_invalid_utf8_warning(warnings: &[String], source: &str, path: &Path) {

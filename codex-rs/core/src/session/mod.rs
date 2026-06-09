@@ -293,7 +293,7 @@ use crate::SkillLoadOutcome;
 #[cfg(test)]
 use crate::SkillMetadata;
 use crate::SkillsManager;
-use crate::agents_md::AgentsMdManager;
+use crate::agents_md::load_project_instructions;
 use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
@@ -531,11 +531,13 @@ impl Codex {
             .as_ref()
             .map(|environment| environment.get_filesystem());
         let mut agents_md_warnings = Vec::new();
-        let mut agents_md_manager = AgentsMdManager::new(&config, user_instructions);
-        agents_md_manager
-            .load_project_instructions(primary_fs.as_deref(), &mut agents_md_warnings)
-            .await;
-        let loaded_agents_md = agents_md_manager.into_loaded_agents_md();
+        let loaded_agents_md = load_project_instructions(
+            &config,
+            user_instructions,
+            primary_fs.as_deref(),
+            &mut agents_md_warnings,
+        )
+        .await;
         config.startup_warnings.extend(agents_md_warnings);
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
