@@ -54,7 +54,9 @@ fn create_request_user_input_sse_response_with_auto_resolution(
 async fn request_user_input_round_trip() -> Result<()> {
     let codex_home = tempfile::TempDir::new()?;
     let responses = vec![
-        create_request_user_input_sse_response_with_auto_resolution("call1", 60_000)?,
+        create_request_user_input_sse_response_with_auto_resolution(
+            "call1", /*auto_resolution_ms*/ 60_000,
+        )?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
