@@ -1120,7 +1120,8 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
     ) -> LoadedUserInstructions {
-        if !session_source.is_non_root_agent() {
+        let is_root_agent = !session_source.is_non_root_agent();
+        if is_root_agent {
             return self
                 .user_instructions_provider
                 .load_user_instructions()
