@@ -27,6 +27,20 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
+const GLOBAL_AGENTS_FILENAME: &str = "AGENTS.md";
+const GLOBAL_AGENTS_OVERRIDE_FILENAME: &str = "AGENTS.override.md";
+const GLOBAL_INSTRUCTIONS: &str = "global instructions";
+const NEW_GLOBAL_INSTRUCTIONS: &str = "new global instructions";
+const NEW_PROJECT_INSTRUCTIONS: &str = "new project instructions";
+const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
+const PROJECT_INSTRUCTIONS: &str = "project instructions";
+const PROJECT_SEPARATOR: &str = "--- project-doc ---";
+const SPAWN_CALL_ID: &str = "spawn-global-instructions-child";
+const SPAWN_CHILD_PROMPT: &str = "inspect inherited global instructions";
+const SPAWN_FRESH_PARENT_PROMPT: &str = "spawn a child with fresh context";
+const SPAWN_PARENT_PROMPT: &str = "spawn a child with the parent context";
+const SPAWN_SEED_PROMPT: &str = "seed parent history";
+
 async fn agents_instructions(mut builder: TestCodexBuilder) -> Result<String> {
     let server = start_mock_server().await;
     let resp_mock = mount_sse_once(
@@ -44,6 +58,52 @@ async fn agents_instructions(mut builder: TestCodexBuilder) -> Result<String> {
         .into_iter()
         .find(|text| text.starts_with("# AGENTS.md instructions for "))
         .ok_or_else(|| anyhow::anyhow!("instructions message not found"))
+}
+
+fn write_global_file(
+    home: &TempDir,
+    filename: &str,
+    contents: impl AsRef<[u8]>,
+) -> Result<AbsolutePathBuf> {
+    let path = home.path().join(filename);
+    std::fs::write(&path, contents)?;
+    Ok(path.abs())
+}
+
+fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
+    request
+        .message_input_texts("user")
+        .into_iter()
+        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .collect()
+}
+
+fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> String {
+    let cwd = cwd.as_path().display();
+    format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
+}
+
+fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
+    assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
+}
+
+fn request_body_contains(request: &wiremock::Request, text: &str) -> bool {
+    let is_zstd = request
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
+        });
+    let body = if is_zstd {
+        zstd::stream::decode_all(std::io::Cursor::new(&request.body)).ok()
+    } else {
+        Some(request.body.clone())
+    };
+    body.and_then(|body| String::from_utf8(body).ok())
+        .is_some_and(|body| body.contains(text))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -282,67 +342,6 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
 
     Ok(())
 }
-
-const GLOBAL_AGENTS_FILENAME: &str = "AGENTS.md";
-const GLOBAL_AGENTS_OVERRIDE_FILENAME: &str = "AGENTS.override.md";
-const GLOBAL_INSTRUCTIONS: &str = "global instructions";
-const NEW_GLOBAL_INSTRUCTIONS: &str = "new global instructions";
-const NEW_PROJECT_INSTRUCTIONS: &str = "new project instructions";
-const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
-const PROJECT_INSTRUCTIONS: &str = "project instructions";
-const PROJECT_SEPARATOR: &str = "--- project-doc ---";
-const SPAWN_CALL_ID: &str = "spawn-global-instructions-child";
-const SPAWN_CHILD_PROMPT: &str = "inspect inherited global instructions";
-const SPAWN_FRESH_PARENT_PROMPT: &str = "spawn a child with fresh context";
-const SPAWN_PARENT_PROMPT: &str = "spawn a child with the parent context";
-const SPAWN_SEED_PROMPT: &str = "seed parent history";
-
-fn write_global_file(
-    home: &TempDir,
-    filename: &str,
-    contents: impl AsRef<[u8]>,
-) -> Result<AbsolutePathBuf> {
-    let path = home.path().join(filename);
-    std::fs::write(&path, contents)?;
-    Ok(path.abs())
-}
-
-fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
-    request
-        .message_input_texts("user")
-        .into_iter()
-        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
-        .collect()
-}
-
-fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> String {
-    let cwd = cwd.as_path().display();
-    format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
-}
-
-fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
-    assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
-}
-
-fn request_body_contains(request: &wiremock::Request, text: &str) -> bool {
-    let is_zstd = request
-        .headers
-        .get("content-encoding")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value
-                .split(',')
-                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
-        });
-    let body = if is_zstd {
-        zstd::stream::decode_all(std::io::Cursor::new(&request.body)).ok()
-    } else {
-        Some(request.body.clone())
-    };
-    body.and_then(|body| String::from_utf8(body).ok())
-        .is_some_and(|body| body.contains(text))
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Result<()> {
     // Set up one global source, one project source, and two ordinary model turns.

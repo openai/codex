@@ -84,6 +84,11 @@ const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
+const GLOBAL_AGENTS_FILENAME: &str = "AGENTS.md";
+const GLOBAL_AGENTS_OVERRIDE_FILENAME: &str = "AGENTS.override.md";
+const NEW_GLOBAL_INSTRUCTIONS: &str = "new global instructions";
+const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
+const REMOTE_V2_SUMMARY: &str = "global-instructions-remote-v2-summary";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
 
@@ -268,6 +273,92 @@ fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
     let mut provider =
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
     provider.name = "OpenAI (test)".into();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
+    provider
+}
+
+fn write_global_file(
+    home: &TempDir,
+    filename: &str,
+    contents: impl AsRef<[u8]>,
+) -> Result<AbsolutePathBuf> {
+    let path = home.path().join(filename);
+    std::fs::write(&path, contents)?;
+    Ok(path.abs())
+}
+
+fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
+    request
+        .message_input_texts("user")
+        .into_iter()
+        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .collect()
+}
+
+fn instruction_fragments_in_items(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("role").and_then(Value::as_str) == Some("user")
+        })
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|span| span.get("text").and_then(Value::as_str))
+        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .map(str::to_string)
+        .collect()
+}
+
+fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> String {
+    let cwd = cwd.as_path().display();
+    format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
+}
+
+fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
+    assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
+}
+
+fn replacement_history_from_rollout(path: &Path) -> Result<Vec<Value>> {
+    let rollout_text = fs::read_to_string(path)?;
+    let mut replacement_history = None;
+    for line in rollout_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let entry: RolloutLine = serde_json::from_str(line)?;
+        if let RolloutItem::Compacted(compacted) = entry.item
+            && let Some(items) = compacted.replacement_history
+        {
+            replacement_history = Some(
+                items
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            );
+        }
+    }
+    replacement_history.ok_or_else(|| anyhow!("expected rollout replacement history"))
+}
+
+fn remote_v2_compaction_response() -> String {
+    responses::sse(vec![
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "compaction",
+                "encrypted_content": REMOTE_V2_SUMMARY,
+            }
+        }),
+        responses::ev_completed("remote-v2-compact-response"),
+    ])
+}
+
+fn local_compaction_provider(server: &wiremock::MockServer) -> ModelProviderInfo {
+    let mut provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    provider.name = "OpenAI-compatible test provider".to_string();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     provider.supports_websockets = false;
     provider
@@ -4003,98 +4094,6 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
             ]
         )
     );
-}
-
-const GLOBAL_AGENTS_FILENAME: &str = "AGENTS.md";
-const GLOBAL_AGENTS_OVERRIDE_FILENAME: &str = "AGENTS.override.md";
-const NEW_GLOBAL_INSTRUCTIONS: &str = "new global instructions";
-const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
-const REMOTE_V2_SUMMARY: &str = "global-instructions-remote-v2-summary";
-
-fn write_global_file(
-    home: &TempDir,
-    filename: &str,
-    contents: impl AsRef<[u8]>,
-) -> Result<AbsolutePathBuf> {
-    let path = home.path().join(filename);
-    std::fs::write(&path, contents)?;
-    Ok(path.abs())
-}
-
-fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
-    request
-        .message_input_texts("user")
-        .into_iter()
-        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
-        .collect()
-}
-
-fn instruction_fragments_in_items(items: &[Value]) -> Vec<String> {
-    items
-        .iter()
-        .filter(|item| {
-            item.get("type").and_then(Value::as_str) == Some("message")
-                && item.get("role").and_then(Value::as_str) == Some("user")
-        })
-        .filter_map(|item| item.get("content").and_then(Value::as_array))
-        .flatten()
-        .filter_map(|span| span.get("text").and_then(Value::as_str))
-        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
-        .map(str::to_string)
-        .collect()
-}
-
-fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> String {
-    let cwd = cwd.as_path().display();
-    format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
-}
-
-fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
-    assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
-}
-
-fn replacement_history_from_rollout(path: &Path) -> Result<Vec<Value>> {
-    let rollout_text = fs::read_to_string(path)?;
-    let mut replacement_history = None;
-    for line in rollout_text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let entry: RolloutLine = serde_json::from_str(line)?;
-        if let RolloutItem::Compacted(compacted) = entry.item
-            && let Some(items) = compacted.replacement_history
-        {
-            replacement_history = Some(
-                items
-                    .into_iter()
-                    .map(serde_json::to_value)
-                    .collect::<std::result::Result<Vec<_>, _>>()?,
-            );
-        }
-    }
-    replacement_history.ok_or_else(|| anyhow!("expected rollout replacement history"))
-}
-
-fn remote_v2_compaction_response() -> String {
-    responses::sse(vec![
-        json!({
-            "type": "response.output_item.done",
-            "item": {
-                "type": "compaction",
-                "encrypted_content": REMOTE_V2_SUMMARY,
-            }
-        }),
-        responses::ev_completed("remote-v2-compact-response"),
-    ])
-}
-
-fn local_compaction_provider(server: &wiremock::MockServer) -> ModelProviderInfo {
-    let mut provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
-    provider.name = "OpenAI-compatible test provider".to_string();
-    provider.base_url = Some(format!("{}/v1", server.uri()));
-    provider.supports_websockets = false;
-    provider
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
