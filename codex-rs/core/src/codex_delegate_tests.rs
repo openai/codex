@@ -132,7 +132,7 @@ async fn forward_ops_preserves_submission_trace_context() {
         id: "sub-1".to_string(),
         op: Op::Interrupt,
         client_user_message_id: None,
-        parent_turn_id: None,
+        parent_turn_id: Some("parent-turn-1".to_string()),
         trace: Some(codex_protocol::protocol::W3cTraceContext {
             traceparent: Some(
                 "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01".to_string(),
@@ -149,6 +149,7 @@ async fn forward_ops_preserves_submission_trace_context() {
         .expect("forwarded submission missing");
     assert_eq!(submission.id, forwarded.id);
     assert_eq!(submission.op, forwarded.op);
+    assert_eq!(submission.parent_turn_id, forwarded.parent_turn_id);
     assert_eq!(submission.trace, forwarded.trace);
 
     timeout(Duration::from_secs(1), forward)

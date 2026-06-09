@@ -592,7 +592,7 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
-        self.new_turn_with_sub_id_and_parent_turn_id(sub_id, updates, None)
+        self.new_turn_with_sub_id_and_parent_turn_id(sub_id, updates, /*parent_turn_id*/ None)
             .await
     }
 

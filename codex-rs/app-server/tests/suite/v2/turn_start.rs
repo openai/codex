@@ -91,6 +91,7 @@ use wiremock::ResponseTemplate;
 
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
+use super::analytics::wait_for_analytics_events;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -968,6 +969,152 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
             "responseRequestCount": 2,
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn spawned_child_turn_analytics_carry_direct_parent_turn_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const CHILD_PROMPT: &str = "child: do work";
+    const PARENT_PROMPT: &str = "spawn a child and continue";
+    const SPAWN_CALL_ID: &str = "spawn-call-1";
+
+    let server = responses::start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+    }))?;
+    let _parent_turn = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, PARENT_PROMPT),
+        responses::sse(vec![
+            responses::ev_response_created("resp-turn1-1"),
+            responses::ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                "multi_agent_v1",
+                "spawn_agent",
+                &spawn_args,
+            ),
+            responses::ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+    let _child_turn = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("resp-child-1"),
+            responses::ev_assistant_message("msg-child-1", "child done"),
+            responses::ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let _parent_follow_up = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        responses::sse(vec![
+            responses::ev_response_created("resp-turn1-2"),
+            responses::ev_assistant_message("msg-turn1-2", "parent done"),
+            responses::ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    let collab_feature_key = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::Collab)
+        .map(|spec| spec.key)
+        .expect("collab feature key should be defined");
+    std::fs::write(
+        config_path,
+        format!("{config}\n[features]\n{collab_feature_key} = true\n"),
+    )?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![V2UserInput::Text {
+                text: PARENT_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        let mut saw_parent_turn_completed = false;
+        let mut saw_child_turn_completed = false;
+        while !saw_parent_turn_completed || !saw_child_turn_completed {
+            let turn_completed_notif = mcp
+                .read_stream_until_notification_message("turn/completed")
+                .await?;
+            let turn_completed: TurnCompletedNotification = serde_json::from_value(
+                turn_completed_notif.params.expect("turn/completed params"),
+            )?;
+            if turn_completed.thread_id == thread.id && turn_completed.turn.id == turn.id {
+                saw_parent_turn_completed = true;
+            } else if turn_completed.thread_id != thread.id {
+                saw_child_turn_completed = true;
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
+
+    let events =
+        wait_for_analytics_events(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event", 2).await?;
+    let parent_turn_event = events
+        .iter()
+        .find(|event| {
+            event["event_params"]["thread_id"] == thread.id
+                && event["event_params"]["turn_id"] == turn.id
+        })
+        .expect("parent turn analytics event should be emitted");
+    let child_turn_event = events
+        .iter()
+        .find(|event| event["event_params"]["parent_thread_id"] == thread.id)
+        .expect("child turn analytics event should be emitted");
+
+    assert_eq!(
+        parent_turn_event["event_params"]["parent_turn_id"],
+        Value::Null
+    );
+    assert_eq!(child_turn_event["event_params"]["parent_turn_id"], turn.id);
 
     Ok(())
 }

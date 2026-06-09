@@ -692,7 +692,8 @@ impl Codex {
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
-        self.submit_with_parent_turn_id(op, None).await
+        self.submit_with_parent_turn_id(op, /*parent_turn_id*/ None)
+            .await
     }
 
     pub(crate) async fn submit_with_parent_turn_id(
@@ -709,7 +710,7 @@ impl Codex {
         op: Op,
         trace: Option<W3cTraceContext>,
     ) -> CodexResult<String> {
-        self.submit_with_trace_and_parent_turn_id(op, trace, None)
+        self.submit_with_trace_and_parent_turn_id(op, trace, /*parent_turn_id*/ None)
             .await
     }
 

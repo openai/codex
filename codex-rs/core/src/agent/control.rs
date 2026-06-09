@@ -129,8 +129,12 @@ impl AgentControl {
         agent_id: ThreadId,
         initial_operation: Op,
     ) -> CodexResult<String> {
-        self.send_input_with_parent_turn_id(agent_id, initial_operation, None)
-            .await
+        self.send_input_with_parent_turn_id(
+            agent_id,
+            initial_operation,
+            /*parent_turn_id*/ None,
+        )
+        .await
     }
 
     pub(crate) async fn send_input_with_parent_turn_id(

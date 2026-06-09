@@ -630,7 +630,14 @@ impl AnalyticsReducer {
         let turn_id = input.turn_id.clone();
         let thread_id = input.thread_id.clone();
         let num_input_images = input.num_input_images;
+        let connection_id = self
+            .threads
+            .get(thread_id.as_str())
+            .and_then(|thread| thread.connection_id);
         let turn_state = self.turns.entry(turn_id.clone()).or_default();
+        if turn_state.connection_id.is_none() {
+            turn_state.connection_id = connection_id;
+        }
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
         turn_state.resolved_config = Some(input);

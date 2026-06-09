@@ -762,32 +762,35 @@ async fn run_review_on_session(
     let submit_result = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
-        Box::pin(review_session.codex.submit(Op::UserInput {
-            items: prompt_items.items,
-            final_output_json_schema: Some(params.schema.clone()),
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
-                    parent_turn_legacy_fallback_cwd,
-                    parent_turn_environments,
-                )),
-                approval_policy: Some(AskForApproval::Never),
-                sandbox_policy: None,
-                permission_profile: Some(guardian_permission_profile),
-                summary: Some(params.reasoning_summary),
-                personality: params.personality,
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
-                        model: params.model.clone(),
-                        reasoning_effort: params.reasoning_effort.clone(),
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
+        Box::pin(review_session.codex.submit_with_parent_turn_id(
+            Op::UserInput {
+                items: prompt_items.items,
+                final_output_json_schema: Some(params.schema.clone()),
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                    environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                        parent_turn_legacy_fallback_cwd,
+                        parent_turn_environments,
+                    )),
+                    approval_policy: Some(AskForApproval::Never),
+                    sandbox_policy: None,
+                    permission_profile: Some(guardian_permission_profile),
+                    summary: Some(params.reasoning_summary),
+                    personality: params.personality,
+                    collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                        mode: codex_protocol::config_types::ModeKind::Default,
+                        settings: codex_protocol::config_types::Settings {
+                            model: params.model.clone(),
+                            reasoning_effort: params.reasoning_effort.clone(),
+                            developer_instructions: None,
+                        },
+                    }),
+                    ..Default::default()
+                },
             },
-        })),
+            Some(params.parent_turn.sub_id.clone()),
+        )),
     )
     .await;
     let child_turn_id = match submit_result {
@@ -1499,6 +1502,7 @@ mod tests {
             });
         }
         let params = test_review_params().await;
+        let expected_parent_turn_id = params.parent_turn.sub_id.clone();
 
         let review = tokio::spawn(async move {
             run_review_on_session(
@@ -1510,6 +1514,10 @@ mod tests {
             .await
         });
         let submission = rx_sub.recv().await.expect("guardian submission");
+        assert_eq!(
+            submission.parent_turn_id.as_deref(),
+            Some(expected_parent_turn_id.as_str())
+        );
         tx_event
             .send(turn_complete_event("prior-turn", Some("stale"), Some(9)))
             .await

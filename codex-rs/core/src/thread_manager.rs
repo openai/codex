@@ -1072,7 +1072,8 @@ impl ThreadManagerState {
 
     /// Send an operation to a thread by ID.
     pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
-        self.send_op_with_parent_turn_id(thread_id, op, None).await
+        self.send_op_with_parent_turn_id(thread_id, op, /*parent_turn_id*/ None)
+            .await
     }
 
     pub(crate) async fn send_op_with_parent_turn_id(
