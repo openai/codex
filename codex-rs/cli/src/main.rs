@@ -7,7 +7,7 @@ use codex_app_server_daemon::BootstrapOptions as AppServerBootstrapOptions;
 use codex_app_server_daemon::LifecycleCommand as AppServerLifecycleCommand;
 use codex_app_server_daemon::RemoteControlMode as AppServerRemoteControlMode;
 use codex_arg0::Arg0DispatchPaths;
-use codex_arg0::arg0_dispatch_or_else;
+use codex_arg0::arg0_dispatch_or_else_with_pre_runtime;
 use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::read_access_token_from_stdin;
@@ -39,6 +39,7 @@ use codex_utils_cli::SharedCliOptions;
 use codex_utils_cli::resume_hint;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
+use std::path::Path;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -919,10 +920,39 @@ fn stage_str(stage: Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
-        cli_main(arg0_paths).await?;
-        Ok(())
-    })
+    arg0_dispatch_or_else_with_pre_runtime(
+        prepare_ssh_agent_forwarding,
+        |arg0_paths: Arg0DispatchPaths| async move {
+            cli_main(arg0_paths).await?;
+            Ok(())
+        },
+    )
+}
+
+fn prepare_ssh_agent_forwarding() -> anyhow::Result<()> {
+    let Ok(cli) = MultitoolCli::try_parse() else {
+        return Ok(());
+    };
+    let Some(control_socket_path) = app_server_control_socket_for_ssh_agent(&cli) else {
+        return Ok(());
+    };
+    if let Err(err) = codex_app_server::normalize_ssh_auth_sock_before_runtime(control_socket_path)
+    {
+        eprintln!("WARNING: failed to prepare SSH agent forwarding: {err}");
+    }
+    Ok(())
+}
+
+fn app_server_control_socket_for_ssh_agent(cli: &MultitoolCli) -> Option<&Path> {
+    match &cli.subcommand {
+        Some(Subcommand::AppServer(AppServerCommand {
+            subcommand: None,
+            listen: codex_app_server::AppServerTransport::UnixSocket { socket_path },
+            stdio: false,
+            ..
+        })) => Some(socket_path.as_path()),
+        _ => None,
+    }
 }
 
 async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
@@ -1143,6 +1173,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                             codex_app_server::app_server_control_socket_path(&codex_home)?
                         }
                     };
+                    if let Err(err) =
+                        codex_app_server::refresh_ssh_auth_sock_for_proxy(socket_path.as_path())
+                    {
+                        eprintln!("WARNING: failed to refresh SSH agent forwarding: {err}");
+                    }
                     codex_stdio_to_uds::run(socket_path.as_path()).await?;
                 }
                 Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
@@ -3587,6 +3622,29 @@ mod tests {
                     .expect("absolute path should parse")
             }
         );
+    }
+
+    #[test]
+    fn unix_socket_app_server_prepares_ssh_agent_forwarding() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "app-server",
+            "--listen",
+            "unix:///tmp/codex.sock",
+        ])
+        .expect("parse");
+
+        assert_eq!(
+            app_server_control_socket_for_ssh_agent(&cli),
+            Some(Path::new("/tmp/codex.sock"))
+        );
+    }
+
+    #[test]
+    fn app_server_proxy_does_not_normalize_its_ssh_agent_environment() {
+        let cli = MultitoolCli::try_parse_from(["codex", "app-server", "proxy"]).expect("parse");
+
+        assert_eq!(app_server_control_socket_for_ssh_agent(&cli), None);
     }
 
     #[test]

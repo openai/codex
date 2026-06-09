@@ -203,10 +203,28 @@ where
     F: FnOnce(Arg0DispatchPaths) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<()>>,
 {
+    arg0_dispatch_or_else_with_pre_runtime(|| Ok(()), main_fn)
+}
+
+/// Runs a synchronous callback after arg0 environment setup and before any
+/// threads or Tokio runtime are created, then invokes the async entry point.
+///
+/// Use this when a binary must make a process-wide environment change that
+/// would be unsafe after other threads start.
+pub fn arg0_dispatch_or_else_with_pre_runtime<P, F, Fut>(
+    pre_runtime: P,
+    main_fn: F,
+) -> anyhow::Result<()>
+where
+    P: FnOnce() -> anyhow::Result<()>,
+    F: FnOnce(Arg0DispatchPaths) -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<()>>,
+{
     // Retain the TempDir so it exists for the lifetime of the invocation of
     // this executable. Admittedly, we could invoke `keep()` on it, but it
     // would be nice to avoid leaving temporary directories behind, if possible.
     let path_entry_guard = arg0_dispatch();
+    pre_runtime()?;
     let current_exe = std::env::current_exe().ok();
 
     // Regular invocation. Run the async entry point on a thread with the same

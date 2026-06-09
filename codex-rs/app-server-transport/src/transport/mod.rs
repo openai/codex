@@ -24,6 +24,7 @@ use tracing::warn;
 pub const CHANNEL_CAPACITY: usize = 128;
 
 mod remote_control;
+mod ssh_agent;
 mod stdio;
 mod unix_socket;
 #[cfg(test)]
@@ -34,6 +35,8 @@ pub use remote_control::RemoteControlHandle;
 pub use remote_control::RemoteControlStartConfig;
 pub use remote_control::RemoteControlUnavailable;
 pub use remote_control::start_remote_control;
+pub use ssh_agent::normalize_ssh_auth_sock_before_runtime;
+pub use ssh_agent::refresh_ssh_auth_sock_for_proxy;
 pub use stdio::start_stdio_connection;
 pub use unix_socket::AppServerStartupLock;
 pub use unix_socket::acquire_app_server_startup_lock;

@@ -3,12 +3,14 @@ use codex_app_server::AppServerRuntimeOptions;
 use codex_app_server::AppServerTransport;
 use codex_app_server::AppServerWebsocketAuthArgs;
 use codex_app_server::PluginStartupTasks;
+use codex_app_server::normalize_ssh_auth_sock_before_runtime;
 use codex_app_server::run_main_with_transport_options;
 use codex_arg0::Arg0DispatchPaths;
-use codex_arg0::arg0_dispatch_or_else;
+use codex_arg0::arg0_dispatch_or_else_with_pre_runtime;
 use codex_config::LoaderOverrides;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_cli::CliConfigOverrides;
+use std::path::Path;
 use std::path::PathBuf;
 
 // Debug-only test hook: lets integration tests point the server at a temporary
@@ -59,7 +61,7 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
+    let main_fn = |arg0_paths: Arg0DispatchPaths| async move {
         let AppServerArgs {
             config_overrides,
             listen,
@@ -99,7 +101,30 @@ fn main() -> anyhow::Result<()> {
         )
         .await?;
         Ok(())
-    })
+    };
+    arg0_dispatch_or_else_with_pre_runtime(prepare_ssh_agent_forwarding, main_fn)
+}
+
+fn prepare_ssh_agent_forwarding() -> anyhow::Result<()> {
+    let Ok(args) = AppServerArgs::try_parse() else {
+        return Ok(());
+    };
+    let Some(control_socket_path) = app_server_control_socket_for_ssh_agent(&args) else {
+        return Ok(());
+    };
+    if let Err(err) = normalize_ssh_auth_sock_before_runtime(control_socket_path) {
+        eprintln!("WARNING: failed to prepare SSH agent forwarding: {err}");
+    }
+    Ok(())
+}
+
+fn app_server_control_socket_for_ssh_agent(args: &AppServerArgs) -> Option<&Path> {
+    match &args.listen {
+        AppServerTransport::UnixSocket { socket_path } => Some(socket_path.as_path()),
+        AppServerTransport::Stdio
+        | AppServerTransport::WebSocket { .. }
+        | AppServerTransport::Off => None,
+    }
 }
 
 fn disable_managed_config_from_debug_env() -> bool {
