@@ -195,6 +195,33 @@ pub(crate) async fn arm_session_post_failure(
     Ok(())
 }
 
+pub(crate) async fn arm_session_post_json_rpc_failure(
+    base_url: &str,
+    status: u16,
+    remaining: usize,
+) -> anyhow::Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!("{base_url}{SESSION_POST_FAILURE_CONTROL_PATH}"))
+        .json(&json!({
+            "status": status,
+            "remaining": remaining,
+            "content_type": "application/json",
+            "body": json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32000,
+                    "message": "transient session failure",
+                },
+            }).to_string(),
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    Ok(())
+}
+
 pub(crate) async fn arm_initialized_notification_post_json_rpc_failure(
     base_url: &str,
     status: u16,

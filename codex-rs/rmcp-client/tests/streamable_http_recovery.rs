@@ -20,6 +20,7 @@ use streamable_http_test_support::arm_initialize_post_failure;
 use streamable_http_test_support::arm_initialize_post_json_rpc_failure;
 use streamable_http_test_support::arm_initialized_notification_post_json_rpc_failure;
 use streamable_http_test_support::arm_session_post_failure;
+use streamable_http_test_support::arm_session_post_json_rpc_failure;
 use streamable_http_test_support::call_echo_tool;
 use streamable_http_test_support::create_client;
 use streamable_http_test_support::create_client_with_http_client;
@@ -185,6 +186,31 @@ async fn streamable_http_tools_list_retries_transient_http_status() -> anyhow::R
         /*www_authenticate_headers*/ &[],
     )
     .await?;
+
+    let result = client
+        .list_tools(
+            /*params*/ None,
+            /*timeout*/ Some(Duration::from_secs(5)),
+        )
+        .await?;
+
+    assert_eq!(result, expected);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_tools_list_retries_json_rpc_transient_status() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    let client = create_client(&base_url).await?;
+
+    let expected = client
+        .list_tools(
+            /*params*/ None,
+            /*timeout*/ Some(Duration::from_secs(5)),
+        )
+        .await?;
+    arm_session_post_json_rpc_failure(&base_url, /*status*/ 502, /*remaining*/ 1).await?;
 
     let result = client
         .list_tools(
