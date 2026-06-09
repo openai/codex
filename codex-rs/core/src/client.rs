@@ -802,10 +802,16 @@ impl ModelClient {
             service_tier,
             prompt_cache_key,
             text,
-            client_metadata: Some(HashMap::from([(
-                X_CODEX_INSTALLATION_ID_HEADER.to_string(),
-                self.state.installation_id.clone(),
-            )])),
+            client_metadata: Some(HashMap::from([
+                (
+                    X_CODEX_INSTALLATION_ID_HEADER.to_string(),
+                    self.state.installation_id.clone(),
+                ),
+                (
+                    X_CODEX_WINDOW_ID_HEADER.to_string(),
+                    self.current_window_id(),
+                ),
+            ])),
         };
         Ok(request)
     }

@@ -1994,6 +1994,7 @@ dependencies = [
  "codex-rollout",
  "codex-sandboxing",
  "codex-shell-command",
+ "codex-skills-extension",
  "codex-state",
  "codex-thread-store",
  "codex-tools",
@@ -2922,6 +2923,8 @@ dependencies = [
  "codex-context-fragments",
  "codex-protocol",
  "codex-tools",
+ "pretty_assertions",
+ "tokio",
 ]
 
 [[package]]
@@ -3106,6 +3109,7 @@ dependencies = [
  "codex-protocol",
  "codex-tools",
  "codex-utils-absolute-path",
+ "codex-utils-image",
  "http 1.4.0",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -3795,8 +3799,11 @@ dependencies = [
  "async-trait",
  "codex-core",
  "codex-core-skills",
+ "codex-exec-server",
  "codex-extension-api",
  "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-string",
  "pretty_assertions",
  "tokio",
 ]
@@ -4149,6 +4156,21 @@ dependencies = [
  "dunce",
  "pretty_assertions",
  "tempfile",
+]
+
+[[package]]
+name = "codex-utils-path-uri"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "ts-rs",
+ "url",
+ "urlencoding",
 ]
 
 [[package]]

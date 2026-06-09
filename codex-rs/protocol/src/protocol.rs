@@ -112,6 +112,34 @@ pub struct TurnEnvironmentSelection {
     pub cwd: AbsolutePathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurnEnvironmentSelections {
+    pub legacy_fallback_cwd: AbsolutePathBuf,
+    pub environments: Vec<TurnEnvironmentSelection>,
+}
+
+impl TurnEnvironmentSelections {
+    pub fn new(
+        legacy_fallback_cwd: AbsolutePathBuf,
+        environments: Vec<TurnEnvironmentSelection>,
+    ) -> Self {
+        let mut settings = Self {
+            legacy_fallback_cwd,
+            environments,
+        };
+        settings.sync_primary_environment_cwd();
+        settings
+    }
+
+    fn sync_primary_environment_cwd(&mut self) {
+        if let Some(turn_environment) = self.environments.first_mut()
+            && turn_environment.cwd != self.legacy_fallback_cwd
+        {
+            turn_environment.cwd = self.legacy_fallback_cwd.clone();
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 #[serde(transparent)]
 #[ts(type = "string")]
@@ -370,8 +398,8 @@ pub struct ConversationTextParams {
 /// on their own.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ThreadSettingsOverrides {
-    /// Updated `cwd` for sandbox/tool calls.
-    pub cwd: Option<AbsolutePathBuf>,
+    /// Updated fallback `cwd` and environments supplied together as a complete pair.
+    pub environments: Option<TurnEnvironmentSelections>,
 
     /// Updated runtime workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions.
@@ -472,8 +500,6 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
-        /// Optional turn-scoped environments.
-        environments: Option<Vec<TurnEnvironmentSelection>>,
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         final_output_json_schema: Option<Value>,
         /// Optional turn-scoped Responses API `client_metadata`.
@@ -612,7 +638,6 @@ pub enum ThreadMemoryMode {
 impl From<Vec<UserInput>> for Op {
     fn from(value: Vec<UserInput>) -> Self {
         Op::UserInput {
-            environments: None,
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -1324,6 +1349,9 @@ pub enum EventMsg {
     CollabResumeBegin(CollabResumeBeginEvent),
     /// Collab interaction: resume end.
     CollabResumeEnd(CollabResumeEndEvent),
+
+    /// Path-based v2 sub-agent activity.
+    SubAgentActivity(SubAgentActivityEvent),
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, EnumIter)]
@@ -1540,6 +1568,12 @@ impl From<CollabResumeBeginEvent> for EventMsg {
 impl From<CollabResumeEndEvent> for EventMsg {
     fn from(event: CollabResumeEndEvent) -> Self {
         EventMsg::CollabResumeEnd(event)
+    }
+}
+
+impl From<SubAgentActivityEvent> for EventMsg {
+    fn from(event: SubAgentActivityEvent) -> Self {
+        EventMsg::SubAgentActivity(event)
     }
 }
 
@@ -2446,12 +2480,12 @@ impl InitialHistory {
 
     pub fn get_resumed_session_sources(&self) -> Option<(SessionSource, Option<ThreadSource>)> {
         let meta = self.get_resumed_session_meta()?;
-        Some((meta.source.clone(), meta.thread_source))
+        Some((meta.source.clone(), meta.thread_source.clone()))
     }
 
     pub fn get_resumed_thread_source(&self) -> Option<ThreadSource> {
         self.get_resumed_session_meta()
-            .and_then(|meta| meta.thread_source)
+            .and_then(|meta| meta.thread_source.clone())
     }
 
     pub fn get_resumed_parent_thread_id(&self) -> Option<ThreadId> {
@@ -2495,20 +2529,23 @@ pub enum SessionSource {
     Unknown,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(try_from = "String", into = "String")]
+#[schemars(with = "String")]
+#[ts(type = "string")]
 pub enum ThreadSource {
     User,
     Subagent,
+    Feature(String),
     MemoryConsolidation,
 }
 
 impl ThreadSource {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             ThreadSource::User => "user",
             ThreadSource::Subagent => "subagent",
+            ThreadSource::Feature(feature) => feature,
             ThreadSource::MemoryConsolidation => "memory_consolidation",
         }
     }
@@ -2520,6 +2557,20 @@ impl fmt::Display for ThreadSource {
     }
 }
 
+impl TryFrom<String> for ThreadSource {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<ThreadSource> for String {
+    fn from(value: ThreadSource) -> Self {
+        value.to_string()
+    }
+}
+
 impl FromStr for ThreadSource {
     type Err = String;
 
@@ -2528,7 +2579,7 @@ impl FromStr for ThreadSource {
             "user" => Ok(ThreadSource::User),
             "subagent" => Ok(ThreadSource::Subagent),
             "memory_consolidation" => Ok(ThreadSource::MemoryConsolidation),
-            other => Err(format!("unknown thread source: {other}")),
+            other => Ok(ThreadSource::Feature(other.to_string())),
         }
     }
 }
@@ -3865,6 +3916,27 @@ pub struct CollabAgentInteractionEndEvent {
     pub status: AgentStatus,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SubAgentActivityKind {
+    Started,
+    Interacted,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct SubAgentActivityEvent {
+    pub event_id: String,
+    #[serde(default)]
+    pub occurred_at_ms: i64,
+    /// Thread ID of the affected sub-agent.
+    pub agent_thread_id: ThreadId,
+    /// Canonical v2 path of the affected sub-agent.
+    pub agent_path: AgentPath,
+    pub kind: SubAgentActivityKind,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct CollabWaitingBeginEvent {
     #[serde(default)]
@@ -3992,6 +4064,18 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
+
+    #[test]
+    fn feature_thread_source_serializes_as_its_app_owned_label() -> Result<()> {
+        let source = ThreadSource::Feature("automation".to_string());
+
+        assert_eq!(serde_json::to_value(&source)?, json!("automation"));
+        assert_eq!(
+            serde_json::from_value::<ThreadSource>(json!("automation"))?,
+            source
+        );
+        Ok(())
+    }
 
     fn sorted_writable_roots(roots: Vec<WritableRoot>) -> Vec<(PathBuf, Vec<PathBuf>)> {
         let mut sorted_roots: Vec<(PathBuf, Vec<PathBuf>)> = roots

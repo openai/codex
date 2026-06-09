@@ -64,6 +64,36 @@
         }
       ]
     },
+    "CapabilityRootLocation": {
+      "description": "Location used to resolve a selected capability root.",
+      "oneOf": [
+        {
+          "description": "A path owned by an execution environment.",
+          "properties": {
+            "environmentId": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "environment"
+              ],
+              "title": "EnvironmentCapabilityRootLocationType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "environmentId",
+            "path",
+            "type"
+          ],
+          "title": "EnvironmentCapabilityRootLocation",
+          "type": "object"
+        }
+      ]
+    },
     "DynamicToolSpec": {
       "properties": {
         "deferLoading": {
@@ -106,12 +136,29 @@
       ],
       "type": "string"
     },
-    "ThreadSource": {
-      "enum": [
-        "user",
-        "subagent",
-        "memory_consolidation"
+    "SelectedCapabilityRoot": {
+      "description": "A user-selected root that can expose one or more runtime capabilities.",
+      "properties": {
+        "id": {
+          "description": "Stable identifier supplied by the capability selection platform.",
+          "type": "string"
+        },
+        "location": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilityRootLocation"
+            }
+          ],
+          "description": "Where the selected root can be resolved."
+        }
+      },
+      "required": [
+        "id",
+        "location"
       ],
+      "type": "object"
+    },
+    "ThreadSource": {
       "type": "string"
     },
     "ThreadStartSource": {

@@ -26,6 +26,7 @@ use core_test_support::responses::sse_completed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -65,12 +66,11 @@ fn read_only_text_turn_with_personality(
             text: text.into(),
             text_elements: Vec::new(),
         }],
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(test.config.cwd.clone()),
+            environments: Some(local_selections(test.config.cwd.clone())),
             approval_policy: Some(approval_policy),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,

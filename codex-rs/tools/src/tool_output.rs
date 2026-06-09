@@ -18,6 +18,12 @@ pub trait ToolOutput: Send {
 
     fn success_for_logging(&self) -> bool;
 
+    /// Whether this output contains external context that should disable memory generation when
+    /// `memories.disable_on_external_context` is enabled.
+    fn contains_external_context(&self) -> bool {
+        false
+    }
+
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 
     /// Returns the tool call id exposed to `PostToolUse` hooks for this output.
@@ -56,6 +62,10 @@ where
 
     fn success_for_logging(&self) -> bool {
         (**self).success_for_logging()
+    }
+
+    fn contains_external_context(&self) -> bool {
+        (**self).contains_external_context()
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {

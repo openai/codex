@@ -3177,6 +3177,14 @@
       ],
       "type": "object"
     },
+    "SubAgentActivityKind": {
+      "enum": [
+        "started",
+        "interacted",
+        "interrupted"
+      ],
+      "type": "string"
+    },
     "SubAgentSource": {
       "oneOf": [
         {
@@ -4109,6 +4117,38 @@
         },
         {
           "properties": {
+            "agentPath": {
+              "type": "string"
+            },
+            "agentThreadId": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/definitions/SubAgentActivityKind"
+            },
+            "type": {
+              "enum": [
+                "subAgentActivity"
+              ],
+              "title": "SubAgentActivityThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "agentPath",
+            "agentThreadId",
+            "id",
+            "kind",
+            "type"
+          ],
+          "title": "SubAgentActivityThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "action": {
               "anyOf": [
                 {
@@ -4575,11 +4615,6 @@
       "type": "object"
     },
     "ThreadSource": {
-      "enum": [
-        "user",
-        "subagent",
-        "memory_consolidation"
-      ],
       "type": "string"
     },
     "ThreadStartedNotification": {

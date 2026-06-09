@@ -122,7 +122,7 @@ async fn thread_settings_update(
     thread_settings: ThreadSettingsOverrides,
 ) -> SessionSettingsUpdate {
     let ThreadSettingsOverrides {
-        cwd,
+        environments,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -151,7 +151,7 @@ async fn thread_settings_update(
         }
     };
     SessionSettingsUpdate {
-        cwd,
+        environments,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -173,6 +173,7 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
         let state = sess.state.lock().await;
         state.session_configuration.thread_config_snapshot()
     };
+    let cwd = snapshot.cwd().clone();
     EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
         thread_settings: ThreadSettingsSnapshot {
             model: snapshot.model,
@@ -182,7 +183,7 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
             approvals_reviewer: snapshot.approvals_reviewer,
             permission_profile: snapshot.permission_profile,
             active_permission_profile: snapshot.active_permission_profile,
-            cwd: snapshot.cwd,
+            cwd,
             reasoning_effort: snapshot.reasoning_effort,
             reasoning_summary: snapshot.reasoning_summary,
             personality: snapshot.personality,
@@ -200,7 +201,6 @@ pub(super) async fn user_input_or_turn_inner(
 ) {
     let Op::UserInput {
         items,
-        environments,
         final_output_json_schema,
         responsesapi_client_metadata,
         additional_context,
@@ -216,7 +216,6 @@ pub(super) async fn user_input_or_turn_inner(
         SessionSettingsUpdate::default()
     };
     updates.final_output_json_schema = Some(final_output_json_schema);
-    updates.environments = environments;
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
