@@ -149,11 +149,6 @@ pub fn write_atomically(write_path: &Path, contents: &str) -> io::Result<()> {
 /// Relative paths are resolved from the process's current directory.
 #[cfg(unix)]
 pub fn open_file_for_read_no_follow(path: &Path) -> io::Result<File> {
-    open_file_no_follow(path, libc::O_RDONLY, /*mode*/ 0)
-}
-
-#[cfg(unix)]
-fn open_file_no_follow(path: &Path, flags: libc::c_int, mode: libc::mode_t) -> io::Result<File> {
     let components = path
         .components()
         .filter_map(|component| match component {
@@ -189,8 +184,8 @@ fn open_file_no_follow(path: &Path, flags: libc::c_int, mode: libc::mode_t) -> i
     openat(
         &current_dir,
         file_name,
-        flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-        mode,
+        libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        /*mode*/ 0,
     )
 }
 
