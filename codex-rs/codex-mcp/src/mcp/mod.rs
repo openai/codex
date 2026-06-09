@@ -131,6 +131,11 @@ pub struct McpConfig {
     /// ChatGPT auth is checked separately at runtime before the host-owned apps
     /// MCP server is added.
     pub apps_enabled: bool,
+    /// Whether to synthesize the legacy host-owned Apps MCP server.
+    ///
+    /// Hosts that install an MCP extension for this server disable the legacy
+    /// loader and contribute the server through the normal runtime overlay.
+    pub legacy_apps_mcp_loader_enabled: bool,
     /// Whether model-visible MCP tool namespaces should keep the legacy
     /// `mcp__` prefix.
     pub prefix_mcp_tool_names: bool,
@@ -218,10 +223,20 @@ pub fn with_codex_apps_mcp(
     auth: Option<&CodexAuth>,
     config: &McpConfig,
 ) -> HashMap<String, EffectiveMcpServer> {
+    if !config.legacy_apps_mcp_loader_enabled {
+        if !host_owned_codex_apps_enabled(config, auth) {
+            servers.remove(CODEX_APPS_MCP_SERVER_NAME);
+        }
+        return servers;
+    }
     if host_owned_codex_apps_enabled(config, auth) {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            EffectiveMcpServer::configured(codex_apps_mcp_server_config(config)),
+            EffectiveMcpServer::configured(codex_apps_mcp_server_config(
+                &config.chatgpt_base_url,
+                config.apps_mcp_path_override.as_deref(),
+                config.apps_mcp_product_sku.as_deref(),
+            )),
         );
     } else {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
@@ -443,10 +458,14 @@ fn codex_apps_mcp_url_for_base_url(base_url: &str, apps_mcp_path_override: Optio
     format!("{base_url}/{path}")
 }
 
-fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
-    let url = codex_apps_mcp_url(config);
-    let http_headers = config.apps_mcp_product_sku.as_ref().map(|product_sku| {
-        HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.clone())])
+pub fn codex_apps_mcp_server_config(
+    chatgpt_base_url: &str,
+    apps_mcp_path_override: Option<&str>,
+    apps_mcp_product_sku: Option<&str>,
+) -> McpServerConfig {
+    let url = codex_apps_mcp_url_for_base_url(chatgpt_base_url, apps_mcp_path_override);
+    let http_headers = apps_mcp_product_sku.map(|product_sku| {
+        HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.to_string())])
     });
 
     McpServerConfig {

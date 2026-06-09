@@ -61,6 +61,7 @@ codex-memories-extension = { workspace = true }
 codex-web-search-extension = { workspace = true }
 codex-memories-write = { workspace = true }
 codex-mcp = { workspace = true }
+codex-mcp-extension = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
