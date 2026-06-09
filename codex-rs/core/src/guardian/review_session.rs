@@ -57,6 +57,10 @@ use super::prompt::build_guardian_prompt_items_with_parent_turn;
 use super::prompt::guardian_policy_prompt;
 use super::prompt::guardian_policy_prompt_with_config;
 
+mod eager_compaction;
+
+use eager_compaction::GuardianEagerCompaction;
+
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug)]
 pub(crate) enum GuardianReviewSessionOutcome {
@@ -105,6 +109,7 @@ struct GuardianReviewSession {
     cancel_token: CancellationToken,
     reuse_key: GuardianReviewSessionReuseKey,
     review_lock: Semaphore,
+    eager_compaction: GuardianEagerCompaction,
     state: Mutex<GuardianReviewState>,
 }
 
@@ -215,6 +220,7 @@ pub(crate) fn prompt_cache_key_override_for_review_session(
 impl GuardianReviewSession {
     async fn shutdown(&self) {
         self.cancel_token.cancel();
+        self.wait_for_eager_compaction().await;
         let _ = self.codex.shutdown_and_wait().await;
     }
 
@@ -408,6 +414,16 @@ impl GuardianReviewSessionManager {
             .await;
         }
 
+        if let Err(outcome) = run_before_review_deadline(
+            deadline,
+            params.external_cancel.as_ref(),
+            trunk.wait_for_eager_compaction(),
+        )
+        .await
+        {
+            return (outcome, GuardianReviewAnalyticsResult::without_session());
+        }
+
         let trunk_guard = match trunk.review_lock.try_acquire() {
             Ok(trunk_guard) => trunk_guard,
             Err(_) => {
@@ -435,6 +451,7 @@ impl GuardianReviewSessionManager {
         .await;
         if keep_review_session && matches!(outcome, GuardianReviewSessionOutcome::Completed(_)) {
             trunk.refresh_last_committed_fork_snapshot().await;
+            trunk.schedule_eager_compaction().await;
         }
         drop(trunk_guard);
 
@@ -459,6 +476,7 @@ impl GuardianReviewSessionManager {
             codex,
             cancel_token: CancellationToken::new(),
             review_lock: Semaphore::new(/*permits*/ 1),
+            eager_compaction: GuardianEagerCompaction::default(),
             state: Mutex::new(GuardianReviewState {
                 prior_review_count: 0,
                 last_reviewed_transcript_cursor: None,
@@ -482,6 +500,7 @@ impl GuardianReviewSessionManager {
                 codex,
                 cancel_token: CancellationToken::new(),
                 review_lock: Semaphore::new(/*permits*/ 1),
+                eager_compaction: GuardianEagerCompaction::default(),
                 state: Mutex::new(GuardianReviewState {
                     prior_review_count: 0,
                     last_reviewed_transcript_cursor: None,
@@ -636,6 +655,7 @@ async fn spawn_guardian_review_session(
         cancel_token,
         reuse_key,
         review_lock: Semaphore::new(/*permits*/ 1),
+        eager_compaction: GuardianEagerCompaction::default(),
         state: Mutex::new(GuardianReviewState {
             prior_review_count,
             last_reviewed_transcript_cursor: initial_transcript_cursor,
@@ -1115,6 +1135,7 @@ mod tests {
                 cancel_token: CancellationToken::new(),
                 reuse_key,
                 review_lock: Semaphore::new(/*permits*/ 1),
+                eager_compaction: GuardianEagerCompaction::default(),
                 state: Mutex::new(GuardianReviewState {
                     prior_review_count: 0,
                     last_reviewed_transcript_cursor: None,
