@@ -10,9 +10,6 @@
 
 use std::future::Future;
 
-const CONFIG_PROBE_ARGS: &[&str] = &["config", "--null", "--get", "core.fsmonitor"];
-const CAPABILITY_PROBE_ARGS: &[&str] = &["version", "--build-options"];
-
 /// The safe `core.fsmonitor` override for an internal Git command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FsmonitorOverride {
@@ -57,7 +54,10 @@ pub async fn detect_fsmonitor_override(
     // local true fail conversion. Query the raw effective value first.
     // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L482-L514
     // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/config.c#L611-L614
-    let Some(config) = runner.run_probe(CONFIG_PROBE_ARGS).await else {
+    let Some(config) = runner
+        .run_probe(&["config", "--null", "--get", "core.fsmonitor"])
+        .await
+    else {
         return FsmonitorOverride::Disabled;
     };
     let Some(config) = config.strip_suffix(b"\0") else {
@@ -111,7 +111,7 @@ pub async fn detect_fsmonitor_override(
     // the feature line Git added specifically for capability checks.
     // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/Documentation/config/core.adoc#L90-L99
     // https://github.com/git/git/commit/dd77cf61a1a2fbf52c94d0cd986d555ad2ba8a4b
-    let Some(build_options) = runner.run_probe(CAPABILITY_PROBE_ARGS).await else {
+    let Some(build_options) = runner.run_probe(&["version", "--build-options"]).await else {
         return FsmonitorOverride::Disabled;
     };
     if build_options
