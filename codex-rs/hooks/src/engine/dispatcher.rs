@@ -2,6 +2,7 @@ use std::path::Path;
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use serde::Serialize;
 
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
@@ -11,9 +12,8 @@ use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookScope;
 
-use super::CommandShell;
+use super::ClaudeHooksEngine;
 use super::ConfiguredHandler;
-use super::async_output::AsyncCommandRuntime;
 use super::command_runner::CommandRunResult;
 use super::command_runner::run_command;
 use crate::events::common::matches_matcher;
@@ -25,27 +25,7 @@ pub(crate) struct ParsedHandler<T> {
     pub completion_order: usize,
 }
 
-pub(crate) fn select_handlers(
-    handlers: &[ConfiguredHandler],
-    event_name: HookEventName,
-    matcher_input: Option<&str>,
-) -> Vec<ConfiguredHandler> {
-    let matcher_inputs = matcher_input.into_iter().collect::<Vec<_>>();
-    select_handlers_for_matcher_inputs(handlers, event_name, &matcher_inputs)
-}
-
-pub(crate) fn select_sync_handlers(
-    handlers: &[ConfiguredHandler],
-    event_name: HookEventName,
-    matcher_input: Option<&str>,
-) -> Vec<ConfiguredHandler> {
-    select_handlers(handlers, event_name, matcher_input)
-        .into_iter()
-        .filter(|handler| !handler.r#async)
-        .collect()
-}
-
-pub(crate) fn select_handlers_for_matcher_inputs(
+fn select_handlers_for_matcher_inputs(
     handlers: &[ConfiguredHandler],
     event_name: HookEventName,
     matcher_inputs: &[&str],
@@ -79,18 +59,7 @@ pub(crate) fn select_handlers_for_matcher_inputs(
         .collect()
 }
 
-pub(crate) fn select_sync_handlers_for_matcher_inputs(
-    handlers: &[ConfiguredHandler],
-    event_name: HookEventName,
-    matcher_inputs: &[&str],
-) -> Vec<ConfiguredHandler> {
-    select_handlers_for_matcher_inputs(handlers, event_name, matcher_inputs)
-        .into_iter()
-        .filter(|handler| !handler.r#async)
-        .collect()
-}
-
-pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
+fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
     HookRunSummary {
         id: handler.run_id(),
         event_name: handler.event_name,
@@ -109,49 +78,86 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
     }
 }
 
-pub(crate) async fn execute_handlers<T>(
-    shell: &CommandShell,
-    async_runtime: &AsyncCommandRuntime,
-    handlers: Vec<ConfiguredHandler>,
-    input_json: Result<String, String>,
-    cwd: &Path,
-    turn_id: Option<String>,
-    parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
-) -> Vec<ParsedHandler<T>> {
-    let (handlers, asynchronous) = handlers
-        .into_iter()
-        .partition::<Vec<_>, _>(|handler| !handler.r#async);
-    for handler in asynchronous {
-        async_runtime.spawn_handler(
-            shell.clone(),
-            handler,
-            input_json.clone(),
-            cwd.to_path_buf(),
-        );
+impl ClaudeHooksEngine {
+    pub(crate) fn preview_commands(
+        &self,
+        event_name: HookEventName,
+        matcher_inputs: &[&str],
+    ) -> Vec<HookRunSummary> {
+        select_handlers_for_matcher_inputs(&self.handlers, event_name, matcher_inputs)
+            .into_iter()
+            .filter(|handler| !handler.r#async)
+            .map(|handler| running_summary(&handler))
+            .collect()
     }
 
-    let mut pending = FuturesUnordered::new();
-    for (configured_order, handler) in handlers.into_iter().enumerate() {
-        let input_json = input_json.clone();
-        let turn_id = turn_id.clone();
-        pending.push(async move {
-            let result = match input_json {
-                Ok(input_json) => run_command(shell, &handler, &input_json, cwd).await,
-                Err(error) => CommandRunResult::failed(error),
-            };
-            (configured_order, parse(&handler, result, turn_id))
-        });
-    }
+    pub(crate) async fn execute_commands<T, I>(
+        &self,
+        event_name: HookEventName,
+        matcher_inputs: &[&str],
+        input: &I,
+        cwd: &Path,
+        turn_id: Option<String>,
+        parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
+    ) -> Vec<ParsedHandler<T>>
+    where
+        I: Serialize + ?Sized,
+    {
+        let handlers =
+            select_handlers_for_matcher_inputs(&self.handlers, event_name, matcher_inputs);
+        if handlers.is_empty() {
+            return Vec::new();
+        }
 
-    let mut completed = Vec::new();
-    let mut completion_order = 0;
-    while let Some((configured_order, mut parsed)) = pending.next().await {
-        parsed.completion_order = completion_order;
-        completion_order += 1;
-        completed.push((configured_order, parsed));
+        let input_label = match event_name {
+            HookEventName::PreToolUse => "pre tool use",
+            HookEventName::PermissionRequest => "permission request",
+            HookEventName::PostToolUse => "post tool use",
+            HookEventName::PreCompact => "pre compact",
+            HookEventName::PostCompact => "post compact",
+            HookEventName::SessionStart => "session start",
+            HookEventName::UserPromptSubmit => "user prompt submit",
+            HookEventName::SubagentStart => "subagent start",
+            HookEventName::SubagentStop => "subagent stop",
+            HookEventName::Stop => "stop",
+        };
+        let input_json = serde_json::to_string(input)
+            .map_err(|error| format!("failed to serialize {input_label} hook input: {error}"));
+        let (handlers, asynchronous) = handlers
+            .into_iter()
+            .partition::<Vec<_>, _>(|handler| !handler.r#async);
+        for handler in asynchronous {
+            self.async_runtime.spawn_handler(
+                self.shell.clone(),
+                handler,
+                input_json.clone(),
+                cwd.to_path_buf(),
+            );
+        }
+
+        let mut pending = FuturesUnordered::new();
+        for (configured_order, handler) in handlers.into_iter().enumerate() {
+            let input_json = input_json.clone();
+            let turn_id = turn_id.clone();
+            pending.push(async move {
+                let result = match input_json {
+                    Ok(input_json) => run_command(&self.shell, &handler, &input_json, cwd).await,
+                    Err(error) => CommandRunResult::failed(error),
+                };
+                (configured_order, parse(&handler, result, turn_id))
+            });
+        }
+
+        let mut completed = Vec::new();
+        let mut completion_order = 0;
+        while let Some((configured_order, mut parsed)) = pending.next().await {
+            parsed.completion_order = completion_order;
+            completion_order += 1;
+            completed.push((configured_order, parsed));
+        }
+        completed.sort_by_key(|(configured_order, _)| *configured_order);
+        completed.into_iter().map(|(_, parsed)| parsed).collect()
     }
-    completed.sort_by_key(|(configured_order, _)| *configured_order);
-    completed.into_iter().map(|(_, parsed)| parsed).collect()
 }
 
 pub(crate) fn completed_summary(
@@ -202,16 +208,19 @@ mod tests {
     use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use serde::Serialize;
+    use serde::Serializer;
+    use serde::ser::Error as _;
 
+    use super::ClaudeHooksEngine;
     use super::CommandRunResult;
-    use super::CommandShell;
     use super::ConfiguredHandler;
     use super::ParsedHandler;
     use super::completed_summary;
-    use super::execute_handlers;
-    use super::select_handlers;
     use super::select_handlers_for_matcher_inputs;
+    use crate::engine::CommandShell;
     use crate::engine::async_output::AsyncCommandRuntime;
+    use crate::output_spill::HookOutputSpiller;
 
     fn make_handler(
         event_name: HookEventName,
@@ -233,6 +242,22 @@ mod tests {
         }
     }
 
+    fn engine_with_handlers(
+        handlers: Vec<ConfiguredHandler>,
+        async_runtime: AsyncCommandRuntime,
+    ) -> ClaudeHooksEngine {
+        ClaudeHooksEngine {
+            handlers,
+            warnings: Vec::new(),
+            shell: CommandShell {
+                program: String::new(),
+                args: Vec::new(),
+            },
+            async_runtime,
+            output_spiller: HookOutputSpiller::new(),
+        }
+    }
+
     #[test]
     fn select_handlers_keeps_duplicate_stop_handlers() {
         let handlers = vec![
@@ -250,7 +275,7 @@ mod tests {
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::Stop, /*matcher_input*/ None);
+        let selected = select_handlers_for_matcher_inputs(&handlers, HookEventName::Stop, &[]);
 
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].display_order, 0);
@@ -274,7 +299,11 @@ mod tests {
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::SessionStart, Some("startup"));
+        let selected = select_handlers_for_matcher_inputs(
+            &handlers,
+            HookEventName::SessionStart,
+            &["startup"],
+        );
 
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].display_order, 0);
@@ -298,7 +327,8 @@ mod tests {
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::PreCompact, Some("manual"));
+        let selected =
+            select_handlers_for_matcher_inputs(&handlers, HookEventName::PreCompact, &["manual"]);
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].display_order, 0);
@@ -321,7 +351,8 @@ mod tests {
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+        let selected =
+            select_handlers_for_matcher_inputs(&handlers, HookEventName::PreToolUse, &["Bash"]);
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].display_order, 0);
@@ -344,7 +375,8 @@ mod tests {
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::PostToolUse, Some("Bash"));
+        let selected =
+            select_handlers_for_matcher_inputs(&handlers, HookEventName::PostToolUse, &["Bash"]);
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].display_order, 0);
@@ -367,7 +399,8 @@ mod tests {
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+        let selected =
+            select_handlers_for_matcher_inputs(&handlers, HookEventName::PreToolUse, &["Bash"]);
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].display_order, 0);
@@ -382,9 +415,12 @@ mod tests {
             /*display_order*/ 0,
         )];
 
-        let selected_edit = select_handlers(&handlers, HookEventName::PreToolUse, Some("Edit"));
-        let selected_write = select_handlers(&handlers, HookEventName::PreToolUse, Some("Write"));
-        let selected_bash = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+        let selected_edit =
+            select_handlers_for_matcher_inputs(&handlers, HookEventName::PreToolUse, &["Edit"]);
+        let selected_write =
+            select_handlers_for_matcher_inputs(&handlers, HookEventName::PreToolUse, &["Write"]);
+        let selected_bash =
+            select_handlers_for_matcher_inputs(&handlers, HookEventName::PreToolUse, &["Bash"]);
 
         assert_eq!(selected_edit.len(), 1);
         assert_eq!(selected_write.len(), 1);
@@ -453,11 +489,8 @@ mod tests {
             ),
         ];
 
-        let selected = select_handlers(
-            &handlers,
-            HookEventName::UserPromptSubmit,
-            /*matcher_input*/ None,
-        );
+        let selected =
+            select_handlers_for_matcher_inputs(&handlers, HookEventName::UserPromptSubmit, &[]);
 
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].display_order, 0);
@@ -488,12 +521,9 @@ mod tests {
         ];
         handlers[1].r#async = true;
 
-        let selected = select_handlers(&handlers, HookEventName::Stop, /*matcher_input*/ None);
-        let synchronous = super::select_sync_handlers(
-            &handlers,
-            HookEventName::Stop,
-            /*matcher_input*/ None,
-        );
+        let selected = select_handlers_for_matcher_inputs(&handlers, HookEventName::Stop, &[]);
+        let engine = engine_with_handlers(handlers, AsyncCommandRuntime::default());
+        let synchronous = engine.preview_commands(HookEventName::Stop, &[]);
 
         assert_eq!(selected.len(), 3);
         assert_eq!(selected[0].command, "first");
@@ -502,9 +532,9 @@ mod tests {
         assert_eq!(
             synchronous
                 .iter()
-                .map(|handler| handler.command.as_str())
+                .map(|run| run.display_order)
                 .collect::<Vec<_>>(),
-            vec!["first", "third"],
+            vec![0, 2],
         );
     }
 
@@ -521,39 +551,53 @@ mod tests {
         asynchronous.display_order = 1;
         asynchronous.r#async = true;
         let runtime = AsyncCommandRuntime::default();
+        let engine = engine_with_handlers(vec![synchronous, asynchronous], runtime.clone());
         let cwd = test_path_buf("/tmp").abs();
 
-        let results = execute_handlers(
-            &CommandShell {
-                program: String::new(),
-                args: Vec::new(),
-            },
-            &runtime,
-            vec![synchronous, asynchronous],
-            Err("serialize failed".to_string()),
-            cwd.as_path(),
-            Some("turn-1".to_string()),
-            parse_failure,
-        )
-        .await;
+        let results = engine
+            .execute_commands(
+                HookEventName::PreToolUse,
+                &["Bash"],
+                &SerializationFailure,
+                cwd.as_path(),
+                Some("turn-1".to_string()),
+                parse_failure,
+            )
+            .await;
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].completed.run.status, HookRunStatus::Failed);
-        assert_eq!(results[0].data, "serialize failed");
-        let batch = tokio::time::timeout(Duration::from_secs(1), async {
+        assert_eq!(
+            results[0].data,
+            "failed to serialize pre tool use hook input: serialize failed"
+        );
+        let output = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                if let Some(batch) = runtime.prepare_batch() {
-                    break batch;
+                let boundary = runtime.ready_boundary();
+                if let Some(output) = runtime.flush_through(boundary) {
+                    break output;
                 }
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("async serialization failure completion");
-        let output = runtime.commit(batch);
-        assert!(output.contains("Async hook failed to run: serialize failed"));
+        assert!(output.contains(
+            "Async hook failed to run: failed to serialize pre tool use hook input: serialize failed"
+        ));
         assert!(output.contains("event=\"PreToolUse\""));
         runtime.shutdown().await;
+    }
+
+    struct SerializationFailure;
+
+    impl Serialize for SerializationFailure {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            Err(S::Error::custom("serialize failed"))
+        }
     }
 
     fn parse_failure(

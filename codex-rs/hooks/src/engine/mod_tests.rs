@@ -32,6 +32,7 @@ use tempfile::tempdir;
 use super::ClaudeHooksEngine;
 use super::CommandShell;
 use super::ConfiguredHandler;
+use crate::events::post_tool_use::PostToolUseRequest;
 use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 
@@ -64,6 +65,45 @@ fn user_prompt_request() -> UserPromptSubmitRequest {
         permission_mode: "default".to_string(),
         prompt: "next prompt".to_string(),
     }
+}
+
+#[test]
+fn post_tool_use_preview_id_includes_tool_use_id() {
+    let source_path = cwd();
+    let mut engine = disabled_engine();
+    engine.handlers.push(ConfiguredHandler {
+        event_name: HookEventName::PostToolUse,
+        matcher: Some("^Bash$".to_string()),
+        command: "echo hook".to_string(),
+        timeout_sec: 5,
+        r#async: false,
+        status_message: None,
+        source_path: source_path.clone(),
+        source: HookSource::User,
+        display_order: 0,
+        env: HashMap::new(),
+    });
+
+    let preview = engine.preview_post_tool_use(&PostToolUseRequest {
+        session_id: ThreadId::new(),
+        turn_id: "turn-1".to_string(),
+        subagent: None,
+        cwd: cwd(),
+        transcript_path: None,
+        model: "gpt-test".to_string(),
+        permission_mode: "default".to_string(),
+        tool_name: "Bash".to_string(),
+        matcher_aliases: Vec::new(),
+        tool_use_id: "tool-call-456".to_string(),
+        tool_input: serde_json::json!({ "command": "echo hello" }),
+        tool_response: serde_json::json!({ "output": "hello" }),
+    });
+
+    assert_eq!(preview.len(), 1);
+    assert_eq!(
+        preview[0].id,
+        format!("post-tool-use:0:{}:tool-call-456", source_path.display())
+    );
 }
 
 fn managed_hooks_for_current_platform(
@@ -1272,6 +1312,7 @@ print(json.dumps({
         .await;
 
     assert_eq!(outcome.hook_events.len(), 1);
+    assert_eq!(outcome.hook_events[0].run.id, preview[0].id);
     assert_eq!(outcome.hook_events[0].run.source, HookSource::Plugin);
     assert_eq!(
         outcome.hook_events[0].run.status,
@@ -1415,7 +1456,8 @@ async fn reconfiguration_preserves_pending_async_output() {
     assert_eq!(outcome.hook_events, Vec::new());
     assert_eq!(outcome.additional_contexts.len(), 1);
     assert!(outcome.additional_contexts[0].contains("queued context"));
-    assert!(reconfigured.async_runtime.prepare_batch().is_none());
+    let boundary = reconfigured.async_runtime.ready_boundary();
+    assert!(reconfigured.async_runtime.flush_through(boundary).is_none());
 }
 
 #[tokio::test]
@@ -1444,11 +1486,11 @@ async fn blocked_prompt_preserves_pending_async_output() {
 
     let blocked = engine.run_user_prompt_submit(request.clone()).await;
     assert!(blocked.should_stop);
-    assert!(engine.async_runtime.prepare_batch().is_some());
 
     engine.handlers.clear();
     let accepted = engine.run_user_prompt_submit(request).await;
     assert!(!accepted.should_stop);
     assert!(accepted.additional_contexts[0].contains("queued context"));
-    assert!(engine.async_runtime.prepare_batch().is_none());
+    let boundary = engine.async_runtime.ready_boundary();
+    assert!(engine.async_runtime.flush_through(boundary).is_none());
 }

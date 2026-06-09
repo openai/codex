@@ -78,22 +78,31 @@ fn async_output_surfaces_parse_and_runtime_failures() {
 }
 
 #[test]
-fn queue_preserves_duplicate_completions_until_commit() {
+fn queue_preserves_duplicate_completions_and_holds_arrivals_after_boundary() {
     let runtime = AsyncCommandRuntime::default();
     runtime.push(HookEventName::PreToolUse, "same".to_string());
     runtime.push(HookEventName::PostToolUse, "same".to_string());
     runtime.push(HookEventName::Stop, "last".to_string());
 
-    let batch = runtime.prepare_batch().expect("queued output batch");
-    assert_eq!(runtime.prepare_batch(), Some(batch.clone()));
-    let text = runtime.commit(batch);
+    let boundary = runtime.ready_boundary();
+    runtime.push(HookEventName::SessionStart, "next-turn".to_string());
+
+    let text = runtime
+        .flush_through(boundary)
+        .expect("queued async output");
     assert_eq!(text.matches("same").count(), 2);
     assert!(
         ["PreToolUse", "PostToolUse", "last"]
             .map(|needle| text.find(needle).expect("queued output"))
             .is_sorted()
     );
-    assert!(runtime.prepare_batch().is_none());
+    assert!(!text.contains("next-turn"));
+
+    let text = runtime
+        .flush_through(runtime.ready_boundary())
+        .expect("completion after boundary");
+    assert!(text.contains("next-turn"));
+    assert!(runtime.flush_through(runtime.ready_boundary()).is_none());
 }
 
 #[test]
@@ -114,9 +123,10 @@ fn queue_bounds_items_and_flushes_a_contiguous_prefix() {
 
     let mut completed = 0;
     loop {
-        let batch = runtime.prepare_batch().expect("bounded output batch");
-        completed += batch.completion_count;
-        let text = runtime.commit(batch);
+        let text = runtime
+            .flush_through(runtime.ready_boundary())
+            .expect("bounded async output");
+        completed += text.matches("<async_hook_output event=").count();
         assert!(approx_token_count(&text) <= ASYNC_HOOK_FLUSH_TOKEN_LIMIT);
         if let Some(tail) = text.find("small-tail") {
             if let Some(large) = text.find("tokens truncated") {
@@ -126,7 +136,7 @@ fn queue_bounds_items_and_flushes_a_contiguous_prefix() {
             break;
         }
     }
-    assert!(runtime.prepare_batch().is_none());
+    assert!(runtime.flush_through(runtime.ready_boundary()).is_none());
 }
 
 #[tokio::test]

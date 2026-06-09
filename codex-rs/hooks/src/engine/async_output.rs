@@ -6,6 +6,7 @@ use std::sync::MutexGuard;
 
 use codex_protocol::protocol::HookEventName;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_output_truncation::truncate_text;
@@ -46,15 +47,13 @@ struct AsyncCommandState {
     tasks: TaskTracker,
 }
 
-/// A rendered snapshot of the oldest deliverable completions in the queue.
+/// Single-use marker for the completions ready before a real user turn began.
 ///
-/// Preparing a batch does not consume it. The caller commits it only after the
-/// synchronous `UserPromptSubmit` lane accepts the turn, so a blocked prompt
-/// cannot lose completed async output.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AsyncOutputBatch {
+/// Delivery is single-consumer, and producers only append between capturing and
+/// flushing a boundary. Therefore the marked prefix cannot move or shrink.
+#[derive(Debug)]
+pub(super) struct AsyncOutputBoundary {
     completion_count: usize,
-    text: String,
 }
 
 impl AsyncCommandRuntime {
@@ -122,36 +121,66 @@ impl AsyncCommandRuntime {
             .push_back(AsyncCommandCompletion { event_name, text });
     }
 
-    /// Prepares the oldest contiguous queue prefix that fits the per-turn flush budget.
-    ///
-    /// The selected completions remain queued until [`Self::commit`] is called.
-    /// Later completions stay in FIFO order for a subsequent real user turn.
-    pub(crate) fn prepare_batch(&self) -> Option<AsyncOutputBatch> {
-        let pending = self.lock_pending();
-        let mut selected = Vec::new();
-        for completion in pending.iter() {
-            selected.push(completion.clone());
-            // Measure the fully rendered developer injection so wrapper overhead
-            // counts toward the flush budget. The first item that does not fit,
-            // and every item after it, remains queued.
-            let text = render_batch(&selected);
-            if approx_token_count(&text) > ASYNC_HOOK_FLUSH_TOKEN_LIMIT {
-                selected.pop();
-                break;
-            }
+    /// Captures the queue boundary before the current user turn can spawn more hooks.
+    pub(super) fn ready_boundary(&self) -> AsyncOutputBoundary {
+        AsyncOutputBoundary {
+            completion_count: self.lock_pending().len(),
         }
-        (!selected.is_empty()).then(|| AsyncOutputBatch {
-            completion_count: selected.len(),
-            text: render_batch(&selected),
-        })
     }
 
-    /// Consumes a prepared prefix and returns its merged developer-context payload.
-    pub(crate) fn commit(&self, batch: AsyncOutputBatch) -> String {
-        // Producers only append, so completions arriving after preparation cannot
-        // disturb the prefix identified by `completion_count`.
-        self.lock_pending().drain(..batch.completion_count);
-        batch.text
+    /// Flushes the bounded FIFO prefix that was ready at `boundary`.
+    ///
+    /// Callers invoke this only after the real user turn is accepted. Completions
+    /// appended after the boundary, including hooks fired by the current turn,
+    /// remain queued for a later turn.
+    pub(super) fn flush_through(&self, boundary: AsyncOutputBoundary) -> Option<String> {
+        let mut pending = self.lock_pending();
+        debug_assert!(
+            boundary.completion_count <= pending.len(),
+            "async output can only be appended between boundary capture and flush"
+        );
+        // Keep release builds resilient if the single-consumer contract is ever
+        // violated rather than allowing an out-of-bounds prefix.
+        let eligible_count = boundary.completion_count.min(pending.len());
+        let max_bytes = approx_bytes_for_tokens(ASYNC_HOOK_FLUSH_TOKEN_LIMIT);
+        let closing_tag = "\n</async_hook_outputs>";
+        let mut completion_count = 0;
+        let mut text = String::from("<async_hook_outputs>\n");
+
+        for completion in pending.iter().take(eligible_count) {
+            let rendered = format!(
+                "<async_hook_output event=\"{:?}\">\n{}\n</async_hook_output>",
+                completion.event_name, completion.text
+            );
+            let separator_len = usize::from(completion_count > 0);
+
+            // Include the outer closing tag in the budget. The first completion
+            // that does not fit, and every completion after it, stays queued.
+            if text
+                .len()
+                .saturating_add(separator_len)
+                .saturating_add(rendered.len())
+                .saturating_add(closing_tag.len())
+                > max_bytes
+            {
+                break;
+            }
+            if completion_count > 0 {
+                text.push('\n');
+            }
+            text.push_str(&rendered);
+            completion_count += 1;
+        }
+
+        if completion_count == 0 {
+            return None;
+        }
+
+        text.push_str(closing_tag);
+        // Producers only append, so arrivals after the boundary cannot disturb
+        // the prefix selected above.
+        pending.drain(..completion_count);
+        Some(text)
     }
 
     /// Cancels in-flight handlers, closes the tracker for waiting, and joins its tasks.
@@ -168,21 +197,6 @@ impl AsyncCommandRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
-}
-
-/// Renders several completed firings as one ordered developer-context injection.
-fn render_batch(completions: &[AsyncCommandCompletion]) -> String {
-    let outputs = completions
-        .iter()
-        .map(|completion| {
-            format!(
-                "<async_hook_output event=\"{:?}\">\n{}\n</async_hook_output>",
-                completion.event_name, completion.text
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("<async_hook_outputs>\n{outputs}\n</async_hook_outputs>")
 }
 
 /// Converts a command result into informational text suitable for later delivery.

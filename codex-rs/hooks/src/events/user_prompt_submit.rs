@@ -10,9 +10,8 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
-use crate::engine::CommandShell;
+use crate::engine::ClaudeHooksEngine;
 use crate::engine::ConfiguredHandler;
-use crate::engine::async_output::AsyncCommandRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -48,41 +47,18 @@ struct UserPromptSubmitHandlerData {
 }
 
 pub(crate) fn preview(
-    handlers: &[ConfiguredHandler],
+    engine: &ClaudeHooksEngine,
     _request: &UserPromptSubmitRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_sync_handlers(
-        handlers,
-        HookEventName::UserPromptSubmit,
-        /*matcher_input*/ None,
-    )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
+    engine.preview_commands(HookEventName::UserPromptSubmit, &[])
 }
 
 pub(crate) async fn run(
-    handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
-    async_runtime: &AsyncCommandRuntime,
+    engine: &ClaudeHooksEngine,
     request: UserPromptSubmitRequest,
 ) -> UserPromptSubmitOutcome {
-    let matched = dispatcher::select_handlers(
-        handlers,
-        HookEventName::UserPromptSubmit,
-        /*matcher_input*/ None,
-    );
-    if matched.is_empty() {
-        return UserPromptSubmitOutcome {
-            hook_events: Vec::new(),
-            should_stop: false,
-            stop_reason: None,
-            additional_contexts: Vec::new(),
-        };
-    }
-
     let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
-    let input_json = serde_json::to_string(&UserPromptSubmitCommandInput {
+    let input = UserPromptSubmitCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
         agent_id: subagent.agent_id,
@@ -93,19 +69,18 @@ pub(crate) async fn run(
         model: request.model.clone(),
         permission_mode: request.permission_mode.clone(),
         prompt: request.prompt.clone(),
-    })
-    .map_err(|error| format!("failed to serialize user prompt submit hook input: {error}"));
+    };
 
-    let results = dispatcher::execute_handlers(
-        shell,
-        async_runtime,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
-        parse_completed,
-    )
-    .await;
+    let results = engine
+        .execute_commands(
+            HookEventName::UserPromptSubmit,
+            &[],
+            &input,
+            request.cwd.as_path(),
+            Some(request.turn_id),
+            parse_completed,
+        )
+        .await;
 
     let should_stop = results.iter().any(|result| result.data.should_stop);
     let stop_reason = results

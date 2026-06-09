@@ -10,9 +10,8 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
-use crate::engine::CommandShell;
+use crate::engine::ClaudeHooksEngine;
 use crate::engine::ConfiguredHandler;
-use crate::engine::async_output::AsyncCommandRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -93,53 +92,41 @@ struct SessionStartHandlerData {
 }
 
 pub(crate) fn preview(
-    handlers: &[ConfiguredHandler],
+    engine: &ClaudeHooksEngine,
     request: &SessionStartRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_sync_handlers(
-        handlers,
+    engine.preview_commands(
         request.target.event_name(),
-        Some(request.target.matcher_input()),
+        &[request.target.matcher_input()],
     )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
 }
 
 pub(crate) async fn run(
-    handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
-    async_runtime: &AsyncCommandRuntime,
+    engine: &ClaudeHooksEngine,
     request: SessionStartRequest,
     turn_id: Option<String>,
 ) -> SessionStartOutcome {
-    let matched = dispatcher::select_handlers(
-        handlers,
-        request.target.event_name(),
-        Some(request.target.matcher_input()),
-    );
-    if matched.is_empty() {
-        return SessionStartOutcome {
-            hook_events: Vec::new(),
-            should_stop: false,
-            stop_reason: None,
-            additional_contexts: Vec::new(),
-        };
-    }
-
-    let (input_json, turn_id) = match request.target {
-        StartHookTarget::SessionStart { source } => (
-            serde_json::to_string(&SessionStartCommandInput::new(
+    let results = match request.target {
+        StartHookTarget::SessionStart { source } => {
+            let input = SessionStartCommandInput::new(
                 request.session_id.to_string(),
                 request.transcript_path.clone(),
                 request.cwd.display().to_string(),
                 request.model.clone(),
                 request.permission_mode.clone(),
                 source.as_str().to_string(),
-            ))
-            .map_err(|error| format!("failed to serialize session start hook input: {error}")),
-            turn_id,
-        ),
+            );
+            engine
+                .execute_commands(
+                    HookEventName::SessionStart,
+                    &[source.as_str()],
+                    &input,
+                    request.cwd.as_path(),
+                    turn_id,
+                    parse_completed,
+                )
+                .await
+        }
         StartHookTarget::SubagentStart {
             turn_id: subagent_turn_id,
             agent_id,
@@ -156,22 +143,18 @@ pub(crate) async fn run(
                 agent_id,
                 agent_type,
             };
-            let input_json = serde_json::to_string(&input)
-                .map_err(|error| format!("failed to serialize subagent start hook input: {error}"));
-            (input_json, Some(subagent_turn_id))
+            engine
+                .execute_commands(
+                    HookEventName::SubagentStart,
+                    &[input.agent_type.as_str()],
+                    &input,
+                    request.cwd.as_path(),
+                    Some(subagent_turn_id),
+                    parse_completed,
+                )
+                .await
         }
     };
-
-    let results = dispatcher::execute_handlers(
-        shell,
-        async_runtime,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        turn_id,
-        parse_completed,
-    )
-    .await;
 
     let should_stop = results.iter().any(|result| result.data.should_stop);
     let stop_reason = results

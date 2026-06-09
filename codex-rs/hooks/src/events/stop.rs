@@ -11,9 +11,8 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
-use crate::engine::CommandShell;
+use crate::engine::ClaudeHooksEngine;
 use crate::engine::ConfiguredHandler;
-use crate::engine::async_output::AsyncCommandRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -79,43 +78,13 @@ struct StopHandlerData {
     continuation_fragments: Vec<HookPromptFragment>,
 }
 
-pub(crate) fn preview(
-    handlers: &[ConfiguredHandler],
-    request: &StopRequest,
-) -> Vec<HookRunSummary> {
-    dispatcher::select_sync_handlers(
-        handlers,
-        request.target.event_name(),
-        request.target.matcher_input(),
-    )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
+pub(crate) fn preview(engine: &ClaudeHooksEngine, request: &StopRequest) -> Vec<HookRunSummary> {
+    let matcher_input = request.target.matcher_input();
+    engine.preview_commands(request.target.event_name(), matcher_input.as_slice())
 }
 
-pub(crate) async fn run(
-    handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
-    async_runtime: &AsyncCommandRuntime,
-    request: StopRequest,
-) -> StopOutcome {
-    let matched = dispatcher::select_handlers(
-        handlers,
-        request.target.event_name(),
-        request.target.matcher_input(),
-    );
-    if matched.is_empty() {
-        return StopOutcome {
-            hook_events: Vec::new(),
-            should_stop: false,
-            stop_reason: None,
-            should_block: false,
-            block_reason: None,
-            continuation_fragments: Vec::new(),
-        };
-    }
-
-    let input_json = match request.target {
+pub(crate) async fn run(engine: &ClaudeHooksEngine, request: StopRequest) -> StopOutcome {
+    let results = match request.target {
         StopHookTarget::Stop => {
             let input = StopCommandInput {
                 session_id: request.session_id.to_string(),
@@ -130,8 +99,16 @@ pub(crate) async fn run(
                     request.last_assistant_message.clone(),
                 ),
             };
-            serde_json::to_string(&input)
-                .map_err(|error| format!("failed to serialize stop hook input: {error}"))
+            engine
+                .execute_commands(
+                    HookEventName::Stop,
+                    &[],
+                    &input,
+                    request.cwd.as_path(),
+                    Some(request.turn_id),
+                    parse_completed,
+                )
+                .await
         }
         StopHookTarget::SubagentStop {
             agent_id,
@@ -154,21 +131,18 @@ pub(crate) async fn run(
                     request.last_assistant_message.clone(),
                 ),
             };
-            serde_json::to_string(&input)
-                .map_err(|error| format!("failed to serialize subagent stop hook input: {error}"))
+            engine
+                .execute_commands(
+                    HookEventName::SubagentStop,
+                    &[input.agent_type.as_str()],
+                    &input,
+                    request.cwd.as_path(),
+                    Some(request.turn_id),
+                    parse_completed,
+                )
+                .await
         }
     };
-
-    let results = dispatcher::execute_handlers(
-        shell,
-        async_runtime,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
-        parse_completed,
-    )
-    .await;
 
     let aggregate = aggregate_results(results.iter().map(|result| &result.data));
 

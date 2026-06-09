@@ -11,9 +11,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 
 use super::common;
-use crate::engine::CommandShell;
+use crate::engine::ClaudeHooksEngine;
 use crate::engine::ConfiguredHandler;
-use crate::engine::async_output::AsyncCommandRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -53,57 +52,33 @@ struct PreToolUseHandlerData {
 }
 
 pub(crate) fn preview(
-    handlers: &[ConfiguredHandler],
+    engine: &ClaudeHooksEngine,
     request: &PreToolUseRequest,
 ) -> Vec<HookRunSummary> {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
-    dispatcher::select_sync_handlers_for_matcher_inputs(
-        handlers,
-        HookEventName::PreToolUse,
-        &matcher_inputs,
-    )
-    .into_iter()
-    .map(|handler| {
-        common::hook_run_for_tool_use(dispatcher::running_summary(&handler), &request.tool_use_id)
-    })
-    .collect()
+    engine
+        .preview_commands(HookEventName::PreToolUse, &matcher_inputs)
+        .into_iter()
+        .map(|run| common::hook_run_for_tool_use(run, &request.tool_use_id))
+        .collect()
 }
 
 pub(crate) async fn run(
-    handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
-    async_runtime: &AsyncCommandRuntime,
+    engine: &ClaudeHooksEngine,
     request: PreToolUseRequest,
 ) -> PreToolUseOutcome {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
-    let matched = dispatcher::select_handlers_for_matcher_inputs(
-        handlers,
-        HookEventName::PreToolUse,
-        &matcher_inputs,
-    );
-    if matched.is_empty() {
-        return PreToolUseOutcome {
-            hook_events: Vec::new(),
-            should_block: false,
-            block_reason: None,
-            additional_contexts: Vec::new(),
-            updated_input: None,
-        };
-    }
-
-    let input_json = command_input_json(&request)
-        .map_err(|error| format!("failed to serialize pre tool use hook input: {error}"));
-
-    let results = dispatcher::execute_handlers(
-        shell,
-        async_runtime,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id.clone()),
-        parse_completed,
-    )
-    .await;
+    let input = command_input(&request);
+    let results = engine
+        .execute_commands(
+            HookEventName::PreToolUse,
+            &matcher_inputs,
+            &input,
+            request.cwd.as_path(),
+            Some(request.turn_id.clone()),
+            parse_completed,
+        )
+        .await;
 
     let should_block = results.iter().any(|result| result.data.should_block);
     let block_reason = results
@@ -154,15 +129,15 @@ fn latest_updated_input(
         .map(|(_, updated_input)| updated_input)
 }
 
-/// Serializes command stdin for a selected `PreToolUse` hook.
+/// Builds command stdin for a selected `PreToolUse` hook.
 ///
 /// Handler selection may include internal matcher aliases, but hook stdin keeps
 /// the canonical `tool_name` so audit logs and downstream policy decisions stay
 /// stable. Shell-like tools pass `{ "command": ... }` as `tool_input`; MCP
 /// tools pass their resolved JSON arguments.
-fn command_input_json(request: &PreToolUseRequest) -> Result<String, serde_json::Error> {
+fn command_input(request: &PreToolUseRequest) -> PreToolUseCommandInput {
     let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
-    serde_json::to_string(&PreToolUseCommandInput {
+    PreToolUseCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
         agent_id: subagent.agent_id,
@@ -175,7 +150,7 @@ fn command_input_json(request: &PreToolUseRequest) -> Result<String, serde_json:
         tool_name: request.tool_name.clone(),
         tool_input: request.tool_input.clone(),
         tool_use_id: request.tool_use_id.clone(),
-    })
+    }
 }
 
 fn parse_completed(
@@ -307,10 +282,9 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::PreToolUseHandlerData;
-    use super::command_input_json;
+    use super::command_input;
     use super::latest_updated_input;
     use super::parse_completed;
-    use super::preview;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
     use crate::events::common;
@@ -320,9 +294,7 @@ mod tests {
         let mut request = request_for_tool_use("call-apply-patch");
         request.tool_name = "apply_patch".to_string();
 
-        let input_json = command_input_json(&request).expect("serialize command input");
-        let input: serde_json::Value =
-            serde_json::from_str(&input_json).expect("parse command input");
+        let input = serde_json::to_value(command_input(&request)).expect("serialize command input");
 
         assert_eq!(input["tool_name"], "apply_patch");
     }
@@ -682,19 +654,8 @@ mod tests {
     }
 
     #[test]
-    fn preview_and_completed_run_ids_include_tool_use_id() {
+    fn completed_run_id_includes_tool_use_id() {
         let request = request_for_tool_use("tool-call-123");
-        let runs = preview(&[handler()], &request);
-
-        assert_eq!(runs.len(), 1);
-        assert_eq!(
-            runs[0].id,
-            format!(
-                "pre-tool-use:0:{}:tool-call-123",
-                test_path_buf("/tmp/hooks.json").display()
-            )
-        );
-
         let parsed = parse_completed(
             &handler(),
             run_result(Some(0), "", ""),
@@ -702,7 +663,13 @@ mod tests {
         );
         let completed = common::hook_completed_for_tool_use(parsed.completed, &request.tool_use_id);
 
-        assert_eq!(completed.run.id, runs[0].id);
+        assert_eq!(
+            completed.run.id,
+            format!(
+                "pre-tool-use:0:{}:tool-call-123",
+                test_path_buf("/tmp/hooks.json").display()
+            )
+        );
     }
 
     fn handler() -> ConfiguredHandler {

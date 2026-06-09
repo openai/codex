@@ -196,25 +196,25 @@ impl ClaudeHooksEngine {
         &self,
         request: &SessionStartRequest,
     ) -> Vec<HookRunSummary> {
-        crate::events::session_start::preview(&self.handlers, request)
+        crate::events::session_start::preview(self, request)
     }
 
     pub(crate) fn preview_pre_tool_use(&self, request: &PreToolUseRequest) -> Vec<HookRunSummary> {
-        crate::events::pre_tool_use::preview(&self.handlers, request)
+        crate::events::pre_tool_use::preview(self, request)
     }
 
     pub(crate) fn preview_permission_request(
         &self,
         request: &PermissionRequestRequest,
     ) -> Vec<HookRunSummary> {
-        crate::events::permission_request::preview(&self.handlers, request)
+        crate::events::permission_request::preview(self, request)
     }
 
     pub(crate) fn preview_post_tool_use(
         &self,
         request: &PostToolUseRequest,
     ) -> Vec<HookRunSummary> {
-        crate::events::post_tool_use::preview(&self.handlers, request)
+        crate::events::post_tool_use::preview(self, request)
     }
 
     pub(crate) async fn run_session_start(
@@ -223,14 +223,7 @@ impl ClaudeHooksEngine {
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         let session_id = request.session_id;
-        let mut outcome = crate::events::session_start::run(
-            &self.handlers,
-            &self.shell,
-            &self.async_runtime,
-            request,
-            turn_id,
-        )
-        .await;
+        let mut outcome = crate::events::session_start::run(self, request, turn_id).await;
         outcome.additional_contexts = self
             .maybe_spill_texts(session_id, outcome.additional_contexts)
             .await;
@@ -239,13 +232,7 @@ impl ClaudeHooksEngine {
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
         let session_id = request.session_id;
-        let mut outcome = crate::events::pre_tool_use::run(
-            &self.handlers,
-            &self.shell,
-            &self.async_runtime,
-            request,
-        )
-        .await;
+        let mut outcome = crate::events::pre_tool_use::run(self, request).await;
         outcome.additional_contexts = self
             .maybe_spill_texts(session_id, outcome.additional_contexts)
             .await;
@@ -256,13 +243,7 @@ impl ClaudeHooksEngine {
         &self,
         request: PermissionRequestRequest,
     ) -> PermissionRequestOutcome {
-        crate::events::permission_request::run(
-            &self.handlers,
-            &self.shell,
-            &self.async_runtime,
-            request,
-        )
-        .await
+        crate::events::permission_request::run(self, request).await
     }
 
     pub(crate) async fn run_post_tool_use(
@@ -270,13 +251,7 @@ impl ClaudeHooksEngine {
         request: PostToolUseRequest,
     ) -> PostToolUseOutcome {
         let session_id = request.session_id;
-        let mut outcome = crate::events::post_tool_use::run(
-            &self.handlers,
-            &self.shell,
-            &self.async_runtime,
-            request,
-        )
-        .await;
+        let mut outcome = crate::events::post_tool_use::run(self, request).await;
         outcome.additional_contexts = self
             .maybe_spill_texts(session_id, outcome.additional_contexts)
             .await;
@@ -287,31 +262,29 @@ impl ClaudeHooksEngine {
     }
 
     pub(crate) fn preview_pre_compact(&self, request: &PreCompactRequest) -> Vec<HookRunSummary> {
-        crate::events::compact::preview_pre(&self.handlers, request)
+        crate::events::compact::preview_pre(self, request)
     }
 
     pub(crate) async fn run_pre_compact(&self, request: PreCompactRequest) -> PreCompactOutcome {
-        crate::events::compact::run_pre(&self.handlers, &self.shell, &self.async_runtime, request)
-            .await
+        crate::events::compact::run_pre(self, request).await
     }
 
     pub(crate) fn preview_post_compact(&self, request: &PostCompactRequest) -> Vec<HookRunSummary> {
-        crate::events::compact::preview_post(&self.handlers, request)
+        crate::events::compact::preview_post(self, request)
     }
 
     pub(crate) async fn run_post_compact(
         &self,
         request: PostCompactRequest,
     ) -> StatelessHookOutcome {
-        crate::events::compact::run_post(&self.handlers, &self.shell, &self.async_runtime, request)
-            .await
+        crate::events::compact::run_post(self, request).await
     }
 
     pub(crate) fn preview_user_prompt_submit(
         &self,
         request: &UserPromptSubmitRequest,
     ) -> Vec<HookRunSummary> {
-        crate::events::user_prompt_submit::preview(&self.handlers, request)
+        crate::events::user_prompt_submit::preview(self, request)
     }
 
     pub(crate) async fn run_user_prompt_submit(
@@ -319,35 +292,26 @@ impl ClaudeHooksEngine {
         request: UserPromptSubmitRequest,
     ) -> UserPromptSubmitOutcome {
         let session_id = request.session_id;
-        let async_output_batch = self.async_runtime.prepare_batch();
-        let mut outcome = crate::events::user_prompt_submit::run(
-            &self.handlers,
-            &self.shell,
-            &self.async_runtime,
-            request,
-        )
-        .await;
+        let async_output_boundary = self.async_runtime.ready_boundary();
+        let mut outcome = crate::events::user_prompt_submit::run(self, request).await;
         outcome.additional_contexts = self
             .maybe_spill_texts(session_id, outcome.additional_contexts)
             .await;
         if !outcome.should_stop
-            && let Some(batch) = async_output_batch
+            && let Some(text) = self.async_runtime.flush_through(async_output_boundary)
         {
-            let text = self.async_runtime.commit(batch);
             outcome.additional_contexts.insert(0, text);
         }
         outcome
     }
 
     pub(crate) fn preview_stop(&self, request: &StopRequest) -> Vec<HookRunSummary> {
-        crate::events::stop::preview(&self.handlers, request)
+        crate::events::stop::preview(self, request)
     }
 
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         let session_id = request.session_id;
-        let mut outcome =
-            crate::events::stop::run(&self.handlers, &self.shell, &self.async_runtime, request)
-                .await;
+        let mut outcome = crate::events::stop::run(self, request).await;
         outcome.continuation_fragments = self
             .maybe_spill_prompt_fragments(session_id, outcome.continuation_fragments)
             .await;

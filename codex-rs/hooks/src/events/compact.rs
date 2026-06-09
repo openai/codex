@@ -10,9 +10,8 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
-use crate::engine::CommandShell;
+use crate::engine::ClaudeHooksEngine;
 use crate::engine::ConfiguredHandler;
-use crate::engine::async_output::AsyncCommandRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -57,51 +56,27 @@ pub struct PreCompactOutcome {
 }
 
 pub(crate) fn preview_pre(
-    handlers: &[ConfiguredHandler],
+    engine: &ClaudeHooksEngine,
     request: &PreCompactRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_sync_handlers(
-        handlers,
-        HookEventName::PreCompact,
-        Some(request.trigger.as_str()),
-    )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
+    engine.preview_commands(HookEventName::PreCompact, &[request.trigger.as_str()])
 }
 
 pub(crate) async fn run_pre(
-    handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
-    async_runtime: &AsyncCommandRuntime,
+    engine: &ClaudeHooksEngine,
     request: PreCompactRequest,
 ) -> PreCompactOutcome {
-    let matched = dispatcher::select_handlers(
-        handlers,
-        HookEventName::PreCompact,
-        Some(request.trigger.as_str()),
-    );
-    if matched.is_empty() {
-        return PreCompactOutcome {
-            hook_events: Vec::new(),
-            should_stop: false,
-            stop_reason: None,
-        };
-    }
-
-    let input_json = pre_command_input_json(&request)
-        .map_err(|error| format!("failed to serialize pre compact hook input: {error}"));
-
-    let results = dispatcher::execute_handlers(
-        shell,
-        async_runtime,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
-        parse_pre_completed,
-    )
-    .await;
+    let input = pre_command_input(&request);
+    let results = engine
+        .execute_commands(
+            HookEventName::PreCompact,
+            &[request.trigger.as_str()],
+            &input,
+            request.cwd.as_path(),
+            Some(request.turn_id),
+            parse_pre_completed,
+        )
+        .await;
     let should_stop = results.iter().any(|result| result.data.should_stop);
     let stop_reason = results
         .iter()
@@ -113,9 +88,9 @@ pub(crate) async fn run_pre(
     }
 }
 
-fn pre_command_input_json(request: &PreCompactRequest) -> Result<String, serde_json::Error> {
+fn pre_command_input(request: &PreCompactRequest) -> PreCompactCommandInput {
     let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
-    serde_json::to_string(&PreCompactCommandInput {
+    PreCompactCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
         agent_id: subagent.agent_id,
@@ -125,55 +100,31 @@ fn pre_command_input_json(request: &PreCompactRequest) -> Result<String, serde_j
         hook_event_name: "PreCompact".to_string(),
         model: request.model.clone(),
         trigger: request.trigger.clone(),
-    })
+    }
 }
 
 pub(crate) fn preview_post(
-    handlers: &[ConfiguredHandler],
+    engine: &ClaudeHooksEngine,
     request: &PostCompactRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_sync_handlers(
-        handlers,
-        HookEventName::PostCompact,
-        Some(request.trigger.as_str()),
-    )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
+    engine.preview_commands(HookEventName::PostCompact, &[request.trigger.as_str()])
 }
 
 pub(crate) async fn run_post(
-    handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
-    async_runtime: &AsyncCommandRuntime,
+    engine: &ClaudeHooksEngine,
     request: PostCompactRequest,
 ) -> StatelessHookOutcome {
-    let matched = dispatcher::select_handlers(
-        handlers,
-        HookEventName::PostCompact,
-        Some(request.trigger.as_str()),
-    );
-    if matched.is_empty() {
-        return StatelessHookOutcome {
-            hook_events: Vec::new(),
-            should_stop: false,
-            stop_reason: None,
-        };
-    }
-
-    let input_json = post_command_input_json(&request)
-        .map_err(|error| format!("failed to serialize post compact hook input: {error}"));
-
-    let results = dispatcher::execute_handlers(
-        shell,
-        async_runtime,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
-        parse_post_completed,
-    )
-    .await;
+    let input = post_command_input(&request);
+    let results = engine
+        .execute_commands(
+            HookEventName::PostCompact,
+            &[request.trigger.as_str()],
+            &input,
+            request.cwd.as_path(),
+            Some(request.turn_id),
+            parse_post_completed,
+        )
+        .await;
     let should_stop = results.iter().any(|result| result.data.should_stop);
     let stop_reason = results
         .iter()
@@ -185,9 +136,9 @@ pub(crate) async fn run_post(
     }
 }
 
-fn post_command_input_json(request: &PostCompactRequest) -> Result<String, serde_json::Error> {
+fn post_command_input(request: &PostCompactRequest) -> PostCompactCommandInput {
     let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
-    serde_json::to_string(&PostCompactCommandInput {
+    PostCompactCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
         agent_id: subagent.agent_id,
@@ -197,7 +148,7 @@ fn post_command_input_json(request: &PostCompactRequest) -> Result<String, serde
         hook_event_name: "PostCompact".to_string(),
         model: request.model.clone(),
         trigger: request.trigger.clone(),
-    })
+    }
 }
 
 #[derive(Default)]
@@ -410,16 +361,15 @@ mod tests {
 
     use super::parse_post_completed;
     use super::parse_pre_completed;
-    use super::post_command_input_json;
-    use super::pre_command_input_json;
+    use super::post_command_input;
+    use super::pre_command_input;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
 
     #[test]
     fn pre_compact_input_includes_lifecycle_metadata() {
-        let input_json = pre_command_input_json(&pre_request()).expect("serialize command input");
-        let input: serde_json::Value =
-            serde_json::from_str(&input_json).expect("parse command input");
+        let input = serde_json::to_value(pre_command_input(&pre_request()))
+            .expect("serialize command input");
 
         assert_eq!(
             input,
@@ -437,9 +387,8 @@ mod tests {
 
     #[test]
     fn post_compact_input_includes_lifecycle_metadata() {
-        let input_json = post_command_input_json(&post_request()).expect("serialize command input");
-        let input: serde_json::Value =
-            serde_json::from_str(&input_json).expect("parse command input");
+        let input = serde_json::to_value(post_command_input(&post_request()))
+            .expect("serialize command input");
 
         assert_eq!(
             input,
