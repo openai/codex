@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use tokio::io;
 
@@ -218,8 +217,8 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn copy(
         &self,
-        source_path: &AbsolutePathBuf,
-        destination_path: &AbsolutePathBuf,
+        source_path: &PathUri,
+        destination_path: &PathUri,
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -227,8 +226,8 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Copy(FsCopyParams {
-                source_path: source_path.clone(),
-                destination_path: destination_path.clone(),
+                source_path: source_path.to_abs_path()?,
+                destination_path: destination_path.to_abs_path()?,
                 recursive: options.recursive,
                 sandbox: None,
             }),

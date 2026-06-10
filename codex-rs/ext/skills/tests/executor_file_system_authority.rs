@@ -143,8 +143,8 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn copy(
         &self,
-        _source_path: &AbsolutePathBuf,
-        _destination_path: &AbsolutePathBuf,
+        _source_path: &PathUri,
+        _destination_path: &PathUri,
         _options: CopyOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {

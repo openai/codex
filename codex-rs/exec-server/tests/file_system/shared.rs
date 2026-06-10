@@ -212,8 +212,8 @@ async fn file_system_copy_copies_file(implementation: FileSystemImplementation) 
 
     file_system
         .copy(
-            &absolute_path(&source_file),
-            &absolute_path(&copied_file),
+            &PathUri::from_path(&source_file)?,
+            &PathUri::from_path(&copied_file)?,
             CopyOptions { recursive: false },
             /*sandbox*/ None,
         )
@@ -243,8 +243,8 @@ async fn file_system_copy_copies_directory_recursively(
 
     file_system
         .copy(
-            &absolute_path(&source_dir),
-            &absolute_path(&copied_dir),
+            &PathUri::from_path(&source_dir)?,
+            &PathUri::from_path(&copied_dir)?,
             CopyOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -373,8 +373,8 @@ async fn file_system_copy_rejects_directory_without_recursive(
 
     let error = file_system
         .copy(
-            &absolute_path(&source_dir),
-            &absolute_path(tmp.path().join("dest")),
+            &PathUri::from_path(&source_dir)?,
+            &PathUri::from_path(tmp.path().join("dest"))?,
             CopyOptions { recursive: false },
             /*sandbox*/ None,
         )
@@ -543,8 +543,8 @@ async fn file_system_copy_rejects_copying_directory_into_descendant(
 
     let error = file_system
         .copy(
-            &absolute_path(&source_dir),
-            &absolute_path(source_dir.join("nested").join("copy")),
+            &PathUri::from_path(&source_dir)?,
+            &PathUri::from_path(source_dir.join("nested").join("copy"))?,
             CopyOptions { recursive: true },
             /*sandbox*/ None,
         )

@@ -79,8 +79,8 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn copy(
         &self,
-        _source_path: &AbsolutePathBuf,
-        _destination_path: &AbsolutePathBuf,
+        _source_path: &PathUri,
+        _destination_path: &PathUri,
         _copy_options: CopyOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {

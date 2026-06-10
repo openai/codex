@@ -148,8 +148,8 @@ impl ExecutorFileSystem for LocalFileSystem {
 
     async fn copy(
         &self,
-        source_path: &AbsolutePathBuf,
-        destination_path: &AbsolutePathBuf,
+        source_path: &PathUri,
+        destination_path: &PathUri,
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -238,8 +238,8 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 
     async fn copy(
         &self,
-        source_path: &AbsolutePathBuf,
-        destination_path: &AbsolutePathBuf,
+        source_path: &PathUri,
+        destination_path: &PathUri,
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -382,14 +382,14 @@ impl ExecutorFileSystem for DirectFileSystem {
 
     async fn copy(
         &self,
-        source_path: &AbsolutePathBuf,
-        destination_path: &AbsolutePathBuf,
+        source_path: &PathUri,
+        destination_path: &PathUri,
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
-        let source_path = source_path.to_path_buf();
-        let destination_path = destination_path.to_path_buf();
+        let source_path = source_path.to_abs_path()?.into_path_buf();
+        let destination_path = destination_path.to_abs_path()?.into_path_buf();
         tokio::task::spawn_blocking(move || -> FileSystemResult<()> {
             let metadata = std::fs::symlink_metadata(source_path.as_path())?;
             let file_type = metadata.file_type();
@@ -550,6 +550,10 @@ fn system_time_to_unix_ms(time: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
+#[cfg(all(test, any(unix, windows)))]
+#[path = "local_file_system_path_uri_tests.rs"]
+mod path_uri_tests;
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -605,7 +609,3 @@ mod tests {
         Ok(())
     }
 }
-
-#[cfg(all(test, any(unix, windows)))]
-#[path = "local_file_system_path_uri_tests.rs"]
-mod path_uri_tests;

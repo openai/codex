@@ -191,10 +191,13 @@ impl FileSystemHandler {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
+        let source_path = PathUri::from_abs_path(&params.source_path).map_err(map_fs_error)?;
+        let destination_path =
+            PathUri::from_abs_path(&params.destination_path).map_err(map_fs_error)?;
         self.file_system
             .copy(
-                &params.source_path,
-                &params.destination_path,
+                &source_path,
+                &destination_path,
                 CopyOptions {
                     recursive: params.recursive,
                 },

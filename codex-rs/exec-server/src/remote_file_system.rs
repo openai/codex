@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use tokio::io;
 use tracing::trace;
@@ -195,17 +194,19 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn copy(
         &self,
-        source_path: &AbsolutePathBuf,
-        destination_path: &AbsolutePathBuf,
+        source_path: &PathUri,
+        destination_path: &PathUri,
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs copy");
+        let source_path = source_path.to_abs_path()?;
+        let destination_path = destination_path.to_abs_path()?;
         let client = self.client.get().await.map_err(map_remote_error)?;
         client
             .fs_copy(FsCopyParams {
-                source_path: source_path.clone(),
-                destination_path: destination_path.clone(),
+                source_path,
+                destination_path,
                 recursive: options.recursive,
                 sandbox: remote_sandbox_context(sandbox),
             })
@@ -239,6 +240,10 @@ fn map_remote_error(error: ExecServerError) -> io::Error {
     }
 }
 
+#[cfg(all(test, any(unix, windows)))]
+#[path = "remote_file_system_path_uri_tests.rs"]
+mod path_uri_tests;
+
 #[cfg(test)]
 mod tests {
     use codex_protocol::models::PermissionProfile;
@@ -248,6 +253,7 @@ mod tests {
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::permissions::NetworkSandboxPolicy;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -328,7 +334,3 @@ mod tests {
         AbsolutePathBuf::from_absolute_path(&path).expect("absolute path")
     }
 }
-
-#[cfg(all(test, any(unix, windows)))]
-#[path = "remote_file_system_path_uri_tests.rs"]
-mod path_uri_tests;

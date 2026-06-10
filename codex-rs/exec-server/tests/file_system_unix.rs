@@ -31,7 +31,6 @@ use test_case::test_case;
 use crate::common::exec_server::exec_server_with_env;
 
 use crate::support::FileSystemImplementation;
-use crate::support::absolute_path;
 use crate::support::create_file_system_context;
 use crate::support::read_only_sandbox;
 use crate::support::workspace_write_sandbox;
@@ -545,8 +544,8 @@ async fn file_system_copy_rejects_symlink_escape_destination(
     let sandbox = workspace_write_sandbox(allowed_dir.clone());
     let error = match file_system
         .copy(
-            &absolute_path(allowed_dir.join("source.txt")),
-            &absolute_path(&requested_destination),
+            &PathUri::from_path(allowed_dir.join("source.txt"))?,
+            &PathUri::from_path(&requested_destination)?,
             CopyOptions { recursive: false },
             Some(&sandbox),
         )
@@ -623,8 +622,8 @@ async fn file_system_copy_preserves_symlink_source(
     let sandbox = workspace_write_sandbox(allowed_dir.clone());
     file_system
         .copy(
-            &absolute_path(&source_symlink),
-            &absolute_path(&copied_symlink),
+            &PathUri::from_path(&source_symlink)?,
+            &PathUri::from_path(&copied_symlink)?,
             CopyOptions { recursive: false },
             Some(&sandbox),
         )
@@ -701,8 +700,8 @@ async fn file_system_copy_rejects_symlink_escape_source(
     let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
         .copy(
-            &absolute_path(&requested_source),
-            &absolute_path(&requested_destination),
+            &PathUri::from_path(&requested_source)?,
+            &PathUri::from_path(&requested_destination)?,
             CopyOptions { recursive: false },
             Some(&sandbox),
         )
@@ -735,8 +734,8 @@ async fn file_system_copy_preserves_symlinks_in_recursive_copy(
 
     file_system
         .copy(
-            &absolute_path(&source_dir),
-            &absolute_path(&copied_dir),
+            &PathUri::from_path(&source_dir)?,
+            &PathUri::from_path(&copied_dir)?,
             CopyOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -781,8 +780,8 @@ async fn file_system_copy_ignores_unknown_special_files_in_recursive_copy(
 
     file_system
         .copy(
-            &absolute_path(&source_dir),
-            &absolute_path(&copied_dir),
+            &PathUri::from_path(&source_dir)?,
+            &PathUri::from_path(&copied_dir)?,
             CopyOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -820,8 +819,8 @@ async fn file_system_copy_rejects_standalone_fifo_source(
 
     let error = file_system
         .copy(
-            &absolute_path(&fifo_path),
-            &absolute_path(tmp.path().join("copied")),
+            &PathUri::from_path(&fifo_path)?,
+            &PathUri::from_path(tmp.path().join("copied"))?,
             CopyOptions { recursive: false },
             /*sandbox*/ None,
         )
