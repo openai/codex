@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use super::manager::AuthManager;
 use super::storage::AuthDotJson;
-use super::storage::create_auth_storage;
+use codex_app_server_protocol::AuthMode;
 
 /// Managed Amazon Bedrock API key persisted in `auth.json`.
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -30,13 +30,19 @@ impl BedrockApiKeyAuthRecord {
     }
 }
 
-impl AuthDotJson {
-    pub(super) fn has_primary_auth(&self) -> bool {
-        self.auth_mode.is_some()
-            || self.openai_api_key.is_some()
-            || self.tokens.is_some()
-            || self.agent_identity.is_some()
-            || self.personal_access_token.is_some()
+/// Runtime authentication state for Amazon Bedrock bearer-token auth.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BedrockApiKeyAuth {
+    record: BedrockApiKeyAuthRecord,
+}
+
+impl BedrockApiKeyAuth {
+    pub fn load(record: BedrockApiKeyAuthRecord) -> Self {
+        Self { record }
+    }
+
+    pub fn api_key(&self) -> &str {
+        self.record.api_key()
     }
 }
 
@@ -52,44 +58,44 @@ impl AuthManager {
         self.bedrock_api_key_cached().is_some()
     }
 
-    pub fn save_bedrock_api_key(&self, record: BedrockApiKeyAuthRecord) -> io::Result<()> {
-        let storage = create_auth_storage(
-            self.codex_home_for_auth_storage(),
-            self.auth_credentials_store_mode(),
-        );
-        let mut auth = storage.load()?.unwrap_or_else(empty_auth_dot_json);
-        auth.bedrock_api_key = Some(record);
-        storage.save(&auth)
+    pub async fn save_bedrock_api_key(&self, record: BedrockApiKeyAuthRecord) -> io::Result<()> {
+        let storage = self.auth_storage();
+        storage.save(&bedrock_auth_dot_json(record))?;
+        self.reload().await;
+        Ok(())
     }
 
-    pub fn clear_bedrock_api_key(&self) -> io::Result<bool> {
-        let storage = create_auth_storage(
-            self.codex_home_for_auth_storage(),
-            self.auth_credentials_store_mode(),
-        );
-        let Some(mut auth) = storage.load()? else {
+    pub async fn clear_bedrock_api_key(&self) -> io::Result<bool> {
+        let storage = self.auth_storage();
+        let Some(auth) = storage.load()? else {
             return Ok(false);
         };
-        if auth.bedrock_api_key.take().is_none() {
+        if auth.resolved_mode() != AuthMode::BedrockApiKey {
             return Ok(false);
         }
-        if !auth.has_primary_auth() {
-            storage.delete()?;
-        } else {
-            storage.save(&auth)?;
-        }
-        Ok(true)
+        let removed = storage.delete()?;
+        self.reload().await;
+        Ok(removed)
+    }
+}
+
+pub(super) fn bedrock_auth_dot_json(record: BedrockApiKeyAuthRecord) -> AuthDotJson {
+    AuthDotJson {
+        auth_mode: Some(AuthMode::BedrockApiKey),
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: None,
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: Some(record),
     }
 }
 
 fn load_auth_dot_json(manager: &AuthManager) -> io::Result<Option<AuthDotJson>> {
-    create_auth_storage(
-        manager.codex_home_for_auth_storage(),
-        manager.auth_credentials_store_mode(),
-    )
-    .load()
+    manager.auth_storage().load()
 }
 
+#[cfg(test)]
 fn empty_auth_dot_json() -> AuthDotJson {
     AuthDotJson {
         auth_mode: None,

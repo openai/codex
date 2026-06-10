@@ -11,6 +11,7 @@ mod external_bearer;
 mod manager;
 mod revoke;
 
+pub use bedrock_api_key::BedrockApiKeyAuth;
 pub use bedrock_api_key::BedrockApiKeyAuthRecord;
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;

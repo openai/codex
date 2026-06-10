@@ -4,6 +4,7 @@ use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
 use super::*;
+use crate::auth::CodexAuth;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
@@ -32,7 +33,7 @@ fn bedrock_record() -> BedrockApiKeyAuthRecord {
 }
 
 #[tokio::test]
-async fn save_bedrock_api_key_preserves_openai_auth() -> anyhow::Result<()> {
+async fn save_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
     storage.save(&api_key_auth())?;
@@ -44,15 +45,25 @@ async fn save_bedrock_api_key_preserves_openai_auth() -> anyhow::Result<()> {
     )
     .await;
 
-    auth_manager.save_bedrock_api_key(bedrock_record())?;
+    auth_manager.save_bedrock_api_key(bedrock_record()).await?;
 
     let loaded = storage.load()?.expect("auth should be stored");
+    let expected = bedrock_auth_dot_json(BedrockApiKeyAuthRecord::try_new("bedrock-api-key-test")?);
+    assert_eq!(loaded, expected);
+    assert_eq!(auth_manager.auth_mode(), Some(AuthMode::BedrockApiKey));
     assert_eq!(
-        loaded,
-        AuthDotJson {
-            bedrock_api_key: Some(BedrockApiKeyAuthRecord::try_new("bedrock-api-key-test")?),
-            ..api_key_auth()
-        }
+        auth_manager
+            .auth_cached()
+            .and_then(|auth| match auth {
+                CodexAuth::BedrockApiKey(auth) => Some(auth.api_key().to_string()),
+                CodexAuth::ApiKey(_)
+                | CodexAuth::Chatgpt(_)
+                | CodexAuth::ChatgptAuthTokens(_)
+                | CodexAuth::AgentIdentity(_)
+                | CodexAuth::PersonalAccessToken(_) => None,
+            })
+            .as_deref(),
+        Some("bedrock-api-key-test")
     );
     assert_eq!(
         auth_manager
@@ -66,13 +77,10 @@ async fn save_bedrock_api_key_preserves_openai_auth() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn clear_bedrock_api_key_preserves_openai_auth() -> anyhow::Result<()> {
+async fn clear_bedrock_api_key_removes_bedrock_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
-    storage.save(&AuthDotJson {
-        bedrock_api_key: Some(bedrock_record()),
-        ..api_key_auth()
-    })?;
+    storage.save(&bedrock_auth_dot_json(bedrock_record()))?;
     let auth_manager = AuthManager::new(
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
@@ -81,9 +89,10 @@ async fn clear_bedrock_api_key_preserves_openai_auth() -> anyhow::Result<()> {
     )
     .await;
 
-    assert!(auth_manager.clear_bedrock_api_key()?);
+    assert!(auth_manager.clear_bedrock_api_key().await?);
 
-    assert_eq!(storage.load()?, Some(api_key_auth()));
+    assert_eq!(storage.load()?, None);
+    assert_eq!(auth_manager.auth_cached(), None);
     assert!(!auth_manager.has_bedrock_api_key());
     Ok(())
 }
@@ -101,14 +110,14 @@ async fn clear_bedrock_api_key_without_entry_is_noop() -> anyhow::Result<()> {
     )
     .await;
 
-    assert!(!auth_manager.clear_bedrock_api_key()?);
+    assert!(!auth_manager.clear_bedrock_api_key().await?);
 
     assert_eq!(storage.load()?, Some(api_key_auth()));
     Ok(())
 }
 
 #[tokio::test]
-async fn bedrock_only_auth_storage_does_not_create_primary_auth() -> anyhow::Result<()> {
+async fn bedrock_only_auth_storage_creates_primary_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
     storage.save(&bedrock_only_auth())?;
@@ -121,7 +130,21 @@ async fn bedrock_only_auth_storage_does_not_create_primary_auth() -> anyhow::Res
     )
     .await;
 
-    assert_eq!(auth_manager.auth_cached(), None);
+    assert_eq!(auth_manager.auth_mode(), Some(AuthMode::BedrockApiKey));
+    assert_eq!(
+        auth_manager
+            .auth_cached()
+            .and_then(|auth| match auth {
+                CodexAuth::BedrockApiKey(auth) => Some(auth.api_key().to_string()),
+                CodexAuth::ApiKey(_)
+                | CodexAuth::Chatgpt(_)
+                | CodexAuth::ChatgptAuthTokens(_)
+                | CodexAuth::AgentIdentity(_)
+                | CodexAuth::PersonalAccessToken(_) => None,
+            })
+            .as_deref(),
+        Some("bedrock-api-key-test")
+    );
     assert!(auth_manager.has_bedrock_api_key());
     Ok(())
 }
@@ -139,9 +162,25 @@ async fn clear_bedrock_only_auth_storage_removes_auth_file() -> anyhow::Result<(
     )
     .await;
 
-    assert!(auth_manager.clear_bedrock_api_key()?);
+    assert!(auth_manager.clear_bedrock_api_key().await?);
 
     assert!(!get_auth_file(codex_home.path()).exists());
     assert_eq!(storage.load()?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_with_api_key_clears_bedrock_api_key() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    storage.save(&bedrock_auth_dot_json(bedrock_record()))?;
+
+    crate::auth::login_with_api_key(
+        codex_home.path(),
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    assert_eq!(storage.load()?, Some(api_key_auth()));
     Ok(())
 }

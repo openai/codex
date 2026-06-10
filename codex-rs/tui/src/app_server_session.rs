@@ -1169,6 +1169,7 @@ pub(crate) fn status_account_display_from_auth_mode(
             email: None,
             plan: plan_type.map(plan_type_display_name),
         }),
+        Some(AuthMode::BedrockApiKey) => None,
         None => None,
     }
 }
