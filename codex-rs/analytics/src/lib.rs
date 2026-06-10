@@ -1,10 +1,9 @@
 mod accepted_lines;
 mod client;
-mod event_sink;
 mod events;
 mod facts;
-mod local_sink;
 mod reducer;
+mod sinks;
 
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -50,9 +49,9 @@ pub use facts::TurnSteerRequestError;
 pub use facts::TurnSteerResult;
 pub use facts::TurnTokenUsageFact;
 pub use facts::build_track_events_context;
-pub use local_sink::LOCAL_ANALYTICS_SCHEMA_VERSION;
-pub use local_sink::LocalAnalyticsRecord;
-pub use local_sink::LocalAnalyticsRecordType;
+pub use sinks::LOCAL_ANALYTICS_SCHEMA_VERSION;
+pub use sinks::LocalAnalyticsRecord;
+pub use sinks::LocalAnalyticsRecordType;
 
 #[cfg(test)]
 mod analytics_client_tests;

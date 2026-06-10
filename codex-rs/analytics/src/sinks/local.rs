@@ -149,5 +149,5 @@ fn string_field(value: Option<&JsonValue>, field: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "local_sink_tests.rs"]
+#[path = "local_tests.rs"]
 mod tests;

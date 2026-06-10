@@ -1,5 +1,3 @@
-use crate::event_sink::AnalyticsEvent;
-use crate::event_sink::AnalyticsEventSink;
 use crate::events::AppServerRpcTransport;
 use crate::events::GuardianReviewAnalyticsResult;
 use crate::events::GuardianReviewTrackContext;
@@ -22,9 +20,11 @@ use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
-use crate::local_sink::SharedLocalAnalyticsSink;
-use crate::local_sink::local_analytics_sink_from_env;
 use crate::reducer::AnalyticsReducer;
+use crate::sinks::AnalyticsEvent;
+use crate::sinks::AnalyticsEventSink;
+use crate::sinks::SharedLocalAnalyticsSink;
+use crate::sinks::local_analytics_sink_from_env;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
@@ -42,7 +42,7 @@ use std::sync::Mutex;
 use tokio::sync::mpsc;
 
 #[cfg(test)]
-use crate::local_sink::local_analytics_sink_for_path;
+use crate::sinks::local_analytics_sink_for_path;
 #[cfg(test)]
 use std::path::PathBuf;
 
