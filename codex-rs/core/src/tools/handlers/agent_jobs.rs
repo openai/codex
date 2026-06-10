@@ -280,6 +280,9 @@ async fn run_agent_job_loop(
         {
             progressed = true;
         }
+        if db.fail_stale_agent_job_items(job_id.as_str()).await? > 0 {
+            progressed = true;
+        }
 
         let finished = find_finished_threads(session.clone(), &active_items).await;
         if finished.is_empty() {

@@ -1,6 +1,8 @@
 use super::*;
 use crate::model::AgentJobItemRow;
 
+const DEFAULT_AGENT_JOB_ITEM_TIMEOUT_SECONDS: i64 = 60 * 30;
+
 impl StateRuntime {
     pub async fn create_agent_job(
         &self,
@@ -133,6 +135,7 @@ WHERE id = ?
         status: Option<AgentJobItemStatus>,
         limit: Option<usize>,
     ) -> anyhow::Result<Vec<AgentJobItem>> {
+        self.fail_stale_agent_job_items(job_id).await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
 SELECT
@@ -176,6 +179,7 @@ WHERE job_id =
         job_id: &str,
         item_id: &str,
     ) -> anyhow::Result<Option<AgentJobItem>> {
+        self.fail_stale_agent_job_items(job_id).await?;
         let row: Option<AgentJobItemRow> = sqlx::query_as::<_, AgentJobItemRow>(
             r#"
 SELECT
@@ -311,6 +315,57 @@ WHERE id = ?
         Ok(AgentJobStatus::parse(status.as_str())? == AgentJobStatus::Cancelled)
     }
 
+    pub async fn fail_stale_agent_job_items(&self, job_id: &str) -> anyhow::Result<u64> {
+        let row = sqlx::query(
+            r#"
+SELECT max_runtime_seconds
+FROM agent_jobs
+WHERE id = ?
+            "#,
+        )
+        .bind(job_id)
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+        let Some(row) = row else {
+            return Ok(0);
+        };
+        let max_runtime_seconds = row
+            .try_get::<Option<i64>, _>("max_runtime_seconds")?
+            .unwrap_or(DEFAULT_AGENT_JOB_ITEM_TIMEOUT_SECONDS);
+        if max_runtime_seconds < 1 {
+            return Ok(0);
+        }
+
+        let now = Utc::now().timestamp();
+        let cutoff = now.saturating_sub(max_runtime_seconds);
+        let error_message = format!("worker exceeded max runtime of {max_runtime_seconds}s");
+        let result = sqlx::query(
+            r#"
+UPDATE agent_job_items
+SET
+    status = ?,
+    completed_at = ?,
+    updated_at = ?,
+    last_error = ?,
+    assigned_thread_id = NULL
+WHERE
+    job_id = ?
+    AND status = ?
+    AND updated_at <= ?
+            "#,
+        )
+        .bind(AgentJobItemStatus::Failed.as_str())
+        .bind(now)
+        .bind(now)
+        .bind(error_message)
+        .bind(job_id)
+        .bind(AgentJobItemStatus::Running.as_str())
+        .bind(cutoff)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn mark_agent_job_item_running(
         &self,
         job_id: &str,
@@ -345,6 +400,9 @@ WHERE job_id = ? AND item_id = ? AND status = ?
         item_id: &str,
         thread_id: &str,
     ) -> anyhow::Result<bool> {
+        if ThreadId::from_string(thread_id).is_err() {
+            return Ok(false);
+        }
         let now = Utc::now().timestamp();
         let result = sqlx::query(
             r#"
@@ -530,6 +588,7 @@ WHERE
     }
 
     pub async fn get_agent_job_progress(&self, job_id: &str) -> anyhow::Result<AgentJobProgress> {
+        self.fail_stale_agent_job_items(job_id).await?;
         let row = sqlx::query(
             r#"
 SELECT
@@ -578,7 +637,7 @@ mod tests {
     ) -> anyhow::Result<(String, String, String)> {
         let job_id = "job-1".to_string();
         let item_id = "item-1".to_string();
-        let thread_id = "thread-1".to_string();
+        let thread_id = "00000000-0000-0000-0000-000000000001".to_string();
         runtime
             .create_agent_job(
                 &AgentJobCreateParams {
