@@ -289,13 +289,15 @@ impl McpRequestProcessor {
             resource_templates,
             auth_statuses,
             mut server_names,
+            startup_failures,
         } = snapshot;
         server_names.extend(
             auth_statuses
                 .keys()
                 .cloned()
                 .chain(resources.keys().cloned())
-                .chain(resource_templates.keys().cloned()),
+                .chain(resource_templates.keys().cloned())
+                .chain(startup_failures.keys().cloned()),
         );
         server_names.sort();
         server_names.dedup();
@@ -332,6 +334,7 @@ impl McpRequestProcessor {
                     .cloned()
                     .unwrap_or(CoreMcpAuthStatus::Unsupported)
                     .into(),
+                startup_error: startup_failures.get(name).cloned(),
             })
             .collect();
 

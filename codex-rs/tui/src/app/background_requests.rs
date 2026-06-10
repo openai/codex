@@ -1084,6 +1084,7 @@ mod tests {
                 resources: Vec::new(),
                 resource_templates: Vec::new(),
                 auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+                startup_error: None,
             },
             McpServerStatus {
                 name: "disabled".to_string(),
@@ -1092,6 +1093,7 @@ mod tests {
                 resources: Vec::new(),
                 resource_templates: Vec::new(),
                 auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+                startup_error: None,
             },
         ];
 

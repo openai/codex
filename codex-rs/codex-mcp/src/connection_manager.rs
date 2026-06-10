@@ -7,6 +7,7 @@
 //! `codex-core`.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -112,6 +113,43 @@ pub struct McpConnectionManager {
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
 }
+
+pub(crate) struct McpConnectionManagerStartupError {
+    manager: McpConnectionManager,
+    failures: Vec<McpStartupFailure>,
+}
+
+impl McpConnectionManagerStartupError {
+    pub(crate) fn into_parts(self) -> (McpConnectionManager, Vec<McpStartupFailure>) {
+        (self.manager, self.failures)
+    }
+}
+
+impl fmt::Debug for McpConnectionManagerStartupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("McpConnectionManagerStartupError")
+            .field("failures", &self.failures)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for McpConnectionManagerStartupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let details = self
+            .failures
+            .iter()
+            .map(|failure| format!("{}: {}", failure.server, failure.error))
+            .collect::<Vec<_>>()
+            .join("; ");
+        write!(
+            formatter,
+            "required MCP servers failed to initialize: {details}"
+        )
+    }
+}
+
+impl std::error::Error for McpConnectionManagerStartupError {}
 
 impl McpConnectionManager {
     #[allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
@@ -281,15 +319,7 @@ impl McpConnectionManager {
             ))
             .await;
         if !failures.is_empty() {
-            startup_cancellation_token.cancel();
-            let details = failures
-                .iter()
-                .map(|failure| format!("{}: {}", failure.server, failure.error))
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(anyhow!(
-                "required MCP servers failed to initialize: {details}"
-            ));
+            return Err(McpConnectionManagerStartupError { manager, failures }.into());
         }
         Ok(manager)
     }

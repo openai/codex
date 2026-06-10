@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex_apps::codex_apps_tools_cache_key;
 use crate::connection_manager::McpConnectionManager;
+use crate::connection_manager::McpConnectionManagerStartupError;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
 
@@ -331,6 +332,7 @@ pub struct McpServerStatusSnapshot {
     pub resource_templates: HashMap<String, Vec<ResourceTemplate>>,
     pub auth_statuses: HashMap<String, McpAuthStatus>,
     pub server_names: Vec<String>,
+    pub startup_failures: HashMap<String, String>,
 }
 
 pub async fn collect_mcp_server_status_snapshot_with_detail(
@@ -351,6 +353,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
             resource_templates: HashMap::new(),
             auth_statuses: HashMap::new(),
             server_names: Vec::new(),
+            startup_failures: HashMap::new(),
         });
     }
 
@@ -367,7 +370,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     drop(rx_event);
 
     let cancel_token = CancellationToken::new();
-    let mcp_connection_manager = McpConnectionManager::new(
+    let manager_result = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries.clone(),
@@ -386,15 +389,30 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         auth,
         /*elicitation_reviewer*/ None,
     )
-    .await?;
+    .await;
+    let (mcp_connection_manager, startup_failures) = match manager_result {
+        Ok(manager) => (manager, HashMap::new()),
+        Err(err) => match err.downcast::<McpConnectionManagerStartupError>() {
+            Ok(err) => {
+                let (manager, failures) = err.into_parts();
+                let failures = failures
+                    .into_iter()
+                    .map(|failure| (failure.server, failure.error))
+                    .collect();
+                (manager, failures)
+            }
+            Err(err) => return Err(err),
+        },
+    };
 
-    let snapshot = collect_mcp_server_status_snapshot_from_manager(
+    let mut snapshot = collect_mcp_server_status_snapshot_from_manager(
         &mcp_connection_manager,
         auth_status_entries,
         server_names,
         detail,
     )
     .await;
+    snapshot.startup_failures = startup_failures;
 
     cancel_token.cancel();
 
@@ -639,6 +657,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
         resource_templates: convert_mcp_resource_templates(resource_templates),
         auth_statuses: auth_statuses_from_entries(&auth_status_entries),
         server_names,
+        startup_failures: HashMap::new(),
     }
 }
 

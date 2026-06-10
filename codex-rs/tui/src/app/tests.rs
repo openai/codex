@@ -153,6 +153,7 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
             resources: Vec::new(),
             resource_templates: Vec::new(),
             auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            startup_error: None,
         }]),
         McpServerStatusDetail::ToolsAndAuthOnly,
         /*thread_id*/ None,
