@@ -1,5 +1,6 @@
 mod access_token;
 mod agent_identity;
+mod bedrock_api_key;
 pub mod default_client;
 pub mod error;
 mod personal_access_token;
@@ -10,6 +11,7 @@ mod external_bearer;
 mod manager;
 mod revoke;
 
+pub use bedrock_api_key::BedrockApiKeyAuthRecord;
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;
 pub use manager::*;

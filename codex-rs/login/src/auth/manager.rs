@@ -472,6 +472,7 @@ impl CodexAuth {
             last_refresh: Some(Utc::now()),
             agent_identity: None,
             personal_access_token: None,
+            bedrock_api_key: None,
         };
 
         let client = create_client();
@@ -589,6 +590,7 @@ pub fn login_with_api_key(
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        bedrock_api_key: None,
     };
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
@@ -612,6 +614,7 @@ pub async fn login_with_access_token(
                 last_refresh: None,
                 agent_identity: None,
                 personal_access_token: Some(access_token.to_string()),
+                bedrock_api_key: None,
             }
         }
         CodexAccessToken::AgentIdentityJwt(jwt) => {
@@ -627,6 +630,7 @@ pub async fn login_with_access_token(
                 last_refresh: None,
                 agent_identity: Some(jwt.to_string()),
                 personal_access_token: None,
+                bedrock_api_key: None,
             }
         }
     };
@@ -818,6 +822,9 @@ async fn load_auth(
         AuthCredentialsStoreMode::Ephemeral,
     );
     if let Some(auth_dot_json) = ephemeral_storage.load()? {
+        if !auth_dot_json.has_primary_auth() {
+            return Ok(None);
+        }
         let auth = CodexAuth::from_auth_dot_json(
             codex_home,
             auth_dot_json,
@@ -854,6 +861,9 @@ async fn load_auth(
         Some(auth) => auth,
         None => return Ok(None),
     };
+    if !auth_dot_json.has_primary_auth() {
+        return Ok(None);
+    }
 
     let auth = CodexAuth::from_auth_dot_json(
         codex_home,
@@ -1043,6 +1053,7 @@ impl AuthDotJson {
             last_refresh: Some(Utc::now()),
             agent_identity: None,
             personal_access_token: None,
+            bedrock_api_key: None,
         })
     }
 
@@ -1496,6 +1507,14 @@ impl AuthManager {
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
         self.inner.read().ok().and_then(|c| c.auth.clone())
+    }
+
+    pub(super) fn codex_home_for_auth_storage(&self) -> PathBuf {
+        self.codex_home.clone()
+    }
+
+    pub(super) fn auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
+        self.auth_credentials_store_mode
     }
 
     /// Subscribes to cached auth changes that can affect request recovery.
