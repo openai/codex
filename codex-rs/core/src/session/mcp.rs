@@ -81,18 +81,6 @@ impl Session {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "MCP inventory reads are serialized through the session-owned manager guard"
-    )]
-    pub(crate) async fn mcp_server_status_snapshot(
-        &self,
-        detail: McpSnapshotDetail,
-    ) -> McpServerStatusSnapshot {
-        let manager = self.services.mcp_connection_manager.read().await;
-        collect_mcp_server_status_snapshot(&manager, detail).await
-    }
-
-    #[expect(
-        clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
     pub async fn request_mcp_server_elicitation(

@@ -50,7 +50,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
@@ -106,8 +105,6 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
-    auth_statuses: HashMap<String, McpAuthStatus>,
-    status_server_names: Vec<String>,
     server_metadata: HashMap<String, McpServerMetadata>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
     host_owned_codex_apps_enabled: bool,
@@ -137,12 +134,6 @@ impl McpConnectionManager {
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> Result<Self> {
-        let auth_statuses = auth_entries
-            .iter()
-            .map(|(name, entry)| (name.clone(), entry.auth_status))
-            .collect();
-        let mut status_server_names = mcp_servers.keys().cloned().collect::<Vec<_>>();
-        status_server_names.sort();
         let mut required_servers = mcp_servers
             .iter()
             .filter(|(_, server)| server.enabled() && server.required())
@@ -252,8 +243,6 @@ impl McpConnectionManager {
         }
         let manager = Self {
             clients,
-            auth_statuses,
-            status_server_names,
             server_metadata,
             tool_plugin_provenance,
             host_owned_codex_apps_enabled,
@@ -312,8 +301,6 @@ impl McpConnectionManager {
     ) -> Self {
         Self {
             clients: HashMap::new(),
-            auth_statuses: HashMap::new(),
-            status_server_names: Vec::new(),
             server_metadata: HashMap::new(),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             host_owned_codex_apps_enabled: false,
@@ -329,14 +316,6 @@ impl McpConnectionManager {
 
     pub fn has_servers(&self) -> bool {
         !self.clients.is_empty()
-    }
-
-    pub(crate) fn status_server_names(&self) -> Vec<String> {
-        self.status_server_names.clone()
-    }
-
-    pub(crate) fn auth_statuses(&self) -> HashMap<String, McpAuthStatus> {
-        self.auth_statuses.clone()
     }
 
     /// Drain all MCP clients from this manager and return a future that stops

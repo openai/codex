@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,10 +10,9 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use axum::Router;
+use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
-use codex_app_server_protocol::McpAuthStatus;
-use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
@@ -72,14 +70,13 @@ url = "{mcp_server_url}/mcp"
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    let thread_id = start_thread(&mut mcp, ThreadStartParams::default()).await?;
 
     let request_id = mcp
         .send_list_mcp_server_status_request(ListMcpServerStatusParams {
             cursor: None,
             limit: None,
             detail: None,
-            thread_id: Some(thread_id),
+            thread_id: None,
         })
         .await?;
     let response = timeout(
@@ -119,7 +116,7 @@ url = "{mcp_server_url}/mcp"
 }
 
 #[tokio::test]
-async fn threadless_mcp_server_status_list_does_not_start_configured_servers() -> Result<()> {
+async fn mcp_server_status_list_returns_startup_failure_and_keeps_server_running() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(
@@ -154,32 +151,37 @@ required = true
             thread_id: None,
         })
         .await?;
-    let response = timeout(
+    let error = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let response: ListMcpServerStatusResponse = to_response(response)?;
     assert_eq!(
-        response,
-        ListMcpServerStatusResponse {
-            data: vec![McpServerStatus {
-                name: "required_broken".to_string(),
-                server_info: None,
-                tools: HashMap::new(),
-                resources: Vec::new(),
-                resource_templates: Vec::new(),
-                auth_status: McpAuthStatus::Unsupported,
-            }],
-            next_cursor: None,
-        }
+        (
+            error.error.code,
+            error
+                .error
+                .message
+                .contains("required MCP servers failed to initialize: required_broken"),
+            error.error.data,
+        ),
+        (-32603, true, None),
     );
+
+    let follow_up_request_id = mcp
+        .send_experimental_feature_list_request(ExperimentalFeatureListParams::default())
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(follow_up_request_id)),
+    )
+    .await??;
 
     Ok(())
 }
 
 #[tokio::test]
-async fn mcp_server_status_list_uses_thread_connection_manager() -> Result<()> {
+async fn mcp_server_status_list_uses_thread_project_local_config() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let (mcp_server_url, mcp_server_handle) = start_mcp_server("project_lookup").await?;
     let codex_home = TempDir::new()?;
@@ -199,6 +201,19 @@ async fn mcp_server_status_list_uses_thread_connection_manager() -> Result<()> {
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
+
     let project_config_dir = workspace.path().join(".codex");
     std::fs::create_dir_all(&project_config_dir)?;
     std::fs::write(
@@ -210,15 +225,6 @@ url = "{mcp_server_url}/mcp"
 "#
         ),
     )?;
-    let thread_id = start_thread(
-        &mut mcp,
-        ThreadStartParams {
-            cwd: Some(workspace.path().to_string_lossy().into_owned()),
-            ..Default::default()
-        },
-    )
-    .await?;
-    std::fs::write(project_config_dir.join("config.toml"), "")?;
 
     let threadless_request_id = mcp
         .send_list_mcp_server_status_request(ListMcpServerStatusParams {
@@ -241,7 +247,7 @@ url = "{mcp_server_url}/mcp"
             cursor: None,
             limit: None,
             detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
-            thread_id: Some(thread_id),
+            thread_id: Some(thread.id),
         })
         .await?;
     let thread_response = timeout(
@@ -264,17 +270,6 @@ url = "{mcp_server_url}/mcp"
     let _ = mcp_server_handle.await;
 
     Ok(())
-}
-
-async fn start_thread(mcp: &mut TestAppServer, params: ThreadStartParams) -> Result<String> {
-    let request_id = mcp.send_thread_start_request(params).await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(response)?;
-    Ok(thread.id)
 }
 
 #[derive(Clone)]
@@ -409,14 +404,13 @@ url = "{mcp_server_url}/mcp"
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    let thread_id = start_thread(&mut mcp, ThreadStartParams::default()).await?;
 
     let request_id = mcp
         .send_list_mcp_server_status_request(ListMcpServerStatusParams {
             cursor: None,
             limit: None,
             detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
-            thread_id: Some(thread_id),
+            thread_id: None,
         })
         .await?;
     let response = timeout(
@@ -475,14 +469,13 @@ url = "{underscore_server_url}/mcp"
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    let thread_id = start_thread(&mut mcp, ThreadStartParams::default()).await?;
 
     let request_id = mcp
         .send_list_mcp_server_status_request(ListMcpServerStatusParams {
             cursor: None,
             limit: None,
             detail: None,
-            thread_id: Some(thread_id),
+            thread_id: None,
         })
         .await?;
     let response = timeout(

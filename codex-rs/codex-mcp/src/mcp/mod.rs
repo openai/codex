@@ -333,26 +333,72 @@ pub struct McpServerStatusSnapshot {
     pub server_names: Vec<String>,
 }
 
-pub async fn collect_configured_mcp_server_status_snapshot(
+pub async fn collect_mcp_server_status_snapshot_with_detail(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
-) -> McpServerStatusSnapshot {
+    submit_id: String,
+    runtime_context: McpRuntimeContext,
+    detail: McpSnapshotDetail,
+) -> anyhow::Result<McpServerStatusSnapshot> {
     let mcp_servers = effective_mcp_servers(config, auth);
+    let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(config, auth);
+    let tool_plugin_provenance = tool_plugin_provenance(config);
+    if mcp_servers.is_empty() {
+        return Ok(McpServerStatusSnapshot {
+            server_infos: HashMap::new(),
+            tools_by_server: HashMap::new(),
+            resources: HashMap::new(),
+            resource_templates: HashMap::new(),
+            auth_statuses: HashMap::new(),
+            server_names: Vec::new(),
+        });
+    }
+
     let auth_status_entries = compute_auth_statuses(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         auth,
     )
     .await;
+
     let server_names = mcp_servers.keys().cloned().collect();
-    McpServerStatusSnapshot {
-        server_infos: HashMap::new(),
-        tools_by_server: HashMap::new(),
-        resources: HashMap::new(),
-        resource_templates: HashMap::new(),
-        auth_statuses: auth_statuses_from_entries(&auth_status_entries),
+
+    let (tx_event, rx_event) = unbounded();
+    drop(rx_event);
+
+    let cancel_token = CancellationToken::new();
+    let mcp_connection_manager = McpConnectionManager::new(
+        &mcp_servers,
+        config.mcp_oauth_credentials_store_mode,
+        auth_status_entries.clone(),
+        &config.approval_policy,
+        submit_id,
+        tx_event,
+        cancel_token.clone(),
+        PermissionProfile::default(),
+        runtime_context,
+        config.codex_home.clone(),
+        codex_apps_tools_cache_key(auth),
+        host_owned_codex_apps_enabled,
+        config.prefix_mcp_tool_names,
+        config.client_elicitation_capability.clone(),
+        tool_plugin_provenance,
+        auth,
+        /*elicitation_reviewer*/ None,
+    )
+    .await?;
+
+    let snapshot = collect_mcp_server_status_snapshot_from_manager(
+        &mcp_connection_manager,
+        auth_status_entries,
         server_names,
-    }
+        detail,
+    )
+    .await;
+
+    cancel_token.cancel();
+
+    Ok(snapshot)
 }
 
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
@@ -548,8 +594,10 @@ fn convert_mcp_resource_templates(
         .collect::<HashMap<_, _>>()
 }
 
-pub async fn collect_mcp_server_status_snapshot(
+async fn collect_mcp_server_status_snapshot_from_manager(
     mcp_connection_manager: &McpConnectionManager,
+    auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
+    server_names: Vec<String>,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let (tools, resources, resource_templates) = tokio::join!(
@@ -589,8 +637,8 @@ pub async fn collect_mcp_server_status_snapshot(
         tools_by_server,
         resources: convert_mcp_resources(resources),
         resource_templates: convert_mcp_resource_templates(resource_templates),
-        auth_statuses: mcp_connection_manager.auth_statuses(),
-        server_names: mcp_connection_manager.status_server_names(),
+        auth_statuses: auth_statuses_from_entries(&auth_status_entries),
+        server_names,
     }
 }
 
