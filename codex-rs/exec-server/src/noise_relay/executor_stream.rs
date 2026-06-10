@@ -1,3 +1,11 @@
+//! Owns one authenticated executor-side virtual stream after handshake approval.
+//!
+//! The shared environment loop handles websocket reads for every stream, while
+//! a per-stream task handles JSON-RPC writes. Both directions share Clatter's
+//! `NoiseTransport` because it contains the independent send and receive nonce
+//! state. The mutex is held only for synchronous encrypt/decrypt calls and never
+//! across an `.await`.
+
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -47,6 +55,10 @@ pub(super) struct NoiseVirtualStream {
 }
 
 impl NoiseVirtualStream {
+    /// Notify the JSON-RPC processor that this virtual connection has ended.
+    ///
+    /// Delivery is nonblocking because a stalled connection must not stall the
+    /// physical websocket or the other virtual streams that share it.
     pub(super) fn disconnect(self, reason: Option<String>) {
         let _ = self.disconnected_tx.send(true);
         let _ = self
@@ -54,10 +66,17 @@ impl NoiseVirtualStream {
             .try_send(JsonRpcConnectionEvent::Disconnected { reason });
     }
 
+    /// Check whether a delayed close notification refers to this exact stream.
     pub(super) fn is_instance(&self, instance_id: u64) -> bool {
         self.instance_id == instance_id
     }
 
+    /// Process one executor-bound ciphertext record without blocking the shared
+    /// loop.
+    ///
+    /// Records are reordered before decryption because Noise's receive nonce is
+    /// implicit. Authenticated plaintext is then fed into the length-delimited
+    /// JSON-RPC decoder; only complete messages enter the connection queue.
     pub(super) fn receive_data(&mut self, data: RelayData) -> Result<(), ExecServerError> {
         // Relay sequence ordering is enforced before taking the transport lock
         // and decrypting. Each virtual stream owns one ordered Noise nonce
@@ -86,6 +105,12 @@ impl NoiseVirtualStream {
     }
 }
 
+/// Start JSON-RPC processing for a completed Noise handshake.
+///
+/// The returned value is the read half retained by the shared environment loop.
+/// The spawned writer owns outbound JSON-RPC messages, frames and encrypts them,
+/// and reports its exact `instance_id` when it exits so stream-ID reuse cannot
+/// remove a newer connection.
 pub(super) fn spawn_noise_virtual_stream(
     stream_id: String,
     instance_id: u64,

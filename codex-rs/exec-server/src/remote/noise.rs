@@ -1,7 +1,15 @@
 //! Noise registration and encrypted relay runtime.
 //!
-//! Noise failures remain on this path; there is no automatic fallback to the
-//! unauthenticated plaintext relay.
+//! The environment registry is the control plane: it records the executor's
+//! public identity, returns a short-lived rendezvous URL and registration ID,
+//! and later decides whether a Noise-authenticated harness key may connect. The
+//! rendezvous websocket is only the data plane and sees routing metadata plus
+//! ciphertext.
+//!
+//! The process keeps one executor identity across reconnects, but registers it
+//! again before each websocket attempt so every connection uses current control
+//! plane state. Noise failures remain on this path; there is no automatic
+//! fallback to the unauthenticated plaintext relay.
 
 use std::time::Duration;
 
@@ -32,7 +40,12 @@ const NOISE_RELAY_SECURITY_PROFILE: &str = "noise_hybrid_ik_v1";
 const REMOTE_RENDEZVOUS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl EnvironmentRegistryClient {
-    /// Register the exec-server's static Noise identity.
+    /// Register the exec-server's static Noise identity and obtain rendezvous
+    /// state.
+    ///
+    /// The response's registration ID is later authenticated inside every
+    /// virtual stream's Noise prologue, preventing a handshake from being moved
+    /// to a different executor registration.
     async fn register_noise_environment(
         &self,
         environment_id: &str,
@@ -90,6 +103,14 @@ struct RegistryHarnessKeyValidator {
 }
 
 impl HarnessKeyValidator for RegistryHarnessKeyValidator {
+    /// Ask the registry to authorize the key authenticated by the first IK
+    /// message.
+    ///
+    /// Noise proves that the peer possesses the corresponding private keys; this
+    /// request answers the separate product question of whether that peer is
+    /// allowed to use this registered executor. The short-lived authorization
+    /// and authenticated public key are submitted together so neither can be
+    /// replayed as authority for a different identity.
     async fn validate_harness_key(
         &self,
         harness_public_key: &NoiseChannelPublicKey,
@@ -143,7 +164,9 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
 ///
 /// A new executor identity is generated once per process invocation and reused
 /// across physical reconnects. The registry-returned registration ID is bound
-/// into every virtual stream's Noise prologue.
+/// into every virtual stream's Noise prologue. Each loop iteration registers,
+/// connects, serves virtual streams until the physical websocket ends, and then
+/// retries with exponential backoff and fresh registry state.
 pub(super) async fn run_remote_environment(
     config: &RemoteEnvironmentConfig,
     client: &EnvironmentRegistryClient,
@@ -156,6 +179,9 @@ pub(super) async fn run_remote_environment(
     let mut backoff = Duration::from_secs(1);
 
     loop {
+        // Registration is repeated because the URL and registration ID belong
+        // to one current rendezvous allocation. The static identity is reused
+        // so reconnecting does not silently become a different executor.
         let response = client
             .register_noise_environment(&config.environment_id, &identity.public_key())
             .await?;

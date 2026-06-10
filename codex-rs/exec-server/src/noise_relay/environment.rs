@@ -1,3 +1,21 @@
+//! Executor-side state machine for multiplexed Noise relay connections.
+//!
+//! One physical websocket carries frames for many harness-selected `stream_id`
+//! values. Each stream advances independently through these states:
+//!
+//! 1. **Unknown**: no cryptographic or application state exists.
+//! 2. **Pending**: the first hybrid-IK message authenticated a harness key, but
+//!    the registry has not yet authorized that key for this executor.
+//! 3. **Active**: registry authorization succeeded, the responder sent the
+//!    second handshake message, and a JSON-RPC connection owns the transport.
+//! 4. **Closed**: reset, protocol failure, backpressure, or websocket closure
+//!    removes the stream and its keys.
+//!
+//! Registry checks run concurrently so one slow check cannot block unrelated
+//! streams. A monotonically increasing validation ID ties each result to the
+//! exact pending instance, which is important because untrusted peers choose and
+//! may reuse `stream_id` values.
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -53,6 +71,12 @@ pub(crate) trait HarnessKeyValidator: Send + Sync {
 /// outer websocket and rendezvous route are treated as untrusted delivery:
 /// malformed, unauthorized, or cryptographically invalid streams fail closed
 /// without creating a `JsonRpcConnection`.
+///
+/// The trust transition is deliberately visible in this function: parsing the
+/// first Noise message proves possession of the harness private keys, registry
+/// validation grants product authorization to those authenticated public keys,
+/// and only the successful combination is converted into an active virtual
+/// stream.
 pub(crate) async fn run_noise_multiplexed_environment<S, V>(
     stream: WebSocketStream<S>,
     processor: ConnectionProcessor,
@@ -380,17 +404,27 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
     }
 }
 
+/// Cryptographic responder state parked while registry authorization is in flight.
 struct PendingHandshake {
     validation_id: u64,
     handshake: PendingResponderHandshake,
 }
 
+/// Result returned by an asynchronous registry check.
+///
+/// `validation_id` distinguishes this result from an older check for the same
+/// relay-controlled `stream_id`.
 struct HarnessKeyValidationResult {
     stream_id: String,
     validation_id: u64,
     result: Result<(), ExecServerError>,
 }
 
+/// Best-effort signal that one virtual stream must be discarded.
+///
+/// Reset affects routing and availability only. It is cleartext relay control,
+/// not authenticated application data, and the receiver never treats its reason
+/// as trusted diagnostic text.
 fn send_reset(physical_outgoing_tx: &mpsc::Sender<Vec<u8>>, stream_id: String) {
     let reset = RelayMessageFrame::reset(stream_id, NOISE_RELAY_RESET_REASON.to_string());
     // Resets are best effort. Untrusted relay input must never block the shared
