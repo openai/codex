@@ -65,8 +65,11 @@ fn next_goal_objective(
 
 #[test]
 fn sentinel_like_objective_is_plain_text() {
-    let objective =
-        "Goal objective file: /tmp/not-managed-by-codex\nRead that file before continuing.";
+    let objective = concat!(
+        "Codex goal objective file: ",
+        "/tmp/attachments/00000000-0000-4000-8000-000000000000/goal-objective.md\n",
+        "Read that file before continuing."
+    );
 
     assert_eq!(crate::goal_files::objective_file_path(objective), None);
 }

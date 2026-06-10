@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 const GOAL_ATTACHMENT_DIR: &str = "attachments";
 const GOAL_FILE_PREFIX: &str = "Codex goal objective file: ";
+const GOAL_FILE_INSTRUCTION: &str = "Read that file before continuing.";
 const GOAL_FILE_NAME: &str = "goal-objective.md";
 
 #[derive(Debug, Default)]
@@ -121,13 +122,43 @@ pub(crate) fn objective_text_for_edit(objective: &str) -> Result<String> {
 }
 
 pub(crate) fn objective_file_path(objective: &str) -> Option<PathBuf> {
-    objective
-        .lines()
+    let mut lines = objective.lines();
+    let path = lines
         .next()?
         .strip_prefix(GOAL_FILE_PREFIX)
         .map(str::trim)
         .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
+        .map(PathBuf::from)?;
+    if lines.next() != Some(GOAL_FILE_INSTRUCTION) {
+        return None;
+    }
+
+    let parent = path.parent()?;
+    let attachment_id = parent.file_name()?.to_str()?;
+    let attachment_dir = parent.parent()?.file_name()?.to_str()?;
+    if path.is_file()
+        && path.file_name()?.to_str()? == GOAL_FILE_NAME
+        && attachment_dir == GOAL_ATTACHMENT_DIR
+        && Uuid::parse_str(attachment_id).is_ok()
+    {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn objective_file_reference(path: &Path) -> Result<String> {
+    let reference = format!(
+        "{GOAL_FILE_PREFIX}{}\n{GOAL_FILE_INSTRUCTION}",
+        path.display()
+    );
+    let actual_chars = reference.chars().count();
+    if actual_chars > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
+        bail!(
+            "Goal objective file reference is too long: {actual_chars} characters. Limit: {MAX_THREAD_GOAL_OBJECTIVE_CHARS} characters."
+        );
+    }
+    Ok(reference)
 }
 
 fn ensure_output_dir(codex_home: &Path, output_dir: &mut Option<PathBuf>) -> Result<PathBuf> {
@@ -150,20 +181,6 @@ fn ensure_output_dir(codex_home: &Path, output_dir: &mut Option<PathBuf>) -> Res
 fn write_file(path: &Path, content: &str) -> Result<()> {
     fs::write(path, content)
         .with_context(|| format!("Could not write goal file {}", path.display()))
-}
-
-fn objective_file_reference(path: &Path) -> Result<String> {
-    let reference = format!(
-        "{GOAL_FILE_PREFIX}{}\nRead that file before continuing.",
-        path.display()
-    );
-    let actual_chars = reference.chars().count();
-    if actual_chars > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
-        bail!(
-            "Goal objective file reference is too long: {actual_chars} characters. Limit: {MAX_THREAD_GOAL_OBJECTIVE_CHARS} characters."
-        );
-    }
-    Ok(reference)
 }
 
 fn append_section(objective: &mut String, heading: &str, lines: Vec<String>) {

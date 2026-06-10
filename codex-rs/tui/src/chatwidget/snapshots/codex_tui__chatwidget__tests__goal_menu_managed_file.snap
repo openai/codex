@@ -1,10 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/goal_menu.rs
-expression: rendered_goal_summary(&mut rx)
+expression: rendered
 ---
 Goal
 Status: active
-Objective file: goal.md
+Objective file: $CODEX_HOME/attachments/<uuid>/goal-objective.md
 Time used: 1m
 Tokens used: 12.5K
 Token budget: 80K

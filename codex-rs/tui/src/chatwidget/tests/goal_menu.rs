@@ -80,12 +80,23 @@ async fn goal_menu_managed_file_snapshot() {
         AppThreadGoalStatus::Active,
         /*token_budget*/ Some(80_000),
     );
-    goal.objective =
-        "Codex goal objective file: goal.md\nRead that file before continuing.".to_string();
+    goal.objective = crate::goal_files::materialize_goal_draft(
+        chat.config.codex_home.as_path(),
+        crate::goal_files::GoalDraft {
+            objective: "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1),
+            ..Default::default()
+        },
+    )
+    .expect("materialize goal objective");
+    let path = crate::goal_files::objective_file_path(&goal.objective).expect("goal file path");
 
     chat.show_goal_summary(goal);
 
-    assert_chatwidget_snapshot!("goal_menu_managed_file", rendered_goal_summary(&mut rx));
+    let rendered = rendered_goal_summary(&mut rx).replace(
+        &path.display().to_string(),
+        "$CODEX_HOME/attachments/<uuid>/goal-objective.md",
+    );
+    assert_chatwidget_snapshot!("goal_menu_managed_file", rendered);
 }
 
 #[tokio::test]
@@ -168,17 +179,19 @@ async fn goal_edit_prompt_hydrates_and_materializes_oversized_objective_file() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
     let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
-    let path = chat.config.codex_home.join("managed-goal.md");
-    std::fs::write(&path, &objective).expect("write goal file");
     let mut goal = test_goal(
         thread_id,
         AppThreadGoalStatus::Paused,
         /*token_budget*/ Some(80_000),
     );
-    goal.objective = format!(
-        "Codex goal objective file: {}\nRead that file before continuing.",
-        path.display()
-    );
+    goal.objective = crate::goal_files::materialize_goal_draft(
+        chat.config.codex_home.as_path(),
+        crate::goal_files::GoalDraft {
+            objective: objective.clone(),
+            ..Default::default()
+        },
+    )
+    .expect("materialize goal objective");
 
     chat.show_goal_edit_prompt(thread_id, goal);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));

@@ -116,14 +116,23 @@ mod tests {
 
     #[test]
     fn goal_usage_summary_formats_managed_file_objective() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let objective = crate::goal_files::materialize_goal_draft(
+            temp_dir.path(),
+            crate::goal_files::GoalDraft {
+                objective: "x"
+                    .repeat(codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1),
+                ..Default::default()
+            },
+        )
+        .expect("materialize goal objective");
+        let path = crate::goal_files::objective_file_path(&objective).expect("goal file path");
         let mut goal = test_thread_goal(/*token_budget*/ None, /*tokens_used*/ 0);
-        goal.objective =
-            "Codex goal objective file: /tmp/project/goal.md\nRead that file before continuing."
-                .to_string();
+        goal.objective = objective;
 
         assert_eq!(
             goal_usage_summary(&goal),
-            "Objective file: /tmp/project/goal.md Time: 2m."
+            format!("Objective file: {} Time: 2m.", path.display())
         );
     }
 }
