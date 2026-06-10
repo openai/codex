@@ -3011,6 +3011,7 @@ impl Session {
     /// Mid-turn compaction is the other path that can re-establish that baseline when it
     /// reinjects full initial context into replacement history. Other non-regular tasks
     /// intentionally do not update the baseline.
+    #[instrument(level = "trace", skip_all)]
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
