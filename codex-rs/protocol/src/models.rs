@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io;
+use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
@@ -1017,6 +1018,7 @@ const IMAGE_CLOSE_TAG: &str = "</image>";
 const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
 const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
+const MAX_LOCAL_IMAGE_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
 pub fn image_open_tag_text() -> String {
     IMAGE_OPEN_TAG.to_string()
@@ -1255,7 +1257,40 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     UserInput::LocalImage { path, detail, .. } => {
                         image_index += 1;
                         let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
-                        match std::fs::read(&path) {
+                        let file_bytes = std::fs::metadata(&path).and_then(|metadata| {
+                            if !metadata.is_file() {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    "local image path is not a regular file",
+                                ));
+                            }
+                            if metadata.len() > MAX_LOCAL_IMAGE_FILE_BYTES {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!(
+                                        "local image exceeds the {MAX_LOCAL_IMAGE_FILE_BYTES}-byte limit"
+                                    ),
+                                ));
+                            }
+
+                            let capacity = usize::try_from(metadata.len()).unwrap_or_default();
+                            let mut file_bytes = Vec::with_capacity(capacity);
+                            std::fs::File::open(&path)?
+                                .take(MAX_LOCAL_IMAGE_FILE_BYTES + 1)
+                                .read_to_end(&mut file_bytes)?;
+                            if file_bytes.len()
+                                > usize::try_from(MAX_LOCAL_IMAGE_FILE_BYTES).unwrap_or(usize::MAX)
+                            {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!(
+                                        "local image exceeds the {MAX_LOCAL_IMAGE_FILE_BYTES}-byte limit"
+                                    ),
+                                ));
+                            }
+                            Ok(file_bytes)
+                        });
+                        match file_bytes {
                             Ok(file_bytes) => local_image_content_items_with_label_number(
                                 &path,
                                 file_bytes,
@@ -2986,6 +3021,62 @@ mod tests {
             }
             other => panic!("expected message response but got {other:?}"),
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn local_image_too_large_adds_placeholder() -> Result<()> {
+        let dir = tempdir()?;
+        let oversized_path = dir.path().join("oversized.png");
+        std::fs::File::create(&oversized_path)?.set_len(MAX_LOCAL_IMAGE_FILE_BYTES + 1)?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: oversized_path.clone(),
+            detail: None,
+        }]);
+
+        assert_eq!(
+            item,
+            ResponseInputItem::Message {
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!(
+                        "Codex could not read the local image at `{}`: local image exceeds the {MAX_LOCAL_IMAGE_FILE_BYTES}-byte limit",
+                        oversized_path.display()
+                    ),
+                }],
+                phase: None,
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn local_image_non_file_adds_placeholder() -> Result<()> {
+        let dir = tempdir()?;
+        let directory_path = dir.path().join("image.png");
+        std::fs::create_dir(&directory_path)?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: directory_path.clone(),
+            detail: None,
+        }]);
+
+        assert_eq!(
+            item,
+            ResponseInputItem::Message {
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!(
+                        "Codex could not read the local image at `{}`: local image path is not a regular file",
+                        directory_path.display()
+                    ),
+                }],
+                phase: None,
+            }
+        );
 
         Ok(())
     }
