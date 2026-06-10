@@ -556,7 +556,8 @@ async fn ensure_not_directory(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> io::Result<()> {
-    let metadata = fs.get_metadata(path, sandbox).await?;
+    let path_uri = PathUri::from_abs_path(path)?;
+    let metadata = fs.get_metadata(&path_uri, sandbox).await?;
     if metadata.is_directory {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -614,7 +615,11 @@ async fn note_existing_path_delta_support(
     sandbox: Option<&FileSystemSandboxContext>,
     exact: &mut bool,
 ) {
-    match fs.get_metadata(path, sandbox).await {
+    let Ok(path_uri) = PathUri::from_abs_path(path) else {
+        *exact = false;
+        return;
+    };
+    match fs.get_metadata(&path_uri, sandbox).await {
         Ok(metadata) if metadata.is_file && !metadata.is_symlink => {}
         Ok(_) => *exact = false,
         Err(source) if source.kind() == io::ErrorKind::NotFound => {}

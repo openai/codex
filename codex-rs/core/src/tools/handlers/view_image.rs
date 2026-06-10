@@ -153,7 +153,7 @@ impl ViewImageHandler {
         })?;
 
         let metadata = fs
-            .get_metadata(&abs_path, Some(&sandbox))
+            .get_metadata(&path_uri, Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(

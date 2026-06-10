@@ -1138,8 +1138,9 @@ async fn find_project_root(
     for ancestor in cwd.ancestors() {
         for marker in project_root_markers {
             let marker_path = ancestor.join(marker);
+            let marker_path_uri = PathUri::from_abs_path(&marker_path)?;
             if fs
-                .get_metadata(&marker_path, /*sandbox*/ None)
+                .get_metadata(&marker_path_uri, /*sandbox*/ None)
                 .await
                 .is_ok()
             {
@@ -1154,14 +1155,20 @@ async fn find_git_checkout_root(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
-    let base = match fs.get_metadata(cwd, /*sandbox*/ None).await {
+    let cwd_uri = PathUri::from_abs_path(cwd).ok()?;
+    let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
         Ok(metadata) if metadata.is_directory => cwd.clone(),
         _ => cwd.parent()?,
     };
 
     for dir in base.ancestors() {
         let dot_git = dir.join(".git");
-        if fs.get_metadata(&dot_git, /*sandbox*/ None).await.is_ok() {
+        let dot_git_uri = PathUri::from_abs_path(&dot_git).ok()?;
+        if fs
+            .get_metadata(&dot_git_uri, /*sandbox*/ None)
+            .await
+            .is_ok()
+        {
             return Some(dir);
         }
     }
@@ -1209,8 +1216,9 @@ async fn load_project_layers(
     let mut startup_warnings = Vec::new();
     for dir in dirs {
         let dot_codex_abs = dir.join(".codex");
+        let dot_codex_uri = PathUri::from_abs_path(&dot_codex_abs)?;
         if !fs
-            .get_metadata(&dot_codex_abs, /*sandbox*/ None)
+            .get_metadata(&dot_codex_uri, /*sandbox*/ None)
             .await
             .map(|metadata| metadata.is_directory)
             .unwrap_or(false)

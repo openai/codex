@@ -62,7 +62,7 @@ async fn file_system_get_metadata_reports_files_and_directories(
     std::fs::create_dir(&directory_path)?;
 
     let file_metadata = file_system
-        .get_metadata(&absolute_path(&file_path), /*sandbox*/ None)
+        .get_metadata(&PathUri::from_path(&file_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(file_metadata.is_directory, false);
@@ -71,7 +71,7 @@ async fn file_system_get_metadata_reports_files_and_directories(
     assert!(file_metadata.modified_at_ms > 0);
 
     let directory_metadata = file_system
-        .get_metadata(&absolute_path(&directory_path), /*sandbox*/ None)
+        .get_metadata(&PathUri::from_path(&directory_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(directory_metadata.is_directory, true);

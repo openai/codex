@@ -120,7 +120,7 @@ impl ExecutorFileSystem for LocalFileSystem {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
@@ -206,7 +206,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         reject_platform_sandbox_context(sandbox)?;
@@ -315,10 +315,11 @@ impl ExecutorFileSystem for DirectFileSystem {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         reject_sandbox_context(sandbox)?;
+        let path = path.to_abs_path()?;
         let metadata = tokio::fs::metadata(path.as_path()).await?;
         let symlink_metadata = tokio::fs::symlink_metadata(path.as_path()).await?;
         Ok(FileMetadata {

@@ -115,9 +115,10 @@ impl FsRequestProcessor {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         let metadata = self
             .file_system()?
-            .get_metadata(&params.path, /*sandbox*/ None)
+            .get_metadata(&path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {

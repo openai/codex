@@ -30,7 +30,8 @@ async fn plugin_manifest_name(
     let mut manifest_path = None;
     for relative_path in DISCOVERABLE_PLUGIN_MANIFEST_PATHS {
         let candidate = plugin_root.join(relative_path);
-        match fs.get_metadata(&candidate, /*sandbox*/ None).await {
+        let candidate_uri = PathUri::from_abs_path(&candidate).ok()?;
+        match fs.get_metadata(&candidate_uri, /*sandbox*/ None).await {
             Ok(metadata) if metadata.is_file => {
                 manifest_path = Some(candidate);
                 break;

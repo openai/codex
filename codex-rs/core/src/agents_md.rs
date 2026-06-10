@@ -163,7 +163,7 @@ impl<'a> AgentsMdManager<'a> {
             }
 
             let path_uri = PathUri::from_abs_path(&p)?;
-            match fs.get_metadata(&p, /*sandbox*/ None).await {
+            match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
                 Ok(metadata) if !metadata.is_file => continue,
                 Ok(_) => {}
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
@@ -245,12 +245,13 @@ impl<'a> AgentsMdManager<'a> {
             for ancestor in dir.ancestors() {
                 for marker in &project_root_markers {
                     let marker_path = ancestor.join(marker);
-                    let marker_exists = match fs.get_metadata(&marker_path, /*sandbox*/ None).await
-                    {
-                        Ok(_) => true,
-                        Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-                        Err(err) => return Err(err),
-                    };
+                    let marker_path_uri = PathUri::from_abs_path(&marker_path)?;
+                    let marker_exists =
+                        match fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await {
+                            Ok(_) => true,
+                            Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                            Err(err) => return Err(err),
+                        };
                     if marker_exists {
                         project_root = Some(ancestor.clone());
                         break;
@@ -286,7 +287,8 @@ impl<'a> AgentsMdManager<'a> {
         for d in search_dirs {
             for name in &candidate_filenames {
                 let candidate = d.join(name);
-                match fs.get_metadata(&candidate, /*sandbox*/ None).await {
+                let candidate_uri = PathUri::from_abs_path(&candidate)?;
+                match fs.get_metadata(&candidate_uri, /*sandbox*/ None).await {
                     Ok(md) if md.is_file => {
                         found.push(candidate);
                         break;

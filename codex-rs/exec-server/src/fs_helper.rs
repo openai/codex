@@ -231,8 +231,10 @@ pub(crate) async fn run_direct_request(
             ))
         }
         FsHelperRequest::GetMetadata(params) => {
+            let path =
+                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             let metadata = file_system
-                .get_metadata(&params.path, /*sandbox*/ None)
+                .get_metadata(&path, /*sandbox*/ None)
                 .await
                 .map_err(map_fs_error)?;
             Ok(FsHelperPayload::GetMetadata(FsGetMetadataResponse {

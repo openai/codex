@@ -54,7 +54,7 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn get_metadata(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         unimplemented!("test filesystem only supports reads")

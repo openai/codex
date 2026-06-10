@@ -124,14 +124,15 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         trace!("remote fs get_metadata");
+        let path = path.to_abs_path()?;
         let client = self.client.get().await.map_err(map_remote_error)?;
         let response = client
             .fs_get_metadata(FsGetMetadataParams {
-                path: path.clone(),
+                path,
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await

@@ -393,8 +393,9 @@ async fn validate_agent_role_config_file(
         return Ok(());
     };
 
+    let config_file_uri = PathUri::from_abs_path(config_file)?;
     let metadata = fs
-        .get_metadata(config_file, /*sandbox*/ None)
+        .get_metadata(&config_file_uri, /*sandbox*/ None)
         .await
         .map_err(|e| {
             std::io::Error::new(

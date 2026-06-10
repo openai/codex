@@ -103,10 +103,10 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        self.metadata(path)
+        self.metadata(&path.to_abs_path()?)
     }
 
     async fn read_directory(

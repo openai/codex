@@ -173,7 +173,7 @@ pub trait ExecutorFileSystem: Send + Sync {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata>;
 

@@ -220,7 +220,7 @@ async fn file_system_get_metadata_reports_symlink_targets(
     let symlink_path = tmp.path().join("note-link.txt");
     symlink(&file_path, &symlink_path)?;
     let symlink_metadata = file_system
-        .get_metadata(&absolute_path(&symlink_path), /*sandbox*/ None)
+        .get_metadata(&PathUri::from_path(&symlink_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(symlink_metadata.is_directory, false);
@@ -233,7 +233,10 @@ async fn file_system_get_metadata_reports_symlink_targets(
     let dir_symlink_path = tmp.path().join("notes-link");
     symlink(&dir_path, &dir_symlink_path)?;
     let dir_symlink_metadata = file_system
-        .get_metadata(&absolute_path(&dir_symlink_path), /*sandbox*/ None)
+        .get_metadata(
+            &PathUri::from_path(&dir_symlink_path)?,
+            /*sandbox*/ None,
+        )
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(dir_symlink_metadata.is_directory, true);

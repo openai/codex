@@ -47,7 +47,8 @@ pub async fn get_git_repo_root_with_fs(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
-    let base = match fs.get_metadata(cwd, /*sandbox*/ None).await {
+    let cwd_uri = PathUri::from_abs_path(cwd).ok()?;
+    let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
         Ok(metadata) if metadata.is_directory => cwd.clone(),
         _ => cwd.parent()?,
     };
@@ -806,7 +807,7 @@ pub async fn resolve_root_git_project_for_trust(
     let dot_git = repo_root.join(".git");
     let dot_git_uri = PathUri::from_abs_path(&dot_git).ok()?;
     if fs
-        .get_metadata(&dot_git, /*sandbox*/ None)
+        .get_metadata(&dot_git_uri, /*sandbox*/ None)
         .await
         .ok()?
         .is_directory
@@ -858,7 +859,12 @@ async fn find_ancestor_git_entry_with_fs(
 ) -> Option<(AbsolutePathBuf, AbsolutePathBuf)> {
     for dir in base_dir.ancestors() {
         let dot_git = dir.join(".git");
-        if fs.get_metadata(&dot_git, /*sandbox*/ None).await.is_ok() {
+        let dot_git_uri = PathUri::from_abs_path(&dot_git).ok()?;
+        if fs
+            .get_metadata(&dot_git_uri, /*sandbox*/ None)
+            .await
+            .is_ok()
+        {
             return Some((dir, dot_git));
         }
     }

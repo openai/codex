@@ -975,7 +975,13 @@ impl TestCodexHarness {
     }
 
     pub async fn abs_path_exists(&self, path: &AbsolutePathBuf) -> Result<bool> {
-        match self.test.fs().get_metadata(path, /*sandbox*/ None).await {
+        let path_uri = PathUri::from_abs_path(path)?;
+        match self
+            .test
+            .fs()
+            .get_metadata(&path_uri, /*sandbox*/ None)
+            .await
+        {
             Ok(_) => Ok(true),
             Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err.into()),
