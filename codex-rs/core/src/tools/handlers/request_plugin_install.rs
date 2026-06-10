@@ -359,7 +359,7 @@ fn verified_plugin_install_completed(
 ) -> bool {
     let plugins_input = config.plugins_config_input();
     plugins_manager
-        .list_marketplaces_for_config(&plugins_input, &[])
+        .list_marketplaces_for_config(&plugins_input, &[], /*include_openai_curated*/ true)
         .ok()
         .into_iter()
         .flat_map(|outcome| outcome.marketplaces)

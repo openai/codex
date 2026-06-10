@@ -1815,7 +1815,11 @@ enabled = false
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            /*include_openai_curated*/ true,
+        )
         .unwrap()
         .marketplaces;
 
@@ -1917,7 +1921,11 @@ enabled = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            /*include_openai_curated*/ true,
+        )
         .unwrap()
         .marketplaces;
 
@@ -1965,7 +1973,11 @@ plugins = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            /*include_openai_curated*/ true,
+        )
         .unwrap()
         .marketplaces;
 
@@ -2402,7 +2414,11 @@ enabled = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            /*include_openai_curated*/ true,
+        )
         .unwrap()
         .marketplaces;
 
@@ -2496,7 +2512,7 @@ plugins = true
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -2531,6 +2547,37 @@ plugins = true
                 enabled: false,
             }],
         }
+    );
+}
+
+#[tokio::test]
+async fn list_marketplaces_can_skip_openai_curated_before_loading() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    write_file(
+        &curated_root.join(".agents/plugins/marketplace.json"),
+        "{not valid json",
+    );
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let outcome = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ false)
+        .unwrap();
+
+    assert_eq!(outcome.errors, Vec::new());
+    assert_eq!(
+        outcome
+            .marketplaces
+            .iter()
+            .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME),
+        false
     );
 }
 
@@ -2576,7 +2623,7 @@ source = "/tmp/debug"
     .unwrap();
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -2652,7 +2699,7 @@ source = "/tmp/debug"
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -2707,7 +2754,7 @@ plugins = true
     .unwrap();
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -2792,6 +2839,7 @@ enabled = false
                 AbsolutePathBuf::try_from(repo_a_root).unwrap(),
                 AbsolutePathBuf::try_from(repo_b_root).unwrap(),
             ],
+            /*include_openai_curated*/ true,
         )
         .unwrap()
         .marketplaces;
@@ -2902,7 +2950,11 @@ enabled = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            /*include_openai_curated*/ true,
+        )
         .unwrap()
         .marketplaces;
 
