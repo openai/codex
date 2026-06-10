@@ -64,7 +64,7 @@ async fn token_budget_context_is_only_emitted_with_full_context() -> Result<()> 
     assert_eq!(requests.len(), 2);
 
     let expected = vec![format!(
-        "<token_budget>\nCurrent context window 0, window size {EFFECTIVE_CONTEXT_WINDOW} tokens\n</token_budget>"
+        "<token_budget>\nCurrent context window 0.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
     )];
     assert_eq!(token_budget_texts(&requests[0]), expected);
     assert_eq!(token_budget_texts(&requests[1]), expected);
@@ -118,15 +118,17 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
     let requests = responses.requests();
     assert_eq!(requests.len(), 5);
 
-    let full_context =
-        "<token_budget>\nCurrent context window 0, window size 9500 tokens\n</token_budget>"
-            .to_string();
+    let full_context = "<token_budget>\nCurrent context window 0.\nYou have 9500 tokens left in this context window.\n</token_budget>"
+        .to_string();
     let threshold_25 =
-        "<token_budget>\n7000 tokens left in the current window\n</token_budget>".to_string();
+        "<token_budget>\nYou have 7000 tokens left in this context window.\n</token_budget>"
+            .to_string();
     let threshold_50 =
-        "<token_budget>\n4500 tokens left in the current window\n</token_budget>".to_string();
+        "<token_budget>\nYou have 4500 tokens left in this context window.\n</token_budget>"
+            .to_string();
     let threshold_75 =
-        "<token_budget>\n1500 tokens left in the current window\n</token_budget>".to_string();
+        "<token_budget>\nYou have 1500 tokens left in this context window.\n</token_budget>"
+            .to_string();
 
     assert_eq!(token_budget_texts(&requests[0]), vec![full_context.clone()]);
     assert_eq!(
@@ -203,7 +205,7 @@ async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
     assert_eq!(
         token_budget_texts(&requests[2]),
         vec![format!(
-            "<token_budget>\nCurrent context window 1, window size {EFFECTIVE_CONTEXT_WINDOW} tokens\n</token_budget>"
+            "<token_budget>\nCurrent context window 1.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
         )]
     );
 

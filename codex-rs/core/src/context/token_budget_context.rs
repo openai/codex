@@ -3,14 +3,14 @@ use super::ContextualUserFragment;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TokenBudgetContext {
     window_id: u64,
-    window_size: i64,
+    tokens_left: i64,
 }
 
 impl TokenBudgetContext {
-    pub(crate) fn new(window_id: u64, window_size: i64) -> Self {
+    pub(crate) fn new(window_id: u64, tokens_left: i64) -> Self {
         Self {
             window_id,
-            window_size,
+            tokens_left,
         }
     }
 }
@@ -30,8 +30,10 @@ impl ContextualUserFragment for TokenBudgetContext {
 
     fn body(&self) -> String {
         let window_id = self.window_id;
-        let window_size = self.window_size;
-        format!("Current context window {window_id}, window size {window_size} tokens")
+        let tokens_left = self.tokens_left;
+        format!(
+            "Current context window {window_id}.\nYou have {tokens_left} tokens left in this context window."
+        )
     }
 }
 
@@ -61,6 +63,6 @@ impl ContextualUserFragment for TokenBudgetRemainingContext {
 
     fn body(&self) -> String {
         let tokens_left = self.tokens_left;
-        format!("{tokens_left} tokens left in the current window")
+        format!("You have {tokens_left} tokens left in this context window.")
     }
 }
