@@ -32,7 +32,7 @@ async fn materializes_and_reads_oversized_objective_through_store() {
 
     let reference = materialize_goal_draft(
         &mut store,
-        &codex_home,
+        Some(&codex_home),
         GoalDraft {
             objective: objective.clone(),
             ..Default::default()
@@ -72,7 +72,7 @@ async fn materializes_paste_and_image_through_store() {
 
     let objective = materialize_goal_draft(
         &mut store,
-        &codex_home,
+        Some(&codex_home),
         GoalDraft {
             objective,
             text_elements: vec![
@@ -117,4 +117,43 @@ fn path_after(text: &str, prefix: &str) -> AbsolutePathBuf {
         .next()
         .expect("path");
     AbsolutePathBuf::from_absolute_path_checked(path).expect("absolute path")
+}
+
+#[tokio::test]
+async fn plain_objective_does_not_need_codex_home() {
+    let mut store = LocalStore;
+
+    let objective = materialize_goal_draft(
+        &mut store,
+        /*codex_home*/ None,
+        GoalDraft {
+            objective: "read src/lib.rs".to_string(),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("materialize plain goal draft");
+
+    assert_eq!(objective, "read src/lib.rs");
+}
+
+#[tokio::test]
+async fn oversized_objective_requires_codex_home() {
+    let mut store = LocalStore;
+
+    let err = materialize_goal_draft(
+        &mut store,
+        /*codex_home*/ None,
+        GoalDraft {
+            objective: "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("oversized objective should require codex home");
+
+    assert!(
+        err.to_string().contains("$CODEX_HOME"),
+        "expected codex home error, got {err:#}"
+    );
 }

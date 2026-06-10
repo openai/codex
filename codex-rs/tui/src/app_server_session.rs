@@ -238,6 +238,16 @@ impl AppServerSession {
         matches!(self.thread_params_mode, ThreadParamsMode::Remote)
     }
 
+    pub(crate) fn goal_files_codex_home(
+        &self,
+        local_codex_home: &AbsolutePathBuf,
+    ) -> Option<AbsolutePathBuf> {
+        match self.thread_params_mode {
+            ThreadParamsMode::Embedded => Some(local_codex_home.clone()),
+            ThreadParamsMode::Remote => self.client.remote_codex_home().cloned(),
+        }
+    }
+
     pub(crate) fn server_version(&self) -> Option<&str> {
         let AppServerClient::Remote(client) = &self.client else {
             return None;

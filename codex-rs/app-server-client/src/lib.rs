@@ -53,6 +53,7 @@ pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -899,6 +900,13 @@ impl AppServerClient {
         }
     }
 
+    pub fn remote_codex_home(&self) -> Option<&AbsolutePathBuf> {
+        match self {
+            Self::InProcess(_) => None,
+            Self::Remote(client) => client.codex_home(),
+        }
+    }
+
     pub fn request_handle(&self) -> AppServerRequestHandle {
         match self {
             Self::InProcess(client) => AppServerRequestHandle::InProcess(client.request_handle()),
@@ -1104,6 +1112,9 @@ mod tests {
                 id: request.id,
                 result: serde_json::json!({
                     "userAgent": "codex_cli_rs/9.8.7-test (Test OS; x86_64) rust",
+                    "codexHome": test_remote_codex_home().display().to_string(),
+                    "platformFamily": "unix",
+                    "platformOs": "linux",
                 }),
             }),
         )
@@ -1114,6 +1125,11 @@ mod tests {
             panic!("expected initialized notification");
         };
         assert_eq!(notification.method, "initialized");
+    }
+
+    fn test_remote_codex_home() -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path(std::env::temp_dir().join("codex-remote-home"))
+            .expect("test remote codex home should be absolute")
     }
 
     async fn read_websocket_message<S>(
@@ -1440,6 +1456,7 @@ mod tests {
             .expect("remote client should connect");
 
         assert_eq!(client.server_version(), Some("9.8.7-test"));
+        assert_eq!(client.codex_home(), Some(&test_remote_codex_home()));
         let response: GetAccountResponse = client
             .request_typed(ClientRequest::GetAccount {
                 request_id: RequestId::Integer(1),

@@ -76,7 +76,7 @@ impl GoalFileStore for AppServerSession {
 
 pub(crate) async fn materialize_goal_draft(
     store: &mut impl GoalFileStore,
-    codex_home: &AbsolutePathBuf,
+    codex_home: Option<&AbsolutePathBuf>,
     draft: GoalDraft,
 ) -> Result<String> {
     let mut objective = draft.objective;
@@ -214,12 +214,14 @@ pub(crate) fn objective_file_reference(path: &Path) -> Result<String> {
 
 async fn ensure_output_dir(
     store: &mut impl GoalFileStore,
-    codex_home: &AbsolutePathBuf,
+    codex_home: Option<&AbsolutePathBuf>,
     output_dir: &mut Option<AbsolutePathBuf>,
 ) -> Result<AbsolutePathBuf> {
     if let Some(output_dir) = output_dir {
         return Ok(output_dir.clone());
     }
+    let codex_home = codex_home
+        .context("App server did not report $CODEX_HOME; cannot materialize goal files")?;
     let path = codex_home
         .join(GOAL_ATTACHMENT_DIR)
         .join(Uuid::new_v4().to_string());
