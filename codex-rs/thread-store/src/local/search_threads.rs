@@ -109,7 +109,8 @@ pub(super) async fn search_threads(
         )
         .await?;
         for item in page.items {
-            let Some(snippet) = (match remaining_rollouts.remove(item.path.as_path()) {
+            let logical_path = codex_rollout::plain_rollout_path(item.path.as_path());
+            let Some(snippet) = (match remaining_rollouts.remove(logical_path.as_path()) {
                 Some(Some(snippet)) => Some(snippet),
                 Some(None) => first_rollout_content_match_snippet(item.path.as_path(), search_term)
                     .await

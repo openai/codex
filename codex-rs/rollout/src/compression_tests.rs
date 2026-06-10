@@ -106,14 +106,13 @@ async fn append_rollout_item_materializes_compressed_rollout() -> anyhow::Result
 }
 
 #[tokio::test]
-async fn search_rollout_matches_returns_compressed_snippet() -> anyhow::Result<()> {
+async fn search_rollout_matches_uses_logical_path_for_compressed_rollout() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let uuid = Uuid::from_u128(15);
     let thread_id = ThreadId::from_string(&uuid.to_string())?;
     let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
     write_rollout(&rollout_path, thread_id, "targeted search term")?;
     compress_now(&rollout_path)?;
-    let compressed_path = compressed_rollout_path(&rollout_path);
 
     let matches = search_rollout_matches(
         std::path::Path::new("missing-rg-for-test"),
@@ -124,7 +123,7 @@ async fn search_rollout_matches_returns_compressed_snippet() -> anyhow::Result<(
     .await?;
 
     assert_eq!(
-        matches.get(compressed_path.as_path()),
+        matches.get(rollout_path.as_path()),
         Some(&Some("targeted search term".to_string()))
     );
     Ok(())
