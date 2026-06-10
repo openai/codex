@@ -115,7 +115,7 @@ impl RelayMessageFrame {
             Some(relay_message_frame::Body::Data(data)) => data.payload,
             _ => Vec::new(),
         };
-        serde_json::from_slice(&payload).map_err(ExecServerError::Json)
+        serde_json::from_slice(&payload).map_err(ExecServerError::from)
     }
 
     fn into_reset_reason(self) -> Option<String> {
@@ -138,7 +138,7 @@ fn decode_relay_message_frame(payload: &[u8]) -> Result<RelayMessageFrame, ExecS
 }
 
 fn jsonrpc_payload(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
-    serde_json::to_vec(message).map_err(ExecServerError::Json)
+    serde_json::to_vec(message).map_err(ExecServerError::from)
 }
 
 pub(crate) fn harness_connection_from_websocket<T, E>(

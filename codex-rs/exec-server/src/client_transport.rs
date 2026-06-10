@@ -1,4 +1,5 @@
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
@@ -58,20 +59,28 @@ impl ExecServerClient {
     ) -> Result<Self, ExecServerError> {
         ensure_rustls_crypto_provider();
         let websocket_url = args.websocket_url.clone();
+        let parsed_websocket_url = reqwest::Url::parse(&websocket_url).ok();
+        let redacted_websocket_url = parsed_websocket_url
+            .as_ref()
+            .map(redact_websocket_url)
+            .unwrap_or_else(|| "<invalid websocket URL>".to_string());
         let connect_timeout = args.connect_timeout;
         let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
             .await
             .map_err(|_| ExecServerError::WebSocketConnectTimeout {
-                url: websocket_url.clone(),
+                url: redacted_websocket_url.clone(),
                 timeout: connect_timeout,
             })?
             .map_err(|source| ExecServerError::WebSocketConnect {
-                url: websocket_url.clone(),
-                source,
+                url: redacted_websocket_url.clone(),
+                source: source.into(),
             })?;
 
-        let connection_label = format!("exec-server websocket {websocket_url}");
-        let connection = if is_rendezvous_harness_url(&websocket_url) {
+        let connection_label = format!("exec-server websocket {redacted_websocket_url}");
+        let connection = if parsed_websocket_url
+            .as_ref()
+            .is_some_and(is_rendezvous_harness_url)
+        {
             harness_connection_from_websocket(stream, connection_label)
         } else {
             JsonRpcConnection::from_websocket(stream, connection_label)
@@ -87,7 +96,7 @@ impl ExecServerClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(ExecServerError::Spawn)?;
+            .map_err(|error| ExecServerError::Spawn(Arc::new(error)))?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
             ExecServerError::Protocol("spawned exec-server command has no stdin".to_string())
@@ -120,13 +129,16 @@ impl ExecServerClient {
     }
 }
 
-fn is_rendezvous_harness_url(websocket_url: &str) -> bool {
-    let Some((_path, query)) = websocket_url.split_once('?') else {
-        return false;
-    };
-    query
-        .split('&')
-        .filter_map(|pair| pair.split_once('='))
+fn redact_websocket_url(websocket_url: &reqwest::Url) -> String {
+    let mut websocket_url = websocket_url.clone();
+    websocket_url.set_query(None);
+    websocket_url.set_fragment(None);
+    websocket_url.to_string()
+}
+
+fn is_rendezvous_harness_url(websocket_url: &reqwest::Url) -> bool {
+    websocket_url
+        .query_pairs()
         .any(|(key, value)| key == "role" && value == "harness")
 }
 

@@ -3,6 +3,7 @@ mod client_api;
 mod client_transport;
 mod connection;
 mod environment;
+mod environment_info;
 mod environment_path;
 mod environment_provider;
 mod environment_toml;

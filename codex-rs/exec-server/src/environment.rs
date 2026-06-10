@@ -1,17 +1,22 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::RwLock;
 
 use futures::FutureExt;
-use futures::future::BoxFuture;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::HttpClient;
 use crate::client::LazyRemoteExecServerClient;
+use crate::client::RemoteConnectionSource;
+use crate::client::RemoteWebSocketUrlProvider;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
+use crate::environment_info::EnvironmentInfoProvider;
+use crate::environment_info::LocalEnvironmentInfoProvider;
+use crate::environment_info::RemoteEnvironmentInfoProvider;
 use crate::environment_provider::DefaultEnvironmentProvider;
 use crate::environment_provider::EnvironmentDefault;
 use crate::environment_provider::EnvironmentProvider;
@@ -22,10 +27,8 @@ use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
 use crate::protocol::EnvironmentInfo;
-use crate::protocol::ShellInfo;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
-use codex_shell_command::shell_detect::DetectedShell;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
@@ -282,6 +285,35 @@ impl EnvironmentManager {
             .insert(environment_id, Arc::new(environment));
         Ok(())
     }
+
+    /// Adds or replaces a remote environment whose signed WebSocket URL is
+    /// resolved before every connection attempt.
+    pub fn upsert_environment_with_url_provider<F, Fut>(
+        &self,
+        environment_id: String,
+        websocket_url_provider: F,
+    ) -> Result<(), ExecServerError>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<String, ExecServerError>> + Send + 'static,
+    {
+        if environment_id.is_empty() {
+            return Err(ExecServerError::Protocol(
+                "environment id cannot be empty".to_string(),
+            ));
+        }
+        let websocket_url_provider: RemoteWebSocketUrlProvider =
+            Arc::new(move || websocket_url_provider().boxed());
+        let environment = Environment::remote_with_url_provider(
+            websocket_url_provider,
+            self.local_runtime_paths.clone(),
+        );
+        self.environments
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(environment_id, Arc::new(environment));
+        Ok(())
+    }
 }
 
 /// Concrete execution/filesystem environment selected for a session.
@@ -290,8 +322,7 @@ impl EnvironmentManager {
 /// paths used by filesystem helpers.
 #[derive(Clone)]
 pub struct Environment {
-    exec_server_url: Option<String>,
-    remote_transport: Option<ExecServerTransportParams>,
+    connection: EnvironmentConnection,
     info_provider: Arc<dyn EnvironmentInfoProvider>,
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
@@ -299,41 +330,17 @@ pub struct Environment {
     local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
 
-/// Provides environment metadata from either a local environment or a remote exec-server.
-trait EnvironmentInfoProvider: Send + Sync {
-    fn info(&self) -> BoxFuture<'_, Result<EnvironmentInfo, ExecServerError>>;
-}
-
-struct LocalEnvironmentInfoProvider;
-
-impl EnvironmentInfoProvider for LocalEnvironmentInfoProvider {
-    fn info(&self) -> BoxFuture<'_, Result<EnvironmentInfo, ExecServerError>> {
-        std::future::ready(Ok(EnvironmentInfo::local())).boxed()
-    }
-}
-
-struct RemoteEnvironmentInfoProvider {
-    client: LazyRemoteExecServerClient,
-}
-
-impl RemoteEnvironmentInfoProvider {
-    fn new(client: LazyRemoteExecServerClient) -> Self {
-        Self { client }
-    }
-}
-
-impl EnvironmentInfoProvider for RemoteEnvironmentInfoProvider {
-    fn info(&self) -> BoxFuture<'_, Result<EnvironmentInfo, ExecServerError>> {
-        async move { self.client.environment_info().await }.boxed()
-    }
+#[derive(Clone)]
+enum EnvironmentConnection {
+    Local,
+    Remote(RemoteConnectionSource),
 }
 
 impl Environment {
     /// Builds a test-only local environment without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
         Self {
-            exec_server_url: None,
-            remote_transport: None,
+            connection: EnvironmentConnection::Local,
             info_provider: Arc::new(LocalEnvironmentInfoProvider),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
@@ -346,7 +353,7 @@ impl Environment {
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Environment")
-            .field("exec_server_url", &self.exec_server_url)
+            .field("exec_server_url", &self.exec_server_url())
             .finish_non_exhaustive()
     }
 }
@@ -389,8 +396,7 @@ impl Environment {
 
     pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
-            exec_server_url: None,
-            remote_transport: None,
+            connection: EnvironmentConnection::Local,
             info_provider: Arc::new(LocalEnvironmentInfoProvider),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
@@ -415,21 +421,23 @@ impl Environment {
         remote_transport: ExecServerTransportParams,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        let exec_server_url = match &remote_transport {
-            ExecServerTransportParams::WebSocketUrl {
-                websocket_url: exec_server_url,
-                ..
-            } => Some(exec_server_url.clone()),
-            ExecServerTransportParams::StdioCommand { .. } => None,
-        };
-        let client = LazyRemoteExecServerClient::new(remote_transport.clone());
+        Self::remote(
+            RemoteConnectionSource::Fixed(remote_transport),
+            local_runtime_paths,
+        )
+    }
+
+    fn remote(
+        connection_source: RemoteConnectionSource,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Self {
+        let client = LazyRemoteExecServerClient::new(connection_source.clone());
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem: Arc<dyn ExecutorFileSystem> =
             Arc::new(RemoteFileSystem::new(client.clone()));
 
         Self {
-            exec_server_url,
-            remote_transport: Some(remote_transport),
+            connection: EnvironmentConnection::Remote(connection_source),
             info_provider: Arc::new(RemoteEnvironmentInfoProvider::new(client.clone())),
             exec_backend,
             filesystem,
@@ -438,13 +446,26 @@ impl Environment {
         }
     }
 
+    fn remote_with_url_provider(
+        websocket_url_provider: RemoteWebSocketUrlProvider,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Self {
+        Self::remote(
+            RemoteConnectionSource::RefreshingWebSocket(websocket_url_provider),
+            local_runtime_paths,
+        )
+    }
+
     pub fn is_remote(&self) -> bool {
-        self.remote_transport.is_some()
+        matches!(&self.connection, EnvironmentConnection::Remote(_))
     }
 
     /// Returns the remote exec-server URL when this environment is remote.
     pub fn exec_server_url(&self) -> Option<&str> {
-        self.exec_server_url.as_deref()
+        match &self.connection {
+            EnvironmentConnection::Local => None,
+            EnvironmentConnection::Remote(connection_source) => connection_source.configured_url(),
+        }
     }
 
     pub fn local_runtime_paths(&self) -> Option<&ExecServerRuntimePaths> {
@@ -466,23 +487,6 @@ impl Environment {
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         Arc::clone(&self.filesystem)
-    }
-}
-
-impl EnvironmentInfo {
-    pub(crate) fn local() -> Self {
-        Self {
-            shell: codex_shell_command::shell_detect::default_user_shell().into(),
-        }
-    }
-}
-
-impl From<DetectedShell> for ShellInfo {
-    fn from(shell: DetectedShell) -> Self {
-        Self {
-            name: shell.name().to_string(),
-            path: shell.shell_path.to_string_lossy().into_owned(),
-        }
     }
 }
 
