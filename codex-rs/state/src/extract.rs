@@ -35,7 +35,11 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::SessionMeta(_) | RolloutItem::TurnContext(_) => true,
         RolloutItem::EventMsg(
-            EventMsg::TokenCount(_) | EventMsg::UserMessage(_) | EventMsg::ThreadGoalUpdated(_),
+            EventMsg::SessionConfigured(_)
+            | EventMsg::ThreadSettingsApplied(_)
+            | EventMsg::TokenCount(_)
+            | EventMsg::UserMessage(_)
+            | EventMsg::ThreadGoalUpdated(_),
         ) => true,
         RolloutItem::EventMsg(_)
         | RolloutItem::ResponseItem(_)
@@ -78,6 +82,13 @@ fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem)
     }
     metadata.model = Some(turn_ctx.model.clone());
     metadata.reasoning_effort = turn_ctx.effort.clone();
+    metadata.runtime_workspace_roots = turn_ctx.workspace_roots.as_ref().map(|roots| {
+        roots
+            .iter()
+            .cloned()
+            .map(std::path::PathBuf::from)
+            .collect()
+    });
     metadata.sandbox_policy =
         serde_json::to_string(&turn_ctx.permission_profile()).unwrap_or_default();
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
@@ -108,6 +119,12 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
             if !objective.is_empty() {
                 set_preview_if_empty(metadata, Some(objective.to_string()));
             }
+        }
+        EventMsg::SessionConfigured(event) => {
+            metadata.approvals_reviewer = event.approvals_reviewer;
+        }
+        EventMsg::ThreadSettingsApplied(event) => {
+            metadata.approvals_reviewer = event.thread_settings.approvals_reviewer;
         }
         _ => {}
     }
@@ -539,6 +556,9 @@ mod tests {
             preview: None,
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+            runtime_workspace_roots: None,
+            automation_owner_thread_id: None,
             tokens_used: 1,
             first_user_message: None,
             archived_at: None,

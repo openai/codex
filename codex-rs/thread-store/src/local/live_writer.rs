@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
@@ -32,24 +33,64 @@ pub(super) async fn resume_thread(
     params: ResumeThreadParams,
 ) -> ThreadStoreResult<()> {
     store.ensure_live_recorder_absent(params.thread_id).await?;
-    let rollout_path = match (params.rollout_path, params.history) {
-        (Some(rollout_path), _history) => rollout_path,
-        (None, history) => {
+    let recorder_params = match params.rollout_path {
+        Some(rollout_path) => RolloutRecorderParams::resume(rollout_path),
+        None => {
             let thread = super::read_thread::read_thread(
                 store,
                 ReadThreadParams {
                     thread_id: params.thread_id,
                     include_archived: params.include_archived,
-                    include_history: history.is_none(),
+                    include_history: params.history.is_none(),
                 },
             )
             .await?;
 
-            thread
+            let rollout_path = thread
                 .rollout_path
                 .ok_or_else(|| ThreadStoreError::Internal {
                     message: format!("thread {} does not have a rollout path", params.thread_id),
-                })?
+                })?;
+            if codex_rollout::existing_rollout_path(rollout_path.as_path())
+                .await
+                .is_some()
+            {
+                RolloutRecorderParams::resume(rollout_path)
+            } else {
+                let session_meta = params
+                    .history
+                    .as_ref()
+                    .and_then(|history| {
+                        history.iter().find_map(|item| match item {
+                            RolloutItem::SessionMeta(meta_line)
+                                if meta_line.meta.id == params.thread_id =>
+                            {
+                                Some(&meta_line.meta)
+                            }
+                            RolloutItem::SessionMeta(_)
+                            | RolloutItem::ResponseItem(_)
+                            | RolloutItem::Compacted(_)
+                            | RolloutItem::TurnContext(_)
+                            | RolloutItem::EventMsg(_) => None,
+                        })
+                    })
+                    .ok_or_else(|| ThreadStoreError::Internal {
+                        message: format!(
+                            "thread {} does not have a rollout path",
+                            params.thread_id
+                        ),
+                    })?;
+                RolloutRecorderParams::new(
+                    params.thread_id,
+                    session_meta.forked_from_id,
+                    session_meta.parent_thread_id,
+                    session_meta.source.clone(),
+                    session_meta.thread_source,
+                    session_meta.base_instructions.clone().unwrap_or_default(),
+                    session_meta.dynamic_tools.clone().unwrap_or_default(),
+                )
+                .with_multi_agent_version(session_meta.multi_agent_version)
+            }
         }
     };
     let cwd = params
@@ -66,7 +107,7 @@ pub(super) async fn resume_thread(
         model_provider_id: params.metadata.model_provider.clone(),
         generate_memories: matches!(params.metadata.memory_mode, ThreadMemoryMode::Enabled),
     };
-    let recorder = RolloutRecorder::new(&config, RolloutRecorderParams::resume(rollout_path))
+    let recorder = RolloutRecorder::new(&config, recorder_params)
         .await
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to resume local thread recorder: {err}"),

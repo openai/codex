@@ -1,5 +1,6 @@
 use super::threads::ThreadFilterOptions;
 use super::threads::push_thread_filters;
+use super::threads::push_thread_select_columns;
 use super::*;
 use crate::SortDirection;
 use crate::model::Phase2JobClaimOutcome;
@@ -168,36 +169,9 @@ WHERE kind = ? AND job_key = ?
         let idle_cutoff =
             (Utc::now() - Duration::hours(min_rollout_idle_hours.max(0))).timestamp_millis();
 
-        let mut builder = QueryBuilder::<Sqlite>::new(
-            r#"
-SELECT
-    threads.id,
-    threads.rollout_path,
-    threads.created_at_ms AS created_at,
-    threads.updated_at_ms AS updated_at,
-    threads.source,
-    threads.thread_source,
-    threads.agent_path,
-    threads.agent_nickname,
-    threads.agent_role,
-    threads.model_provider,
-    threads.model,
-    threads.reasoning_effort,
-    threads.cwd,
-    threads.cli_version,
-    threads.title,
-    threads.preview,
-    threads.sandbox_policy,
-    threads.approval_mode,
-    threads.tokens_used,
-    threads.first_user_message,
-    threads.archived_at,
-    threads.git_sha,
-    threads.git_branch,
-    threads.git_origin_url
-FROM threads
-            "#,
-        );
+        let mut builder = QueryBuilder::<Sqlite>::new("");
+        push_thread_select_columns(&mut builder);
+        builder.push(" FROM threads");
         push_thread_filters(
             &mut builder,
             ThreadFilterOptions {
@@ -538,40 +512,15 @@ WHERE so.thread_id = ? AND so.source_updated_at = ?
         &self,
         thread_id: ThreadId,
     ) -> anyhow::Result<Option<ThreadMetadata>> {
-        let row = sqlx::query(
-            r#"
-SELECT
-    threads.id,
-    threads.rollout_path,
-    threads.created_at_ms AS created_at,
-    threads.updated_at_ms AS updated_at,
-    threads.source,
-    threads.thread_source,
-    threads.agent_nickname,
-    threads.agent_role,
-    threads.agent_path,
-    threads.model_provider,
-    threads.model,
-    threads.reasoning_effort,
-    threads.cwd,
-    threads.cli_version,
-    threads.title,
-    threads.preview,
-    threads.sandbox_policy,
-    threads.approval_mode,
-    threads.tokens_used,
-    threads.first_user_message,
-    threads.archived_at,
-    threads.git_sha,
-    threads.git_branch,
-    threads.git_origin_url
-FROM threads
-WHERE threads.id = ? AND threads.memory_mode = 'enabled'
-            "#,
-        )
-        .bind(thread_id.to_string())
-        .fetch_optional(self.state_pool.as_ref())
-        .await?;
+        let mut builder = QueryBuilder::<Sqlite>::new("");
+        push_thread_select_columns(&mut builder);
+        builder.push(" FROM threads WHERE threads.id = ");
+        builder.push_bind(thread_id.to_string());
+        builder.push(" AND threads.memory_mode = 'enabled'");
+        let row = builder
+            .build()
+            .fetch_optional(self.state_pool.as_ref())
+            .await?;
 
         row.map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
             .transpose()

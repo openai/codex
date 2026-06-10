@@ -5,6 +5,8 @@ use chrono::Utc;
 #[cfg(test)]
 use codex_protocol::ThreadId;
 #[cfg(test)]
+use codex_protocol::config_types::ApprovalsReviewer;
+#[cfg(test)]
 use codex_protocol::openai_models::ReasoningEffort;
 #[cfg(test)]
 use codex_protocol::protocol::AskForApproval;
@@ -61,6 +63,9 @@ pub(super) fn test_thread_metadata(
         preview: Some("hello".to_string()),
         sandbox_policy: crate::extract::enum_to_string(&SandboxPolicy::new_read_only_policy()),
         approval_mode: crate::extract::enum_to_string(&AskForApproval::OnRequest),
+        approvals_reviewer: ApprovalsReviewer::User,
+        runtime_workspace_roots: None,
+        automation_owner_thread_id: None,
         tokens_used: 0,
         first_user_message: Some("hello".to_string()),
         archived_at: None,

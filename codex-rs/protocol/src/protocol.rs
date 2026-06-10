@@ -107,6 +107,7 @@ pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+pub const AUTOMATION_SESSION_SOURCE_NAME: &str = "automation";
 
 // TODO(anp): Replace `TurnEnvironmentSelection` with `PathUri` once path URIs carry environment
 // identifiers.
@@ -2688,6 +2689,10 @@ impl fmt::Display for SessionSource {
 }
 
 impl SessionSource {
+    pub fn automation() -> Self {
+        Self::Custom(AUTOMATION_SESSION_SOURCE_NAME.to_string())
+    }
+
     pub fn from_startup_arg(value: &str) -> Result<Self, &'static str> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -2707,6 +2712,10 @@ impl SessionSource {
 
     pub fn is_internal(&self) -> bool {
         matches!(self, SessionSource::Internal(_))
+    }
+
+    pub fn is_automation(&self) -> bool {
+        matches!(self, SessionSource::Custom(value) if value == AUTOMATION_SESSION_SOURCE_NAME)
     }
 
     pub fn is_non_root_agent(&self) -> bool {

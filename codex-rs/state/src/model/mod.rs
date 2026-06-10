@@ -29,11 +29,13 @@ pub use thread_goal::ThreadGoalStatus;
 pub use thread_metadata::Anchor;
 pub use thread_metadata::BackfillStats;
 pub use thread_metadata::ExtractionOutcome;
+pub use thread_metadata::RuntimeThreadMetadataInput;
 pub use thread_metadata::SortDirection;
 pub use thread_metadata::SortKey;
 pub use thread_metadata::ThreadMetadata;
 pub use thread_metadata::ThreadMetadataBuilder;
 pub use thread_metadata::ThreadsPage;
+pub use thread_metadata::build_runtime_thread_metadata;
 
 pub(crate) use agent_job::AgentJobItemRow;
 pub(crate) use agent_job::AgentJobRow;

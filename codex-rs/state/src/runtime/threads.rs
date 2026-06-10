@@ -1,6 +1,5 @@
 use super::*;
 use crate::SortDirection;
-use codex_protocol::protocol::SessionSource;
 use std::sync::atomic::Ordering;
 
 impl StateRuntime {
@@ -26,6 +25,9 @@ SELECT
     threads.preview,
     threads.sandbox_policy,
     threads.approval_mode,
+    threads.approvals_reviewer,
+    threads.runtime_workspace_roots_json,
+    threads.automation_owner_thread_id,
     threads.tokens_used,
     threads.first_user_message,
     threads.archived_at,
@@ -289,41 +291,6 @@ ORDER BY depth ASC, child_thread_id ASC
             .collect()
     }
 
-    async fn insert_thread_spawn_edge_if_absent(
-        &self,
-        parent_thread_id: ThreadId,
-        child_thread_id: ThreadId,
-    ) -> anyhow::Result<()> {
-        sqlx::query(
-            r#"
-INSERT INTO thread_spawn_edges (
-    parent_thread_id,
-    child_thread_id,
-    status
-) VALUES (?, ?, ?)
-ON CONFLICT(child_thread_id) DO NOTHING
-            "#,
-        )
-        .bind(parent_thread_id.to_string())
-        .bind(child_thread_id.to_string())
-        .bind(crate::DirectionalThreadSpawnEdgeStatus::Open.as_ref())
-        .execute(self.pool.as_ref())
-        .await?;
-        Ok(())
-    }
-
-    async fn insert_thread_spawn_edge_from_source_if_absent(
-        &self,
-        child_thread_id: ThreadId,
-        source: &str,
-    ) -> anyhow::Result<()> {
-        let Some(parent_thread_id) = thread_spawn_parent_thread_id_from_source_str(source) else {
-            return Ok(());
-        };
-        self.insert_thread_spawn_edge_if_absent(parent_thread_id, child_thread_id)
-            .await
-    }
-
     /// Find a rollout path by thread id using the underlying database.
     pub async fn find_rollout_path_by_id(
         &self,
@@ -499,6 +466,8 @@ ON CONFLICT(child_thread_id) DO NOTHING
     ) -> anyhow::Result<bool> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
         let preview = metadata_preview(metadata);
+        let runtime_workspace_roots_json =
+            thread_runtime_workspace_roots_json(metadata.runtime_workspace_roots.as_deref())?;
         let result = sqlx::query(
             r#"
 INSERT INTO threads (
@@ -522,6 +491,9 @@ INSERT INTO threads (
     preview,
     sandbox_policy,
     approval_mode,
+    approvals_reviewer,
+    runtime_workspace_roots_json,
+    automation_owner_thread_id,
     tokens_used,
     first_user_message,
     archived,
@@ -530,7 +502,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -564,6 +536,13 @@ ON CONFLICT(id) DO NOTHING
         .bind(preview)
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
+        .bind(crate::extract::enum_to_string(&metadata.approvals_reviewer))
+        .bind(runtime_workspace_roots_json.as_deref())
+        .bind(
+            metadata
+                .automation_owner_thread_id
+                .map(|thread_id| thread_id.to_string()),
+        )
         .bind(metadata.tokens_used)
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
         .bind(metadata.archived_at.is_some())
@@ -574,7 +553,7 @@ ON CONFLICT(id) DO NOTHING
         .bind("enabled")
         .execute(self.pool.as_ref())
         .await?;
-        self.insert_thread_spawn_edge_from_source_if_absent(metadata.id, metadata.source.as_str())
+        self.upsert_thread_spawn_edge_from_metadata(metadata, /*previous_metadata*/ None)
             .await?;
         Ok(result.rows_affected() > 0)
     }
@@ -701,8 +680,11 @@ WHERE id = ?
         metadata: &crate::ThreadMetadata,
         creation_memory_mode: Option<&str>,
     ) -> anyhow::Result<()> {
+        let previous_metadata = self.get_thread(metadata.id).await?;
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
         let preview = metadata_preview(metadata);
+        let runtime_workspace_roots_json =
+            thread_runtime_workspace_roots_json(metadata.runtime_workspace_roots.as_deref())?;
         // Backfill/reconcile callers merge existing git info before upserting, but that
         // read/modify/write is not atomic. Preserve non-null SQLite git fields here so
         // an explicit metadata update cannot be lost if a stale rollout upsert lands later.
@@ -729,6 +711,9 @@ INSERT INTO threads (
     preview,
     sandbox_policy,
     approval_mode,
+    approvals_reviewer,
+    runtime_workspace_roots_json,
+    automation_owner_thread_id,
     tokens_used,
     first_user_message,
     archived,
@@ -737,7 +722,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -758,6 +743,9 @@ ON CONFLICT(id) DO UPDATE SET
     preview = COALESCE(NULLIF(excluded.preview, ''), threads.preview),
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
+    approvals_reviewer = excluded.approvals_reviewer,
+    runtime_workspace_roots_json = excluded.runtime_workspace_roots_json,
+    automation_owner_thread_id = excluded.automation_owner_thread_id,
     tokens_used = excluded.tokens_used,
     first_user_message = excluded.first_user_message,
     archived = excluded.archived,
@@ -797,6 +785,13 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(preview)
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
+        .bind(crate::extract::enum_to_string(&metadata.approvals_reviewer))
+        .bind(runtime_workspace_roots_json.as_deref())
+        .bind(
+            metadata
+                .automation_owner_thread_id
+                .map(|thread_id| thread_id.to_string()),
+        )
         .bind(metadata.tokens_used)
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
         .bind(metadata.archived_at.is_some())
@@ -807,7 +802,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(creation_memory_mode.unwrap_or("enabled"))
         .execute(self.pool.as_ref())
         .await?;
-        self.insert_thread_spawn_edge_from_source_if_absent(metadata.id, metadata.source.as_str())
+        self.upsert_thread_spawn_edge_from_metadata(metadata, previous_metadata.as_ref())
             .await?;
         Ok(())
     }
@@ -1093,6 +1088,9 @@ SELECT
     threads.preview,
     threads.sandbox_policy,
     threads.approval_mode,
+    threads.approvals_reviewer,
+    threads.runtime_workspace_roots_json,
+    threads.automation_owner_thread_id,
     threads.tokens_used,
     threads.first_user_message,
     threads.archived_at,
@@ -1112,12 +1110,6 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,
     })
-}
-
-fn thread_spawn_parent_thread_id_from_source_str(source: &str) -> Option<ThreadId> {
-    let parsed_source = serde_json::from_str(source)
-        .or_else(|_| serde_json::from_value::<SessionSource>(Value::String(source.to_string())));
-    parsed_source.ok()?.parent_thread_id()
 }
 
 #[derive(Clone, Copy)]
@@ -1257,6 +1249,22 @@ fn metadata_preview(metadata: &crate::ThreadMetadata) -> &str {
         .as_deref()
         .or(metadata.first_user_message.as_deref())
         .unwrap_or_default()
+}
+
+fn thread_runtime_workspace_roots_json(
+    runtime_workspace_roots: Option<&[PathBuf]>,
+) -> anyhow::Result<Option<String>> {
+    runtime_workspace_roots
+        .map(|roots| {
+            serde_json::to_string(
+                &roots
+                    .iter()
+                    .map(|root| root.display().to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(Into::into)
+        })
+        .transpose()
 }
 
 #[cfg(test)]

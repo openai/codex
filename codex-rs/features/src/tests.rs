@@ -132,6 +132,13 @@ fn guardian_approval_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn automations_is_under_development() {
+    assert_eq!(Feature::Automations.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::Automations.default_enabled(), false);
+    assert_eq!(feature_for_key("automations"), Some(Feature::Automations));
+}
+
+#[test]
 fn request_permissions_is_under_development() {
     assert_eq!(
         Feature::ExecPermissionApprovals.stage(),

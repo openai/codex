@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -10,6 +11,8 @@ use codex_protocol::protocol::ThreadSource;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;
+
+const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
 
 /// The sort key to use when listing threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +98,12 @@ pub struct ThreadMetadata {
     pub sandbox_policy: String,
     /// The approval mode (stringified enum).
     pub approval_mode: String,
+    /// The approval reviewer routing captured for the thread.
+    pub approvals_reviewer: ApprovalsReviewer,
+    /// Effective runtime workspace roots captured for the thread, if known.
+    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    /// Owner thread for automation-spawned threads, if any.
+    pub automation_owner_thread_id: Option<ThreadId>,
     /// The last observed token usage.
     pub tokens_used: i64,
     /// First user message observed for this thread, if any.
@@ -140,6 +149,10 @@ pub struct ThreadMetadataBuilder {
     pub sandbox_policy: SandboxPolicy,
     /// The approval mode.
     pub approval_mode: AskForApproval,
+    /// The approval reviewer routing.
+    pub approvals_reviewer: ApprovalsReviewer,
+    /// Effective runtime workspace roots, if known.
+    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
     /// The archive timestamp, if the thread is archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// The git commit SHA, if known.
@@ -148,6 +161,45 @@ pub struct ThreadMetadataBuilder {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
+}
+
+/// Fully resolved runtime thread settings used to persist a thread record into sqlite.
+///
+/// Callers should populate this from the current live thread/session configuration rather than
+/// rollout-derived metadata. This keeps state-db materialization logic consistent across core and
+/// app-server surfaces that need to upsert the current thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeThreadMetadataInput {
+    /// The thread identifier.
+    pub id: ThreadId,
+    /// The absolute rollout path on disk.
+    pub rollout_path: PathBuf,
+    /// Timestamp to record for thread creation/update when first materializing the row.
+    pub created_at: DateTime<Utc>,
+    /// The session source for the running thread.
+    pub session_source: SessionSource,
+    /// Optional analytics source classification for this thread.
+    pub thread_source: Option<ThreadSource>,
+    /// The model provider identifier.
+    pub model_provider_id: String,
+    /// The working directory for the thread.
+    pub cwd: PathBuf,
+    /// Version of the CLI that created the thread.
+    pub cli_version: String,
+    /// The sandbox policy applied to the running thread.
+    pub sandbox_policy: SandboxPolicy,
+    /// The approval mode applied to the running thread.
+    pub approval_mode: AskForApproval,
+    /// The approval reviewer applied to the running thread.
+    pub approvals_reviewer: ApprovalsReviewer,
+    /// Effective runtime workspace roots applied to the running thread.
+    pub runtime_workspace_roots: Vec<PathBuf>,
+    /// Owner thread for automation-spawned threads, if any.
+    pub automation_owner_thread_id: Option<ThreadId>,
+    /// The active model for the running thread.
+    pub model: String,
+    /// The active reasoning effort for the running thread.
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl ThreadMetadataBuilder {
@@ -173,6 +225,8 @@ impl ThreadMetadataBuilder {
             cli_version: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             approval_mode: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::User,
+            runtime_workspace_roots: None,
             archived_at: None,
             git_sha: None,
             git_branch: None,
@@ -215,6 +269,9 @@ impl ThreadMetadataBuilder {
             preview: None,
             sandbox_policy,
             approval_mode,
+            approvals_reviewer: self.approvals_reviewer,
+            runtime_workspace_roots: self.runtime_workspace_roots.clone(),
+            automation_owner_thread_id: None,
             tokens_used: 0,
             first_user_message: None,
             archived_at: self.archived_at.map(canonicalize_datetime),
@@ -225,7 +282,50 @@ impl ThreadMetadataBuilder {
     }
 }
 
+pub fn build_runtime_thread_metadata(input: RuntimeThreadMetadataInput) -> ThreadMetadata {
+    let RuntimeThreadMetadataInput {
+        id,
+        rollout_path,
+        created_at,
+        session_source,
+        thread_source,
+        model_provider_id,
+        cwd,
+        cli_version,
+        sandbox_policy,
+        approval_mode,
+        approvals_reviewer,
+        runtime_workspace_roots,
+        automation_owner_thread_id,
+        model,
+        reasoning_effort,
+    } = input;
+    let mut builder = ThreadMetadataBuilder::new(id, rollout_path, created_at, session_source);
+    builder.thread_source = thread_source;
+    builder.model_provider = Some(model_provider_id.clone());
+    builder.cwd = cwd;
+    builder.cli_version = Some(cli_version);
+    builder.sandbox_policy = sandbox_policy;
+    builder.approval_mode = approval_mode;
+    builder.approvals_reviewer = approvals_reviewer;
+    builder.runtime_workspace_roots =
+        (!runtime_workspace_roots.is_empty()).then_some(runtime_workspace_roots);
+    let mut metadata = builder.build(model_provider_id.as_str());
+    metadata.model = Some(model);
+    metadata.reasoning_effort = reasoning_effort;
+    metadata.automation_owner_thread_id = automation_owner_thread_id;
+    metadata
+}
+
 impl ThreadMetadata {
+    pub fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+            || self
+                .rollout_path
+                .components()
+                .any(|component| component.as_os_str() == ARCHIVED_SESSIONS_SUBDIR)
+    }
+
     /// Preserve existing non-null Git fields when rollout-derived metadata is reconciled.
     pub fn prefer_existing_git_info(&mut self, existing: &Self) {
         if existing.git_sha.is_some() {
@@ -308,6 +408,15 @@ impl ThreadMetadata {
         if self.approval_mode != other.approval_mode {
             diffs.push("approval_mode");
         }
+        if self.approvals_reviewer != other.approvals_reviewer {
+            diffs.push("approvals_reviewer");
+        }
+        if self.runtime_workspace_roots != other.runtime_workspace_roots {
+            diffs.push("runtime_workspace_roots");
+        }
+        if self.automation_owner_thread_id != other.automation_owner_thread_id {
+            diffs.push("automation_owner_thread_id");
+        }
         if self.tokens_used != other.tokens_used {
             diffs.push("tokens_used");
         }
@@ -354,6 +463,9 @@ pub(crate) struct ThreadRow {
     preview: String,
     sandbox_policy: String,
     approval_mode: String,
+    approvals_reviewer: String,
+    runtime_workspace_roots_json: Option<String>,
+    automation_owner_thread_id: Option<String>,
     tokens_used: i64,
     first_user_message: String,
     archived_at: Option<i64>,
@@ -383,6 +495,9 @@ impl ThreadRow {
             preview: row.try_get("preview")?,
             sandbox_policy: row.try_get("sandbox_policy")?,
             approval_mode: row.try_get("approval_mode")?,
+            approvals_reviewer: row.try_get("approvals_reviewer")?,
+            runtime_workspace_roots_json: row.try_get("runtime_workspace_roots_json")?,
+            automation_owner_thread_id: row.try_get("automation_owner_thread_id")?,
             tokens_used: row.try_get("tokens_used")?,
             first_user_message: row.try_get("first_user_message")?,
             archived_at: row.try_get("archived_at")?,
@@ -416,6 +531,9 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             preview,
             sandbox_policy,
             approval_mode,
+            approvals_reviewer,
+            runtime_workspace_roots_json,
+            automation_owner_thread_id,
             tokens_used,
             first_user_message,
             archived_at,
@@ -447,6 +565,13 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             preview: (!preview.is_empty()).then_some(preview),
             sandbox_policy,
             approval_mode,
+            approvals_reviewer: parse_approvals_reviewer(approvals_reviewer.as_str()),
+            runtime_workspace_roots: runtime_workspace_roots_json
+                .map(parse_runtime_workspace_roots)
+                .transpose()?,
+            automation_owner_thread_id: automation_owner_thread_id
+                .map(|thread_id| ThreadId::from_string(&thread_id))
+                .transpose()?,
             tokens_used,
             first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
             archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
@@ -471,6 +596,15 @@ pub(crate) fn datetime_to_epoch_millis(dt: DateTime<Utc>) -> i64 {
 
 pub(crate) fn datetime_to_epoch_seconds(dt: DateTime<Utc>) -> i64 {
     dt.timestamp()
+}
+
+fn parse_approvals_reviewer(value: &str) -> ApprovalsReviewer {
+    serde_json::from_value(serde_json::Value::String(value.to_string())).unwrap_or_default()
+}
+
+fn parse_runtime_workspace_roots(value: String) -> Result<Vec<PathBuf>> {
+    let roots = serde_json::from_str::<Vec<String>>(value.as_str())?;
+    Ok(roots.into_iter().map(PathBuf::from).collect())
 }
 
 pub(crate) fn epoch_millis_to_datetime(value: i64) -> Result<DateTime<Utc>> {
@@ -509,6 +643,7 @@ mod tests {
     use chrono::DateTime;
     use chrono::Utc;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -533,6 +668,9 @@ mod tests {
             preview: String::new(),
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
+            approvals_reviewer: "user".to_string(),
+            runtime_workspace_roots_json: None,
+            automation_owner_thread_id: None,
             tokens_used: 1,
             first_user_message: String::new(),
             archived_at: None,
@@ -563,6 +701,9 @@ mod tests {
             preview: None,
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
+            approvals_reviewer: ApprovalsReviewer::User,
+            runtime_workspace_roots: None,
+            automation_owner_thread_id: None,
             tokens_used: 1,
             first_user_message: None,
             archived_at: None,
@@ -592,5 +733,22 @@ mod tests {
             metadata,
             expected_thread_metadata(Some(ReasoningEffort::Custom("future".to_string())))
         );
+    }
+
+    #[test]
+    fn thread_metadata_is_archived_when_archived_at_is_present() {
+        let mut metadata = expected_thread_metadata(None);
+        metadata.archived_at =
+            Some(DateTime::<Utc>::from_timestamp(1_700_000_200, 0).expect("timestamp"));
+
+        assert_eq!(metadata.is_archived(), true);
+    }
+
+    #[test]
+    fn thread_metadata_is_archived_when_rollout_path_is_archived() {
+        let mut metadata = expected_thread_metadata(None);
+        metadata.rollout_path = PathBuf::from("/tmp/archived_sessions/rollout-123.jsonl");
+
+        assert_eq!(metadata.is_archived(), true);
     }
 }

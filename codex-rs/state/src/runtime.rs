@@ -67,6 +67,7 @@ mod recovery;
 mod remote_control;
 #[cfg(test)]
 mod test_support;
+mod thread_spawn_lineage;
 mod threads;
 
 pub use external_agent_config_imports::ExternalAgentConfigImportDetailsRecord;
