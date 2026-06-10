@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::io;
-use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
+#[cfg(test)]
 use codex_utils_image::MAX_PROMPT_IMAGE_FILE_BYTES;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
-use codex_utils_image::validate_prompt_image_file_size;
+use codex_utils_image::read_prompt_image_file;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -1258,24 +1258,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     UserInput::LocalImage { path, detail, .. } => {
                         image_index += 1;
                         let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
-                        let file_bytes = std::fs::metadata(&path).and_then(|metadata| {
-                            if !metadata.is_file() {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::InvalidInput,
-                                    "local image path is not a regular file",
-                                ));
-                            }
-                            validate_prompt_image_file_size(metadata.len())?;
-
-                            let capacity = usize::try_from(metadata.len()).unwrap_or_default();
-                            let mut file_bytes = Vec::with_capacity(capacity);
-                            std::fs::File::open(&path)?
-                                .take(MAX_PROMPT_IMAGE_FILE_BYTES + 1)
-                                .read_to_end(&mut file_bytes)?;
-                            let file_size = u64::try_from(file_bytes.len()).unwrap_or(u64::MAX);
-                            validate_prompt_image_file_size(file_size)?;
-                            Ok(file_bytes)
-                        });
+                        let file_bytes = read_prompt_image_file(&path);
                         match file_bytes {
                             Ok(file_bytes) => local_image_content_items_with_label_number(
                                 &path,

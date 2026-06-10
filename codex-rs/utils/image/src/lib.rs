@@ -1,7 +1,12 @@
+use std::fs::OpenOptions;
 use std::io;
+use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::LazyLock;
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -19,6 +24,8 @@ use image::imageops::FilterType;
 /// Maximum width or height used when resizing images before uploading.
 pub const MAX_DIMENSION: u32 = 2048;
 /// Maximum compressed file size accepted for an image added to a prompt.
+///
+/// 50 MiB accommodates large source images while bounding the allocation made before decoding.
 pub const MAX_PROMPT_IMAGE_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
 pub mod error;
@@ -46,8 +53,7 @@ pub enum PromptImageMode {
     Original,
 }
 
-/// Validates the compressed byte size of an image before prompt processing.
-pub fn validate_prompt_image_file_size(file_size: u64) -> io::Result<()> {
+fn validate_prompt_image_file_size(file_size: u64) -> io::Result<()> {
     if file_size > MAX_PROMPT_IMAGE_FILE_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -55,6 +61,35 @@ pub fn validate_prompt_image_file_size(file_size: u64) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Reads a regular image file into memory, up to the prompt image size limit.
+///
+/// On Unix, the file is opened in nonblocking mode so a path resolving to a FIFO or other special
+/// file cannot block before its type is checked. Metadata and bytes are read from the same handle.
+pub fn read_prompt_image_file(path: &Path) -> io::Result<Vec<u8>> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "local image path is not a regular file",
+        ));
+    }
+    validate_prompt_image_file_size(metadata.len())?;
+
+    let capacity = usize::try_from(metadata.len()).unwrap_or_default();
+    let mut file_bytes = Vec::with_capacity(capacity);
+    file.take(MAX_PROMPT_IMAGE_FILE_BYTES + 1)
+        .read_to_end(&mut file_bytes)?;
+    let file_size = u64::try_from(file_bytes.len()).unwrap_or(u64::MAX);
+    validate_prompt_image_file_size(file_size)?;
+    Ok(file_bytes)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -217,6 +252,15 @@ fn format_to_mime(format: ImageFormat) -> String {
 mod tests {
     use std::io::Cursor;
 
+    #[cfg(unix)]
+    use std::ffi::CString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    use std::sync::mpsc;
+    #[cfg(unix)]
+    use std::time::Duration;
+
     use super::*;
     use image::GenericImageView;
     use image::ImageBuffer;
@@ -241,6 +285,39 @@ mod tests {
             (
                 io::ErrorKind::InvalidData,
                 format!("image exceeds the {MAX_PROMPT_IMAGE_FILE_BYTES}-byte limit"),
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prompt_image_file_read_rejects_fifo_without_blocking() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let fifo_path = dir.path().join("image.png");
+        let c_path = CString::new(fifo_path.as_os_str().as_bytes()).expect("path without nul");
+        // SAFETY: `c_path` is NUL-terminated and remains valid for the duration of the call.
+        let result = unsafe {
+            libc::mkfifo(c_path.as_ptr(), /*mode*/ 0o600)
+        };
+        assert_eq!(result, 0);
+
+        let (sender, receiver) = mpsc::channel();
+        let read_thread = std::thread::spawn(move || {
+            sender
+                .send(read_prompt_image_file(&fifo_path))
+                .expect("send read result");
+        });
+        let read_result = receiver
+            .recv_timeout(Duration::from_secs(/*secs*/ 5))
+            .expect("FIFO read should return without blocking");
+        read_thread.join().expect("join read thread");
+
+        let error = read_result.expect_err("reject FIFO");
+        assert_eq!(
+            (error.kind(), error.to_string()),
+            (
+                io::ErrorKind::InvalidInput,
+                "local image path is not a regular file".to_string(),
             )
         );
     }

@@ -15,9 +15,13 @@ mime_guess = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "rt", "rt-multi-thread", "macros"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 divan = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
+tempfile = { workspace = true }
 
 [lib]
 doctest = false
