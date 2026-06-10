@@ -38,6 +38,7 @@ use codex_utils_cli::ProfileV2Name;
 use codex_utils_cli::SharedCliOptions;
 use codex_utils_cli::resume_hint;
 use owo_colors::OwoColorize;
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -2188,7 +2189,7 @@ async fn run_interactive_tui(
             remote_endpoint.clone(),
         )
     };
-    let mut attempted_repair = false;
+    let mut attempted_backups = HashSet::new();
     loop {
         let err = match start_tui().await {
             Ok(exit_info) => return Ok(exit_info),
@@ -2201,25 +2202,25 @@ async fn run_interactive_tui(
             local_state_db::print_locked_guidance(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
-        if attempted_repair {
+        if !local_state_db::is_auto_backup_recoverable(startup_error) {
             local_state_db::print_diagnostic_guidance(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
-        if !local_state_db::confirm_repair(startup_error)? {
+        if !attempted_backups.insert(startup_error.database_path().to_path_buf()) {
             local_state_db::print_diagnostic_guidance(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
 
-        match local_state_db::repair_files(startup_error).await {
-            Ok(backups) => local_state_db::print_repair_backups(&backups),
-            Err(repair_err) => {
+        local_state_db::print_auto_backup_start(startup_error);
+        match local_state_db::backup_files_for_fresh_start(startup_error).await {
+            Ok(backups) => local_state_db::confirm_fresh_start_rebuild(startup_error, &backups)?,
+            Err(backup_err) => {
                 local_state_db::print_diagnostic_guidance(startup_error);
                 return Ok(AppExitInfo::fatal(format!(
-                    "failed to repair Codex local data automatically: {repair_err}"
+                    "failed to move damaged Codex local database files into a backup folder automatically: {backup_err}"
                 )));
             }
         }
-        attempted_repair = true;
     }
 }
 

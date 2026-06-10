@@ -24,11 +24,6 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
-use codex_app_server_protocol::ExternalAgentConfigDetectParams;
-use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
-use codex_app_server_protocol::ExternalAgentConfigImportParams;
-use codex_app_server_protocol::ExternalAgentConfigImportResponse;
-use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::FsCreateDirectoryParams;
 use codex_app_server_protocol::FsCreateDirectoryResponse;
 use codex_app_server_protocol::FsReadFileParams;
@@ -355,31 +350,6 @@ impl AppServerSession {
             })
             .await
             .map_err(|err| bootstrap_request_error("account/read failed during TUI bootstrap", err))
-    }
-
-    pub(crate) async fn external_agent_config_detect(
-        &mut self,
-        params: ExternalAgentConfigDetectParams,
-    ) -> Result<ExternalAgentConfigDetectResponse> {
-        let request_id = self.next_request_id();
-        self.client
-            .request_typed(ClientRequest::ExternalAgentConfigDetect { request_id, params })
-            .await
-            .wrap_err("externalAgentConfig/detect failed during TUI startup")
-    }
-
-    pub(crate) async fn external_agent_config_import(
-        &mut self,
-        migration_items: Vec<ExternalAgentConfigMigrationItem>,
-    ) -> Result<ExternalAgentConfigImportResponse> {
-        let request_id = self.next_request_id();
-        self.client
-            .request_typed(ClientRequest::ExternalAgentConfigImport {
-                request_id,
-                params: ExternalAgentConfigImportParams { migration_items },
-            })
-            .await
-            .wrap_err("externalAgentConfig/import failed during TUI startup")
     }
 
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {

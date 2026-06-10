@@ -573,14 +573,14 @@ impl App {
             }
             AppEvent::FetchPluginInstall {
                 cwd,
-                marketplace_path,
+                location,
                 plugin_name,
                 plugin_display_name,
             } => {
                 self.fetch_plugin_install(
                     app_server,
                     cwd,
-                    marketplace_path,
+                    location,
                     plugin_name,
                     plugin_display_name,
                 );
@@ -601,7 +601,7 @@ impl App {
             }
             AppEvent::PluginInstallLoaded {
                 cwd,
-                marketplace_path,
+                location,
                 plugin_name,
                 plugin_display_name,
                 result,
@@ -612,7 +612,7 @@ impl App {
                 }
                 let should_refresh_plugin_detail = self.chat_widget.on_plugin_install_loaded(
                     cwd.clone(),
-                    marketplace_path.clone(),
+                    location.clone(),
                     plugin_name.clone(),
                     plugin_display_name,
                     result,
@@ -621,12 +621,14 @@ impl App {
                 {
                     self.fetch_plugins_list(app_server, cwd.clone());
                     if should_refresh_plugin_detail {
+                        let (marketplace_path, remote_marketplace_name) =
+                            location.into_request_params();
                         self.fetch_plugin_detail(
                             app_server,
                             cwd,
                             PluginReadParams {
-                                marketplace_path: Some(marketplace_path),
-                                remote_marketplace_name: None,
+                                marketplace_path,
+                                remote_marketplace_name,
                                 plugin_name,
                             },
                         );

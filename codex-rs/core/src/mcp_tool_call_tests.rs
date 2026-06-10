@@ -46,6 +46,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::tempdir;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -1256,13 +1257,14 @@ fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
 
 async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: &TurnContext) {
     let auth = session.services.auth_manager.auth().await;
-    let (manager, _cancel_token) = codex_mcp::McpConnectionManager::new(
+    let manager = codex_mcp::McpConnectionManager::new(
         &HashMap::new(),
         turn_context.config.mcp_oauth_credentials_store_mode,
         HashMap::new(),
         &turn_context.approval_policy,
         turn_context.sub_id.clone(),
         session.get_tx_event(),
+        CancellationToken::new(),
         turn_context.permission_profile(),
         codex_mcp::McpRuntimeContext::new(Arc::clone(&session.services.environment_manager), {
             #[allow(deprecated)]
@@ -1278,7 +1280,10 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         /*elicitation_reviewer*/ None,
     )
     .await;
-    *session.services.mcp_connection_manager.write().await = manager;
+    session
+        .services
+        .mcp_connection_manager
+        .store(Arc::new(manager));
 }
 
 #[tokio::test]

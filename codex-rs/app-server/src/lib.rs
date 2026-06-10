@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use codex_arg0::Arg0DispatchPaths;
@@ -73,6 +74,8 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
+
+const SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY: &str = "Codex rebuilt its local database.";
 
 mod analytics_utils;
 mod app_server_tracing;
@@ -533,8 +536,8 @@ pub async fn run_main_with_transport_options(
         }
         _ => None,
     };
-    let state_db = match rollout_state_db::try_init(&config).await {
-        Ok(state_db) => Some(state_db),
+    let state_db_init = match init_sqlite_state_db_with_fresh_start_on_corruption(&config).await {
+        Ok(state_db_init) => state_db_init,
         Err(err) => {
             return Err(std::io::Error::other(format!(
                 "failed to initialize sqlite state runtime under {}: {err}",
@@ -542,6 +545,15 @@ pub async fn run_main_with_transport_options(
             )));
         }
     };
+    let state_db = state_db_init.state_db;
+    if let Some(recovery_notice) = state_db_init.recovery_notice {
+        config_warnings.push(ConfigWarningNotification {
+            summary: SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY.to_string(),
+            details: Some(recovery_notice.details),
+            path: None,
+            range: None,
+        });
+    }
 
     if should_run_personality_migration {
         let effective_toml = config.config_layer_stack.effective_config();
@@ -1097,6 +1109,121 @@ pub async fn run_main_with_transport_options(
     }
 
     Ok(())
+}
+
+struct SqliteRecoveryNotice {
+    details: String,
+}
+
+struct RecoveredSqliteDatabase {
+    database_path: String,
+    backup_folder: String,
+}
+
+struct StateDbInitResult {
+    state_db: Option<rollout_state_db::StateDbHandle>,
+    recovery_notice: Option<SqliteRecoveryNotice>,
+}
+
+async fn init_sqlite_state_db_with_fresh_start_on_corruption(
+    config: &Config,
+) -> anyhow::Result<StateDbInitResult> {
+    let mut attempted_backups = HashSet::new();
+    let mut recovered_databases = Vec::new();
+    loop {
+        let err = match rollout_state_db::try_init(config).await {
+            Ok(state_db) => {
+                let recovery_notice = sqlite_recovery_notice(&recovered_databases);
+                if recovery_notice.is_some() {
+                    emit_state_db_backup_warning(SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY);
+                    for recovered_database in &recovered_databases {
+                        emit_state_db_backup_warning(&format!(
+                            "Database path: {}",
+                            recovered_database.database_path
+                        ));
+                        emit_state_db_backup_warning(&format!(
+                            "Backup folder: {}",
+                            recovered_database.backup_folder
+                        ));
+                    }
+                }
+                return Ok(StateDbInitResult {
+                    state_db: Some(state_db),
+                    recovery_notice,
+                });
+            }
+            Err(err) => err,
+        };
+        if !codex_state::is_sqlite_corruption_error(&err) {
+            return Err(err);
+        }
+
+        let database_path = codex_state::runtime_db_path_for_corruption_error(&err)
+            .unwrap_or_else(|| codex_state::state_db_path(config.sqlite_home.as_path()));
+        if !attempted_backups.insert(database_path.clone()) {
+            return Err(anyhow::anyhow!(
+                "failed to initialize sqlite state runtime after moving damaged database file into a backup folder: {err}"
+            ));
+        }
+
+        let original_error = err.to_string();
+        emit_state_db_backup_warning(&format!(
+            "Codex local database at {} appears damaged. Moving it into a backup folder so the app server can rebuild it from saved data.",
+            database_path.display()
+        ));
+        let backups = codex_state::backup_runtime_db_for_fresh_start(database_path.as_path())
+            .await
+            .map_err(|backup_err| {
+                anyhow::anyhow!(
+                    "failed to move damaged sqlite state database files into a backup folder: {backup_err}; original error: {original_error}"
+                )
+            })?;
+        for backup in &backups {
+            emit_state_db_backup_warning(&format!(
+                "Moved damaged Codex local database file {} to {}",
+                backup.original_path.display(),
+                backup.backup_path.display()
+            ));
+        }
+        if let Some(first_backup) = backups.first()
+            && let Some(backup_folder) = first_backup.backup_path.parent()
+        {
+            recovered_databases.push(RecoveredSqliteDatabase {
+                database_path: first_backup.original_path.display().to_string(),
+                backup_folder: backup_folder.display().to_string(),
+            });
+        }
+    }
+}
+
+fn sqlite_recovery_notice(
+    recovered_databases: &[RecoveredSqliteDatabase],
+) -> Option<SqliteRecoveryNotice> {
+    if recovered_databases.is_empty() {
+        return None;
+    }
+
+    let details = recovered_databases
+        .iter()
+        .map(|recovered_database| {
+            format!(
+                "Database path: {}\nBackup folder: {}",
+                recovered_database.database_path, recovered_database.backup_folder
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    Some(SqliteRecoveryNotice { details })
+}
+
+fn emit_state_db_backup_warning(message: &str) {
+    warn!("{message}");
+    if !tracing::dispatcher::has_been_set() {
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!("{message}");
+        }
+    }
 }
 
 fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransport {

@@ -31,7 +31,6 @@ struct WriteStdinArgs {
 
 pub struct WriteStdinHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("write_stdin")
@@ -41,7 +40,13 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
         create_write_stdin_tool()
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl WriteStdinHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
