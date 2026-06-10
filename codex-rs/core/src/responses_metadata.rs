@@ -10,7 +10,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::ThreadSource;
 use codex_utils_string::to_ascii_json_string;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
@@ -35,7 +34,6 @@ pub(crate) const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
 pub(crate) const FORKED_FROM_THREAD_ID_KEY: &str = "forked_from_thread_id";
 pub(crate) const PARENT_THREAD_ID_KEY: &str = "parent_thread_id";
 pub(crate) const SUBAGENT_KIND_KEY: &str = "subagent_kind";
-pub(crate) const THREAD_SOURCE_KEY: &str = "thread_source";
 pub(crate) const SANDBOX_KEY: &str = "sandbox";
 pub(crate) const WORKSPACES_KEY: &str = "workspaces";
 
@@ -58,7 +56,6 @@ const RESERVED_METADATA_KEYS: &[&str] = &[
     FORKED_FROM_THREAD_ID_KEY,
     PARENT_THREAD_ID_KEY,
     SUBAGENT_KIND_KEY,
-    THREAD_SOURCE_KEY,
     SANDBOX_KEY,
     WORKSPACES_KEY,
 ];
@@ -146,7 +143,6 @@ pub struct CodexResponsesMetadata {
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) subagent_header: Option<String>,
     pub(crate) subagent_kind: Option<String>,
-    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) sandbox: Option<String>,
     pub(crate) workspaces: BTreeMap<String, TurnMetadataWorkspace>,
     pub(crate) turn_started_at_unix_ms: Option<i64>,
@@ -171,7 +167,6 @@ impl CodexResponsesMetadata {
             parent_thread_id: None,
             subagent_header: None,
             subagent_kind: None,
-            thread_source: None,
             sandbox: None,
             workspaces: BTreeMap::new(),
             turn_started_at_unix_ms: None,
@@ -273,7 +268,6 @@ impl CodexResponsesMetadata {
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
             subagent_kind: self.subagent_kind.as_deref(),
-            thread_source: self.thread_source.as_ref(),
             sandbox: self.sandbox.as_deref(),
             workspaces: non_empty_workspaces(&self.workspaces),
             turn_started_at_unix_ms: self.turn_started_at_unix_ms,
@@ -359,8 +353,6 @@ struct CodexTurnMetadataPayload<'a> {
     parent_thread_id: Option<ThreadId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     subagent_kind: Option<&'a str>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    thread_source: Option<&'a ThreadSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sandbox: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

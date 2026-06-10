@@ -13,7 +13,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::ThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -188,7 +187,6 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
-        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -201,7 +199,6 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let sandbox_name = json.get("sandbox").and_then(Value::as_str);
     let session_id = json.get("session_id").and_then(Value::as_str);
     let thread_id = json.get("thread_id").and_then(Value::as_str);
-    let thread_source = json.get("thread_source").and_then(Value::as_str);
 
     assert!(json.get("request_kind").is_none());
     let expected_sandbox = permission_profile_sandbox_tag(
@@ -212,36 +209,9 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     assert_eq!(sandbox_name, Some(expected_sandbox));
     assert_eq!(session_id, Some("session-a"));
     assert_eq!(thread_id, Some("thread-a"));
-    assert_eq!(thread_source, Some("user"));
     assert!(json.get("forked_from_thread_id").is_none());
     assert!(json.get("parent_thread_id").is_none());
     assert!(json.get("subagent_kind").is_none());
-    assert!(json.get("session_source").is_none());
-}
-
-#[test]
-fn turn_metadata_state_uses_explicit_subagent_thread_source() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let cwd = temp_dir.path().abs();
-    let permission_profile = PermissionProfile::read_only();
-    let state = TurnMetadataState::new(
-        "session-a".to_string(),
-        "thread-a".to_string(),
-        /*forked_from_thread_id*/ None,
-        /*parent_thread_id*/ None,
-        &SessionSource::Exec,
-        Some(ThreadSource::Subagent),
-        "turn-a".to_string(),
-        cwd,
-        &permission_profile,
-        WindowsSandboxLevel::Disabled,
-        /*enforce_managed_network*/ false,
-    );
-
-    let header = test_turn_metadata_header(&state);
-    let json: Value = serde_json::from_str(&header).expect("json");
-
-    assert_eq!(json["thread_source"].as_str(), Some("subagent"));
     assert!(json.get("session_source").is_none());
 }
 
@@ -259,7 +229,6 @@ fn turn_metadata_state_includes_root_fork_lineage() {
         Some(source_thread_id),
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
-        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -298,7 +267,6 @@ fn turn_metadata_state_includes_thread_spawn_subagent_parent_without_fork() {
             agent_nickname: None,
             agent_role: None,
         }),
-        Some(ThreadSource::Subagent),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -337,7 +305,6 @@ fn turn_metadata_state_includes_forked_thread_spawn_subagent_lineage() {
             agent_nickname: None,
             agent_role: None,
         }),
-        Some(ThreadSource::Subagent),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -382,7 +349,6 @@ fn turn_metadata_state_includes_known_parent_for_non_thread_spawn_subagents_with
             /*forked_from_thread_id*/ None,
             Some(parent_thread_id),
             &SessionSource::SubAgent(subagent_source),
-            Some(ThreadSource::Subagent),
             "turn-a".to_string(),
             cwd.clone(),
             &permission_profile,
@@ -414,7 +380,6 @@ fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
-        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -444,7 +409,6 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
-        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -493,7 +457,6 @@ fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_reque
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
-        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -546,7 +509,6 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
-        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -600,7 +562,6 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             agent_nickname: None,
             agent_role: None,
         }),
-        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -676,7 +637,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         Some("55555555-5555-4555-8555-555555555555")
     );
     assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
-    assert_eq!(json["thread_source"].as_str(), Some("user"));
+    assert_eq!(json["thread_source"].as_str(), Some("client-supplied"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
     assert!(json.get("request_kind").is_none());
     assert!(json.get(WINDOW_ID_KEY).is_none());
@@ -718,7 +679,6 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
         &SessionSource::Exec,
-        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -781,7 +741,6 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
             agent_nickname: None,
             agent_role: None,
         }),
-        Some(ThreadSource::Subagent),
         "turn-a".to_string(),
         repo_path,
         &permission_profile,

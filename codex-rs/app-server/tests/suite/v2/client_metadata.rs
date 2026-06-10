@@ -110,7 +110,7 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
         .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
     assert_eq!(metadata["fiber_run_id"].as_str(), Some("fiber-start-123"));
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
-    assert!(metadata.get("thread_source").is_none());
+    assert_eq!(metadata["thread_source"].as_str(), Some("client-supplied"));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
     assert!(metadata.get("installation_id").is_some());
     assert!(metadata.get("session_id").is_some());
