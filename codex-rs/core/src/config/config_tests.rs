@@ -62,9 +62,11 @@ use codex_config::types::TuiPetAnchor;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_config::types::WindowsToml;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::remote::RemotePluginScope;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_login::CodexAuth;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
@@ -4612,6 +4614,141 @@ enabled = true
         ))
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn to_mcp_config_gates_cached_remote_plugin_mcp_by_remote_plugin_feature()
+-> anyhow::Result<()> {
+    let without_feature = cached_remote_plugin_mcp_server_names(/*remote_plugin*/ None).await?;
+    assert_eq!(without_feature, Vec::<String>::new());
+
+    let disabled = cached_remote_plugin_mcp_server_names(Some(false)).await?;
+    assert_eq!(disabled, Vec::<String>::new());
+
+    let enabled = cached_remote_plugin_mcp_server_names(Some(true)).await?;
+    assert_eq!(enabled, vec!["datascienceWidgets".to_string()]);
+
+    Ok(())
+}
+
+async fn cached_remote_plugin_mcp_server_names(
+    remote_plugin: Option<bool>,
+) -> anyhow::Result<Vec<String>> {
+    use serde_json::json;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+    use wiremock::matchers::query_param;
+
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let remote_plugin_feature = remote_plugin
+        .map(|enabled| format!("remote_plugin = {enabled}\n"))
+        .unwrap_or_default();
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = true
+{remote_plugin_feature}
+"#,
+            server.uri()
+        ),
+    )?;
+    write_cached_remote_plugin_with_mcp(codex_home.path())?;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": [
+                {
+                    "id": "plugins~Plugin_data_analytics",
+                    "name": "data-analytics",
+                    "scope": "GLOBAL",
+                    "installation_policy": "AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "AVAILABLE",
+                    "release": {
+                        "version": "local",
+                        "display_name": "Data Analytics",
+                        "description": "Analyze data",
+                        "bundle_download_url": "",
+                        "app_ids": [],
+                        "interface": {},
+                        "skills": [],
+                        "mcp_servers": [{ "key": "datascienceWidgets" }]
+                    },
+                    "enabled": true,
+                    "disabled_skill_names": []
+                }
+            ],
+            "pagination": {
+                "limit": 50,
+                "next_page_token": null
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "WORKSPACE"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": [],
+            "pagination": {
+                "limit": 50,
+                "next_page_token": null
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    plugins_manager
+        .build_and_cache_remote_installed_plugin_marketplaces(
+            &config.plugins_config_input(),
+            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+            &[RemotePluginScope::Global],
+            /*on_effective_plugins_changed*/ None,
+        )
+        .await?;
+
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    let mut server_names = mcp_config
+        .configured_mcp_servers
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    server_names.sort();
+    Ok(server_names)
+}
+
+fn write_cached_remote_plugin_with_mcp(codex_home: &Path) -> std::io::Result<()> {
+    let plugin_root = codex_home.join("plugins/cache/openai-curated-remote/data-analytics/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"data-analytics","version":"local"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "datascienceWidgets": {
+      "type": "http",
+      "url": "https://datascience.example/mcp"
+    }
+  }
+}"#,
+    )
 }
 
 #[tokio::test]

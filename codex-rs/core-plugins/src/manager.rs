@@ -491,7 +491,7 @@ impl PluginsManager {
 
         let outcome = load_plugins_from_layer_stack(
             &config.config_layer_stack,
-            self.remote_installed_plugin_configs(),
+            self.remote_installed_plugin_configs_for_config(config),
             &self.store,
             self.restriction_product,
             config.remote_plugin_enabled,
@@ -537,7 +537,7 @@ impl PluginsManager {
         }
         load_plugins_from_layer_stack(
             config_layer_stack,
-            self.remote_installed_plugin_configs(),
+            self.remote_installed_plugin_configs_for_config(config),
             &self.store,
             self.restriction_product,
             config.remote_plugin_enabled,
@@ -556,7 +556,7 @@ impl PluginsManager {
         }
         load_plugin_hooks_from_layer_stack(
             config_layer_stack,
-            self.remote_installed_plugin_configs(),
+            self.remote_installed_plugin_configs_for_config(config),
             &self.store,
             config.remote_plugin_enabled,
         )
@@ -588,7 +588,14 @@ impl PluginsManager {
         }
     }
 
-    fn remote_installed_plugin_configs(&self) -> HashMap<String, PluginConfig> {
+    fn remote_installed_plugin_configs_for_config(
+        &self,
+        config: &PluginsConfigInput,
+    ) -> HashMap<String, PluginConfig> {
+        if !config.remote_plugin_enabled {
+            return HashMap::new();
+        }
+
         let cache = match self.remote_installed_plugins_cache.read() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -724,6 +731,9 @@ impl PluginsManager {
         if !config.plugins_enabled {
             return;
         }
+        if !config.remote_plugin_enabled {
+            return;
+        }
 
         self.schedule_remote_installed_plugins_cache_refresh(
             RemoteInstalledPluginsCacheRefreshRequest {
@@ -742,6 +752,9 @@ impl PluginsManager {
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         if !config.plugins_enabled {
+            return;
+        }
+        if !config.remote_plugin_enabled {
             return;
         }
 

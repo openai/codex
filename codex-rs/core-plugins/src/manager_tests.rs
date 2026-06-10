@@ -162,6 +162,32 @@ fn write_cached_plugin(codex_home: &Path, marketplace_name: &str, plugin_name: &
     );
 }
 
+fn write_cached_plugin_mcp(
+    codex_home: &Path,
+    marketplace_name: &str,
+    plugin_name: &str,
+    server_name: &str,
+) {
+    let plugin_root = codex_home
+        .join("plugins/cache")
+        .join(marketplace_name)
+        .join(plugin_name)
+        .join("local");
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        &format!(
+            r#"{{
+  "mcpServers": {{
+    "{server_name}": {{
+      "type": "http",
+      "url": "https://{server_name}.example/mcp"
+    }}
+  }}
+}}"#
+        ),
+    );
+}
+
 #[tokio::test]
 async fn load_plugins_loads_default_skills_and_mcp_servers() {
     let codex_home = TempDir::new().unwrap();
@@ -369,7 +395,7 @@ remote_plugin = true
 }
 
 #[tokio::test]
-async fn remote_installed_cache_prefers_local_curated_conflicts_when_remote_plugin_disabled() {
+async fn remote_installed_cache_ignores_remote_plugins_when_remote_plugin_disabled() {
     let codex_home = TempDir::new().unwrap();
     write_file(
         &codex_home.path().join(CONFIG_TOML_FILE),
@@ -406,8 +432,74 @@ enabled = true
         vec![
             "calendar@openai-curated".to_string(),
             "linear@openai-curated".to_string(),
-            "remote-only@openai-curated-remote".to_string(),
         ]
+    );
+}
+
+#[tokio::test]
+async fn remote_installed_cache_does_not_expose_cached_mcp_when_remote_plugin_absent() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    write_cached_plugin(codex_home.path(), "openai-curated-remote", "data-analytics");
+    write_cached_plugin_mcp(
+        codex_home.path(),
+        "openai-curated-remote",
+        "data-analytics",
+        "datascienceWidgets",
+    );
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![remote_installed_plugin("data-analytics")]);
+
+    let outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(outcome, PluginLoadOutcome::default());
+    assert!(outcome.effective_mcp_servers().is_empty());
+}
+
+#[tokio::test]
+async fn remote_installed_cache_exposes_cached_mcp_when_remote_plugin_enabled() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+"#,
+    );
+    write_cached_plugin(codex_home.path(), "openai-curated-remote", "data-analytics");
+    write_cached_plugin_mcp(
+        codex_home.path(),
+        "openai-curated-remote",
+        "data-analytics",
+        "datascienceWidgets",
+    );
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![remote_installed_plugin("data-analytics")]);
+
+    let outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(
+        outcome
+            .plugins()
+            .iter()
+            .map(|plugin| plugin.config_name.clone())
+            .collect::<Vec<_>>(),
+        vec!["data-analytics@openai-curated-remote".to_string()]
+    );
+    assert_eq!(
+        outcome
+            .effective_mcp_servers()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["datascienceWidgets".to_string()]
     );
 }
 
