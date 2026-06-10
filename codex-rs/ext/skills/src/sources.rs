@@ -101,13 +101,23 @@ impl SkillProviders {
     }
 
     pub(crate) async fn list_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
+        self.list_matching(&query, |source| source.should_list(&query))
+            .await
+    }
+
+    pub(crate) async fn list_remote_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
+        self.list_matching(&query, |source| source.kind == SkillSourceKind::Remote)
+            .await
+    }
+
+    async fn list_matching(
+        &self,
+        query: &SkillListQuery,
+        should_list: impl Fn(&SkillProviderSource) -> bool,
+    ) -> SkillCatalog {
         let mut catalog = SkillCatalog::default();
 
-        for source in self
-            .sources
-            .iter()
-            .filter(|source| source.should_list(&query))
-        {
+        for source in self.sources.iter().filter(|source| should_list(source)) {
             extend_catalog(
                 &mut catalog,
                 source.provider.list(query.clone()).await,

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::time::Duration;
 
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceContent;
@@ -19,6 +20,7 @@ use crate::provider::SkillReadRequest;
 use crate::provider::SkillSearchRequest;
 
 const BACKEND_SKILL_MIME_TYPE: &str = "mcp/skill";
+const BACKEND_SKILL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESOURCE_PAGES: usize = 10;
 const MAX_BACKEND_SKILLS: usize = 100;
 const MAX_SKILL_NAME_CHARS: usize = 64;
@@ -50,6 +52,7 @@ impl SkillProvider for BackendSkillProvider {
                 return Ok(SkillCatalog::default());
             }
 
+            let discovery_deadline = tokio::time::Instant::now() + BACKEND_SKILL_DISCOVERY_TIMEOUT;
             let mut catalog = SkillCatalog::default();
             let mut cursor = None;
             let mut seen_cursors = HashSet::new();
@@ -58,15 +61,23 @@ impl SkillProvider for BackendSkillProvider {
             let mut truncated = false;
 
             for _ in 0..MAX_RESOURCE_PAGES {
-                let result = client
-                    .list_resources(&self.server_name, cursor.clone())
-                    .await
-                    .map_err(|err| {
-                        SkillProviderError::new(format!(
-                            "failed to list backend skill resources from {}: {err:#}",
-                            self.server_name
-                        ))
-                    })?;
+                let result = tokio::time::timeout_at(
+                    discovery_deadline,
+                    client.list_resources(&self.server_name, cursor.clone()),
+                )
+                .await
+                .map_err(|_| {
+                    let server_name = &self.server_name;
+                    SkillProviderError::new(format!(
+                        "backend skill discovery from {server_name} timed out after {BACKEND_SKILL_DISCOVERY_TIMEOUT:?}"
+                    ))
+                })?
+                .map_err(|err| {
+                    SkillProviderError::new(format!(
+                        "failed to list backend skill resources from {}: {err:#}",
+                        self.server_name
+                    ))
+                })?;
 
                 for resource in &result.resources {
                     if resource.mime_type.as_deref() != Some(BACKEND_SKILL_MIME_TYPE) {

@@ -23,6 +23,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
 
+use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
@@ -97,16 +98,18 @@ impl ContextContributor for SkillsExtension {
                 return Vec::new();
             }
             let catalog = self
-                .providers
-                .list_for_turn(SkillListQuery {
-                    turn_id: thread_store.level_id().to_string(),
-                    executor_roots: thread_state.selected_roots().to_vec(),
-                    host: None,
-                    include_host_skills: false,
-                    include_bundled_skills: config.bundled_skills_enabled,
-                    include_remote_skills: true,
-                    mcp_resources: session_store.get::<McpResourceClient>(),
-                })
+                .catalog_for_turn(
+                    SkillListQuery {
+                        turn_id: thread_store.level_id().to_string(),
+                        executor_roots: thread_state.selected_roots().to_vec(),
+                        host: None,
+                        include_host_skills: false,
+                        include_bundled_skills: config.bundled_skills_enabled,
+                        include_remote_skills: true,
+                        mcp_resources: session_store.get::<McpResourceClient>(),
+                    },
+                    &thread_state,
+                )
                 .await;
             for warning in &catalog.warnings {
                 self.emit_warning(thread_store.level_id(), warning.clone());
@@ -143,7 +146,7 @@ impl TurnInputContributor for SkillsExtension {
                 include_remote_skills: true,
                 mcp_resources: session_store.get::<McpResourceClient>(),
             };
-            let catalog = self.providers.list_for_turn(query).await;
+            let catalog = self.catalog_for_turn(query, &thread_state).await;
             for warning in &catalog.warnings {
                 self.emit_warning(&input.turn_id, warning.clone());
             }
@@ -236,6 +239,25 @@ impl TurnInputContributor for SkillsExtension {
 }
 
 impl SkillsExtension {
+    async fn catalog_for_turn(
+        &self,
+        mut query: SkillListQuery,
+        thread_state: &SkillsThreadState,
+    ) -> SkillCatalog {
+        let include_remote_skills = query.include_remote_skills;
+        let remote_query = query.clone();
+        query.include_remote_skills = false;
+
+        let mut catalog = self.providers.list_for_turn(query).await;
+        if include_remote_skills {
+            let remote_catalog = thread_state
+                .remote_catalog_snapshot(self.providers.list_remote_for_turn(remote_query))
+                .await;
+            catalog.extend(remote_catalog);
+        }
+        catalog
+    }
+
     async fn read_main_prompt(
         &self,
         entry: &SkillCatalogEntry,
