@@ -819,8 +819,6 @@ async fn load_auth_reads_access_token_from_env() {
     let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, &agent_identity);
 
     let chatgpt_base_url = format!("{}/backend-api", server.uri());
-    let _authapi_guard =
-        EnvVarGuard::set("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &chatgpt_base_url);
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
@@ -835,7 +833,7 @@ async fn load_auth_reads_access_token_from_env() {
         panic!("env auth should load as agent identity");
     };
     assert_eq!(agent_identity.record(), &expected_record);
-    assert_eq!(agent_identity.process_task_id(), "task-123");
+    assert_eq!(agent_identity.run_task_id(), Some("task-123".to_string()));
     assert!(
         !get_auth_file(codex_home.path()).exists(),
         "env auth should not write auth.json"
@@ -1101,8 +1099,6 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
         .mount(&server)
         .await;
     let chatgpt_base_url = format!("{}/backend-api", server.uri());
-    let _authapi_guard =
-        EnvVarGuard::set("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &chatgpt_base_url);
     save_auth(
         codex_home.path(),
         &AuthDotJson {
@@ -1338,8 +1334,6 @@ async fn assert_agent_identity_plan_alias(
         .mount(&server)
         .await;
     let chatgpt_base_url = format!("{}/backend-api", server.uri());
-    let _authapi_guard =
-        EnvVarGuard::set("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &chatgpt_base_url);
     let auth = CodexAuth::from_agent_identity_jwt(&jwt, Some(&chatgpt_base_url))
         .await
         .expect("agent identity auth");

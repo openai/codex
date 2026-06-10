@@ -281,7 +281,9 @@ impl CodexAuth {
             .trim_end_matches('/')
             .to_string();
         let record = verified_agent_identity_record(jwt, &base_url).await?;
-        Ok(Self::AgentIdentity(AgentIdentityAuth::load(record).await?))
+        let auth = AgentIdentityAuth::new(record);
+        auth.ensure_run_task(Some(base_url)).await?;
+        Ok(Self::AgentIdentity(auth))
     }
 
     pub async fn from_personal_access_token(access_token: &str) -> std::io::Result<Self> {
