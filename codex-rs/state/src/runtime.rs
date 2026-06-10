@@ -60,6 +60,7 @@ use std::time::Instant;
 use tracing::warn;
 
 mod agent_jobs;
+mod automation_schedule;
 mod automations;
 mod backfill;
 mod external_agent_config_imports;

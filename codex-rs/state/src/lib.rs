@@ -116,6 +116,8 @@ pub const GOALS_DB_FILENAME: &str = "goals_1.sqlite";
 pub const MEMORIES_DB_FILENAME: &str = "memories_1.sqlite";
 pub const AUTOMATIONS_DB_FILENAME: &str = "automations_1.sqlite";
 pub const STATE_DB_FILENAME: &str = "state_5.sqlite";
+pub const DEFAULT_AUTOMATION_RRULE: &str = "FREQ=HOURLY;INTERVAL=24;BYMINUTE=0";
+pub const AUTOMATION_RUN_JITTER_WINDOW_SECS: i64 = 120;
 
 /// Errors encountered during DB operations. Tags: [stage]
 pub const DB_ERROR_METRIC: &str = "codex.db.error";
