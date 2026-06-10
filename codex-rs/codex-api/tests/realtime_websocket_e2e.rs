@@ -426,7 +426,7 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
 
         ws.send(Message::Text(
             json!({
-                "type": "response.created",
+                "type": "response.unknown",
                 "response": {"id": "resp_unknown"}
             })
             .to_string()

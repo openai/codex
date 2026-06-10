@@ -2674,7 +2674,7 @@ async fn conversation_clears_handoff_after_turn_abort() -> Result<()> {
         _ => None,
     })
     .await;
-    api_server.wait_for_request_count(1).await;
+    api_server.wait_for_request_count(/*count*/ 1).await;
 
     test.codex.submit(Op::Interrupt).await?;
     wait_for_event(&test.codex, |event| {
@@ -3235,19 +3235,6 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
         "delegate now"
     );
 
-    let completion = completions
-        .into_iter()
-        .next()
-        .expect("missing delegated turn completion");
-    let _ = gate_completed_tx.send(());
-    completion
-        .await
-        .expect("delegated turn request did not complete");
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
     let mirrored_request = realtime_server
         .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
         .await;
@@ -3288,10 +3275,22 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     );
     assert_eq!(audio_out.data, "AQID");
 
+    let completion = completions
+        .into_iter()
+        .next()
+        .expect("missing delegated turn completion");
+    let _ = gate_completed_tx.send(());
+    completion
+        .await
+        .expect("delegated turn request did not complete");
     eprintln!(
         "[realtime test +{}ms] delegated completion resolved",
         start.elapsed().as_millis()
     );
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     let requests = api_server.requests().await;
     assert_eq!(requests.len(), 1);
