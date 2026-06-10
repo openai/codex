@@ -86,7 +86,11 @@ impl PluginsManager {
         }
 
         let marketplaces = self
-            .list_marketplaces_for_config(&input.plugins, &[])
+            .list_marketplaces_for_config(
+                &input.plugins,
+                &[],
+                /*include_openai_curated*/ !input.plugins.remote_plugin_enabled,
+            )
             .context("failed to list plugin marketplaces for tool suggestions")?
             .marketplaces;
         let mut installed_app_connector_ids = self
@@ -109,11 +113,6 @@ impl PluginsManager {
         let mut discoverable_plugins = Vec::<ToolSuggestDiscoverablePlugin>::new();
         for marketplace in marketplaces {
             let marketplace_name = marketplace.name;
-            if input.plugins.remote_plugin_enabled
-                && marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME
-            {
-                continue;
-            }
             let use_legacy_local_curated_filter = should_use_legacy_local_curated_discovery_filter(
                 &marketplace_name,
                 marketplace.path.as_path(),
