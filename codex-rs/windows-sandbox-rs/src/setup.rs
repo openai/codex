@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::ffi::c_void;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -395,6 +396,17 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     vec![helper_dir]
 }
 
+fn path_read_roots(env_map: &HashMap<String, String>) -> Vec<PathBuf> {
+    env_map
+        .get("PATH")
+        .map(OsString::from)
+        .or_else(|| std::env::var_os("PATH"))
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path))
+        .filter(|path| path.is_absolute())
+        .collect()
+}
+
 fn gather_full_read_roots_for_permissions(
     command_cwd: &Path,
     permissions: &ResolvedWindowsSandboxPermissions,
@@ -443,6 +455,7 @@ pub(crate) fn gather_read_roots(
                 .map(PathBuf::from),
         );
     }
+    roots.extend(path_read_roots(env_map));
     roots.extend(permissions.readable_roots_for_cwd(command_cwd));
     canonical_existing(&roots)
 }
@@ -1617,6 +1630,26 @@ mod tests {
             dunce::canonicalize(&writable_root).expect("canonical writable root");
 
         assert!(roots.contains(&expected_writable));
+    }
+
+    #[test]
+    fn restricted_read_roots_include_path_directories() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let path_root = tmp.path().join("localappdata-tool-bin");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&path_root).expect("create path root");
+        let permission_profile = PermissionProfile::read_only();
+        let workspace_roots = workspace_roots_for(command_cwd.as_path());
+        let permissions = permissions_for(&permission_profile, workspace_roots.as_slice());
+        let mut env_map = HashMap::new();
+        env_map.insert("PATH".to_string(), path_root.display().to_string());
+
+        let roots = gather_read_roots(&command_cwd, &permissions, &env_map, &codex_home);
+        let expected_path_root = dunce::canonicalize(&path_root).expect("canonical path root");
+
+        assert!(roots.contains(&expected_path_root));
     }
 
     #[test]
