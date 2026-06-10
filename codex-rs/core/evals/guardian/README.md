@@ -196,9 +196,10 @@ The committed fixtures include:
   summarization, email draft autosave, and tax estimation.
 - Salvage-derived, redacted regression cases from security penetration-test
   artifacts, covering historical financial exfiltration paths through MCP tools
-  such as stock helpers, loan calculators, home search, presentation/graphics
-  assistants, recipe and personal-support helpers, legal advice, and
-  underwriting/audit logging.
+  such as stock helpers, loan calculators, compound-interest calculators, home
+  search, presentation/graphics assistants, recipe and personal-support
+  helpers, encoded finance-data helpers, legal advice, and underwriting/audit
+  logging.
 - An unauthorized destructive calendar mutation.
 
 ## Adding A Case
