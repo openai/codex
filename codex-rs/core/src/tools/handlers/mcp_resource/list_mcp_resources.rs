@@ -40,11 +40,20 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
         true
     }
 
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        self.handle_call(invocation).await
+    }
+}
+
+impl ListMcpResourcesHandler {
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "MCP resource listing reads through the session-owned manager guard"
     )]
-    async fn handle(
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
