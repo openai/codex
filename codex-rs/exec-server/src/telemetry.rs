@@ -14,6 +14,13 @@ const REQUESTS_TOTAL_METRIC: &str = "exec_server_requests_total";
 const REQUESTS_TOTAL_DESCRIPTION: &str = "Total number of exec-server requests.";
 const REQUEST_DURATION_METRIC: &str = "exec_server_request_duration_seconds";
 const REQUEST_DURATION_DESCRIPTION: &str = "Duration of exec-server requests in seconds.";
+const PROCESSES_ACTIVE_METRIC: &str = "exec_server_processes_active";
+const PROCESSES_ACTIVE_DESCRIPTION: &str = "Number of active exec-server processes.";
+const PROCESSES_FINISHED_TOTAL_METRIC: &str = "exec_server_processes_finished_total";
+const PROCESSES_FINISHED_TOTAL_DESCRIPTION: &str =
+    "Total number of finished exec-server processes.";
+const PROCESS_DURATION_METRIC: &str = "exec_server_process_duration_seconds";
+const PROCESS_DURATION_DESCRIPTION: &str = "Duration of exec-server processes in seconds.";
 
 pub fn runtime_span() -> tracing::Span {
     tracing::info_span!("codex.exec_server", otel.kind = "internal")
@@ -46,6 +53,7 @@ struct ExecServerTelemetryInner {
     relay_connections: AtomicI64,
     stdio_connections: AtomicI64,
     websocket_connections: AtomicI64,
+    active_processes: AtomicI64,
 }
 
 pub(crate) struct ConnectionMetricGuard {
@@ -62,6 +70,7 @@ impl ExecServerTelemetry {
                     relay_connections: AtomicI64::new(0),
                     stdio_connections: AtomicI64::new(0),
                     websocket_connections: AtomicI64::new(0),
+                    active_processes: AtomicI64::new(0),
                 })
             }),
         }
@@ -111,6 +120,41 @@ impl ExecServerTelemetry {
                 REQUEST_DURATION_DESCRIPTION,
                 duration,
                 &tags,
+            );
+        });
+    }
+
+    pub(crate) fn process_started(&self) {
+        self.with_inner(|inner| {
+            let active = inner.active_processes.fetch_add(1, Ordering::AcqRel) + 1;
+            inner.gauge(
+                PROCESSES_ACTIVE_METRIC,
+                PROCESSES_ACTIVE_DESCRIPTION,
+                active,
+                &[],
+            );
+        });
+    }
+
+    pub(crate) fn process_finished(&self, result: &'static str, duration: Duration) {
+        self.with_inner(|inner| {
+            let active = inner.active_processes.fetch_sub(1, Ordering::AcqRel) - 1;
+            inner.gauge(
+                PROCESSES_ACTIVE_METRIC,
+                PROCESSES_ACTIVE_DESCRIPTION,
+                active,
+                &[],
+            );
+            inner.counter(
+                PROCESSES_FINISHED_TOTAL_METRIC,
+                PROCESSES_FINISHED_TOTAL_DESCRIPTION,
+                &[("result", result)],
+            );
+            inner.duration(
+                PROCESS_DURATION_METRIC,
+                PROCESS_DURATION_DESCRIPTION,
+                duration,
+                &[("result", result)],
             );
         });
     }

@@ -86,6 +86,47 @@ fn emits_request_metrics() {
     );
 }
 
+#[test]
+fn emits_process_metrics() {
+    let (telemetry, metrics, exporter) = test_telemetry();
+
+    telemetry.process_started();
+    telemetry.process_finished("terminated", Duration::from_millis(34));
+    metrics.shutdown().expect("shutdown metrics");
+
+    let metrics = latest_metrics(&exporter);
+    assert_eq!(
+        metric_points(&metrics, PROCESSES_ACTIVE_METRIC),
+        vec![(0.0, BTreeMap::new())]
+    );
+    assert_eq!(
+        metric_points(&metrics, PROCESSES_FINISHED_TOTAL_METRIC),
+        vec![(
+            1.0,
+            BTreeMap::from([("result".to_string(), "terminated".to_string())]),
+        )]
+    );
+    assert_eq!(histogram_count(&metrics, PROCESS_DURATION_METRIC), 1);
+    assert_metric_metadata(
+        &metrics,
+        PROCESSES_ACTIVE_METRIC,
+        PROCESSES_ACTIVE_DESCRIPTION,
+        "",
+    );
+    assert_metric_metadata(
+        &metrics,
+        PROCESSES_FINISHED_TOTAL_METRIC,
+        PROCESSES_FINISHED_TOTAL_DESCRIPTION,
+        "",
+    );
+    assert_metric_metadata(
+        &metrics,
+        PROCESS_DURATION_METRIC,
+        PROCESS_DURATION_DESCRIPTION,
+        "s",
+    );
+}
+
 fn test_telemetry() -> (
     ExecServerTelemetry,
     codex_otel::MetricsClient,

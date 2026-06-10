@@ -34,7 +34,7 @@ impl ConnectionProcessor {
         telemetry: ExecServerTelemetry,
     ) -> Self {
         Self {
-            session_registry: SessionRegistry::new(),
+            session_registry: SessionRegistry::new(telemetry.clone()),
             runtime_paths,
             telemetry,
         }
@@ -401,7 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn transport_disconnect_detaches_session_during_in_flight_read() {
-        let registry = SessionRegistry::new();
+        let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
         let (mut first_writer, mut first_lines, first_task) =
             spawn_test_connection(Arc::clone(&registry), "first");
 

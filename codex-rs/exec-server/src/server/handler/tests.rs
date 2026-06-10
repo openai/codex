@@ -77,7 +77,7 @@ fn test_runtime_paths() -> ExecServerRuntimePaths {
 
 async fn initialized_handler() -> Arc<ExecServerHandler> {
     let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
-    let registry = SessionRegistry::new();
+    let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
     let handler = Arc::new(ExecServerHandler::new(
         registry,
         RpcNotificationSender::new(outgoing_tx),
@@ -155,7 +155,7 @@ async fn terminate_reports_false_after_process_exit() {
 #[tokio::test]
 async fn long_poll_read_fails_after_session_resume() {
     let (first_tx, _first_rx) = mpsc::channel(16);
-    let registry = SessionRegistry::new();
+    let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
     let first_handler = Arc::new(ExecServerHandler::new(
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
@@ -228,7 +228,7 @@ async fn long_poll_read_fails_after_session_resume() {
 #[tokio::test]
 async fn active_session_resume_is_rejected() {
     let (first_tx, _first_rx) = mpsc::channel(16);
-    let registry = SessionRegistry::new();
+    let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
     let first_handler = Arc::new(ExecServerHandler::new(
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
@@ -272,7 +272,7 @@ async fn active_session_resume_is_rejected() {
 async fn output_and_exit_are_retained_after_notification_receiver_closes() {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let handler = Arc::new(ExecServerHandler::new(
-        SessionRegistry::new(),
+        SessionRegistry::new(crate::ExecServerTelemetry::default()),
         RpcNotificationSender::new(outgoing_tx),
         test_runtime_paths(),
     ));
