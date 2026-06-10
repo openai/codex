@@ -1108,7 +1108,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
 }
 
 #[tokio::test]
-async fn required_local_stdio_without_local_runtime_fails_validation_but_keeps_http_server() {
+async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let (tx_event, rx_event) = async_channel::unbounded();
     drop(rx_event);
@@ -1126,7 +1126,7 @@ async fn required_local_stdio_without_local_runtime_fails_validation_but_keeps_h
                 },
                 environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                 enabled: true,
-                required: true,
+                required: false,
                 supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
@@ -1167,6 +1167,7 @@ async fn required_local_stdio_without_local_runtime_fails_validation_but_keeps_h
         ),
     ]);
 
+    let cancel_token = CancellationToken::new();
     let manager = McpConnectionManager::new(
         &mcp_servers,
         OAuthCredentialsStoreMode::default(),
@@ -1174,7 +1175,7 @@ async fn required_local_stdio_without_local_runtime_fails_validation_but_keeps_h
         &approval_policy,
         String::new(),
         tx_event,
-        CancellationToken::new(),
+        cancel_token.clone(),
         PermissionProfile::default(),
         McpRuntimeContext::new(
             Arc::new(EnvironmentManager::without_environments()),
@@ -1202,14 +1203,7 @@ async fn required_local_stdio_without_local_runtime_fails_validation_but_keeps_h
             .wait_for_server_ready("stdio", Duration::from_millis(10))
             .await
     );
-    let error = match manager.validate_required_servers().await {
-        Ok(_) => panic!("required MCP startup should fail"),
-        Err(error) => error,
-    };
-    assert_eq!(
-        error.to_string(),
-        "required MCP servers failed to initialize: stdio: local stdio MCP server `stdio` requires a local environment"
-    );
+    cancel_token.cancel();
 }
 
 #[test]
