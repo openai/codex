@@ -37,6 +37,7 @@ use crate::relay_proto::RelayMessageFrame;
 use crate::server::ConnectionProcessor;
 
 const MAX_ACTIVE_NOISE_RELAY_STREAMS: usize = 128;
+const MAX_FAILED_NOISE_HANDSHAKES: usize = 8;
 const MAX_HARNESS_KEY_AUTHORIZATION_BYTES: usize = 4096;
 const MAX_PENDING_HANDSHAKE_VALIDATIONS: usize = 32;
 const HARNESS_KEY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -86,6 +87,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
     let mut streams: HashMap<String, NoiseVirtualStream> = HashMap::new();
     let mut pending_handshakes: HashMap<String, PendingHandshake> = HashMap::new();
     let mut validation_tasks: JoinSet<HarnessKeyValidationResult> = JoinSet::new();
+    let mut failed_handshakes = 0usize;
     let mut next_validation_id = 0u64;
 
     loop {
@@ -129,6 +131,10 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                             // Validator errors may contain authorization details.
                             warn!("Noise relay harness key validation failed");
                             send_reset(&physical_outgoing_tx, validation_result.stream_id);
+                            if failed_handshake_budget_exhausted(&mut failed_handshakes) {
+                                warn!("closing Noise relay after repeated handshake failures");
+                                break;
+                            }
                             continue;
                         }
                         if streams.len() >= MAX_ACTIVE_NOISE_RELAY_STREAMS {
@@ -145,6 +151,10 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                             Err(error) => {
                                 warn!("failed to complete Noise relay handshake: {error}");
                                 send_reset(&physical_outgoing_tx, validation_result.stream_id);
+                                if failed_handshake_budget_exhausted(&mut failed_handshakes) {
+                                    warn!("closing Noise relay after repeated handshake failures");
+                                    break;
+                                }
                                 continue;
                             }
                         };
@@ -215,8 +225,9 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
         let stream_id = frame.stream_id.clone();
         match kind {
             RelayFrameBodyKind::Handshake => {
-                // Bound all pre-authentication state before doing expensive
-                // hybrid cryptography or starting an external validation.
+                // Reject duplicate or busy streams before paying for a hybrid
+                // handshake. Malformed attempts that reach cryptography are
+                // covered by the connection-wide failure budget below.
                 if streams.contains_key(&stream_id) || pending_handshakes.contains_key(&stream_id) {
                     send_reset(&physical_outgoing_tx, stream_id);
                     continue;
@@ -257,6 +268,10 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                         Err(error) => {
                             warn!("failed to read Noise relay handshake request: {error}");
                             send_reset(&physical_outgoing_tx, stream_id);
+                            if failed_handshake_budget_exhausted(&mut failed_handshakes) {
+                                warn!("closing Noise relay after repeated handshake failures");
+                                break;
+                            }
                             continue;
                         }
                     };
@@ -267,18 +282,24 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                     Ok(authorization)
                         if authorization.len() <= MAX_HARNESS_KEY_AUTHORIZATION_BYTES =>
                     {
-                        authorization
+                        Some(authorization)
                     }
                     Ok(_) => {
                         warn!("Noise relay handshake authorization is too long");
-                        send_reset(&physical_outgoing_tx, stream_id);
-                        continue;
+                        None
                     }
                     Err(_) => {
                         warn!("Noise relay handshake authorization is not UTF-8");
-                        send_reset(&physical_outgoing_tx, stream_id);
-                        continue;
+                        None
                     }
+                };
+                let Some(authorization) = authorization else {
+                    send_reset(&physical_outgoing_tx, stream_id);
+                    if failed_handshake_budget_exhausted(&mut failed_handshakes) {
+                        warn!("closing Noise relay after repeated handshake failures");
+                        break;
+                    }
+                    continue;
                 };
                 let harness_public_key = pending.initiator_public_key().clone();
                 let validation_id = next_validation_id;
@@ -361,6 +382,15 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
         physical_writer_task.abort();
         let _ = physical_writer_task.await;
     }
+}
+
+/// Charge one failed authenticated-channel attempt to this physical relay.
+///
+/// Closing after a small fixed budget prevents a peer that has not been
+/// authorized from triggering unbounded hybrid handshakes or registry checks.
+fn failed_handshake_budget_exhausted(failed_handshakes: &mut usize) -> bool {
+    *failed_handshakes += 1;
+    *failed_handshakes >= MAX_FAILED_NOISE_HANDSHAKES
 }
 
 /// Responder state held while registry authorization is pending.

@@ -216,6 +216,11 @@ pub(super) async fn run_remote_environment(
 }
 
 fn validate_environment_id(environment_id: &str) -> Result<(), ExecServerError> {
+    if environment_id.is_empty() {
+        return Err(ExecServerError::EnvironmentRegistryConfig(
+            "environment id is required for Noise registration".to_string(),
+        ));
+    }
     if environment_id.len() > MAX_REMOTE_ENVIRONMENT_ID_LEN {
         return Err(ExecServerError::EnvironmentRegistryConfig(format!(
             "environment id cannot be longer than {MAX_REMOTE_ENVIRONMENT_ID_LEN} characters"
