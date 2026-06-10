@@ -1,3 +1,4 @@
+use std::time::Duration;
 use std::time::Instant;
 
 use tracing::Span;
@@ -6,6 +7,7 @@ use tracing::warn;
 
 use crate::ExecServerError;
 use crate::ExecServerTelemetry;
+use crate::telemetry::RemoteWebSocketMetricGuard;
 
 macro_rules! emit_remote_otel_event {
     ($level:ident, $event_name:literal, $($fields:tt)*) => {{
@@ -79,5 +81,86 @@ pub(crate) fn registration_failed(
         WARN,
         "codex.exec_server.remote_environment_registration_failed",
         "failed to register remote exec-server environment"
+    );
+}
+
+pub(crate) fn websocket_connect_span(attempt: u32) -> Span {
+    tracing::info_span!(
+        "codex.exec_server.remote.websocket.connect",
+        otel.kind = "client",
+        otel.name = "codex.exec_server.remote.websocket.connect",
+        attempt,
+        result = tracing::field::Empty,
+    )
+}
+
+pub(crate) fn websocket_connected(
+    telemetry: &ExecServerTelemetry,
+    span: Span,
+    started_at: Instant,
+    attempt: u32,
+) -> RemoteWebSocketMetricGuard {
+    span.record("result", "success");
+    telemetry.remote_websocket_connect_completed("success", started_at.elapsed());
+    drop(span);
+
+    info!(attempt, "connected remote exec-server websocket");
+    emit_remote_otel_event!(
+        INFO,
+        "codex.exec_server.remote_websocket_connected",
+        attempt,
+        "connected remote exec-server websocket"
+    );
+    telemetry.remote_websocket_connected()
+}
+
+pub(crate) fn websocket_connect_failed(
+    telemetry: &ExecServerTelemetry,
+    span: Span,
+    started_at: Instant,
+    attempt: u32,
+    err: &tokio_tungstenite::tungstenite::Error,
+) {
+    span.record("result", "error");
+    telemetry.remote_websocket_connect_completed("error", started_at.elapsed());
+    drop(span);
+
+    warn!(
+        attempt,
+        error = %err,
+        "failed to connect remote exec-server websocket"
+    );
+    emit_remote_otel_event!(
+        WARN,
+        "codex.exec_server.remote_websocket_connect_failed",
+        attempt,
+        "failed to connect remote exec-server websocket"
+    );
+    telemetry.remote_websocket_reconnect("connect_failed");
+}
+
+pub(crate) fn websocket_disconnected(telemetry: &ExecServerTelemetry, attempt: u32) {
+    telemetry.remote_websocket_reconnect("disconnected");
+    warn!(
+        attempt,
+        "remote exec-server websocket disconnected; retrying"
+    );
+    emit_remote_otel_event!(
+        WARN,
+        "codex.exec_server.remote_websocket_disconnected",
+        attempt,
+        "remote exec-server websocket disconnected; retrying"
+    );
+}
+
+pub(crate) fn websocket_retrying(attempt: u32, backoff: Duration) {
+    let backoff_ms = backoff.as_millis();
+    info!(attempt, backoff_ms, "retrying remote exec-server websocket");
+    emit_remote_otel_event!(
+        INFO,
+        "codex.exec_server.remote_websocket_retrying",
+        attempt,
+        backoff_ms,
+        "retrying remote exec-server websocket"
     );
 }

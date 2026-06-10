@@ -160,6 +160,65 @@ fn emits_remote_registration_metrics() {
     );
 }
 
+#[test]
+fn emits_remote_websocket_metrics() {
+    let (telemetry, metrics, exporter) = test_telemetry();
+
+    let websocket = telemetry.remote_websocket_connected();
+    telemetry.remote_websocket_connect_completed("success", Duration::from_millis(7));
+    telemetry.remote_websocket_reconnect("connect_failed");
+    drop(websocket);
+    metrics.shutdown().expect("shutdown metrics");
+
+    let metrics = latest_metrics(&exporter);
+    assert_eq!(
+        metric_points(&metrics, REMOTE_WEBSOCKET_CONNECT_TOTAL_METRIC),
+        vec![(
+            1.0,
+            BTreeMap::from([("result".to_string(), "success".to_string())]),
+        )]
+    );
+    assert_eq!(
+        metric_points(&metrics, REMOTE_WEBSOCKET_ACTIVE_METRIC),
+        vec![(0.0, BTreeMap::new())]
+    );
+    assert_eq!(
+        metric_points(&metrics, REMOTE_WEBSOCKET_RECONNECTS_METRIC),
+        vec![(
+            1.0,
+            BTreeMap::from([("reason".to_string(), "connect_failed".to_string())]),
+        )]
+    );
+    assert_eq!(
+        histogram_count(&metrics, REMOTE_WEBSOCKET_CONNECT_DURATION_METRIC),
+        1
+    );
+    for (name, description, unit) in [
+        (
+            REMOTE_WEBSOCKET_ACTIVE_METRIC,
+            REMOTE_WEBSOCKET_ACTIVE_DESCRIPTION,
+            "",
+        ),
+        (
+            REMOTE_WEBSOCKET_CONNECT_TOTAL_METRIC,
+            REMOTE_WEBSOCKET_CONNECT_TOTAL_DESCRIPTION,
+            "",
+        ),
+        (
+            REMOTE_WEBSOCKET_CONNECT_DURATION_METRIC,
+            REMOTE_WEBSOCKET_CONNECT_DURATION_DESCRIPTION,
+            "s",
+        ),
+        (
+            REMOTE_WEBSOCKET_RECONNECTS_METRIC,
+            REMOTE_WEBSOCKET_RECONNECTS_DESCRIPTION,
+            "",
+        ),
+    ] {
+        assert_metric_metadata(&metrics, name, description, unit);
+    }
+}
+
 fn test_telemetry() -> (
     ExecServerTelemetry,
     codex_otel::MetricsClient,

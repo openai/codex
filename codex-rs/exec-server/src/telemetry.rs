@@ -17,6 +17,19 @@ const REMOTE_REGISTRATION_DURATION_METRIC: &str =
     "exec_server_remote_registration_duration_seconds";
 const REMOTE_REGISTRATION_DURATION_DESCRIPTION: &str =
     "Duration of remote exec-server registration attempts in seconds.";
+const REMOTE_WEBSOCKET_ACTIVE_METRIC: &str = "exec_server_remote_websocket_active";
+const REMOTE_WEBSOCKET_ACTIVE_DESCRIPTION: &str =
+    "Number of active remote exec-server WebSocket connections.";
+const REMOTE_WEBSOCKET_CONNECT_TOTAL_METRIC: &str = "exec_server_remote_websocket_connect_total";
+const REMOTE_WEBSOCKET_CONNECT_TOTAL_DESCRIPTION: &str =
+    "Total number of remote exec-server WebSocket connection attempts.";
+const REMOTE_WEBSOCKET_CONNECT_DURATION_METRIC: &str =
+    "exec_server_remote_websocket_connect_duration_seconds";
+const REMOTE_WEBSOCKET_CONNECT_DURATION_DESCRIPTION: &str =
+    "Duration of remote exec-server WebSocket connection attempts in seconds.";
+const REMOTE_WEBSOCKET_RECONNECTS_METRIC: &str = "exec_server_remote_websocket_reconnects_total";
+const REMOTE_WEBSOCKET_RECONNECTS_DESCRIPTION: &str =
+    "Total number of remote exec-server WebSocket reconnects.";
 const REQUESTS_TOTAL_METRIC: &str = "exec_server_requests_total";
 const REQUESTS_TOTAL_DESCRIPTION: &str = "Total number of exec-server requests.";
 const REQUEST_DURATION_METRIC: &str = "exec_server_request_duration_seconds";
@@ -60,12 +73,17 @@ struct ExecServerTelemetryInner {
     relay_connections: AtomicI64,
     stdio_connections: AtomicI64,
     websocket_connections: AtomicI64,
+    remote_websockets: AtomicI64,
     active_processes: AtomicI64,
 }
 
 pub(crate) struct ConnectionMetricGuard {
     telemetry: ExecServerTelemetry,
     transport: ConnectionTransport,
+}
+
+pub(crate) struct RemoteWebSocketMetricGuard {
+    telemetry: ExecServerTelemetry,
 }
 
 impl ExecServerTelemetry {
@@ -77,6 +95,7 @@ impl ExecServerTelemetry {
                     relay_connections: AtomicI64::new(0),
                     stdio_connections: AtomicI64::new(0),
                     websocket_connections: AtomicI64::new(0),
+                    remote_websockets: AtomicI64::new(0),
                     active_processes: AtomicI64::new(0),
                 })
             }),
@@ -148,6 +167,52 @@ impl ExecServerTelemetry {
         });
     }
 
+    pub(crate) fn remote_websocket_connected(&self) -> RemoteWebSocketMetricGuard {
+        self.with_inner(|inner| {
+            let active = inner.remote_websockets.fetch_add(1, Ordering::AcqRel) + 1;
+            inner.gauge(
+                REMOTE_WEBSOCKET_ACTIVE_METRIC,
+                REMOTE_WEBSOCKET_ACTIVE_DESCRIPTION,
+                active,
+                &[],
+            );
+        });
+        RemoteWebSocketMetricGuard {
+            telemetry: self.clone(),
+        }
+    }
+
+    pub(crate) fn remote_websocket_connect_completed(
+        &self,
+        result: &'static str,
+        duration: Duration,
+    ) {
+        self.with_inner(|inner| {
+            let tags = [("result", result)];
+            inner.counter(
+                REMOTE_WEBSOCKET_CONNECT_TOTAL_METRIC,
+                REMOTE_WEBSOCKET_CONNECT_TOTAL_DESCRIPTION,
+                &tags,
+            );
+            inner.duration(
+                REMOTE_WEBSOCKET_CONNECT_DURATION_METRIC,
+                REMOTE_WEBSOCKET_CONNECT_DURATION_DESCRIPTION,
+                duration,
+                &tags,
+            );
+        });
+    }
+
+    pub(crate) fn remote_websocket_reconnect(&self, reason: &'static str) {
+        self.with_inner(|inner| {
+            inner.counter(
+                REMOTE_WEBSOCKET_RECONNECTS_METRIC,
+                REMOTE_WEBSOCKET_RECONNECTS_DESCRIPTION,
+                &[("reason", reason)],
+            );
+        });
+    }
+
     pub(crate) fn process_started(&self) {
         self.with_inner(|inner| {
             let active = inner.active_processes.fetch_add(1, Ordering::AcqRel) + 1;
@@ -198,6 +263,18 @@ impl ExecServerTelemetry {
         });
     }
 
+    fn remote_websocket_disconnected(&self) {
+        self.with_inner(|inner| {
+            let active = inner.remote_websockets.fetch_sub(1, Ordering::AcqRel) - 1;
+            inner.gauge(
+                REMOTE_WEBSOCKET_ACTIVE_METRIC,
+                REMOTE_WEBSOCKET_ACTIVE_DESCRIPTION,
+                active,
+                &[],
+            );
+        });
+    }
+
     fn with_inner(&self, emit: impl FnOnce(&ExecServerTelemetryInner)) {
         if let Some(inner) = &self.inner {
             emit(inner);
@@ -208,6 +285,12 @@ impl ExecServerTelemetry {
 impl Drop for ConnectionMetricGuard {
     fn drop(&mut self) {
         self.telemetry.connection_finished(self.transport);
+    }
+}
+
+impl Drop for RemoteWebSocketMetricGuard {
+    fn drop(&mut self) {
+        self.telemetry.remote_websocket_disconnected();
     }
 }
 

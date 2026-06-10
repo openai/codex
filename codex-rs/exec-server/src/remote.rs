@@ -7,7 +7,6 @@ use serde::Deserialize;
 use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
 use tracing::Instrument;
-use tracing::warn;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
@@ -145,6 +144,7 @@ pub async fn run_remote_environment(
         EnvironmentRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
     let processor = ConnectionProcessor::new(runtime_paths, config.telemetry.clone());
     let mut backoff = Duration::from_secs(1);
+    let mut connection_attempt = 0_u32;
 
     loop {
         let registration_started_at = Instant::now();
@@ -172,16 +172,39 @@ pub async fn run_remote_environment(
             &response.environment_id,
         );
 
-        match connect_async(response.url.as_str()).await {
+        let websocket_connect_started_at = Instant::now();
+        let websocket_connect_span =
+            remote_observability::websocket_connect_span(connection_attempt + 1);
+        match connect_async(response.url.as_str())
+            .instrument(websocket_connect_span.clone())
+            .await
+        {
             Ok((websocket, _)) => {
+                connection_attempt += 1;
+                let remote_websocket = remote_observability::websocket_connected(
+                    &config.telemetry,
+                    websocket_connect_span,
+                    websocket_connect_started_at,
+                    connection_attempt,
+                );
                 backoff = Duration::from_secs(1);
                 run_multiplexed_environment(websocket, processor.clone()).await;
+                drop(remote_websocket);
+                remote_observability::websocket_disconnected(&config.telemetry, connection_attempt);
             }
             Err(err) => {
-                warn!("failed to connect remote exec-server websocket: {err}");
+                connection_attempt += 1;
+                remote_observability::websocket_connect_failed(
+                    &config.telemetry,
+                    websocket_connect_span,
+                    websocket_connect_started_at,
+                    connection_attempt,
+                    &err,
+                );
             }
         }
 
+        remote_observability::websocket_retrying(connection_attempt, backoff);
         sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(30));
     }
@@ -444,6 +467,37 @@ mod tests {
                     .all(|attribute| attribute.value.to_string() != "env-raw-local-only")
             }),
             "raw environment id leaked into exported spans: {spans:?}"
+        );
+    }
+
+    #[test]
+    fn remote_websocket_operation_span_finishes_immediately() {
+        let span_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(span_exporter.clone())
+            .build();
+        let tracer = tracer_provider.tracer("exec-server-test");
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            let websocket_span = remote_observability::websocket_connect_span(/*attempt*/ 2);
+            websocket_span.in_scope(|| {});
+            websocket_span.record("result", "success");
+            drop(websocket_span);
+        });
+
+        tracer_provider.force_flush().expect("flush traces");
+        let spans = span_exporter.get_finished_spans().expect("span export");
+        assert!(
+            spans
+                .iter()
+                .any(|span| { span.name.as_ref() == "codex.exec_server.remote.websocket.connect" }),
+            "expected finished remote websocket connect span, got {spans:?}"
         );
     }
 }
