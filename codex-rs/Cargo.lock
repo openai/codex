@@ -4589,7 +4589,6 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
- "codex-utils-pty",
  "ctor 0.6.3",
  "futures",
  "notify",

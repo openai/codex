@@ -6,8 +6,6 @@
 //! `OPENAI_API_KEY`.
 
 use assert_cmd::prelude::*;
-use core_test_support::process::ChildProcessCleanupGuard;
-use core_test_support::process::configure_std_command_for_process_tree_cleanup;
 use predicates::prelude::*;
 use std::process::Command;
 use std::process::Stdio;
@@ -62,10 +60,8 @@ fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    configure_std_command_for_process_tree_cleanup(&mut cmd);
 
     let mut child = cmd.spawn().expect("failed to spawn codex-rs");
-    let cleanup = ChildProcessCleanupGuard::new(child.id());
 
     // Send the terminating newline so Session::run exits after the first turn.
     child
@@ -108,7 +104,6 @@ fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
     );
 
     let status = child.wait().expect("failed to wait on child");
-    cleanup.cleanup();
     let stdout = stdout_handle.join().expect("stdout thread panicked");
     let stderr = stderr_handle.join().expect("stderr thread panicked");
 

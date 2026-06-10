@@ -3,12 +3,17 @@ use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
 use codex_protocol::protocol::GitInfo;
 use core_test_support::fs_wait;
-use core_test_support::process::output_with_process_tree_cleanup;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use std::io;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 use std::process::Output;
+use std::process::Stdio;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -83,8 +88,57 @@ fn personal_access_token_exec_command(server: &MockServer, home: &TempDir) -> Co
     cmd
 }
 
-fn run_cli_command(command: &mut Command) -> std::io::Result<Output> {
-    output_with_process_tree_cleanup(command, CLI_TIMEOUT)
+struct ChildProcessCleanupGuard(u32);
+
+impl Drop for ChildProcessCleanupGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            let _ = codex_utils_pty::process_group::kill_process_group(self.0);
+        }
+
+        #[cfg(windows)]
+        {
+            let _ = Command::new("taskkill")
+                .args(["/PID", &self.0.to_string(), "/T", "/F"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = self.0;
+        }
+    }
+}
+
+fn run_cli_command(command: &mut Command) -> io::Result<Output> {
+    #[cfg(unix)]
+    command.process_group(0);
+
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let child = command.spawn()?;
+    let _cleanup = ChildProcessCleanupGuard(child.id());
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let _waiter = thread::spawn(move || {
+        let _ = sender.send(child.wait_with_output());
+    });
+
+    match receiver.recv_timeout(CLI_TIMEOUT) {
+        Ok(output) => output,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(io::Error::new(io::ErrorKind::TimedOut, "process timed out"))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(io::Error::other("process output reader thread exited"))
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
