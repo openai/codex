@@ -2,10 +2,15 @@ use super::*;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_exec_server::LOCAL_FS;
+use codex_git_utils::ApplyGitRequest;
+use codex_git_utils::apply_git_patch;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
+use std::time::Instant;
 use tempfile::tempdir;
 
 fn git_blob_sha1_hex(data: &str) -> String {
@@ -327,4 +332,109 @@ index {left_oid_b}..{right_oid_b}
 "#,
     );
     assert_eq!(tracker.get_unified_diff(), Some(expected));
+}
+
+#[tokio::test]
+async fn reuses_rendered_diffs_for_unchanged_paths() {
+    let dir = tempdir().expect("tempdir");
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+
+    let add_a = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: a.txt\n+one\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&add_a);
+    assert_eq!(tracker.rendered_diff_count(), 1);
+
+    let add_b = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: b.txt\n+two\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&add_b);
+
+    assert_eq!(tracker.rendered_diff_count(), 2);
+    assert_eq!(
+        tracker.get_unified_diff(),
+        tracker.get_unified_diff(),
+        "reading the cached aggregate must not render file diffs",
+    );
+    assert_eq!(tracker.rendered_diff_count(), 2);
+}
+
+#[tokio::test]
+async fn repeated_updates_only_rerender_the_touched_path() {
+    let dir = tempdir().expect("tempdir");
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+
+    for patch in [
+        "*** Begin Patch\n*** Add File: stable.txt\n+stable\n*** End Patch".to_string(),
+        "*** Begin Patch\n*** Add File: hot.txt\n+value 0\n*** End Patch".to_string(),
+    ] {
+        tracker.track_delta(&apply_verified_patch(dir.path(), &patch).await);
+    }
+
+    for value in 1..=40 {
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: hot.txt\n@@\n-value {}\n+value {value}\n*** End Patch",
+            value - 1,
+        );
+        tracker.track_delta(&apply_verified_patch(dir.path(), &patch).await);
+    }
+
+    assert_eq!(tracker.rendered_diff_count(), 42);
+}
+
+#[test]
+fn large_rewrite_returns_promptly_and_preserves_exact_content() {
+    let dir = tempdir().expect("tempdir");
+    assert!(
+        Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(dir.path())
+            .status()
+            .expect("run git init")
+            .success()
+    );
+    let old_content = (0..48_000)
+        .map(|line| format!("old line {line:05}\n"))
+        .collect::<String>();
+    let new_content = (0..48_000)
+        .map(|line| format!("new line {line:05}\n"))
+        .collect::<String>();
+    let path = dir.path().join("large.txt");
+    fs::write(&path, &old_content).expect("seed large file");
+    assert!(
+        Command::new("git")
+            .args(["add", "large.txt"])
+            .current_dir(dir.path())
+            .status()
+            .expect("run git add")
+            .success()
+    );
+    let tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+
+    let started = Instant::now();
+    let diff = tracker
+        .render_diff(&path, Some(&old_content), &path, Some(&new_content))
+        .expect("complete rewrite should produce a diff");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "large rewrite took {:?}",
+        started.elapsed(),
+    );
+    let result = apply_git_patch(&ApplyGitRequest {
+        cwd: dir.path().to_path_buf(),
+        diff,
+        revert: false,
+        preflight: false,
+    })
+    .expect("apply generated diff");
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    assert_eq!(
+        fs::read_to_string(path).expect("read large file"),
+        new_content
+    );
 }
