@@ -1203,6 +1203,20 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             .wait_for_server_ready("stdio", Duration::from_millis(10))
             .await
     );
+    let error = match manager
+        .clients
+        .get("stdio")
+        .expect("stdio client")
+        .client()
+        .await
+    {
+        Ok(_) => panic!("local stdio MCP startup should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        startup_outcome_error_message(error),
+        "local stdio MCP server `stdio` requires a local environment"
+    );
     cancel_token.cancel();
 }
 
