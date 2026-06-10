@@ -15,6 +15,7 @@ use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ProcessId;
+use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
@@ -251,6 +252,10 @@ impl ExecProcess for BlockingTerminateExecProcess {
         Ok(WriteResponse {
             status: WriteStatus::Accepted,
         })
+    }
+
+    async fn signal(&self, _signal: ProcessSignal) -> Result<(), ExecServerError> {
+        Ok(())
     }
 
     async fn terminate(&self) -> Result<(), ExecServerError> {

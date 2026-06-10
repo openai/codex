@@ -785,9 +785,6 @@ impl UnifiedExecProcessManager {
                 entry: Box::new(entry),
             }
         } else {
-            entry
-                .initial_exec_command_active
-                .store(false, Ordering::Release);
             ProcessStatus::Alive {
                 exit_code,
                 call_id: entry.call_id.clone(),
