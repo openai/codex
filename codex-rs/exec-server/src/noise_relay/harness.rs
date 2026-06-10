@@ -1,3 +1,20 @@
+//! Harness-side adapter from a rendezvous websocket to `JsonRpcConnection`.
+//!
+//! The rendezvous service forwards frames by `stream_id`; it is not trusted with
+//! application plaintext or with authenticating either endpoint. Establishing
+//! and using a secure connection follows five steps:
+//!
+//! 1. Claim a fresh virtual stream and send the first hybrid-IK message.
+//! 2. Verify the executor's response against the registry-pinned static key.
+//! 3. Enter Noise transport mode only after that verification succeeds.
+//! 4. Frame JSON-RPC messages as a byte stream, split them into bounded records,
+//!    and encrypt each record exactly once.
+//! 5. Reorder inbound relay records before decryption, then reconstruct complete
+//!    JSON-RPC messages from the authenticated plaintext stream.
+//!
+//! Keeping all five steps in this adapter means callers receive an ordinary
+//! `JsonRpcConnection` but cannot accidentally use it before authentication.
+
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -35,7 +52,9 @@ use crate::relay_proto::RelayMessageFrame;
 /// The returned connection is not usable until the background task completes
 /// hybrid IK against the registry-pinned exec-server key. Rendezvous can see
 /// stream metadata and ciphertext, but never JSON-RPC plaintext or either
-/// endpoint's private key.
+/// endpoint's private key. Handshake failure, malformed framing, decryption
+/// failure, and websocket closure all terminate the connection; none fall back
+/// to the legacy plaintext relay.
 pub(crate) fn noise_harness_connection_from_websocket<T, E>(
     stream: T,
     connection_label: String,
@@ -357,6 +376,13 @@ where
     }
 }
 
+/// Move one routed data frame through ordering, authenticated decryption, and
+/// JSON-RPC reassembly.
+///
+/// A relay frame is not the same thing as a JSON-RPC message: one message may
+/// span several Noise records, and one decrypted record may finish several
+/// messages. The ordering layer therefore operates on ciphertext records while
+/// the decoder operates on the resulting authenticated byte stream.
 async fn receive_data(
     inbound_ciphertexts: &mut OrderedCiphertextFrames,
     transport: &mut NoiseTransport,

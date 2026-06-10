@@ -26,6 +26,11 @@ pub(crate) fn frame_jsonrpc_message(message: &JSONRPCMessage) -> Result<Vec<u8>,
 }
 
 /// Incrementally reconstructs authenticated JSON-RPC messages from Noise records.
+///
+/// This decoder runs only after Noise authentication succeeds. Its length
+/// prefix is therefore part of the encrypted plaintext, not relay-controlled
+/// metadata, but it is still bounded because an authenticated peer can be buggy
+/// or hostile.
 #[derive(Default)]
 pub(crate) struct JsonRpcMessageDecoder {
     buffered: Vec<u8>,

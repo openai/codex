@@ -22,6 +22,10 @@ pub(crate) struct OrderedCiphertextFrames {
 
 impl OrderedCiphertextFrames {
     /// Accept one relay record and return the newly contiguous ciphertext run.
+    ///
+    /// The result is empty for a duplicate or a record that still has a gap in
+    /// front of it. When the gap closes, the result contains the expected record
+    /// followed by every now-contiguous buffered successor.
     pub(crate) fn push(
         &mut self,
         seq: u32,
