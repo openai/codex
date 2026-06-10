@@ -68,6 +68,19 @@ where
         call: ToolCall,
     ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
     {
+        self.handle_call(call).await
+    }
+}
+
+impl<B> SearchTool<B>
+where
+    B: MemoriesBackend,
+{
+    async fn handle_call(
+        &self,
+        call: ToolCall,
+    ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
+    {
         let backend = self.backend.clone();
         let args: SearchArgs = parse_args(&call)?;
         let scope = scope_from_optional_path(args.path.as_deref(), "all");

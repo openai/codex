@@ -52,6 +52,14 @@ impl ToolExecutor<ToolInvocation> for LifecycleTestHandler {
         &self,
         _invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        self.handle_call().await
+    }
+}
+
+impl LifecycleTestHandler {
+    async fn handle_call(
+        &self,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         match self.result.clone() {
             LifecycleTestResult::Ok { success } => Ok(Box::new(
                 crate::tools::context::FunctionToolOutput::from_text(

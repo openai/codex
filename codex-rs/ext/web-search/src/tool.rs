@@ -75,6 +75,12 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
     }
 
     async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+        self.handle_call(call).await
+    }
+}
+
+impl WebSearchTool {
+    async fn handle_call(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let commands = parse_commands(&call)?;
         let command_action = command_action(&commands);
         let provider = self

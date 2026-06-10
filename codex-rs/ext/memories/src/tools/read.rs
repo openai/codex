@@ -59,6 +59,19 @@ where
         call: ToolCall,
     ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
     {
+        self.handle_call(call).await
+    }
+}
+
+impl<B> ReadTool<B>
+where
+    B: MemoriesBackend,
+{
+    async fn handle_call(
+        &self,
+        call: ToolCall,
+    ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
+    {
         let backend = self.backend.clone();
         let args: ReadArgs = parse_args(&call)?;
         let path = args.path;

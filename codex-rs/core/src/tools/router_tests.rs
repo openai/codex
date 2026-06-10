@@ -77,6 +77,15 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
         &self,
         call: ExtensionToolCall,
     ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+        self.handle_call(call).await
+    }
+}
+
+impl ExtensionEchoExecutor {
+    async fn handle_call(
+        &self,
+        call: ExtensionToolCall,
+    ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
         let arguments: serde_json::Value =
             serde_json::from_str(call.function_arguments()?).expect("test arguments should parse");
         Ok(Box::new(codex_tools::JsonToolOutput::new(json!({
