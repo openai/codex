@@ -63,4 +63,5 @@ pub use registry::ExtensionRegistryBuilder;
 pub use registry::empty_extension_registry;
 pub use state::ExtensionData;
 pub use state::ExtensionDataInit;
-pub use tool_policy::RequestUserInputSuppression;
+pub use tool_policy::ToolAvailability;
+pub use tool_policy::ToolUnavailable;

@@ -43,6 +43,7 @@ use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHand
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
@@ -53,7 +54,7 @@ use crate::tools::registry::ToolRegistry;
 use crate::tools::registry::override_tool_exposure;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
-use codex_extension_api::RequestUserInputSuppression;
+use codex_extension_api::ToolAvailability;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_mcp::ToolInfo;
@@ -647,7 +648,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     planned_tools.add(PlanHandler);
 
     if turn_context.config.experimental_request_user_input_enabled
-        && !request_user_input_suppressed_for_turn(turn_context)
+        && !request_user_input_unavailable_for_turn(turn_context)
     {
         planned_tools.add(RequestUserInputHandler {
             available_modes: request_user_input_available_modes(features),
@@ -696,11 +697,19 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     }
 }
 
-fn request_user_input_suppressed_for_turn(turn_context: &TurnContext) -> bool {
+fn request_user_input_unavailable_for_turn(turn_context: &TurnContext) -> bool {
+    tool_unavailable_for_turn(turn_context, &ToolName::plain(REQUEST_USER_INPUT_TOOL_NAME))
+        .is_some()
+}
+
+fn tool_unavailable_for_turn(
+    turn_context: &TurnContext,
+    tool_name: &ToolName,
+) -> Option<codex_extension_api::ToolUnavailable> {
     turn_context
         .extension_data
-        .get::<RequestUserInputSuppression>()
-        .is_some()
+        .get::<ToolAvailability>()?
+        .unavailable_reason(tool_name)
 }
 
 fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {

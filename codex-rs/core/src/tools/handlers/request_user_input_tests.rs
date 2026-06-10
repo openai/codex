@@ -3,7 +3,8 @@ use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_extension_api::RequestUserInputSuppression;
+use codex_extension_api::ToolAvailability;
+use codex_extension_api::ToolUnavailable;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::SessionSource;
@@ -13,11 +14,17 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+const REQUEST_USER_INPUT_UNAVAILABLE_MESSAGE: &str = "request_user_input unavailable for test";
+
 #[tokio::test]
 async fn request_user_input_rejects_suppressed_turns() {
     let (session, turn) = make_session_and_context().await;
     turn.extension_data
-        .insert(RequestUserInputSuppression::ActiveDefaultModeGoal);
+        .get_or_init(ToolAvailability::default)
+        .mark_unavailable(
+            codex_tools::ToolName::plain(REQUEST_USER_INPUT_TOOL_NAME),
+            ToolUnavailable::model_message(REQUEST_USER_INPUT_UNAVAILABLE_MESSAGE),
+        );
 
     let result = RequestUserInputHandler {
         available_modes: vec![ModeKind::Default],
@@ -58,11 +65,7 @@ async fn request_user_input_rejects_suppressed_turns() {
     };
     assert_eq!(
         err,
-        FunctionCallError::RespondToModel(
-            RequestUserInputSuppression::ActiveDefaultModeGoal
-                .unavailable_message()
-                .to_string(),
-        )
+        FunctionCallError::RespondToModel(REQUEST_USER_INPUT_UNAVAILABLE_MESSAGE.to_string())
     );
 }
 

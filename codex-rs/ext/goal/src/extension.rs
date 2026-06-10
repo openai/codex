@@ -7,18 +7,20 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::RequestUserInputSuppression;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
 use codex_extension_api::TokenUsageContributor;
+use codex_extension_api::ToolAvailability;
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::ToolName;
+use codex_extension_api::ToolUnavailable;
 use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
@@ -44,6 +46,9 @@ use crate::runtime::GoalRuntimeHandle;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::steering::budget_limit_steering_item;
 use crate::tool::GoalToolExecutor;
+
+const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
+const ACTIVE_GOAL_REQUEST_USER_INPUT_UNAVAILABLE_MESSAGE: &str = "request_user_input is unavailable while the current Default mode turn is working on an active goal";
 
 #[derive(Clone, Debug)]
 pub struct GoalExtensionConfig {
@@ -224,7 +229,13 @@ where
             {
                 input
                     .turn_store
-                    .insert(RequestUserInputSuppression::ActiveDefaultModeGoal);
+                    .get_or_init(ToolAvailability::default)
+                    .mark_unavailable(
+                        ToolName::plain(REQUEST_USER_INPUT_TOOL_NAME),
+                        ToolUnavailable::model_message(
+                            ACTIVE_GOAL_REQUEST_USER_INPUT_UNAVAILABLE_MESSAGE,
+                        ),
+                    );
             }
 
             if matches!(
