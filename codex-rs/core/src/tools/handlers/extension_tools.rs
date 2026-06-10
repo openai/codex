@@ -1,15 +1,20 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::items::TurnItem;
 use codex_tools::ConversationHistory;
 use codex_tools::ExtensionTurnItem;
 use codex_tools::ToolCall as ExtensionToolCall;
+use codex_tools::ToolFileReadFuture;
+use codex_tools::ToolFileReader;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use codex_tools::TurnItemEmissionFuture;
 use codex_tools::TurnItemEmitter;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
@@ -71,6 +76,17 @@ struct CoreTurnItemEmitter {
     turn: Weak<TurnContext>,
 }
 
+struct CoreToolFileReader {
+    file_system: Arc<dyn ExecutorFileSystem>,
+    sandbox: FileSystemSandboxContext,
+}
+
+impl ToolFileReader for CoreToolFileReader {
+    fn read_file<'a>(&'a self, path: &'a AbsolutePathBuf) -> ToolFileReadFuture<'a> {
+        self.file_system.read_file(path, Some(&self.sandbox))
+    }
+}
+
 fn extension_turn_item(item: ExtensionTurnItem) -> TurnItem {
     match item {
         ExtensionTurnItem::WebSearch(item) => TurnItem::WebSearch(item),
@@ -115,6 +131,15 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
     let conversation_history =
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
+    let file_reader = invocation.turn.environments.primary().map(|environment| {
+        Arc::new(CoreToolFileReader {
+            file_system: environment.environment.get_filesystem(),
+            sandbox: invocation.turn.file_system_sandbox_context(
+                /*additional_permissions*/ None,
+                &environment.cwd,
+            ),
+        }) as Arc<dyn ToolFileReader>
+    });
     ExtensionToolCall {
         turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
@@ -126,6 +151,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
             session: Arc::downgrade(&invocation.session),
             turn: Arc::downgrade(&invocation.turn),
         }),
+        file_reader,
         payload: invocation.payload.clone(),
     }
 }
@@ -139,16 +165,24 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::WebSearchItem;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::models::WebSearchAction;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_protocol::protocol::EventMsg;
     use codex_tools::ExtensionTurnItem;
+    use codex_tools::ToolFileReader as _;
     use codex_utils_absolute_path::test_support::PathExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::Mutex;
 
+    use super::CoreToolFileReader;
     use super::CoreTurnItemEmitter;
     use super::ExtensionToolAdapter;
     use crate::tools::context::ToolCallSource;
@@ -276,6 +310,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_system_capability_enforces_turn_sandbox() {
+        let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+        let workspace = tempfile::tempdir().expect("create temp directory");
+        let cwd = workspace.path().abs();
+        let denied_path = cwd.join("denied.png");
+        std::fs::write(&denied_path, b"image bytes").expect("write denied file");
+        turn.environments.turn_environments[0].cwd = cwd.clone();
+
+        let mut file_system_policy = FileSystemSandboxPolicy::default();
+        file_system_policy.entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: denied_path.clone(),
+            },
+            access: FileSystemAccessMode::Deny,
+        });
+        turn.permission_profile = PermissionProfile::from_runtime_permissions(
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        let environment = turn.environments.primary().expect("primary environment");
+        let file_reader = CoreToolFileReader {
+            file_system: environment.environment.get_filesystem(),
+            sandbox: turn.file_system_sandbox_context(
+                /*additional_permissions*/ None,
+                &environment.cwd,
+            ),
+        };
+
+        file_reader
+            .read_file(&denied_path)
+            .await
+            .expect_err("sandbox should reject denied file");
+    }
+
+    #[tokio::test]
     async fn passes_turn_fields_and_scoped_turn_item_emitter_to_extension_call() {
         let captured_call = Arc::new(Mutex::new(None));
         let handler = ExtensionToolAdapter::new(Arc::new(CapturingExtensionExecutor {
@@ -331,6 +401,7 @@ mod tests {
         );
         assert_eq!(captured_call.model, model);
         assert_eq!(captured_call.truncation_policy, truncation_policy);
+        assert!(captured_call.file_reader.is_some());
         assert_eq!(
             captured_call.conversation_history.items(),
             std::slice::from_ref(&history_item)

@@ -4,8 +4,10 @@ use crate::ToolPayload;
 use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::models::ResponseItem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use std::future::Future;
+use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -63,6 +65,15 @@ impl TurnItemEmitter for NoopTurnItemEmitter {
     }
 }
 
+/// Future returned when an extension tool reads a file through the host.
+pub type ToolFileReadFuture<'a> = Pin<Box<dyn Future<Output = io::Result<Vec<u8>>> + Send + 'a>>;
+
+/// Host-provided sandboxed file reads for extension tools.
+pub trait ToolFileReader: Send + Sync {
+    /// Reads one file through host-owned sandbox enforcement.
+    fn read_file<'a>(&'a self, path: &'a AbsolutePathBuf) -> ToolFileReadFuture<'a>;
+}
+
 #[derive(Clone)]
 pub struct ToolCall {
     pub turn_id: String,
@@ -72,6 +83,7 @@ pub struct ToolCall {
     pub truncation_policy: TruncationPolicy,
     pub conversation_history: ConversationHistory,
     pub turn_item_emitter: Arc<dyn TurnItemEmitter>,
+    pub file_reader: Option<Arc<dyn ToolFileReader>>,
     pub payload: ToolPayload,
 }
 
@@ -85,6 +97,10 @@ impl std::fmt::Debug for ToolCall {
             .field("truncation_policy", &self.truncation_policy)
             .field("conversation_history", &self.conversation_history)
             .field("turn_item_emitter", &"<host turn item emitter>")
+            .field(
+                "file_reader",
+                &self.file_reader.as_ref().map(|_| "<host file reader>"),
+            )
             .field("payload", &self.payload)
             .finish()
     }

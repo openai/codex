@@ -11,6 +11,7 @@ use codex_extension_api::ExtensionTurnItem;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
+use codex_extension_api::ToolFileReader;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
@@ -98,7 +99,9 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
     /// Executes the selected image operation and returns the completed image result.
     async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
-        let request = request_for_args(&args, call.conversation_history.items())?;
+        let referenced_images = load_referenced_images(&args, call.file_reader.as_deref()).await?;
+        let request =
+            request_for_args(&args, call.conversation_history.items(), referenced_images)?;
         call.turn_item_emitter
             .emit_started(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
                 id: call.call_id.clone(),
@@ -149,10 +152,36 @@ enum ImageRequest {
     Edit(ImageEditRequest),
 }
 
+async fn load_referenced_images(
+    args: &ImagegenArgs,
+    file_reader: Option<&dyn ToolFileReader>,
+) -> Result<Option<Vec<ImageUrl>>, FunctionCallError> {
+    let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
+    if paths.is_empty()
+        || args.num_last_images_to_include.is_some()
+        || paths.len() > MAX_EDIT_IMAGES
+    {
+        return Ok(None);
+    }
+
+    let Some(file_reader) = file_reader else {
+        return Err(FunctionCallError::RespondToModel(
+            "referenced image paths are unavailable in this session".to_string(),
+        ));
+    };
+    let mut referenced_images = Vec::with_capacity(paths.len());
+    for path in paths {
+        referenced_images.push(image_url(path, file_reader).await?);
+    }
+
+    Ok(Some(referenced_images))
+}
+
 /// Builds a generation or edit request from the mutually exclusive image selectors.
 fn request_for_args(
     args: &ImagegenArgs,
     history: &[ResponseItem],
+    referenced_images: Option<Vec<ImageUrl>>,
 ) -> Result<ImageRequest, FunctionCallError> {
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
     if paths.len() > MAX_EDIT_IMAGES {
@@ -171,7 +200,11 @@ fn request_for_args(
                 size: Some("auto".to_string()),
             }));
         }
-        (false, None) => paths.iter().map(image_url).collect::<Result<Vec<_>, _>>()?,
+        (false, None) => referenced_images.ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "referenced image paths are unavailable in this session".to_string(),
+            )
+        })?,
         (true, Some(count)) => {
             if !(1..=MAX_EDIT_IMAGES).contains(&count) {
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -302,8 +335,11 @@ fn output_image_urls(output: &FunctionCallOutputPayload) -> impl Iterator<Item =
         })
 }
 
-fn image_url(path: &AbsolutePathBuf) -> Result<ImageUrl, FunctionCallError> {
-    let bytes = std::fs::read(path).map_err(|error| {
+async fn image_url(
+    path: &AbsolutePathBuf,
+    file_reader: &dyn ToolFileReader,
+) -> Result<ImageUrl, FunctionCallError> {
+    let bytes = file_reader.read_file(path).await.map_err(|error| {
         FunctionCallError::RespondToModel(format!(
             "unable to read referenced image at `{}`: {error}",
             path.display()

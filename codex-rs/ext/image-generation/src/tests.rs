@@ -46,7 +46,8 @@ fn omitted_references_generate_with_fixed_defaults() {
                 referenced_image_paths: None,
                 num_last_images_to_include: None,
             },
-            &[]
+            &[],
+            /*referenced_images*/ None,
         )
         .expect("generation request should build"),
         ImageRequest::Generate(ImageGenerationRequest {
@@ -118,6 +119,7 @@ fn recent_image_fallback_selects_newest_images_in_chronological_order() {
                 num_last_images_to_include: Some(4),
             },
             &history,
+            /*referenced_images*/ None,
         )
         .expect("history-backed edit request should build"),
         ImageRequest::Edit(expected_edit_request(
@@ -140,6 +142,7 @@ fn conflicting_image_selectors_return_tool_error() {
             num_last_images_to_include: Some(1),
         },
         &[],
+        /*referenced_images*/ None,
     )
     .expect_err("conflicting selectors should fail");
 
@@ -166,6 +169,7 @@ fn too_many_referenced_image_paths_return_tool_error() {
             num_last_images_to_include: None,
         },
         &[],
+        /*referenced_images*/ None,
     )
     .expect_err("too many paths should fail before reading files");
 
@@ -189,6 +193,7 @@ fn recent_image_fallback_requires_requested_count() {
             content: vec![input_image("only-image")],
             phase: None,
         }],
+        /*referenced_images*/ None,
     )
     .expect_err("history-backed edit should require the requested image count");
 

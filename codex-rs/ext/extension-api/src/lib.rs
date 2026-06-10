@@ -20,6 +20,8 @@ pub use codex_tools::NoopTurnItemEmitter;
 pub use codex_tools::ResponsesApiTool;
 pub use codex_tools::ToolCall;
 pub use codex_tools::ToolExecutor;
+pub use codex_tools::ToolFileReadFuture;
+pub use codex_tools::ToolFileReader;
 pub use codex_tools::ToolName;
 pub use codex_tools::ToolOutput;
 pub use codex_tools::ToolPayload;
