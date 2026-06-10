@@ -20,7 +20,7 @@ fn process_exit_upload_contains_final_metric() {
         STATSIG_OTLP_HTTP_ENDPOINT.to_string(),
         HashMap::new(),
         OtelHttpProtocol::Json,
-        None,
+        /*tls*/ None,
         Temporality::Delta,
         /*process_exit_upload*/ true,
     )
@@ -33,7 +33,7 @@ fn process_exit_upload_contains_final_metric() {
         Resource::builder_empty().build(),
         exporter,
         Some(Duration::from_secs(/*secs*/ 3600)),
-        None,
+        /*runtime_reader*/ None,
     );
     meter
         .u64_counter("codex.test.process_exit")

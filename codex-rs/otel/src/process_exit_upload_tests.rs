@@ -9,6 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 #[cfg(unix)]
 use std::sync::mpsc;
+#[cfg(unix)]
 use std::thread;
 #[cfg(unix)]
 use std::time::Duration;
