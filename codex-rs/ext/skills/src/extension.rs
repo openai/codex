@@ -250,16 +250,13 @@ impl SkillsExtension {
 
         let mut catalog = self.providers.list_for_turn(query).await;
         if include_orchestrator_skills {
-            match thread_state
+            let orchestrator_catalog = thread_state
                 .orchestrator_catalog_snapshot(
                     self.providers
                         .list_orchestrator_for_turn(orchestrator_query),
                 )
-                .await
-            {
-                Ok(orchestrator_catalog) => catalog.extend(orchestrator_catalog),
-                Err(err) => catalog.warnings.push(err.message),
-            }
+                .await;
+            catalog.extend(orchestrator_catalog);
         }
         catalog
     }
