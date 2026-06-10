@@ -1125,6 +1125,7 @@ async fn user_shell_commands_do_not_inherit_managed_network_proxy() -> anyhow::R
     execute_user_shell_command(
         Arc::clone(&session),
         turn_context,
+        None,
         command,
         CancellationToken::new(),
         UserShellCommandMode::StandaloneTurn,
@@ -8334,8 +8335,13 @@ async fn run_user_shell_command_does_not_set_reference_context_item() {
         state.set_reference_context_item(/*item*/ None);
     }
 
-    handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
-        .await;
+    handlers::run_user_shell_command(
+        &session,
+        "sub-id".to_string(),
+        None,
+        "echo shell".to_string(),
+    )
+    .await;
 
     let deadline = StdDuration::from_secs(15);
     let start = std::time::Instant::now();
