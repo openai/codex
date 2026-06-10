@@ -545,9 +545,6 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         let header: Vec<Span<'static>> = vec!["  • ".into(), status.name.clone().into()];
 
         lines.push(header.into());
-        if let Some(error) = &status.startup_error {
-            lines.push(vec!["    • Error: ".into(), error.clone().red()].into());
-        }
         let auth_status = match status.auth_status {
             codex_app_server_protocol::McpAuthStatus::Unsupported => McpAuthStatus::Unsupported,
             codex_app_server_protocol::McpAuthStatus::NotLoggedIn => McpAuthStatus::NotLoggedIn,

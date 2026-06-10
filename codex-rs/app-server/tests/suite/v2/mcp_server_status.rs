@@ -118,7 +118,6 @@ url = "{mcp_server_url}/mcp"
 #[tokio::test]
 async fn mcp_server_status_list_returns_startup_failure_and_keeps_server_running() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let (mcp_server_url, mcp_server_handle) = start_mcp_server("healthy_lookup").await?;
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(
         codex_home.path(),
@@ -132,16 +131,13 @@ async fn mcp_server_status_list_returns_startup_failure_and_keeps_server_running
 
     let config_path = codex_home.path().join("config.toml");
     let mut config_toml = std::fs::read_to_string(&config_path)?;
-    config_toml.push_str(&format!(
+    config_toml.push_str(
         r#"
-[mcp_servers.healthy]
-url = "{mcp_server_url}/mcp"
-
 [mcp_servers.required_broken]
 command = "codex-definitely-not-a-real-binary"
 required = true
 "#,
-    ));
+    );
     std::fs::write(config_path, config_toml)?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -155,41 +151,21 @@ required = true
             thread_id: None,
         })
         .await?;
-    let response = timeout(
+    let error = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let response: ListMcpServerStatusResponse = to_response(response)?;
-    let statuses = response
-        .data
-        .iter()
-        .map(|status| (status.name.as_str(), status))
-        .collect::<BTreeMap<_, _>>();
-    let healthy = statuses.get("healthy").copied();
-    let required_broken = statuses.get("required_broken").copied();
     assert_eq!(
         (
-            response.next_cursor.as_deref(),
-            statuses.keys().copied().collect::<Vec<_>>(),
-            healthy.map(|status| status.tools.keys().cloned().collect::<BTreeSet<_>>()),
-            healthy.and_then(|status| status.startup_error.as_deref()),
-            required_broken.map(|status| (
-                status.server_info.as_ref(),
-                status.tools.is_empty(),
-                status
-                    .startup_error
-                    .as_deref()
-                    .is_some_and(|error| !error.is_empty()),
-            )),
+            error.error.code,
+            error
+                .error
+                .message
+                .contains("required MCP servers failed to initialize: required_broken"),
+            error.error.data,
         ),
-        (
-            None,
-            vec!["healthy", "required_broken"],
-            Some(BTreeSet::from(["healthy_lookup".to_string()])),
-            None,
-            Some((None, true, true)),
-        ),
+        (-32603, true, None),
     );
 
     let follow_up_request_id = mcp
@@ -200,9 +176,6 @@ required = true
         mcp.read_stream_until_response_message(RequestId::Integer(follow_up_request_id)),
     )
     .await??;
-
-    mcp_server_handle.abort();
-    let _ = mcp_server_handle.await;
 
     Ok(())
 }

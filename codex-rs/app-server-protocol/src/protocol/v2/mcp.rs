@@ -59,8 +59,6 @@ pub struct McpServerStatus {
     pub resources: Vec<McpResource>,
     pub resource_templates: Vec<McpResourceTemplate>,
     pub auth_status: McpAuthStatus,
-    /// Startup error for a required server that failed to initialize.
-    pub startup_error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

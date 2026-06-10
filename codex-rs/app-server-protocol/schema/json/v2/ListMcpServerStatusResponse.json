@@ -81,13 +81,6 @@
             }
           ]
         },
-        "startupError": {
-          "description": "Startup error for a required server that failed to initialize.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "tools": {
           "additionalProperties": {
             "$ref": "#/definitions/Tool"
