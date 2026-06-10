@@ -388,16 +388,17 @@ mod tests {
 
     struct RecordExtensionTurnItemContributor;
 
-    #[async_trait::async_trait]
     impl TurnItemContributor for RecordExtensionTurnItemContributor {
-        async fn contribute(
-            &self,
-            _thread_store: &ExtensionData,
-            turn_store: &ExtensionData,
-            _item: &mut TurnItem,
-        ) -> Result<(), String> {
-            turn_store.insert(ExtensionTurnItemContributorRan);
-            Ok(())
+        fn contribute<'a>(
+            &'a self,
+            _thread_store: &'a ExtensionData,
+            turn_store: &'a ExtensionData,
+            _item: &'a mut TurnItem,
+        ) -> codex_extension_api::ExtensionFuture<'a, Result<(), String>> {
+            Box::pin(async move {
+                turn_store.insert(ExtensionTurnItemContributorRan);
+                Ok(())
+            })
         }
     }
 

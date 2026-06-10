@@ -1922,26 +1922,27 @@ async fn record_token_usage_info_notifies_extension_contributors() {
         records: Arc<std::sync::Mutex<Vec<RecordedTokenUsage>>>,
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::TokenUsageContributor for TokenUsageRecorder {
-        async fn on_token_usage(
-            &self,
-            session_store: &codex_extension_api::ExtensionData,
-            thread_store: &codex_extension_api::ExtensionData,
-            turn_store: &codex_extension_api::ExtensionData,
-            token_usage: &TokenUsageInfo,
-        ) {
-            self.records
-                .lock()
-                .expect("token usage records lock")
-                .push(RecordedTokenUsage {
-                    session_level_id: session_store.level_id().to_string(),
-                    thread_level_id: thread_store.level_id().to_string(),
-                    turn_level_id: turn_store.level_id().to_string(),
-                    token_usage: token_usage.clone(),
-                    saw_session_store: session_store.get::<SessionTokenUsageMarker>().is_some(),
-                    saw_thread_store: thread_store.get::<ThreadTokenUsageMarker>().is_some(),
-                });
+        fn on_token_usage<'a>(
+            &'a self,
+            session_store: &'a codex_extension_api::ExtensionData,
+            thread_store: &'a codex_extension_api::ExtensionData,
+            turn_store: &'a codex_extension_api::ExtensionData,
+            token_usage: &'a TokenUsageInfo,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                self.records
+                    .lock()
+                    .expect("token usage records lock")
+                    .push(RecordedTokenUsage {
+                        session_level_id: session_store.level_id().to_string(),
+                        thread_level_id: thread_store.level_id().to_string(),
+                        turn_level_id: turn_store.level_id().to_string(),
+                        token_usage: token_usage.clone(),
+                        saw_session_store: session_store.get::<SessionTokenUsageMarker>().is_some(),
+                        saw_thread_store: thread_store.get::<ThreadTokenUsageMarker>().is_some(),
+                    });
+            })
         }
     }
 
@@ -2040,25 +2041,32 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
         records: Arc<std::sync::Mutex<Vec<RecordedTurnStart>>>,
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::TurnLifecycleContributor for TurnStartRecorder {
-        async fn on_turn_start(&self, input: codex_extension_api::TurnStartInput<'_>) {
-            self.records
-                .lock()
-                .expect("turn start records lock")
-                .push(RecordedTurnStart {
-                    session_level_id: input.session_store.level_id().to_string(),
-                    thread_level_id: input.thread_store.level_id().to_string(),
-                    turn_level_id: input.turn_store.level_id().to_string(),
-                    turn_id: input.turn_id.to_string(),
-                    collaboration_mode: input.collaboration_mode.clone(),
-                    token_usage_at_turn_start: input.token_usage_at_turn_start.clone(),
-                    saw_session_store: input
-                        .session_store
-                        .get::<SessionTurnStartMarker>()
-                        .is_some(),
-                    saw_thread_store: input.thread_store.get::<ThreadTurnStartMarker>().is_some(),
-                });
+        fn on_turn_start<'a>(
+            &'a self,
+            input: codex_extension_api::TurnStartInput<'a>,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                self.records
+                    .lock()
+                    .expect("turn start records lock")
+                    .push(RecordedTurnStart {
+                        session_level_id: input.session_store.level_id().to_string(),
+                        thread_level_id: input.thread_store.level_id().to_string(),
+                        turn_level_id: input.turn_store.level_id().to_string(),
+                        turn_id: input.turn_id.to_string(),
+                        collaboration_mode: input.collaboration_mode.clone(),
+                        token_usage_at_turn_start: input.token_usage_at_turn_start.clone(),
+                        saw_session_store: input
+                            .session_store
+                            .get::<SessionTurnStartMarker>()
+                            .is_some(),
+                        saw_thread_store: input
+                            .thread_store
+                            .get::<ThreadTurnStartMarker>()
+                            .is_some(),
+                    });
+            })
         }
     }
 
@@ -2138,24 +2146,31 @@ async fn turn_error_lifecycle_exposes_error_and_stores() {
         records: Arc<std::sync::Mutex<Vec<RecordedTurnError>>>,
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::TurnLifecycleContributor for TurnErrorRecorder {
-        async fn on_turn_error(&self, input: codex_extension_api::TurnErrorInput<'_>) {
-            self.records
-                .lock()
-                .expect("turn error records lock")
-                .push(RecordedTurnError {
-                    session_level_id: input.session_store.level_id().to_string(),
-                    thread_level_id: input.thread_store.level_id().to_string(),
-                    turn_level_id: input.turn_store.level_id().to_string(),
-                    turn_id: input.turn_id.to_string(),
-                    error: input.error,
-                    saw_session_store: input
-                        .session_store
-                        .get::<SessionTurnErrorMarker>()
-                        .is_some(),
-                    saw_thread_store: input.thread_store.get::<ThreadTurnErrorMarker>().is_some(),
-                });
+        fn on_turn_error<'a>(
+            &'a self,
+            input: codex_extension_api::TurnErrorInput<'a>,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                self.records
+                    .lock()
+                    .expect("turn error records lock")
+                    .push(RecordedTurnError {
+                        session_level_id: input.session_store.level_id().to_string(),
+                        thread_level_id: input.thread_store.level_id().to_string(),
+                        turn_level_id: input.turn_store.level_id().to_string(),
+                        turn_id: input.turn_id.to_string(),
+                        error: input.error,
+                        saw_session_store: input
+                            .session_store
+                            .get::<SessionTurnErrorMarker>()
+                            .is_some(),
+                        saw_thread_store: input
+                            .thread_store
+                            .get::<ThreadTurnErrorMarker>()
+                            .is_some(),
+                    });
+            })
         }
     }
 
@@ -6411,16 +6426,20 @@ async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
         expected_thread_id: ThreadId,
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadStopRecorder {
-        async fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
-            assert_eq!(
-                self.expected_thread_id.to_string(),
-                input.thread_store.level_id()
-            );
-            assert!(input.session_store.get::<SessionStopMarker>().is_some());
-            assert!(input.thread_store.get::<ThreadStopMarker>().is_some());
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        fn on_thread_stop<'a>(
+            &'a self,
+            input: codex_extension_api::ThreadStopInput<'a>,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                assert_eq!(
+                    self.expected_thread_id.to_string(),
+                    input.thread_store.level_id()
+                );
+                assert!(input.session_store.get::<SessionStopMarker>().is_some());
+                assert!(input.thread_store.get::<ThreadStopMarker>().is_some());
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
         }
     }
 
@@ -6457,33 +6476,41 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
         expected_turn_id: String,
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for LifecycleRecorder {
-        async fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
-            assert_eq!(
-                self.expected_thread_id.to_string(),
-                input.thread_store.level_id()
-            );
-            self.calls
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push("thread_stop");
+        fn on_thread_stop<'a>(
+            &'a self,
+            input: codex_extension_api::ThreadStopInput<'a>,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                assert_eq!(
+                    self.expected_thread_id.to_string(),
+                    input.thread_store.level_id()
+                );
+                self.calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push("thread_stop");
+            })
         }
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::TurnLifecycleContributor for LifecycleRecorder {
-        async fn on_turn_abort(&self, input: codex_extension_api::TurnAbortInput<'_>) {
-            assert_eq!(
-                self.expected_thread_id.to_string(),
-                input.thread_store.level_id()
-            );
-            assert_eq!(self.expected_turn_id, input.turn_store.level_id());
-            assert_eq!(TurnAbortReason::Interrupted, input.reason);
-            self.calls
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push("turn_abort");
+        fn on_turn_abort<'a>(
+            &'a self,
+            input: codex_extension_api::TurnAbortInput<'a>,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                assert_eq!(
+                    self.expected_thread_id.to_string(),
+                    input.thread_store.level_id()
+                );
+                assert_eq!(self.expected_turn_id, input.turn_store.level_id());
+                assert_eq!(TurnAbortReason::Interrupted, input.reason);
+                self.calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push("turn_abort");
+            })
         }
     }
 
@@ -8698,15 +8725,19 @@ async fn task_finish_emits_thread_idle_lifecycle_after_active_turn_clears() {
         expected_thread_id: ThreadId,
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadIdleRecorder {
-        async fn on_thread_idle(&self, input: codex_extension_api::ThreadIdleInput<'_>) {
-            assert_eq!(
-                self.expected_thread_id.to_string(),
-                input.thread_store.level_id()
-            );
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            self.idle_tx.send(()).await.expect("idle receiver open");
+        fn on_thread_idle<'a>(
+            &'a self,
+            input: codex_extension_api::ThreadIdleInput<'a>,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                assert_eq!(
+                    self.expected_thread_id.to_string(),
+                    input.thread_store.level_id()
+                );
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.idle_tx.send(()).await.expect("idle receiver open");
+            })
         }
     }
 
@@ -8740,10 +8771,14 @@ async fn thread_idle_lifecycle_waits_for_trigger_turn_mailbox_work() {
         calls: Arc<std::sync::atomic::AtomicUsize>,
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadIdleRecorder {
-        async fn on_thread_idle(&self, _input: codex_extension_api::ThreadIdleInput<'_>) {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        fn on_thread_idle<'a>(
+            &'a self,
+            _input: codex_extension_api::ThreadIdleInput<'a>,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
         }
     }
 

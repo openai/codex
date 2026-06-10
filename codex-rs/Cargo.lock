@@ -2921,7 +2921,6 @@ dependencies = [
 name = "codex-extension-api"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-config",
  "codex-context-fragments",
  "codex-protocol",
@@ -3070,7 +3069,6 @@ dependencies = [
 name = "codex-guardian"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-core",
  "codex-extension-api",
  "codex-protocol",
@@ -3255,7 +3253,6 @@ dependencies = [
 name = "codex-mcp-extension"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-config",
  "codex-core",
  "codex-core-plugins",

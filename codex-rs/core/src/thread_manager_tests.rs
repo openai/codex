@@ -394,20 +394,24 @@ async fn start_thread_seeds_extension_data_before_lifecycle_contributors_run() {
         observed: Arc<std::sync::Mutex<Option<(String, String)>>>,
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::ThreadLifecycleContributor<Config> for InitialDataRecorder {
-        async fn on_thread_start(&self, input: codex_extension_api::ThreadStartInput<'_, Config>) {
-            let marker = input
-                .thread_store
-                .get::<InitialMarker>()
-                .expect("initial extension data should be available");
-            *self
-                .observed
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((
-                input.thread_store.level_id().to_string(),
-                marker.0.to_string(),
-            ));
+        fn on_thread_start<'a>(
+            &'a self,
+            input: codex_extension_api::ThreadStartInput<'a, Config>,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                let marker = input
+                    .thread_store
+                    .get::<InitialMarker>()
+                    .expect("initial extension data should be available");
+                *self
+                    .observed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((
+                    input.thread_store.level_id().to_string(),
+                    marker.0.to_string(),
+                ));
+            })
         }
     }
 
