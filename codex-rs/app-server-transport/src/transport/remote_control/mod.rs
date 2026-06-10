@@ -1,6 +1,7 @@
 mod auth;
 mod client_tracker;
 mod clients;
+mod desired_state;
 mod enroll;
 mod protocol;
 mod segment;
@@ -8,6 +9,8 @@ mod websocket;
 
 use self::auth::load_remote_control_auth;
 use self::auth::recover_remote_control_auth;
+use self::desired_state::RemoteControlDesiredState;
+use self::desired_state::acquire_persistence_lock;
 use self::enroll::RemoteControlEnrollment;
 use self::enroll::enroll_remote_control_server;
 use self::enroll::load_persisted_remote_control_enrollment;
@@ -72,7 +75,8 @@ pub(super) struct QueuedServerEnvelope {
 
 #[derive(Clone)]
 pub struct RemoteControlHandle {
-    enabled_tx: Arc<watch::Sender<bool>>,
+    desired_state_tx: Arc<watch::Sender<RemoteControlDesiredState>>,
+    desired_state_persistence_lock: Arc<Semaphore>,
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
     state_db: Option<Arc<StateRuntime>>,
@@ -166,23 +170,45 @@ impl fmt::Display for RemoteControlUnavailable {
 impl Error for RemoteControlUnavailable {}
 
 impl RemoteControlHandle {
-    pub fn enable(
+    pub async fn enable(
         &self,
+        app_server_client_name: Option<&str>,
+    ) -> io::Result<RemoteControlStatusChangedNotification> {
+        let _persistence = acquire_persistence_lock(&self.desired_state_persistence_lock).await;
+        self.persist_preference(app_server_client_name, true)
+            .await?;
+        self.enable_with_preference(Some(true))
+            .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))
+    }
+
+    pub fn enable_ephemeral(
+        &self,
+    ) -> Result<RemoteControlStatusChangedNotification, RemoteControlUnavailable> {
+        self.enable_with_preference(/*persistence_preference*/ None)
+    }
+
+    fn enable_with_preference(
+        &self,
+        persistence_preference: Option<bool>,
     ) -> Result<RemoteControlStatusChangedNotification, RemoteControlUnavailable> {
         if !self.state_db_available {
             warn!("remote control cannot be enabled because sqlite state db is unavailable");
             return Err(RemoteControlUnavailable);
         }
 
-        let enabled_changed = self.enabled_tx.send_if_modified(|state| {
-            let changed = !*state;
-            *state = true;
+        let desired_state_changed = self.desired_state_tx.send_if_modified(|state| {
+            let next_state = RemoteControlDesiredState::Enabled {
+                persistence_preference,
+            };
+            let changed = *state != next_state;
+            *state = next_state;
             changed
         });
 
         let status = self.status();
         info!(
-            enabled_changed,
+            desired_state_changed,
+            ?persistence_preference,
             current_status = ?status.status,
             environment_id = ?status.environment_id,
             installation_id = %status.installation_id,
@@ -199,22 +225,52 @@ impl RemoteControlHandle {
         Ok(self.publish_status(RemoteControlConnectionStatus::Connecting))
     }
 
-    pub fn disable(&self) -> RemoteControlStatusChangedNotification {
-        let enabled_changed = self.enabled_tx.send_if_modified(|state| {
-            let changed = *state;
-            *state = false;
+    pub async fn disable(
+        &self,
+        app_server_client_name: Option<&str>,
+    ) -> io::Result<RemoteControlStatusChangedNotification> {
+        let _persistence = acquire_persistence_lock(&self.desired_state_persistence_lock).await;
+        self.persist_preference(app_server_client_name, false)
+            .await?;
+        let desired_state_changed = self.desired_state_tx.send_if_modified(|state| {
+            let changed = *state != RemoteControlDesiredState::Disabled;
+            *state = RemoteControlDesiredState::Disabled;
             changed
         });
         let status = self.status();
         info!(
-            enabled_changed,
+            desired_state_changed,
             current_status = ?status.status,
             environment_id = ?status.environment_id,
             installation_id = %status.installation_id,
             server_name = %status.server_name,
             "remote control disable requested"
         );
-        self.publish_status(RemoteControlConnectionStatus::Disabled)
+        Ok(self.publish_status(RemoteControlConnectionStatus::Disabled))
+    }
+
+    async fn persist_preference(
+        &self,
+        app_server_client_name: Option<&str>,
+        remote_control_enabled: bool,
+    ) -> io::Result<()> {
+        let state_db = self
+            .state_db
+            .as_deref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, RemoteControlUnavailable))?;
+        let auth = load_remote_control_auth(&self.auth_manager).await?;
+        let remote_control_target = normalize_remote_control_url(&self.remote_control_url)?;
+        let app_server_client_name = self.pairing_persistence_key(app_server_client_name)?;
+        state_db
+            .set_remote_control_enabled(
+                &remote_control_target.websocket_url,
+                &auth.account_id,
+                app_server_client_name.as_deref(),
+                remote_control_enabled,
+            )
+            .await
+            .map_err(io::Error::other)?;
+        Ok(())
     }
 
     pub fn status(&self) -> RemoteControlStatusChangedNotification {
@@ -230,6 +286,9 @@ impl RemoteControlHandle {
         params: RemoteControlPairingStartParams,
         app_server_client_name: Option<&str>,
     ) -> io::Result<RemoteControlPairingStartResponse> {
+        if !self.desired_state_tx.borrow().is_enabled() {
+            return Err(Self::pairing_disabled_error());
+        }
         let mut auth = load_remote_control_auth(&self.auth_manager)
             .await
             .map_err(|_| pairing_unavailable_error())?;
@@ -323,6 +382,9 @@ impl RemoteControlHandle {
         if current_auth.account_id != auth.account_id {
             return Err(pairing_unavailable_error());
         }
+        if !self.desired_state_tx.borrow().is_enabled() {
+            return Err(Self::pairing_disabled_error());
+        }
         pairing_response
     }
 
@@ -368,12 +430,22 @@ impl RemoteControlHandle {
             server_name,
         )
         .await?;
+        let _persistence = acquire_persistence_lock(&self.desired_state_persistence_lock).await;
+        let persistence_preference = match *self.desired_state_tx.borrow() {
+            RemoteControlDesiredState::Enabled {
+                persistence_preference,
+            } => persistence_preference,
+            RemoteControlDesiredState::Unknown | RemoteControlDesiredState::Disabled => {
+                return Err(Self::pairing_disabled_error());
+            }
+        };
         update_persisted_remote_control_enrollment(
             Some(state_db),
             &remote_control_target,
             &auth.account_id,
             app_server_client_name,
             Some(&enrollment),
+            persistence_preference,
         )
         .await?;
         publish_current_enrollment(current_enrollment, &enrollment);
@@ -398,7 +470,7 @@ impl RemoteControlHandle {
         &self,
         params: RemoteControlPairingStatusParams,
     ) -> io::Result<RemoteControlPairingStatusResponse> {
-        if !*self.enabled_tx.borrow() {
+        if !self.desired_state_tx.borrow().is_enabled() {
             return Err(Self::pairing_disabled_error());
         }
         let mut auth = load_remote_control_auth(&self.auth_manager)
@@ -465,7 +537,7 @@ impl RemoteControlHandle {
                 _ => {}
             }
         }
-        if !*self.enabled_tx.borrow() {
+        if !self.desired_state_tx.borrow().is_enabled() {
             return Err(Self::pairing_disabled_error());
         }
         let current_auth = load_remote_control_auth(&self.auth_manager)
@@ -666,6 +738,7 @@ async fn clear_pairing_enrollment(
         &enrollment.account_id,
         app_server_client_name,
         /*enrollment*/ None,
+        /*remote_control_enabled*/ None,
     )
     .await
     {
@@ -766,7 +839,16 @@ pub async fn start_remote_control(
 ) -> io::Result<(JoinHandle<()>, RemoteControlHandle)> {
     let state_db_available = state_db.is_some();
     let requested_initial_enabled = initial_enabled;
-    let initial_enabled = initial_enabled && state_db_available;
+    let desired_state = if !state_db_available {
+        RemoteControlDesiredState::Disabled
+    } else if initial_enabled {
+        RemoteControlDesiredState::Enabled {
+            persistence_preference: None,
+        }
+    } else {
+        RemoteControlDesiredState::Unknown
+    };
+    let initial_enabled = desired_state.is_enabled();
     if requested_initial_enabled && !state_db_available {
         warn!("remote control disabled because sqlite state db is unavailable");
     }
@@ -776,7 +858,11 @@ pub async fn start_remote_control(
         None
     };
 
-    let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
+    let (desired_state_tx, _desired_state_rx) = watch::channel(desired_state);
+    let desired_state_tx = Arc::new(desired_state_tx);
+    let desired_state_persistence_lock = Arc::new(Semaphore::new(1));
+    let websocket_desired_state_tx = desired_state_tx.clone();
+    let websocket_desired_state_persistence_lock = desired_state_persistence_lock.clone();
     let current_enrollment = Arc::new(RemoteControlEnrollmentState::new(/*enrollment*/ None));
     let websocket_current_enrollment = current_enrollment.clone();
     let pairing_persistence_key_required = app_server_client_name_rx.is_some();
@@ -804,7 +890,7 @@ pub async fn start_remote_control(
         installation_id = %installation_id,
         server_name = %server_name,
         state_db_available,
-        initial_enabled,
+        ?desired_state,
         "starting app-server remote control websocket task"
     );
     let remote_control_url_for_log = remote_control_url.clone();
@@ -817,7 +903,7 @@ pub async fn start_remote_control(
             remote_control_url = %remote_control_url_for_log,
             installation_id = %installation_id_for_log,
             server_name = %server_name_for_log,
-            initial_enabled,
+            ?desired_state,
             "app-server remote control websocket task started"
         );
         let websocket_task = RemoteControlWebsocket::new(
@@ -834,9 +920,10 @@ pub async fn start_remote_control(
                 status_publisher,
                 current_enrollment: websocket_current_enrollment,
                 pairing_persistence_key: websocket_pairing_persistence_key,
+                desired_state_persistence_lock: websocket_desired_state_persistence_lock,
             },
             shutdown_token,
-            enabled_rx,
+            websocket_desired_state_tx,
         )
         .run(app_server_client_name_rx);
         match AssertUnwindSafe(websocket_task).catch_unwind().await {
@@ -875,7 +962,8 @@ pub async fn start_remote_control(
     Ok((
         join_handle,
         RemoteControlHandle {
-            enabled_tx: Arc::new(enabled_tx),
+            desired_state_tx,
+            desired_state_persistence_lock,
             status_tx: Arc::new(status_tx),
             state_db_available,
             state_db: handle_state_db,

@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
+use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
@@ -24,6 +25,8 @@ use codex_app_server_protocol::RemoteControlPairingStatusResponse;
 use codex_app_server_protocol::RemoteControlStatusReadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_state::RemoteControlEnrollmentRecord;
+use codex_state::StateRuntime;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
@@ -38,9 +41,29 @@ use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
+async fn remote_control_preference(
+    state_db: &StateRuntime,
+    websocket_url: &str,
+) -> Result<Option<bool>> {
+    Ok(state_db
+        .get_remote_control_enrollment(websocket_url, "account_id", Some(DEFAULT_CLIENT_NAME))
+        .await?
+        .context("seeded enrollment should remain")?
+        .remote_control_enabled)
+}
+
+async fn wait_for_response(mcp: &mut TestAppServer, request_id: i64) -> Result<JSONRPCResponse> {
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await?
+}
+
 #[tokio::test]
 async fn remote_control_disable_returns_disabled_status() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let _listener = configured_remote_control_listener(codex_home.path()).await?;
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -99,6 +122,55 @@ async fn remote_control_enable_returns_connecting_status() -> Result<()> {
     assert!(!received.server_name.is_empty());
     assert_eq!(received.environment_id, None);
     assert!(!received.installation_id.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn rpc_updates_durable_preference_but_ephemeral_does_not() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let listener = configured_remote_control_listener(codex_home.path()).await?;
+    let websocket_url = format!(
+        "ws://{}/backend-api/wham/remote/control/server",
+        listener.local_addr()?
+    );
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
+    state_db
+        .upsert_remote_control_enrollment(&RemoteControlEnrollmentRecord {
+            websocket_url: websocket_url.clone(),
+            account_id: "account_id".to_string(),
+            app_server_client_name: Some(DEFAULT_CLIENT_NAME.to_string()),
+            server_id: "server-id".to_string(),
+            environment_id: "environment-id".to_string(),
+            server_name: "server-name".to_string(),
+            remote_control_enabled: Some(false),
+        })
+        .await?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_remote_control_enable_request().await?;
+    wait_for_response(&mut mcp, request_id).await?;
+    assert_eq!(
+        remote_control_preference(&state_db, &websocket_url).await?,
+        Some(true)
+    );
+
+    let request_id = mcp.send_remote_control_disable_request().await?;
+    wait_for_response(&mut mcp, request_id).await?;
+    assert_eq!(
+        remote_control_preference(&state_db, &websocket_url).await?,
+        Some(false)
+    );
+
+    let request_id = mcp.send_remote_control_ephemeral_enable_request().await?;
+    wait_for_response(&mut mcp, request_id).await?;
+    assert_eq!(
+        remote_control_preference(&state_db, &websocket_url).await?,
+        Some(false)
+    );
+
     Ok(())
 }
 
@@ -235,11 +307,13 @@ async fn remote_control_pairing_start_returns_pairing_artifacts() -> Result<()> 
 }
 
 #[tokio::test]
-async fn remote_control_pairing_start_returns_pairing_artifacts_while_disabled() -> Result<()> {
+async fn pairing_start_works_after_ephemeral_enable() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut backend = PairingRemoteControlBackend::start(codex_home.path()).await?;
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp.send_remote_control_ephemeral_enable_request().await?;
+    wait_for_response(&mut mcp, request_id).await?;
 
     let request_id = mcp
         .send_remote_control_pairing_start_request(RemoteControlPairingStartParams {

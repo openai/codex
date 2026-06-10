@@ -940,13 +940,18 @@ impl MessageProcessor {
                     .experimental_feature_enablement_set(request_id.clone(), params)
                     .await
             }
-            ClientRequest::RemoteControlEnable { .. } => self
+            ClientRequest::RemoteControlEnable { params, .. } => self
                 .remote_control_processor
-                .enable()
+                .enable(
+                    params.is_some_and(|params| params.ephemeral),
+                    app_server_client_name.as_deref(),
+                )
+                .await
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlDisable { .. } => self
                 .remote_control_processor
-                .disable()
+                .disable(app_server_client_name.as_deref())
+                .await
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlStatusRead { .. } => self
                 .remote_control_processor

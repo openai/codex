@@ -28,17 +28,33 @@ impl RemoteControlRequestProcessor {
         }
     }
 
-    pub(crate) fn enable(&self) -> Result<RemoteControlEnableResponse, JSONRPCErrorError> {
+    pub(crate) async fn enable(
+        &self,
+        ephemeral: bool,
+        app_server_client_name: Option<&str>,
+    ) -> Result<RemoteControlEnableResponse, JSONRPCErrorError> {
         let handle = self.handle()?;
-        handle
-            .enable()
-            .map(RemoteControlEnableResponse::from)
-            .map_err(map_unavailable)
+        let status = if ephemeral {
+            handle.enable_ephemeral().map_err(map_unavailable)?
+        } else {
+            handle
+                .enable(app_server_client_name)
+                .await
+                .map_err(map_update_error)?
+        };
+        Ok(RemoteControlEnableResponse::from(status))
     }
 
-    pub(crate) fn disable(&self) -> Result<RemoteControlDisableResponse, JSONRPCErrorError> {
+    pub(crate) async fn disable(
+        &self,
+        app_server_client_name: Option<&str>,
+    ) -> Result<RemoteControlDisableResponse, JSONRPCErrorError> {
         let handle = self.handle()?;
-        Ok(RemoteControlDisableResponse::from(handle.disable()))
+        handle
+            .disable(app_server_client_name)
+            .await
+            .map(RemoteControlDisableResponse::from)
+            .map_err(map_update_error)
     }
 
     pub(crate) fn status_read(&self) -> Result<RemoteControlStatusReadResponse, JSONRPCErrorError> {
@@ -102,6 +118,14 @@ impl RemoteControlRequestProcessor {
 
 fn map_unavailable(err: RemoteControlUnavailable) -> JSONRPCErrorError {
     invalid_request(err.to_string())
+}
+
+fn map_update_error(err: io::Error) -> JSONRPCErrorError {
+    if err.kind() == io::ErrorKind::NotFound {
+        invalid_request(err.to_string())
+    } else {
+        internal_error(err.to_string())
+    }
 }
 
 fn map_pairing_start_error(err: io::Error) -> JSONRPCErrorError {

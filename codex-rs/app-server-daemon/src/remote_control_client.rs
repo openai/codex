@@ -8,6 +8,7 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
+use codex_app_server_protocol::RemoteControlEnableParams;
 use codex_app_server_protocol::RemoteControlEnableResponse;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::RequestId;
@@ -58,7 +59,9 @@ where
     let enable = JSONRPCMessage::Request(JSONRPCRequest {
         id: REMOTE_CONTROL_ENABLE_REQUEST_ID,
         method: "remoteControl/enable".to_string(),
-        params: None,
+        params: Some(serde_json::to_value(RemoteControlEnableParams {
+            ephemeral: true,
+        })?),
         trace: None,
     });
     client::send_message(websocket, &enable)
@@ -408,6 +411,10 @@ mod tests {
         };
         assert_eq!(enable.id, REMOTE_CONTROL_ENABLE_REQUEST_ID);
         assert_eq!(enable.method, "remoteControl/enable");
+        assert_eq!(
+            enable.params,
+            Some(serde_json::json!({ "ephemeral": true }))
+        );
         client::send_message(
             &mut websocket,
             &JSONRPCMessage::Response(JSONRPCResponse {

@@ -645,7 +645,9 @@ async fn remote_control_handle_disable_keeps_current_enrollment() {
         remote_control_auth_manager(),
     );
 
-    remote_handle.disable();
+    remote_handle
+        .desired_state_tx
+        .send_replace(RemoteControlDesiredState::Disabled);
     assert!(
         remote_handle.current_enrollment.lock().await.is_some(),
         "disabled remote control should keep the selected pairing server"
@@ -665,7 +667,6 @@ async fn remote_control_handle_reenrolls_after_stale_pairing_enrollment() {
         remote_control_auth_manager_with_home(&codex_home),
     );
     remote_handle.state_db = Some(state_db.clone());
-    remote_handle.disable();
     let stale_enrollment = remote_handle
         .current_enrollment
         .lock()
@@ -688,9 +689,15 @@ async fn remote_control_handle_reenrolls_after_stale_pairing_enrollment() {
         "account_id",
         /*app_server_client_name*/ None,
         Some(&stale_enrollment),
+        /*remote_control_enabled*/ None,
     )
     .await
     .expect("stale enrollment should save");
+    remote_handle
+        .desired_state_tx
+        .send_replace(RemoteControlDesiredState::Enabled {
+            persistence_preference: Some(true),
+        });
     let server_refreshed_enrollment = refreshed_enrollment.clone();
     let server_task = tokio::spawn(async move {
         let stale_pairing_request = accept_http_request(&listener).await;
@@ -761,15 +768,17 @@ async fn remote_control_handle_reenrolls_after_stale_pairing_enrollment() {
         }
     );
     assert_eq!(
-        load_persisted_remote_control_enrollment(
-            Some(state_db.as_ref()),
-            &remote_control_target,
-            "account_id",
-            /*app_server_client_name*/ None,
-        )
-        .await
-        .expect("refreshed enrollment should load"),
-        Some(refreshed_enrollment)
+        state_db
+            .get_remote_control_enrollment(
+                &remote_control_target.websocket_url,
+                "account_id",
+                /*app_server_client_name*/ None,
+            )
+            .await
+            .expect("refreshed enrollment should load")
+            .expect("refreshed enrollment should exist")
+            .remote_control_enabled,
+        Some(true)
     );
 }
 
