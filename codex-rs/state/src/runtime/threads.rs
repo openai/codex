@@ -928,6 +928,8 @@ fn push_list_threads_query(
     builder.push(" FROM threads");
     push_thread_filters(builder, filters);
     let order_by_index = match filters.cwd_filters {
+        // Multi-cwd listing is supported but has no current in-repo production caller. Preserve
+        // its query plan so the global timestamp index does not turn cwd filtering into a scan.
         Some(cwd_filters) if cwd_filters.len() > 1 => OrderByIndex::Disabled,
         Some(_) | None => OrderByIndex::Enabled,
     };
@@ -1080,6 +1082,10 @@ pub(super) fn push_thread_filters<'a>(
     }
 }
 
+/// Controls whether SQLite may use the ordered column to satisfy `ORDER BY` from an index.
+///
+/// Disabling it adds a unary `+` to the ordered column. This preserves the sort semantics while
+/// preventing a timestamp-only index from winning over a more selective filtering index.
 #[derive(Clone, Copy)]
 pub(super) enum OrderByIndex {
     Enabled,
@@ -1102,9 +1108,11 @@ pub(super) fn push_thread_order_and_limit(
         SortDirection::Desc => "DESC",
     };
     builder.push(" ORDER BY ");
-    if matches!(order_by_index, OrderByIndex::Disabled) {
-        // Keep SQLite from choosing the timestamp index over a more selective cwd index.
-        builder.push("+");
+    match order_by_index {
+        OrderByIndex::Enabled => {}
+        OrderByIndex::Disabled => {
+            builder.push("+");
+        }
     }
     builder.push(order_column);
     builder.push(" ");
