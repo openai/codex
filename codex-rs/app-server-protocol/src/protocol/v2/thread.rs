@@ -561,6 +561,10 @@ pub struct ThreadForkParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadForkResponse {
     pub thread: Thread,
+    /// Whether multi-agent collaboration tools are disabled for the forked thread.
+    /// Older app-server versions omit this field, which deserializes to `false`.
+    #[serde(default)]
+    pub multi_agent_tools_disabled: bool,
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<String>,

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_core::MultiAgentRuntimeOverride;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::config::AgentRoleConfig;
@@ -753,7 +754,7 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
             initial_history: InitialHistory::New,
             session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
             thread_source: None,
-            multi_agent_version: None,
+            multi_agent_runtime: MultiAgentRuntimeOverride::Inherit,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,

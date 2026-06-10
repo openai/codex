@@ -471,6 +471,16 @@ impl AppServerSession {
             .map_err(|err| {
                 bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
             })?;
+        if multi_agent_tools == MultiAgentToolsOverride::Disabled
+            && !response.multi_agent_tools_disabled
+        {
+            if let Ok(thread_id) = ThreadId::from_string(&response.thread.id) {
+                let _ = self.thread_unsubscribe(thread_id).await;
+            }
+            return Err(color_eyre::eyre::eyre!(
+                "connected app server did not confirm that multi-agent tools were disabled for the fork"
+            ));
+        }
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;

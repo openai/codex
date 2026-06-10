@@ -1,5 +1,6 @@
 use codex_core::CodexThread;
 use codex_core::ModelClient;
+use codex_core::MultiAgentRuntimeOverride;
 use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
@@ -247,7 +248,7 @@ impl MemoryStartupContext {
                     InternalSessionSource::MemoryConsolidation,
                 )),
                 thread_source: Some(ThreadSource::MemoryConsolidation),
-                multi_agent_version: None,
+                multi_agent_runtime: MultiAgentRuntimeOverride::Inherit,
                 dynamic_tools: Vec::new(),
                 metrics_service_name: None,
                 parent_trace: None,

@@ -14008,6 +14008,11 @@
         "modelProvider": {
           "type": "string"
         },
+        "multiAgentToolsDisabled": {
+          "default": false,
+          "description": "Whether multi-agent collaboration tools are disabled for the forked thread. Older app-server versions omit this field, which deserializes to `false`.",
+          "type": "boolean"
+        },
         "reasoningEffort": {
           "anyOf": [
             {

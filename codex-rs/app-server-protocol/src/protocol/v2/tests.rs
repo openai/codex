@@ -3639,6 +3639,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     assert_eq!(start.thread.parent_thread_id, None);
     assert_eq!(resume.instruction_sources, Vec::<AbsolutePathBuf>::new());
     assert_eq!(fork.instruction_sources, Vec::<AbsolutePathBuf>::new());
+    assert!(!fork.multi_agent_tools_disabled);
     assert_eq!(start.active_permission_profile, None);
     assert_eq!(resume.active_permission_profile, None);
     assert_eq!(resume.initial_turns_page, None);

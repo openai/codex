@@ -51,6 +51,7 @@ mod safety_check_downgrade;
 mod skills_list;
 mod thread_archive;
 mod thread_fork;
+mod thread_fork_multi_agent;
 mod thread_inject_items;
 mod thread_list;
 mod thread_loaded_list;
