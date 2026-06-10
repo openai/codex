@@ -23,6 +23,7 @@ mod rpc;
 mod runtime_paths;
 mod sandboxed_file_system;
 mod server;
+mod telemetry;
 
 pub use client::ExecServerClient;
 pub use client::ExecServerError;
@@ -107,3 +108,4 @@ pub use runtime_paths::ExecServerRuntimePaths;
 pub use server::DEFAULT_LISTEN_URL;
 pub use server::ExecServerListenUrlParseError;
 pub use server::run_main;
+pub use telemetry::runtime_span;

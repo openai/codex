@@ -41,6 +41,9 @@ use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
+use tracing::Instrument;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
@@ -569,6 +572,10 @@ struct ExecServerCommand {
     #[arg(long = "use-agent-identity-auth", requires = "remote")]
     use_agent_identity_auth: bool,
 }
+
+const EXEC_SERVER_DEFAULT_ANALYTICS_ENABLED: bool = false;
+const EXEC_SERVER_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
+const EXEC_SERVER_OTEL_SERVICE_NAME: &str = "codex-exec-server";
 
 #[derive(Debug, clap::Subcommand)]
 #[allow(clippy::enum_variant_names)]
@@ -1628,6 +1635,7 @@ async fn run_exec_server_command(
             .environment_id
             .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
         let config = load_exec_server_config(root_config_overrides, strict_config).await?;
+        let _otel = init_exec_server_tracing(Some(&config));
         let auth_provider =
             load_exec_server_remote_auth_provider(&config, &base_url, cmd.use_agent_identity_auth)
                 .await?;
@@ -1639,23 +1647,71 @@ async fn run_exec_server_command(
         if let Some(name) = cmd.name {
             remote_config.name = name;
         }
-        codex_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
+        codex_exec_server::run_remote_environment(remote_config, runtime_paths)
+            .instrument(codex_exec_server::runtime_span())
+            .await?;
         Ok(())
     } else {
-        if strict_config {
-            // Local exec-server startup does not consume Config, but strict
-            // mode should still reject unknown fields before opening a listener.
-            let _validated_config =
-                load_exec_server_config(root_config_overrides, strict_config).await?;
-        }
+        let config = if strict_config {
+            Some(load_exec_server_config(root_config_overrides, strict_config).await?)
+        } else {
+            load_exec_server_config(root_config_overrides, /*strict_config*/ false)
+                .await
+                .ok()
+        };
+        let _otel = init_exec_server_tracing(config.as_ref());
         let listen_url = cmd
             .listen
             .as_deref()
             .unwrap_or(codex_exec_server::DEFAULT_LISTEN_URL);
         codex_exec_server::run_main(listen_url, runtime_paths)
+            .instrument(codex_exec_server::runtime_span())
             .await
             .map_err(anyhow::Error::from_boxed)
     }
+}
+
+fn init_exec_server_tracing(config: Option<&codex_core::config::Config>) -> impl Send + Sync {
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_filter(exec_server_stderr_env_filter());
+    let otel = config.and_then(|config| {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            codex_core::otel_init::build_provider(
+                config,
+                env!("CARGO_PKG_VERSION"),
+                Some(EXEC_SERVER_OTEL_SERVICE_NAME),
+                EXEC_SERVER_DEFAULT_ANALYTICS_ENABLED,
+            )
+        })) {
+            Ok(Ok(otel)) => otel,
+            Ok(Err(err)) => {
+                eprintln!("Could not create otel exporter: {err}");
+                None
+            }
+            Err(_) => {
+                eprintln!("Could not create otel exporter: panicked during initialization");
+                None
+            }
+        }
+    });
+    codex_core::otel_init::record_process_start(otel.as_ref(), EXEC_SERVER_OTEL_SERVICE_NAME);
+
+    let otel_logger_layer = otel.as_ref().and_then(|otel| otel.logger_layer());
+    let otel_tracing_layer = otel.as_ref().and_then(|otel| otel.tracing_layer());
+    let _ = tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(otel_tracing_layer)
+        .with(otel_logger_layer)
+        .try_init();
+    tracing::callsite::rebuild_interest_cache();
+    otel
+}
+
+fn exec_server_stderr_env_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(EXEC_SERVER_DEFAULT_LOG_FILTER))
+        .unwrap_or_else(|_| EnvFilter::new("error"))
 }
 
 async fn load_exec_server_remote_auth_provider(
