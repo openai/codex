@@ -21,6 +21,7 @@ use super::compression;
 const MATCH_CONTEXT_BEFORE_CHARS: usize = 48;
 const MATCH_CONTEXT_AFTER_CHARS: usize = 96;
 
+/// Search matches keyed by the canonical `.jsonl` path for each rollout.
 pub type RolloutSearchMatches = HashMap<PathBuf, Option<String>>;
 
 pub async fn search_rollout_paths(
@@ -145,7 +146,10 @@ async fn scan_rollout_matches(
                 if let Some(snippet) =
                     first_rollout_content_match_snippet(rollout_file.path(), search_term).await?
                 {
-                    matches.insert(rollout_file.into_path(), Some(snippet));
+                    matches.insert(
+                        compression::plain_rollout_path(rollout_file.path()),
+                        Some(snippet),
+                    );
                 }
                 continue;
             }
@@ -217,7 +221,10 @@ async fn scan_compressed_rollout_matches(
             if let Some(snippet) =
                 first_rollout_content_match_snippet(rollout_file.path(), search_term).await?
             {
-                matches.insert(rollout_file.into_path(), Some(snippet));
+                matches.insert(
+                    compression::plain_rollout_path(rollout_file.path()),
+                    Some(snippet),
+                );
             }
         }
     }
