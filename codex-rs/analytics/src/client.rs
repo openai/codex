@@ -1,3 +1,4 @@
+use crate::events::AnalyticsEvent;
 use crate::events::AppServerRpcTransport;
 use crate::events::GuardianReviewAnalyticsResult;
 use crate::events::GuardianReviewTrackContext;
@@ -21,7 +22,6 @@ use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
-use crate::sinks::AnalyticsEvent;
 use crate::sinks::AnalyticsEventSink;
 use crate::sinks::SharedLocalAnalyticsSink;
 use crate::sinks::local_analytics_sink_from_env;

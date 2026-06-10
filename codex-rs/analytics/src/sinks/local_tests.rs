@@ -1,8 +1,9 @@
 use super::LOCAL_ANALYTICS_SCHEMA_VERSION;
 use super::LocalAnalyticsRecord;
 use super::LocalAnalyticsRecordType;
-use super::append_local_analytics_record_best_effort;
+use super::append_record_best_effort;
 use super::local_analytics_sink_for_path;
+use crate::events::AnalyticsEvent;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
 use crate::events::TrackEventRequest;
@@ -19,7 +20,7 @@ static NEXT_TEST_PATH_ID: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn codex_analytics_record_extracts_generic_envelope_metadata() {
-    let record = LocalAnalyticsRecord::from_codex_analytics_event(&sample_track_event())
+    let record = LocalAnalyticsRecord::from_event(&sample_analytics_event())
         .expect("serialize local analytics event");
 
     assert_eq!(
@@ -63,13 +64,12 @@ fn process_global_sink_reuses_writer_for_same_path() {
 fn sink_appends_complete_jsonl_records() {
     let path = test_sink_path("records");
     let sink = local_analytics_sink_for_path(path.clone()).expect("sink");
-    let first = LocalAnalyticsRecord::from_codex_analytics_event(&sample_track_event())
-        .expect("first record");
+    let first = LocalAnalyticsRecord::from_event(&sample_analytics_event()).expect("first record");
     let mut second = first.clone();
     second.turn_id = Some("turn-2".to_string());
 
-    append_local_analytics_record_best_effort(&sink, &first);
-    append_local_analytics_record_best_effort(&sink, &second);
+    append_record_best_effort(&sink, &first);
+    append_record_best_effort(&sink, &second);
 
     let contents = fs::read_to_string(path).expect("read sink");
     let records = contents
@@ -88,22 +88,24 @@ fn sink_initialization_failure_is_best_effort() {
     assert!(local_analytics_sink_for_path(path).is_none());
 }
 
-fn sample_track_event() -> TrackEventRequest {
-    TrackEventRequest::SkillInvocation(SkillInvocationEventRequest {
-        event_type: "skill_invocation",
-        skill_id: "skill-1".to_string(),
-        skill_name: "doc".to_string(),
-        event_params: SkillInvocationEventParams {
-            product_client_id: None,
-            skill_scope: None,
-            plugin_id: None,
-            repo_url: None,
-            thread_id: Some("thread-1".to_string()),
-            turn_id: Some("turn-1".to_string()),
-            invoke_type: Some(InvocationType::Explicit),
-            model_slug: Some("gpt-5.1-codex".to_string()),
+fn sample_analytics_event() -> AnalyticsEvent {
+    AnalyticsEvent::CodexAnalytics(TrackEventRequest::SkillInvocation(
+        SkillInvocationEventRequest {
+            event_type: "skill_invocation",
+            skill_id: "skill-1".to_string(),
+            skill_name: "doc".to_string(),
+            event_params: SkillInvocationEventParams {
+                product_client_id: None,
+                skill_scope: None,
+                plugin_id: None,
+                repo_url: None,
+                thread_id: Some("thread-1".to_string()),
+                turn_id: Some("turn-1".to_string()),
+                invoke_type: Some(InvocationType::Explicit),
+                model_slug: Some("gpt-5.1-codex".to_string()),
+            },
         },
-    })
+    ))
 }
 
 fn test_sink_path(label: &str) -> PathBuf {

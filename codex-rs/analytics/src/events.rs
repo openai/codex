@@ -88,6 +88,34 @@ impl TrackEventRequest {
     }
 }
 
+pub(crate) enum AnalyticsEvent {
+    CodexAnalytics(TrackEventRequest),
+}
+
+impl AnalyticsEvent {
+    pub(crate) fn is_writable_to(&self, sink: AnalyticsEventSinkKind) -> bool {
+        matches!(
+            (self, sink),
+            (
+                Self::CodexAnalytics(_),
+                AnalyticsEventSinkKind::CodexBackend | AnalyticsEventSinkKind::Local,
+            )
+        )
+    }
+}
+
+impl From<TrackEventRequest> for AnalyticsEvent {
+    fn from(event: TrackEventRequest) -> Self {
+        Self::CodexAnalytics(event)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum AnalyticsEventSinkKind {
+    CodexBackend,
+    Local,
+}
+
 #[derive(Serialize)]
 pub(crate) struct CodexAcceptedLineFingerprintsEventParams {
     pub(crate) event_type: &'static str,

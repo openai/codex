@@ -1,4 +1,4 @@
-use crate::events::TrackEventRequest;
+use crate::events::AnalyticsEvent;
 use crate::now_unix_millis;
 use serde::Deserialize;
 use serde::Serialize;
@@ -27,7 +27,6 @@ static PROCESS_LOCAL_SINKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<LocalAnal
 #[serde(rename_all = "snake_case")]
 pub enum LocalAnalyticsRecordType {
     CodexAnalyticsEvent,
-    ResponsesApiCall,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -50,20 +49,14 @@ pub(crate) fn local_analytics_sink_from_env() -> Option<SharedLocalAnalyticsSink
     local_analytics_sink_for_path(PathBuf::from(path))
 }
 
-pub(crate) fn append_codex_analytics_event_best_effort(
-    sink: &SharedLocalAnalyticsSink,
-    event: &TrackEventRequest,
-) {
-    let Some(record) = LocalAnalyticsRecord::from_codex_analytics_event(event) else {
+pub(super) fn write(sink: &SharedLocalAnalyticsSink, event: &AnalyticsEvent) {
+    let Some(record) = LocalAnalyticsRecord::from_event(event) else {
         return;
     };
-    append_local_analytics_record_best_effort(sink, &record);
+    append_record_best_effort(sink, &record);
 }
 
-pub(crate) fn append_local_analytics_record_best_effort(
-    sink: &SharedLocalAnalyticsSink,
-    record: &LocalAnalyticsRecord,
-) {
+fn append_record_best_effort(sink: &SharedLocalAnalyticsSink, record: &LocalAnalyticsRecord) {
     let result = sink
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -101,24 +94,28 @@ pub(crate) fn local_analytics_sink_for_path(path: PathBuf) -> Option<SharedLocal
 }
 
 impl LocalAnalyticsRecord {
-    fn from_codex_analytics_event(event: &TrackEventRequest) -> Option<Self> {
-        let payload = match serde_json::to_value(event) {
-            Ok(payload) => payload,
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to serialize local analytics event");
-                return None;
+    fn from_event(event: &AnalyticsEvent) -> Option<Self> {
+        match event {
+            AnalyticsEvent::CodexAnalytics(event) => {
+                let payload = match serde_json::to_value(event) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to serialize local analytics event");
+                        return None;
+                    }
+                };
+                let event_params = payload.get("event_params");
+                Some(Self {
+                    schema_version: LOCAL_ANALYTICS_SCHEMA_VERSION,
+                    recorded_at_epoch_millis: now_unix_millis(),
+                    record_type: LocalAnalyticsRecordType::CodexAnalyticsEvent,
+                    session_id: string_field(event_params, "session_id"),
+                    thread_id: string_field(event_params, "thread_id"),
+                    turn_id: string_field(event_params, "turn_id"),
+                    payload,
+                })
             }
-        };
-        let event_params = payload.get("event_params");
-        Some(Self {
-            schema_version: LOCAL_ANALYTICS_SCHEMA_VERSION,
-            recorded_at_epoch_millis: now_unix_millis(),
-            record_type: LocalAnalyticsRecordType::CodexAnalyticsEvent,
-            session_id: string_field(event_params, "session_id"),
-            thread_id: string_field(event_params, "thread_id"),
-            turn_id: string_field(event_params, "turn_id"),
-            payload,
-        })
+        }
     }
 }
 
