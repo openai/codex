@@ -361,6 +361,7 @@ impl Session {
         )
         .await
         .validate_required_servers()
+        .await
         {
             Ok(manager) => manager,
             Err(err) => {

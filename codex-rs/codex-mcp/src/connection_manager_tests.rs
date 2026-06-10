@@ -1167,7 +1167,8 @@ async fn required_local_stdio_without_local_runtime_fails_validation() {
         /*elicitation_reviewer*/ None,
     )
     .await
-    .validate_required_servers();
+    .validate_required_servers()
+    .await;
 
     let error = match result {
         Ok(_) => panic!("required MCP startup should fail"),

@@ -106,7 +106,7 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_metadata: HashMap<String, McpServerMetadata>,
-    required_startup_failures: Vec<McpStartupFailure>,
+    required_servers: Vec<String>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
     host_owned_codex_apps_enabled: bool,
     prefix_mcp_tool_names: bool,
@@ -242,10 +242,10 @@ impl McpConnectionManager {
                 (server_name, outcome)
             });
         }
-        let mut manager = Self {
+        let manager = Self {
             clients,
             server_metadata,
-            required_startup_failures: Vec::new(),
+            required_servers,
             tool_plugin_provenance,
             host_owned_codex_apps_enabled,
             prefix_mcp_tool_names,
@@ -274,25 +274,43 @@ impl McpConnectionManager {
                 })
                 .await;
         });
-        manager.required_startup_failures = manager
-            .collect_required_startup_failures(&required_servers)
-            .instrument(info_span!(
-                "session_init.required_mcp_wait",
-                otel.name = "session_init.required_mcp_wait",
-                session_init.required_mcp_server_count = required_servers.len(),
-            ))
-            .await;
         manager
     }
 
     /// Returns this manager only if every required server initialized successfully.
-    pub fn validate_required_servers(self) -> Result<Self> {
-        if self.required_startup_failures.is_empty() {
+    pub async fn validate_required_servers(self) -> Result<Self> {
+        let failures = async {
+            let mut failures = Vec::new();
+            for server_name in &self.required_servers {
+                let Some(async_managed_client) = self.clients.get(server_name).cloned() else {
+                    failures.push(McpStartupFailure {
+                        server: server_name.clone(),
+                        error: format!("required MCP server `{server_name}` was not initialized"),
+                    });
+                    continue;
+                };
+
+                match async_managed_client.client().await {
+                    Ok(_) => {}
+                    Err(error) => failures.push(McpStartupFailure {
+                        server: server_name.clone(),
+                        error: startup_outcome_error_message(error),
+                    }),
+                }
+            }
+            failures
+        }
+        .instrument(info_span!(
+            "session_init.required_mcp_wait",
+            otel.name = "session_init.required_mcp_wait",
+            session_init.required_mcp_server_count = self.required_servers.len(),
+        ))
+        .await;
+        if failures.is_empty() {
             return Ok(self);
         }
 
-        let details = self
-            .required_startup_failures
+        let details = failures
             .iter()
             .map(|failure| format!("{}: {}", failure.server, failure.error))
             .collect::<Vec<_>>()
@@ -310,7 +328,7 @@ impl McpConnectionManager {
         Self {
             clients: HashMap::new(),
             server_metadata: HashMap::new(),
-            required_startup_failures: Vec::new(),
+            required_servers: Vec::new(),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             host_owned_codex_apps_enabled: false,
             prefix_mcp_tool_names,
@@ -783,31 +801,6 @@ impl McpConnectionManager {
             .client()
             .await
             .context("failed to get client")
-    }
-
-    async fn collect_required_startup_failures(
-        &self,
-        required_servers: &[String],
-    ) -> Vec<McpStartupFailure> {
-        let mut failures = Vec::new();
-        for server_name in required_servers {
-            let Some(async_managed_client) = self.clients.get(server_name).cloned() else {
-                failures.push(McpStartupFailure {
-                    server: server_name.clone(),
-                    error: format!("required MCP server `{server_name}` was not initialized"),
-                });
-                continue;
-            };
-
-            match async_managed_client.client().await {
-                Ok(_) => {}
-                Err(error) => failures.push(McpStartupFailure {
-                    server: server_name.clone(),
-                    error: startup_outcome_error_message(error),
-                }),
-            }
-        }
-        failures
     }
 
     #[cfg(test)]
