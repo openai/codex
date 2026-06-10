@@ -10,6 +10,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use clatter::KeyPair;
+use clatter::bytearray::ByteArray;
 use clatter::crypto::dh::X25519;
 use clatter::traits::Dh;
 use clatter::traits::Kem;
