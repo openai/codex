@@ -1104,6 +1104,73 @@ async fn responses_websocket_emits_reasoning_included_event() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_uses_per_request_model_identity_metadata() {
+    skip_if_no_network!();
+
+    let first_identity = json!({
+        "type": "codex.response.metadata",
+        "headers": {
+            "OpenAI-Model": "route-first",
+            "OpenAI-Model-Snapshot": "snapshot-first"
+        }
+    });
+    let second_identity = json!({
+        "type": "codex.response.metadata",
+        "headers": {
+            "OpenAI-Model": "route-terminal",
+            "OpenAI-Model-Snapshot": "snapshot-terminal"
+        }
+    });
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![
+                first_identity,
+                ev_response_created("resp-1"),
+                ev_completed("resp-1"),
+            ],
+            vec![
+                second_identity,
+                ev_response_created("resp-2"),
+                ev_completed("resp-2"),
+            ],
+        ],
+        response_headers: vec![("OpenAI-Model".to_string(), "handshake-model".to_string())],
+        accept_delay: None,
+        close_after_requests: true,
+    }])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    let first =
+        stream_until_complete_and_capture_model_identity(&mut client_session, &harness, &prompt)
+            .await;
+    let second =
+        stream_until_complete_and_capture_model_identity(&mut client_session, &harness, &prompt)
+            .await;
+
+    assert_eq!(
+        first,
+        (
+            Some("route-first".to_string()),
+            Some("snapshot-first".to_string())
+        )
+    );
+    assert_eq!(
+        second,
+        (
+            Some("route-terminal".to_string()),
+            Some("snapshot-terminal".to_string())
+        )
+    );
+    assert_eq!(server.handshakes().len(), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_emits_rate_limit_events() {
     skip_if_no_network!();
 
@@ -2169,6 +2236,43 @@ async fn stream_until_complete_with_service_tier(
         /*turn_metadata_header*/ None,
     )
     .await;
+}
+
+async fn stream_until_complete_and_capture_model_identity(
+    client_session: &mut ModelClientSession,
+    harness: &WebsocketTestHarness,
+    prompt: &Prompt,
+) -> (Option<String>, Option<String>) {
+    let mut stream = client_session
+        .stream(
+            TEST_WINDOW_ID,
+            prompt,
+            &harness.model_info,
+            &harness.session_telemetry,
+            harness.effort.clone(),
+            harness.summary,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
+            &InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("websocket stream failed");
+    let mut identity = (None, None);
+
+    while let Some(event) = stream.next().await {
+        match event.expect("websocket response event should parse") {
+            ResponseEvent::ServerModelIdentity(response_identity) => {
+                identity = (
+                    response_identity.final_model,
+                    response_identity.model_snapshot,
+                );
+            }
+            ResponseEvent::Completed { .. } => return identity,
+            _ => {}
+        }
+    }
+
+    panic!("websocket stream ended before completion");
 }
 
 async fn stream_until_complete_with_turn_metadata(

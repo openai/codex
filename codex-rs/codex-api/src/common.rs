@@ -69,6 +69,12 @@ pub struct MemorySummarizeOutput {
     pub memory_summary: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResponseModelIdentity {
+    pub final_model: Option<String>,
+    pub model_snapshot: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum ResponseEvent {
     Created,
@@ -77,6 +83,8 @@ pub enum ResponseEvent {
     /// Emitted when the server includes `OpenAI-Model` on the stream response.
     /// This can differ from the requested model when backend safety routing applies.
     ServerModel(String),
+    /// Authoritative execution identity reported for this response.
+    ServerModelIdentity(ResponseModelIdentity),
     /// Emitted when the server recommends additional account verification.
     ModelVerifications(Vec<ModelVerification>),
     /// Emitted when the server includes moderation metadata for first-party turn presentation.

@@ -1,5 +1,6 @@
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
+use crate::common::ResponseModelIdentity;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
@@ -633,6 +634,7 @@ async fn run_websocket_response_stream(
     connection_reused: bool,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
+    let mut last_server_model_identity: Option<ResponseModelIdentity> = None;
     send_websocket_request(
         ws_stream,
         request_body,
@@ -697,6 +699,18 @@ async fn run_websocket_response_stream(
                         .send(Ok(ResponseEvent::ServerModel(model.clone())))
                         .await;
                     last_server_model = Some(model);
+                }
+                let server_model_identity = event.response_model_identity();
+                if (server_model_identity.final_model.is_some()
+                    || server_model_identity.model_snapshot.is_some())
+                    && last_server_model_identity.as_ref() != Some(&server_model_identity)
+                {
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::ServerModelIdentity(
+                            server_model_identity.clone(),
+                        )))
+                        .await;
+                    last_server_model_identity = Some(server_model_identity);
                 }
                 if let Some(verifications) = model_verifications
                     && tx_event

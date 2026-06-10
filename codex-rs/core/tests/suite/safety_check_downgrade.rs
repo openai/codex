@@ -29,7 +29,10 @@ use pretty_assertions::assert_eq;
 use wiremock::ResponseTemplate;
 
 const SERVER_MODEL: &str = "gpt-5.2";
+const TERMINAL_SERVER_MODEL: &str = "gpt-5.1-codex";
 const REQUESTED_MODEL: &str = "gpt-5.3-codex";
+const FIRST_MODEL_SNAPSHOT: &str = "test-first-model-snapshot";
+const TERMINAL_MODEL_SNAPSHOT: &str = "test-terminal-model-snapshot";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
 const CYBER_POLICY_MESSAGE: &str =
@@ -221,13 +224,15 @@ async fn openai_model_header_mismatch_only_emits_one_warning_per_turn() -> Resul
         ),
         core_test_support::responses::ev_completed("resp-1"),
     ]))
-    .insert_header("OpenAI-Model", SERVER_MODEL);
+    .insert_header("OpenAI-Model", SERVER_MODEL)
+    .insert_header("OpenAI-Model-Snapshot", FIRST_MODEL_SNAPSHOT);
     let second_response = sse_response(sse(vec![
         ev_response_created("resp-2"),
         ev_assistant_message("msg-1", "done"),
         core_test_support::responses::ev_completed("resp-2"),
     ]))
-    .insert_header("OpenAI-Model", SERVER_MODEL);
+    .insert_header("OpenAI-Model", TERMINAL_SERVER_MODEL)
+    .insert_header("OpenAI-Model-Snapshot", TERMINAL_MODEL_SNAPSHOT);
     let _mock = mount_response_sequence(&server, vec![first_response, second_response]).await;
 
     let mut builder = test_codex().with_model(REQUESTED_MODEL);
@@ -238,18 +243,77 @@ async fn openai_model_header_mismatch_only_emits_one_warning_per_turn() -> Resul
         .await?;
 
     let mut warning_count = 0;
-    loop {
+    let turn_complete = loop {
         let event = wait_for_event(&test.codex, |_| true).await;
         match event {
             EventMsg::Warning(warning) if warning.message.contains(REQUESTED_MODEL) => {
                 warning_count += 1;
             }
-            EventMsg::TurnComplete(_) => break,
+            EventMsg::TurnComplete(turn_complete) => break turn_complete,
             _ => {}
         }
-    }
+    };
 
     assert_eq!(warning_count, 1);
+    assert_eq!(
+        turn_complete.final_model.as_deref(),
+        Some(TERMINAL_SERVER_MODEL)
+    );
+    assert_eq!(
+        turn_complete.model_snapshot.as_deref(),
+        Some(TERMINAL_MODEL_SNAPSHOT)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nonterminal_response_identity_is_not_reported_when_follow_up_fails() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let tool_args = serde_json::json!({
+        "command": "echo hello",
+        "timeout_ms": 1_000
+    });
+    let first_response = sse_response(sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(
+            "call-1",
+            "shell_command",
+            &serde_json::to_string(&tool_args)?,
+        ),
+        core_test_support::responses::ev_completed("resp-1"),
+    ]))
+    .insert_header("OpenAI-Model", SERVER_MODEL)
+    .insert_header("OpenAI-Model-Snapshot", FIRST_MODEL_SNAPSHOT);
+    let failed_follow_up = ResponseTemplate::new(400).set_body_json(serde_json::json!({
+        "error": {
+            "message": "synthetic follow-up failure",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "invalid_prompt"
+        }
+    }));
+    let _mock = mount_response_sequence(&server, vec![first_response, failed_follow_up]).await;
+
+    let mut builder = test_codex().with_model(REQUESTED_MODEL);
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(disabled_text_turn(&test, "trigger failed follow-up"))
+        .await?;
+
+    let turn_complete = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let EventMsg::TurnComplete(turn_complete) = turn_complete else {
+        panic!("expected turn complete event");
+    };
+
+    assert_eq!(turn_complete.final_model, None);
+    assert_eq!(turn_complete.model_snapshot, None);
 
     Ok(())
 }

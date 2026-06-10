@@ -1207,6 +1207,7 @@ impl SessionTelemetry {
                 "reasoning_summary_part_added".into()
             }
             ResponseEvent::ServerModel(_) => "server_model".into(),
+            ResponseEvent::ServerModelIdentity(_) => "server_model_identity".into(),
             ResponseEvent::ModelVerifications(_) => "model_verifications".into(),
             ResponseEvent::TurnModerationMetadata(_) => "turn_moderation_metadata".into(),
             ResponseEvent::ServerReasoningIncluded(_) => "server_reasoning_included".into(),

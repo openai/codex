@@ -33,6 +33,7 @@ pub use crate::common::Reasoning;
 pub use crate::common::ReasoningContext;
 pub use crate::common::ResponseCreateWsRequest;
 pub use crate::common::ResponseEvent;
+pub use crate::common::ResponseModelIdentity;
 pub use crate::common::ResponseStream;
 pub use crate::common::ResponsesApiRequest;
 pub use crate::common::ResponsesWsRequest;

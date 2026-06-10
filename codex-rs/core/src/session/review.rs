@@ -3,6 +3,8 @@ use codex_core_skills::HostLoadedSkills;
 use codex_protocol::openai_models::ToolMode;
 use std::sync::atomic::AtomicBool;
 
+use crate::session::turn_context::ModelExecutionIdentity;
+
 /// Spawn a review thread using the given prompt.
 pub(super) async fn spawn_review_thread(
     sess: Arc<Session>,
@@ -152,6 +154,7 @@ pub(super) async fn spawn_review_thread(
         extension_data,
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
+        model_execution_identity: Arc::new(Mutex::new(ModelExecutionIdentity::default())),
         server_model_warning_emitted: AtomicBool::new(false),
         model_verification_emitted: AtomicBool::new(false),
     };

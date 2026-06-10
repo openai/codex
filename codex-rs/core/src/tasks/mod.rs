@@ -739,11 +739,12 @@ impl Session {
             });
         self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
             .await;
+        let model_execution_identity = turn_context.model_execution_identity.lock().await.clone();
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
-            final_model: None,
-            model_snapshot: None,
+            final_model: model_execution_identity.final_model,
+            model_snapshot: model_execution_identity.model_snapshot,
             completed_at,
             duration_ms,
             time_to_first_token_ms,
