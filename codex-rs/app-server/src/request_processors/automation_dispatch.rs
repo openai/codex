@@ -286,6 +286,14 @@ impl ThreadRequestProcessor {
         claim: &AutomationDispatchClaim,
         thread_id: ThreadId,
     ) -> Result<AutomationDispatchResult, JSONRPCErrorError> {
+        let deferred_for_cooldown = state_db
+            .defer_scheduled_heartbeat_for_cooldown(claim, thread_id)
+            .await
+            .map_err(|err| internal_error(format!("failed to defer automation: {err}")))?;
+        if deferred_for_cooldown {
+            return Ok(AutomationDispatchResult::Deferred);
+        }
+
         let loaded_status = self
             .thread_watch_manager
             .loaded_status_for_thread(&thread_id.to_string())

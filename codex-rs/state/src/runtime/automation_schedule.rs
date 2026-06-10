@@ -151,6 +151,38 @@ pub(super) fn compute_next_run_at(
     Ok(Some(scheduled + Duration::seconds(jitter_seconds)))
 }
 
+pub(super) fn compute_next_heartbeat_cooldown_at(
+    rrule: &str,
+    last_run_at: Option<DateTime<Utc>>,
+    thread_updated_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+    automation_id: &str,
+) -> anyhow::Result<Option<DateTime<Utc>>> {
+    let schedule = AutomationSchedule::parse(rrule)?;
+    if schedule.one_shot && last_run_at.is_some() {
+        return Ok(None);
+    }
+    let Some(interval) = heartbeat_interval_duration(&schedule) else {
+        return compute_next_run_at(
+            AutomationKind::Heartbeat,
+            automation_id,
+            &schedule,
+            last_run_at,
+            now,
+        );
+    };
+    let baseline = [last_run_at, thread_updated_at].into_iter().flatten().max();
+    Ok(baseline.map(|value| value + interval))
+}
+
+fn heartbeat_interval_duration(schedule: &AutomationSchedule) -> Option<Duration> {
+    match schedule.frequency {
+        ScheduleFrequency::Minutely => Some(Duration::minutes(i64::from(schedule.interval))),
+        ScheduleFrequency::Hourly => Some(Duration::hours(i64::from(schedule.interval))),
+        ScheduleFrequency::Daily | ScheduleFrequency::Weekly => None,
+    }
+}
+
 fn parse_optional_u32(value: Option<&String>, key: &str, max: u32) -> anyhow::Result<Option<u32>> {
     let Some(value) = value else {
         return Ok(None);

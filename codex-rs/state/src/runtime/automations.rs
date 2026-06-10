@@ -1,4 +1,5 @@
 use super::automation_schedule::AutomationSchedule;
+use super::automation_schedule::compute_next_heartbeat_cooldown_at;
 use super::automation_schedule::compute_next_run_at;
 use super::*;
 use crate::AUTOMATION_CLAIM_LEASE_SECS;
@@ -527,12 +528,67 @@ WHERE id = ?
             claim.dispatch_mode == AutomationDispatchMode::Scheduled,
             "only scheduled automation dispatches can be deferred",
         );
-        let now = Utc::now().timestamp();
         let retry_at_ts = retry_at.timestamp();
         let next_run_at = claim
             .next_run_at_after_claim
             .map(|value| value.timestamp().min(retry_at_ts))
             .unwrap_or(retry_at_ts);
+        self.defer_scheduled_automation_dispatch_until(claim, next_run_at, reason)
+            .await
+    }
+
+    pub async fn defer_scheduled_heartbeat_for_cooldown(
+        &self,
+        claim: &AutomationDispatchClaim,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<bool> {
+        self.defer_scheduled_heartbeat_for_cooldown_at(claim, thread_id, Utc::now())
+            .await
+    }
+
+    async fn defer_scheduled_heartbeat_for_cooldown_at(
+        &self,
+        claim: &AutomationDispatchClaim,
+        thread_id: ThreadId,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<bool> {
+        anyhow::ensure!(
+            claim.dispatch_mode == AutomationDispatchMode::Scheduled,
+            "only scheduled heartbeat dispatches can be deferred",
+        );
+        anyhow::ensure!(
+            matches!(&claim.automation.target, AutomationTarget::Heartbeat { .. }),
+            "only heartbeat dispatches can use heartbeat cooldown",
+        );
+        let thread_updated_at = self
+            .get_thread(thread_id)
+            .await?
+            .map(|thread| thread.updated_at);
+        let Some(cooldown_at) = compute_next_heartbeat_cooldown_at(
+            claim.automation.rrule.as_str(),
+            claim.automation.last_run_at,
+            thread_updated_at,
+            now,
+            claim.automation.id.as_str(),
+        )?
+        .filter(|cooldown_at| *cooldown_at > now) else {
+            return Ok(false);
+        };
+        self.defer_scheduled_automation_dispatch_until(
+            claim,
+            cooldown_at.timestamp(),
+            "heartbeat target thread is in cooldown",
+        )
+        .await
+    }
+
+    async fn defer_scheduled_automation_dispatch_until(
+        &self,
+        claim: &AutomationDispatchClaim,
+        next_run_at: i64,
+        reason: &str,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
         let result = sqlx::query(
             r#"
 UPDATE automations

@@ -7,6 +7,7 @@ use crate::AutomationDispatchRetryOutcome;
 use crate::AutomationStatus;
 use crate::AutomationTarget;
 use crate::AutomationUpdateParams;
+use crate::runtime::test_support::test_thread_metadata;
 use crate::runtime::test_support::unique_temp_dir;
 use chrono::Duration;
 use chrono::Utc;
@@ -363,6 +364,80 @@ async fn deferred_scheduled_heartbeat_reopens_next_run_without_consuming() {
             .claim_due_automation_dispatch("worker-b")
             .await
             .expect("deferred heartbeat should not be immediately due"),
+        None
+    );
+
+    let _ = tokio::fs::remove_dir_all(codex_home).await;
+}
+
+#[tokio::test]
+async fn scheduled_heartbeat_cooldown_defers_after_recent_thread_activity() {
+    let codex_home = unique_temp_dir();
+    let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+        .await
+        .expect("state runtime should initialize");
+    let now = Utc::now();
+    let target_thread_id = thread_id();
+    let thread_updated_at = now - Duration::minutes(5);
+    let mut metadata =
+        test_thread_metadata(&codex_home, target_thread_id, codex_home.join("workspace"));
+    metadata.updated_at = thread_updated_at;
+    runtime
+        .upsert_thread(&metadata)
+        .await
+        .expect("store target thread metadata");
+
+    let automation = runtime
+        .create_automation(&heartbeat_create_params(target_thread_id))
+        .await
+        .expect("create automation");
+    sqlx::query("UPDATE automations SET next_run_at = ? WHERE id = ?")
+        .bind((now - Duration::seconds(1)).timestamp())
+        .bind(automation.id.as_str())
+        .execute(runtime.automations_pool.as_ref())
+        .await
+        .expect("force due automation");
+
+    let claim = runtime
+        .claim_due_automation_dispatch("worker-a")
+        .await
+        .expect("claim due automation")
+        .expect("automation should be due");
+    assert!(
+        runtime
+            .mark_automation_dispatch_started(
+                claim.automation.id.as_str(),
+                claim.ownership_token.as_str(),
+            )
+            .await
+            .expect("mark started")
+    );
+
+    assert!(
+        runtime
+            .defer_scheduled_heartbeat_for_cooldown_at(&claim, target_thread_id, now)
+            .await
+            .expect("defer heartbeat for cooldown")
+    );
+
+    let reloaded = runtime
+        .get_automation(automation.id.as_str())
+        .await
+        .expect("load automation")
+        .expect("automation should exist");
+    assert_eq!(reloaded.last_run_at, None);
+    assert_eq!(
+        reloaded
+            .next_run_at
+            .expect("cooldown should set next run")
+            .timestamp(),
+        (thread_updated_at + Duration::minutes(30)).timestamp()
+    );
+    assert_eq!(
+        runtime
+            .claim_due_automation_dispatch("worker-b")
+            .await
+            .expect("cooldown heartbeat should not be immediately due"),
         None
     );
 
