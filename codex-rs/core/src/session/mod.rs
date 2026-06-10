@@ -3006,11 +3006,8 @@ impl Session {
     }
 
     async fn advance_auto_compact_window_id(&self) -> u64 {
-        let window_id = {
-            let mut state = self.state.lock().await;
-            state.advance_auto_compact_window_id()
-        };
-        window_id
+        let mut state = self.state.lock().await;
+        state.advance_auto_compact_window_id()
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
