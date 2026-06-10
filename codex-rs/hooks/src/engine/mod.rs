@@ -117,25 +117,6 @@ impl ClaudeHooksEngine {
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
         shell: CommandShell,
-    ) -> Self {
-        Self::new_with_runtime(
-            enabled,
-            bypass_hook_trust,
-            config_layer_stack,
-            plugin_hook_sources,
-            plugin_hook_load_warnings,
-            shell,
-            AsyncCommandRuntime::new(),
-        )
-    }
-
-    fn new_with_runtime(
-        enabled: bool,
-        bypass_hook_trust: bool,
-        config_layer_stack: Option<&ConfigLayerStack>,
-        plugin_hook_sources: Vec<PluginHookSource>,
-        plugin_hook_load_warnings: Vec<String>,
-        shell: CommandShell,
         async_runtime: AsyncCommandRuntime,
     ) -> Self {
         if !enabled {
@@ -162,24 +143,9 @@ impl ClaudeHooksEngine {
         }
     }
 
-    pub(crate) fn reconfigured(
-        &self,
-        enabled: bool,
-        bypass_hook_trust: bool,
-        config_layer_stack: Option<&ConfigLayerStack>,
-        plugin_hook_sources: Vec<PluginHookSource>,
-        plugin_hook_load_warnings: Vec<String>,
-        shell: CommandShell,
-    ) -> Self {
-        Self::new_with_runtime(
-            enabled,
-            bypass_hook_trust,
-            config_layer_stack,
-            plugin_hook_sources,
-            plugin_hook_load_warnings,
-            shell,
-            self.async_runtime.clone(),
-        )
+    /// Returns the refresh-stable runtime for a replacement handler snapshot.
+    pub(crate) fn async_runtime(&self) -> AsyncCommandRuntime {
+        self.async_runtime.clone()
     }
 
     pub(crate) fn async_delivery_cutoff(&self) -> AsyncHookDeliveryCutoff {

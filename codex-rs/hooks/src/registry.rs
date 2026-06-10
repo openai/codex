@@ -7,6 +7,7 @@ use crate::engine::AsyncHookDeliveryCutoff;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
 use crate::engine::HookListEntry;
+use crate::engine::async_command::AsyncCommandRuntime;
 use crate::events::compact::PostCompactRequest;
 use crate::events::compact::PreCompactOutcome;
 use crate::events::compact::PreCompactRequest;
@@ -85,6 +86,7 @@ impl Hooks {
                 program: shell_program.unwrap_or_default(),
                 args: shell_args,
             },
+            AsyncCommandRuntime::new(),
         );
         Self {
             after_agent,
@@ -108,7 +110,7 @@ impl Hooks {
             .map(crate::notify_hook)
             .into_iter()
             .collect();
-        let engine = self.engine.reconfigured(
+        let engine = ClaudeHooksEngine::new(
             feature_enabled,
             bypass_hook_trust,
             config_layer_stack.as_ref(),
@@ -118,6 +120,7 @@ impl Hooks {
                 program: shell_program.unwrap_or_default(),
                 args: shell_args,
             },
+            self.engine.async_runtime(),
         );
         Self {
             after_agent,

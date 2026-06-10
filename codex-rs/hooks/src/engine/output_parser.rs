@@ -300,6 +300,13 @@ pub(crate) fn parse_stop(stdout: &str) -> Option<StopOutput> {
     ))
 }
 
+/// Extracts only informational fields from a successful async command result.
+///
+/// This reuses the event-specific synchronous parser so existing support for
+/// `additionalContext`, `systemMessage`, and plain stdout remains consistent.
+/// Blocking decisions, steering, updated input, and every other control field
+/// are intentionally discarded because async hooks cannot affect the operation
+/// that launched them.
 pub(crate) fn parse_async_informational(
     event_name: HookEventName,
     result: &CommandRunResult,

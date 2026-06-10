@@ -30,10 +30,30 @@ use tempfile::tempdir;
 
 use super::ClaudeHooksEngine;
 use super::CommandShell;
+use super::async_command::AsyncCommandRuntime;
 use crate::events::pre_tool_use::PreToolUseRequest;
 
 fn cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::current_dir().expect("current dir")
+}
+
+fn test_engine(
+    enabled: bool,
+    bypass_hook_trust: bool,
+    config_layer_stack: Option<&ConfigLayerStack>,
+    plugin_hook_sources: Vec<PluginHookSource>,
+    plugin_hook_load_warnings: Vec<String>,
+    shell: CommandShell,
+) -> ClaudeHooksEngine {
+    ClaudeHooksEngine::new(
+        enabled,
+        bypass_hook_trust,
+        config_layer_stack,
+        plugin_hook_sources,
+        plugin_hook_load_warnings,
+        shell,
+        AsyncCommandRuntime::new(),
+    )
 }
 
 fn managed_hooks_for_current_platform(
@@ -194,7 +214,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -300,7 +320,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -379,7 +399,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -461,7 +481,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -527,7 +547,7 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -688,7 +708,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -744,7 +764,7 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -798,7 +818,7 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -868,7 +888,7 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -907,7 +927,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
     let config_layer_stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
         .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -979,7 +999,7 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -1089,7 +1109,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
     )
     .expect("config layer stack");
 
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -1182,7 +1202,7 @@ print(json.dumps({
         AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path"),
         &plugin_hook_sources,
     );
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -1301,7 +1321,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
         AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path"),
         &plugin_hook_sources,
     );
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
@@ -1345,7 +1365,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
 
 #[test]
 fn plugin_hook_load_warnings_are_startup_warnings() {
-    let engine = ClaudeHooksEngine::new(
+    let engine = test_engine(
         /*enabled*/ true,
         /*bypass_hook_trust*/ false,
         /*config_layer_stack*/ None,

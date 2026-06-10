@@ -15,7 +15,6 @@ use codex_protocol::protocol::HookScope;
 use super::CommandShell;
 use super::ConfiguredHandler;
 use super::async_command::AsyncCommandRuntime;
-use super::async_command::AsyncDeliveryTiming;
 use super::command_runner::CommandRunResult;
 use super::command_runner::run_command;
 use crate::events::common::matches_matcher;
@@ -25,12 +24,6 @@ pub(crate) struct ParsedHandler<T> {
     pub completed: HookCompletedEvent,
     pub data: T,
     pub completion_order: usize,
-}
-
-pub(crate) struct AsyncHandlerExecution<'a> {
-    pub session_id: ThreadId,
-    pub runtime: &'a AsyncCommandRuntime,
-    pub delivery_timing: AsyncDeliveryTiming,
 }
 
 pub(crate) fn select_handlers(
@@ -117,13 +110,18 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "keeping async runtime and session identity explicit avoids event-specific wrappers"
+)]
 pub(crate) async fn execute_handlers<T>(
     shell: &CommandShell,
     handlers: Vec<ConfiguredHandler>,
     input_json: String,
     cwd: &Path,
     turn_id: Option<String>,
-    async_execution: AsyncHandlerExecution<'_>,
+    async_runtime: &AsyncCommandRuntime,
+    session_id: ThreadId,
     parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
     let mut pending = FuturesUnordered::new();
@@ -137,13 +135,12 @@ pub(crate) async fn execute_handlers<T>(
                     (configured_order, parse(&handler, result, turn_id))
                 });
             }
-            HookExecutionMode::Async => async_execution.runtime.spawn(
+            HookExecutionMode::Async => async_runtime.spawn(
                 shell.clone(),
                 handler,
                 input_json,
                 cwd.to_path_buf(),
-                async_execution.session_id,
-                async_execution.delivery_timing,
+                session_id,
             ),
         }
     }

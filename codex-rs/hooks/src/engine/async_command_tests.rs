@@ -1,7 +1,6 @@
 use pretty_assertions::assert_eq;
 
 use super::AsyncCommandRuntime;
-use super::AsyncDeliveryTiming;
 use super::AsyncHookCompletion;
 use super::MAX_DELIVERED_CONTEXT_TOKENS_PER_TURN;
 use super::MAX_IN_FLIGHT_COMMANDS;
@@ -122,7 +121,6 @@ async fn launch_is_skipped_at_session_concurrency_limit() {
         String::new(),
         std::env::current_dir().expect("current dir"),
         ThreadId::new(),
-        AsyncDeliveryTiming::NextAcceptedTurn,
     );
 
     assert_eq!(

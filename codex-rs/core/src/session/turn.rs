@@ -165,16 +165,8 @@ pub(crate) async fn run_turn(
         return None;
     }
     let mut can_drain_pending_input = input.is_empty();
-    let async_hook_delivery_cutoff = sess.hooks().async_delivery_cutoff();
-    let hook_input_outcome = run_hooks_and_record_inputs(&sess, &turn_context, &input).await;
-    if hook_input_outcome.should_stop {
+    if run_input_hooks_and_record(&sess, &turn_context, &input).await {
         return None;
-    }
-    if hook_input_outcome.accepted_user_input {
-        let delivery = sess
-            .hooks()
-            .commit_accepted_turn_and_drain_async_output(async_hook_delivery_cutoff);
-        record_async_hook_delivery(&sess, &turn_context, delivery).await;
     }
 
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
@@ -218,17 +210,8 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        let async_hook_delivery_cutoff = sess.hooks().async_delivery_cutoff();
-        let hook_input_outcome =
-            run_hooks_and_record_inputs(&sess, &turn_context, &pending_input).await;
-        if hook_input_outcome.should_stop {
+        if run_input_hooks_and_record(&sess, &turn_context, &pending_input).await {
             break;
-        }
-        if hook_input_outcome.accepted_user_input {
-            let delivery = sess
-                .hooks()
-                .commit_accepted_turn_and_drain_async_output(async_hook_delivery_cutoff);
-            record_async_hook_delivery(&sess, &turn_context, delivery).await;
         }
 
         // Construct the input that we will send to the model.
@@ -414,16 +397,18 @@ async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, Pat
     display_roots
 }
 
-struct HookInputOutcome {
-    should_stop: bool,
-    accepted_user_input: bool,
-}
-
-async fn run_hooks_and_record_inputs(
+/// Runs prompt-submit hooks, records accepted input, and advances async delivery.
+///
+/// The readiness cutoff is captured before synchronous hooks run. Async output
+/// that completes while those hooks are running therefore waits for a later
+/// accepted model request. If every user input is blocked, the accepted
+/// generation is not advanced and queued output remains pending.
+async fn run_input_hooks_and_record(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     input: &[TurnInput],
-) -> HookInputOutcome {
+) -> bool {
+    let async_hook_delivery_cutoff = sess.hooks().async_delivery_cutoff();
     let mut blocked_input = false;
     let mut accepted_user_input = false;
     for input_item in input {
@@ -444,10 +429,13 @@ async fn run_hooks_and_record_inputs(
             .await;
         }
     }
-    HookInputOutcome {
-        should_stop: blocked_input && !accepted_user_input,
-        accepted_user_input,
+    if accepted_user_input {
+        let delivery = sess
+            .hooks()
+            .commit_accepted_turn_and_drain_async_output(async_hook_delivery_cutoff);
+        record_async_hook_delivery(sess, turn_context, delivery).await;
     }
+    blocked_input && !accepted_user_input
 }
 
 #[expect(

@@ -1,3 +1,20 @@
+//! Session-scoped runtime for detached command hooks.
+//!
+//! Async hooks cannot affect the operation that launched them. Successful
+//! informational output is queued until a later model request accepts user
+//! input. Delivery uses two independent gates:
+//!
+//! - An accepted-input generation prevents output from being delivered before
+//!   its eligible model request. Most events target the next generation;
+//!   session and subagent start events target the generation after that so
+//!   their output always skips the model request that runs the start hook.
+//! - A readiness sequence provides a per-submission cutoff. Core snapshots the
+//!   cutoff before synchronous prompt hooks run, so async output that completes
+//!   during that work cannot race into the same model request.
+//!
+//! The runtime survives hook configuration refreshes and bounds concurrent
+//! commands, queued completions, and the amount delivered to one request.
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,6 +24,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookEventName;
 use codex_utils_output_truncation::approx_token_count;
 use tokio::task::JoinHandle;
 
@@ -21,33 +39,43 @@ const MAX_IN_FLIGHT_COMMANDS: usize = 32;
 const MAX_DELIVERED_COMPLETIONS_PER_TURN: usize = 8;
 const MAX_DELIVERED_CONTEXT_TOKENS_PER_TURN: usize = 10_000;
 
+/// Informational async hook output ready to be recorded for a model request.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct AsyncHookDelivery {
+    /// Context fragments to inject into model-visible conversation history.
     pub additional_contexts: Vec<String>,
+    /// User-visible messages to emit without adding them to model context.
     pub system_messages: Vec<String>,
 }
 
+/// Snapshot of completions that were ready before prompt submission began.
+///
+/// The sequence is opaque outside this module so callers cannot manufacture or
+/// compare cutoffs independently of the runtime that created them.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
 pub struct AsyncHookDeliveryCutoff {
     ready_sequence: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum AsyncDeliveryTiming {
-    NextAcceptedTurn,
-    AcceptedTurnAfterNext,
-}
-
-impl AsyncDeliveryTiming {
-    fn generation_delay(self) -> u64 {
-        match self {
-            Self::NextAcceptedTurn => 1,
-            Self::AcceptedTurnAfterNext => 2,
-        }
+fn generation_delay(event_name: HookEventName) -> u64 {
+    match event_name {
+        HookEventName::SessionStart | HookEventName::SubagentStart => 2,
+        HookEventName::PreToolUse
+        | HookEventName::PermissionRequest
+        | HookEventName::PostToolUse
+        | HookEventName::PreCompact
+        | HookEventName::PostCompact
+        | HookEventName::UserPromptSubmit
+        | HookEventName::SubagentStop
+        | HookEventName::Stop => 1,
     }
 }
 
+/// Shared runtime state for async commands launched during one Codex session.
+///
+/// Clones refer to the same in-flight tasks, queued output, and delivery
+/// generations. This lets hook configuration refresh without orphaning work.
 #[derive(Clone)]
 pub(crate) struct AsyncCommandRuntime {
     inner: Arc<AsyncCommandRuntimeInner>,
@@ -76,6 +104,7 @@ struct AsyncHookCompletion {
 }
 
 impl AsyncCommandRuntime {
+    /// Creates an empty runtime for a newly started Codex session.
     pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(AsyncCommandRuntimeInner {
@@ -88,10 +117,19 @@ impl AsyncCommandRuntime {
         }
     }
 
+    /// Returns the spiller shared by synchronous and asynchronous hook output.
+    ///
+    /// Keeping it with the refresh-stable runtime lets detached commands spill
+    /// output even if hook configuration changes before they finish.
     pub(crate) fn output_spiller(&self) -> &HookOutputSpiller {
         &self.inner.output_spiller
     }
 
+    /// Captures which async completions were ready before prompt hooks run.
+    ///
+    /// A completion registered after this snapshot is ineligible for the
+    /// accepted model request associated with the snapshot, even if the command
+    /// finishes before synchronous prompt hooks return.
     pub(crate) fn delivery_cutoff(&self) -> AsyncHookDeliveryCutoff {
         let ready_sequence = self
             .inner
@@ -102,6 +140,11 @@ impl AsyncCommandRuntime {
         AsyncHookDeliveryCutoff { ready_sequence }
     }
 
+    /// Launches one command without waiting for it or emitting hook lifecycle events.
+    ///
+    /// Only successful informational output is queued. Control decisions are
+    /// discarded by the async parser. The event determines the earliest
+    /// accepted-input generation at which the output may be delivered.
     pub(crate) fn spawn(
         &self,
         shell: CommandShell,
@@ -109,7 +152,6 @@ impl AsyncCommandRuntime {
         input_json: String,
         cwd: PathBuf,
         thread_id: ThreadId,
-        delivery_timing: AsyncDeliveryTiming,
     ) {
         if self.inner.shutting_down.load(Ordering::Acquire) {
             return;
@@ -142,7 +184,7 @@ impl AsyncCommandRuntime {
             .inner
             .accepted_turn_generation
             .load(Ordering::Acquire)
-            .saturating_add(delivery_timing.generation_delay());
+            .saturating_add(generation_delay(handler.event_name));
         let inner = Arc::clone(&self.inner);
         let handle = tokio::spawn(async move {
             let result = run_command(&shell, &handler, &input_json, &cwd).await;
@@ -203,6 +245,11 @@ impl AsyncCommandRuntime {
         state.tasks.push(handle);
     }
 
+    /// Advances the accepted-input generation and drains eligible output.
+    ///
+    /// Output must both target the new generation and have been ready before
+    /// `cutoff`. Delivery is bounded; remaining eligible output stays queued for
+    /// later accepted model requests.
     pub(crate) fn commit_accepted_turn_and_drain(
         &self,
         cutoff: AsyncHookDeliveryCutoff,
@@ -256,6 +303,10 @@ impl AsyncCommandRuntime {
         delivery
     }
 
+    /// Stops accepting output, clears queued completions, and aborts all tasks.
+    ///
+    /// Shutdown waits for every aborted Tokio task so no detached hook command
+    /// remains owned by the session after this method returns.
     pub(crate) async fn shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::Release);
         let tasks = {

@@ -109,11 +109,8 @@ pub(crate) async fn run(
         input_json,
         request.cwd.as_path(),
         Some(request.turn_id),
-        dispatcher::AsyncHandlerExecution {
-            session_id: request.session_id,
-            runtime: async_runtime,
-            delivery_timing: crate::engine::async_command::AsyncDeliveryTiming::NextAcceptedTurn,
-        },
+        async_runtime,
+        request.session_id,
         parse_completed,
     )
     .await;
