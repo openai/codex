@@ -1,0 +1,34 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-automation-extension"
+version.workspace = true
+
+[lib]
+name = "codex_automation_extension"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+codex-core = { workspace = true }
+codex-extension-api = { workspace = true }
+codex-features = { workspace = true }
+codex-protocol = { workspace = true }
+codex-state = { workspace = true }
+codex-tools = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+toml = { workspace = true }

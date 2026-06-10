@@ -1971,6 +1971,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-app-server-transport",
  "codex-arg0",
+ "codex-automation-extension",
  "codex-backend-client",
  "codex-chatgpt",
  "codex-cloud-config",
@@ -2232,6 +2233,28 @@ dependencies = [
  "pretty_assertions",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "codex-automation-extension"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "codex-core",
+ "codex-extension-api",
+ "codex-features",
+ "codex-protocol",
+ "codex-state",
+ "codex-tools",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
 ]
 
 [[package]]

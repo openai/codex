@@ -61,6 +61,7 @@ where
     } = dependencies;
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
     if let Some(state_db) = state_db {
+        codex_automation_extension::install(&mut builder, Arc::clone(&state_db));
         codex_goal_extension::install_with_backend(
             &mut builder,
             state_db,
