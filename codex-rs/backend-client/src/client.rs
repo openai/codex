@@ -10,6 +10,7 @@ use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_api::SharedAuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::chatgpt_cloudflare_cookie_header;
 use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
@@ -21,6 +22,7 @@ use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::SpendControlLimitSnapshot;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_TYPE;
+use reqwest::header::COOKIE;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
@@ -448,6 +450,16 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/credential_routes/proxy", self.base_url),
             PathStyle::ChatGptApi => format!("{}/ps/credential_routes/proxy", self.base_url),
         }
+    }
+
+    pub fn credential_routes_proxy_headers(&self) -> HeaderMap {
+        let mut headers = self.headers();
+        if let Ok(proxy_url) = reqwest::Url::parse(&self.credential_routes_proxy_url())
+            && let Some(cookie) = chatgpt_cloudflare_cookie_header(&proxy_url)
+        {
+            headers.insert(COOKIE, cookie);
+        }
+        headers
     }
 
     /// Create a new task (user turn) by POSTing to the appropriate backend path

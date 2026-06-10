@@ -9,6 +9,7 @@ mod sse;
 mod telemetry;
 mod transport;
 
+pub use crate::chatgpt_cloudflare_cookies::chatgpt_cloudflare_cookie_header;
 pub use crate::chatgpt_cloudflare_cookies::with_chatgpt_cloudflare_cookie_store;
 pub use crate::chatgpt_hosts::is_allowed_chatgpt_host;
 pub use crate::custom_ca::BuildCustomCaTransportError;
