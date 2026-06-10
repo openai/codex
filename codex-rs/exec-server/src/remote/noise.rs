@@ -1,10 +1,7 @@
-//! Explicitly selected Noise registration and encrypted relay runtime.
+//! Noise registration and encrypted relay runtime.
 //!
-//! The legacy remote-exec path stays in the parent module. Keeping the Noise
-//! path here makes the opt-in boundary visible and keeps its stricter registry,
-//! identifier, timeout, and websocket requirements from changing legacy
-//! behavior accidentally. Once selected, failures remain on this path; there is
-//! no automatic fallback to the unauthenticated legacy relay.
+//! Noise failures remain on this path; there is no automatic fallback to the
+//! unauthenticated plaintext relay.
 
 use std::time::Duration;
 
@@ -35,11 +32,7 @@ const NOISE_RELAY_SECURITY_PROFILE: &str = "noise_hybrid_ik_v1";
 const REMOTE_RENDEZVOUS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl EnvironmentRegistryClient {
-    /// Register the exec-server's static Noise identity with a Noise-aware registry.
-    ///
-    /// Supplying this request body is the protocol-level opt in. Registries can
-    /// therefore distinguish Noise registrations from the legacy body-less
-    /// contract without guessing based on binary version or rollout state.
+    /// Register the exec-server's static Noise identity.
     async fn register_noise_environment(
         &self,
         environment_id: &str,
@@ -60,56 +53,6 @@ impl EnvironmentRegistryClient {
             .send()
             .await?;
         self.parse_json_response(response).await
-    }
-
-    /// Validate the authenticated harness key without exposing its authorization.
-    async fn validate_harness_key(
-        &self,
-        environment_id: &str,
-        executor_registration_id: &str,
-        harness_public_key: &NoiseChannelPublicKey,
-        harness_key_authorization: &str,
-    ) -> Result<(), ExecServerError> {
-        let response = self
-            .http
-            .post(endpoint_url(
-                &self.base_url,
-                &format!("/cloud/environment/{environment_id}/validate"),
-            ))
-            .headers(self.auth_provider.to_auth_headers())
-            .timeout(ENVIRONMENT_REGISTRY_REQUEST_TIMEOUT)
-            .json(&EnvironmentRegistryHarnessKeyValidationRequest {
-                executor_registration_id,
-                harness_public_key,
-                harness_key_authorization,
-            })
-            .send()
-            .await?;
-        let status = response.status();
-        if !status.is_success() {
-            // This request contains the short-lived harness authorization.
-            // Never propagate a response body that might echo it into logs or
-            // user-visible error chains.
-            if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-                return Err(ExecServerError::EnvironmentRegistryAuth(format!(
-                    "environment registry harness key validation authentication failed ({status})"
-                )));
-            }
-            return Err(ExecServerError::EnvironmentRegistryHttp {
-                status,
-                code: None,
-                message: "environment registry harness key validation failed".to_string(),
-            });
-        }
-        let response = response
-            .json::<EnvironmentRegistryHarnessKeyValidationResponse>()
-            .await?;
-        if !response.valid {
-            return Err(ExecServerError::Protocol(
-                "environment registry rejected Noise relay harness key".to_string(),
-            ));
-        }
-        Ok(())
     }
 }
 
@@ -152,14 +95,47 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
         harness_public_key: &NoiseChannelPublicKey,
         authorization: &str,
     ) -> Result<(), ExecServerError> {
-        self.client
-            .validate_harness_key(
-                &self.environment_id,
-                &self.executor_registration_id,
+        let environment_id = &self.environment_id;
+        let response = self
+            .client
+            .http
+            .post(endpoint_url(
+                &self.client.base_url,
+                &format!("/cloud/environment/{environment_id}/validate"),
+            ))
+            .headers(self.client.auth_provider.to_auth_headers())
+            .timeout(ENVIRONMENT_REGISTRY_REQUEST_TIMEOUT)
+            .json(&EnvironmentRegistryHarnessKeyValidationRequest {
+                executor_registration_id: &self.executor_registration_id,
                 harness_public_key,
-                authorization,
-            )
-            .await
+                harness_key_authorization: authorization,
+            })
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            // The request contains the short-lived authorization. Do not include
+            // a response body that might echo it in logs or error chains.
+            if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+                return Err(ExecServerError::EnvironmentRegistryAuth(format!(
+                    "environment registry harness key validation authentication failed ({status})"
+                )));
+            }
+            return Err(ExecServerError::EnvironmentRegistryHttp {
+                status,
+                code: None,
+                message: "environment registry harness key validation failed".to_string(),
+            });
+        }
+        let response = response
+            .json::<EnvironmentRegistryHarnessKeyValidationResponse>()
+            .await?;
+        if !response.valid {
+            return Err(ExecServerError::Protocol(
+                "environment registry rejected Noise relay harness key".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 

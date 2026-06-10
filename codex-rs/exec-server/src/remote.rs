@@ -46,11 +46,8 @@ impl EnvironmentRegistryClient {
         })
     }
 
-    /// Register using the original body-less registry contract.
-    ///
-    /// This method intentionally preserves the legacy request shape and timeout
-    /// behavior. Noise support is opt-in and must not silently alter existing
-    /// remote exec-server registrations.
+    /// Register using the body-less registry contract selected by the explicit
+    /// plaintext relay opt-out.
     async fn register_environment(
         &self,
         environment_id: &str,
@@ -95,14 +92,9 @@ struct EnvironmentRegistryRegistrationResponse {
 }
 
 /// Protocol used for an exec-server's registered remote relay.
-///
-/// Legacy is intentionally the default during rollout. Noise must be selected
-/// explicitly so mixed-version deployments keep the original registry and relay
-/// contract until both endpoints are ready for Noise.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteRelayProtocol {
     /// Original cleartext JSON-RPC relay protocol.
-    #[default]
     Legacy,
     /// Authenticated, end-to-end encrypted Noise relay protocol.
     Noise,
@@ -141,7 +133,7 @@ impl RemoteEnvironmentConfig {
             base_url,
             environment_id,
             name: "codex-exec-server".to_string(),
-            relay_protocol: RemoteRelayProtocol::Legacy,
+            relay_protocol: RemoteRelayProtocol::Noise,
             auth_provider,
         })
     }

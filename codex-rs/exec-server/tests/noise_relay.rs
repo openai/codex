@@ -29,7 +29,6 @@ use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
-use codex_exec_server::RemoteRelayProtocol;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::FutureExt;
 use futures::SinkExt;
@@ -231,12 +230,11 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
 
     let (codex_exe, codex_linux_sandbox_exe) = common::current_test_binary_helper_paths()?;
     let runtime_paths = ExecServerRuntimePaths::new(codex_exe, codex_linux_sandbox_exe)?;
-    let mut config = RemoteEnvironmentConfig::new(
+    let config = RemoteEnvironmentConfig::new(
         registry.uri(),
         ENVIRONMENT_ID.to_string(),
         static_registry_auth_provider(),
     )?;
-    config.relay_protocol = RemoteRelayProtocol::Noise;
     let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
         config,
         runtime_paths,

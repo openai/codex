@@ -1647,8 +1647,8 @@ async fn run_exec_server_command(
         if let Some(name) = cmd.name {
             remote_config.name = name;
         }
-        if !cmd.disable_noise {
-            remote_config.relay_protocol = codex_exec_server::RemoteRelayProtocol::Noise;
+        if cmd.disable_noise {
+            remote_config.relay_protocol = codex_exec_server::RemoteRelayProtocol::Legacy;
         }
         codex_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
         Ok(())
