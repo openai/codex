@@ -11,6 +11,7 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::EffectiveMcpServer;
 use codex_mcp::McpConfig;
 use codex_mcp::ToolPluginProvenance;
+use codex_mcp::codex_apps_mcp_server_config;
 use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::tool_plugin_provenance as collect_tool_plugin_provenance;
@@ -40,16 +41,24 @@ impl McpManager {
         }
     }
 
-    /// Returns the MCP config after applying runtime-only extension overlays.
+    /// Returns the MCP config after applying compatibility built-ins and
+    /// runtime-only extension overlays.
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
         let mut mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
-        let contributions = self.contributions(config).await;
-        if contributions
-            .iter()
-            .any(|contribution| contribution.name() == CODEX_APPS_MCP_SERVER_NAME)
-        {
-            mcp_config.legacy_apps_mcp_loader_enabled = false;
+        if mcp_config.apps_enabled {
+            mcp_config.configured_mcp_servers.insert(
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                codex_apps_mcp_server_config(
+                    &mcp_config.chatgpt_base_url,
+                    mcp_config.apps_mcp_product_sku.as_deref(),
+                ),
+            );
+        } else {
+            mcp_config
+                .configured_mcp_servers
+                .remove(CODEX_APPS_MCP_SERVER_NAME);
         }
+        let contributions = self.contributions(config).await;
         Self::apply_to_configured_servers(&contributions, &mut mcp_config.configured_mcp_servers);
         mcp_config
     }

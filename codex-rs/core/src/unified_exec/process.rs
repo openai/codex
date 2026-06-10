@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::exec::is_likely_sandbox_denied;
 use codex_exec_server::ExecProcess;
+use codex_exec_server::ProcessSignal as ExecServerProcessSignal;
 use codex_exec_server::ReadResponse as ExecReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteStatus;
@@ -23,6 +24,7 @@ use codex_protocol::protocol::TruncationPolicy;
 use codex_sandboxing::SandboxType;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_pty::ExecCommandSession;
+use codex_utils_pty::ProcessSignal as PtyProcessSignal;
 use codex_utils_pty::SpawnedPty;
 
 use super::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
@@ -31,7 +33,6 @@ use super::head_tail_buffer::HeadTailBuffer;
 use super::process_state::ProcessState;
 
 const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(150);
-
 pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
     /// Returns file descriptors that must stay open across the child `exec()`.
     ///
@@ -229,6 +230,18 @@ impl UnifiedExecProcess {
         self.signal_exit(self.exit_code());
         self.finish_termination();
         Ok(())
+    }
+
+    pub(super) async fn interrupt(&self) -> Result<(), UnifiedExecError> {
+        match &self.process_handle {
+            ProcessHandle::Local(process_handle) => process_handle
+                .signal(PtyProcessSignal::Interrupt)
+                .map_err(|err| UnifiedExecError::process_failed(err.to_string())),
+            ProcessHandle::ExecServer(process_handle) => process_handle
+                .signal(ExecServerProcessSignal::Interrupt)
+                .await
+                .map_err(|err| UnifiedExecError::process_failed(err.to_string())),
+        }
     }
 
     pub(super) fn fail_and_terminate(&self, message: String) {

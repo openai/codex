@@ -73,6 +73,7 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
 const NETWORK_ACCESS_DENIED_MESSAGE: &str =
     "Network access was denied by the Codex sandbox network proxy.";
 const LATE_NETWORK_DENIAL_GRACE_PERIOD: Duration = Duration::from_millis(100);
+const INTERRUPT: &str = "\u{3}";
 
 /// Test-only override for deterministic unified exec process IDs.
 ///
@@ -637,24 +638,29 @@ impl UnifiedExecProcessManager {
 
         if !request.input.is_empty() {
             if !tty {
-                return Err(UnifiedExecError::StdinClosed);
-            }
-            match process.write(request.input.as_bytes()).await {
-                Ok(()) => {
-                    // Give the remote process a brief window to react so that we are
-                    // more likely to capture its output in the poll below.
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                if request.input == INTERRUPT {
+                    process.interrupt().await?;
+                } else {
+                    return Err(UnifiedExecError::StdinClosed);
                 }
-                Err(err) => {
-                    let status = self.refresh_process_state(process_id).await;
-                    if matches!(status, ProcessStatus::Exited { .. }) {
-                        status_after_write = Some(status);
-                    } else if matches!(err, UnifiedExecError::ProcessFailed { .. }) {
-                        process.terminate();
-                        self.release_process_id(process_id).await;
-                        return Err(err);
-                    } else {
-                        return Err(err);
+            } else {
+                match process.write(request.input.as_bytes()).await {
+                    Ok(()) => {
+                        // Give the remote process a brief window to react so that we are
+                        // more likely to capture its output in the poll below.
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Err(err) => {
+                        let status = self.refresh_process_state(process_id).await;
+                        if matches!(status, ProcessStatus::Exited { .. }) {
+                            status_after_write = Some(status);
+                        } else if matches!(err, UnifiedExecError::ProcessFailed { .. }) {
+                            process.terminate();
+                            self.release_process_id(process_id).await;
+                            return Err(err);
+                        } else {
+                            return Err(err);
+                        }
                     }
                 }
             }

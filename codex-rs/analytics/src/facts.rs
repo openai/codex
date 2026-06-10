@@ -417,6 +417,27 @@ pub struct CodexCompactionEvent {
     pub duration_ms: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalEventKind {
+    Created,
+    UsageAccounted,
+    StatusChanged,
+    Cleared,
+}
+
+#[derive(Clone)]
+pub struct CodexGoalEvent {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub goal_id: String,
+    pub event_kind: GoalEventKind,
+    pub goal_status: codex_state::ThreadGoalStatus,
+    pub has_token_budget: bool,
+    pub cumulative_tokens_accounted: Option<i64>,
+    pub cumulative_time_accounted_seconds: Option<i64>,
+}
+
 #[allow(dead_code)]
 pub(crate) enum AnalyticsFact {
     Initialize {
@@ -468,6 +489,7 @@ pub(crate) enum AnalyticsFact {
 pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     Compaction(Box<CodexCompactionEvent>),
+    Goal(Box<CodexGoalEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),

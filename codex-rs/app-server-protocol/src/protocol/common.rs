@@ -3002,10 +3002,12 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                model: Some("realtime-treatment-model".to_string()),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: Some("sess_456".to_string()),
                 transport: None,
+                version: Some(RealtimeConversationVersion::V1),
                 voice: Some(RealtimeVoice::Marin),
             },
         };
@@ -3015,10 +3017,12 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "model": "realtime-treatment-model",
                     "outputModality": "audio",
                     "prompt": "You are on a call",
                     "realtimeSessionId": "sess_456",
                     "transport": null,
+                    "version": "v1",
                     "voice": "marin"
                 }
             }),
@@ -3033,10 +3037,12 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: None,
                 realtime_session_id: None,
                 transport: None,
+                version: None,
                 voice: None,
             },
         };
@@ -3046,9 +3052,11 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "model": null,
                     "outputModality": "audio",
                     "realtimeSessionId": null,
                     "transport": null,
+                    "version": null,
                     "voice": null
                 }
             }),
@@ -3059,10 +3067,12 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(None),
                 realtime_session_id: None,
                 transport: None,
+                version: None,
                 voice: None,
             },
         };
@@ -3072,10 +3082,12 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "model": null,
                     "outputModality": "audio",
                     "prompt": null,
                     "realtimeSessionId": null,
                     "transport": null,
+                    "version": null,
                     "voice": null
                 }
             }),
@@ -3228,10 +3240,12 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: None,
                 transport: None,
+                version: None,
                 voice: None,
             },
         };

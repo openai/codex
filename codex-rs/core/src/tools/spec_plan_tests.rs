@@ -285,7 +285,6 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
 
 struct WebRunExtensionTool;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced("web", "run")
@@ -306,17 +305,15 @@ impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
         })
     }
 
-    async fn handle(
-        &self,
-        _call: ExtensionToolCall,
-    ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
-        Ok(Box::new(codex_tools::JsonToolOutput::new(json!({}))))
+    fn handle(&self, _call: ExtensionToolCall) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async {
+            Ok(Box::new(codex_tools::JsonToolOutput::new(json!({}))) as Box<dyn ToolOutput>)
+        })
     }
 }
 
 struct DeferredExtensionTool;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ExtensionToolCall> for DeferredExtensionTool {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("extension_echo")
@@ -344,11 +341,8 @@ impl ToolExecutor<ExtensionToolCall> for DeferredExtensionTool {
         ToolExposure::Deferred
     }
 
-    async fn handle(
-        &self,
-        _call: ExtensionToolCall,
-    ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
-        panic!("spec planning should not execute extension tools")
+    fn handle(&self, _call: ExtensionToolCall) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async { panic!("spec planning should not execute extension tools") })
     }
 }
 
