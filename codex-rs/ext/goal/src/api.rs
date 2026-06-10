@@ -259,19 +259,19 @@ impl GoalService {
             tracing::warn!("failed to prepare external goal mutation: {err}");
         }
 
-        let cleared = state_db
+        let cleared_goal = state_db
             .thread_goals()
             .delete_thread_goal(thread_id)
             .await
             .map_err(|err| {
                 GoalServiceError::Internal(format!("failed to clear thread goal: {err}"))
             })?;
+        let cleared = cleared_goal.is_some();
         drop(goal_state_permit);
         drop(runtime);
 
-        if cleared
-            && let Some(runtime) = self.runtime_for_thread(thread_id)
-            && let Err(err) = runtime.apply_external_goal_clear().await
+        if let (Some(runtime), Some(goal)) = (self.runtime_for_thread(thread_id), cleared_goal)
+            && let Err(err) = runtime.apply_external_goal_clear(goal).await
         {
             tracing::warn!("failed to apply external goal clear runtime effects: {err}");
         }

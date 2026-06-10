@@ -125,6 +125,31 @@ pub(crate) async fn wait_for_analytics_event(
     read_timeout: Duration,
     event_type: &str,
 ) -> Result<Value> {
+    wait_for_matching_analytics_event(server, read_timeout, |event| {
+        event["event_type"] == event_type
+    })
+    .await
+}
+
+pub(crate) async fn wait_for_goal_event(
+    server: &MockServer,
+    read_timeout: Duration,
+    event_kind: &str,
+    goal_status: &str,
+) -> Result<Value> {
+    wait_for_matching_analytics_event(server, read_timeout, |event| {
+        event["event_type"] == "codex_goal_event"
+            && event["event_params"]["event_kind"] == event_kind
+            && event["event_params"]["goal_status"] == goal_status
+    })
+    .await
+}
+
+async fn wait_for_matching_analytics_event(
+    server: &MockServer,
+    read_timeout: Duration,
+    matches: impl Fn(&Value) -> bool,
+) -> Result<Value> {
     timeout(read_timeout, async {
         loop {
             let Some(requests) = server.received_requests().await else {
@@ -142,10 +167,7 @@ pub(crate) async fn wait_for_analytics_event(
                 let Some(events) = payload["events"].as_array() else {
                     continue;
                 };
-                if let Some(event) = events
-                    .iter()
-                    .find(|event| event["event_type"] == event_type)
-                {
+                if let Some(event) = events.iter().find(|event| matches(event)) {
                     return Ok::<Value, anyhow::Error>(event.clone());
                 }
             }

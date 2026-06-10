@@ -196,6 +196,7 @@ mod tests {
                     Arc::new(NoopExtensionEventSink),
                     auth_manager.clone(),
                     Some(state_db.clone()),
+                    codex_analytics::AnalyticsEventsClient::disabled(),
                     thread_manager.clone(),
                     Arc::new(codex_goal_extension::GoalService::new()),
                     Arc::clone(&executor_skill_provider),
