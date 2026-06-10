@@ -6,6 +6,7 @@ use tokio::sync::OnceCell;
 
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
+use crate::catalog::SkillProviderError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SkillsExtensionConfig {
@@ -61,9 +62,12 @@ impl SkillsThreadState {
 
     pub(crate) async fn remote_catalog_snapshot(
         &self,
-        initialize: impl Future<Output = SkillCatalog> + Send,
-    ) -> SkillCatalog {
-        self.remote_catalog.get_or_init(|| initialize).await.clone()
+        initialize: impl Future<Output = Result<SkillCatalog, SkillProviderError>> + Send,
+    ) -> Result<SkillCatalog, SkillProviderError> {
+        self.remote_catalog
+            .get_or_try_init(|| initialize)
+            .await
+            .cloned()
     }
 }
 

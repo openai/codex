@@ -21,6 +21,7 @@ use crate::provider::SkillSearchRequest;
 
 const BACKEND_SKILL_MIME_TYPE: &str = "mcp/skill";
 const BACKEND_SKILL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
+const BACKEND_SKILL_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESOURCE_PAGES: usize = 10;
 const MAX_BACKEND_SKILLS: usize = 100;
 const MAX_SKILL_NAME_CHARS: usize = 64;
@@ -59,25 +60,46 @@ impl SkillProvider for BackendSkillProvider {
             let mut skill_resources_seen = 0usize;
             let mut skipped_resources = 0usize;
             let mut truncated = false;
+            let mut completed_pages = 0usize;
 
             for _ in 0..MAX_RESOURCE_PAGES {
-                let result = tokio::time::timeout_at(
+                let page = match tokio::time::timeout_at(
                     discovery_deadline,
                     client.list_resources(&self.server_name, cursor.clone()),
                 )
                 .await
-                .map_err(|_| {
-                    let server_name = &self.server_name;
-                    SkillProviderError::new(format!(
-                        "backend skill discovery from {server_name} timed out after {BACKEND_SKILL_DISCOVERY_TIMEOUT:?}"
-                    ))
-                })?
-                .map_err(|err| {
-                    SkillProviderError::new(format!(
-                        "failed to list backend skill resources from {}: {err:#}",
-                        self.server_name
-                    ))
-                })?;
+                {
+                    Ok(result) => result.map_err(|err| {
+                        SkillProviderError::new(format!(
+                            "failed to list backend skill resources from {}: {err:#}",
+                            self.server_name
+                        ))
+                    }),
+                    Err(_) => {
+                        let server_name = &self.server_name;
+                        Err(SkillProviderError::new(format!(
+                            "backend skill discovery from {server_name} timed out after {BACKEND_SKILL_DISCOVERY_TIMEOUT:?}"
+                        )))
+                    }
+                };
+                let result = match page {
+                    Ok(result) => result,
+                    Err(err) if completed_pages == 0 => return Err(err),
+                    Err(err) => {
+                        let page_word = if completed_pages == 1 {
+                            "page"
+                        } else {
+                            "pages"
+                        };
+                        catalog.warnings.push(format!(
+                            "Backend skill discovery from {} stopped after {completed_pages} resource {page_word}: {}",
+                            self.server_name, err.message
+                        ));
+                        cursor = None;
+                        break;
+                    }
+                };
+                completed_pages = completed_pages.saturating_add(1);
 
                 for resource in &result.resources {
                     if resource.mime_type.as_deref() != Some(BACKEND_SKILL_MIME_TYPE) {
@@ -151,15 +173,23 @@ impl SkillProvider for BackendSkillProvider {
                     "session MCP resource client is not configured",
                 ));
             };
-            let result = client
-                .read_resource(&self.server_name, request.resource.as_str())
-                .await
-                .map_err(|err| {
-                    SkillProviderError::new(format!(
-                        "failed to read backend skill resource {}: {err:#}",
-                        request.resource.as_str()
-                    ))
-                })?;
+            let result = tokio::time::timeout(
+                BACKEND_SKILL_READ_TIMEOUT,
+                client.read_resource(&self.server_name, request.resource.as_str()),
+            )
+            .await
+            .map_err(|_| {
+                SkillProviderError::new(format!(
+                    "backend skill read from {} timed out after {BACKEND_SKILL_READ_TIMEOUT:?}",
+                    self.server_name
+                ))
+            })?
+            .map_err(|err| {
+                SkillProviderError::new(format!(
+                    "failed to read backend skill resource {}: {err:#}",
+                    request.resource.as_str()
+                ))
+            })?;
             let contents = result
                 .contents
                 .into_iter()

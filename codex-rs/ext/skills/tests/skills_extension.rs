@@ -24,6 +24,7 @@ use codex_skills_extension::catalog::SkillAuthority;
 use codex_skills_extension::catalog::SkillCatalog;
 use codex_skills_extension::catalog::SkillCatalogEntry;
 use codex_skills_extension::catalog::SkillPackageId;
+use codex_skills_extension::catalog::SkillProviderError;
 use codex_skills_extension::catalog::SkillReadResult;
 use codex_skills_extension::catalog::SkillResourceId;
 use codex_skills_extension::catalog::SkillSearchResult;
@@ -145,6 +146,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         },
         read_requests: Arc::clone(&read_requests),
         list_calls: None,
+        fail_first_list: false,
     });
     let providers = SkillProviders::new().with_executor_provider(executor_provider);
     let mut builder = ExtensionRegistryBuilder::new();
@@ -241,7 +243,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
 }
 
 #[tokio::test]
-async fn remote_catalog_snapshot_is_reused_across_context_and_turns() -> TestResult {
+async fn remote_catalog_snapshot_retries_failure_then_is_reused() -> TestResult {
     let list_calls = Arc::new(AtomicUsize::new(0));
     let providers = SkillProviders::new().with_remote_provider(Arc::new(StaticSkillProvider {
         catalog: SkillCatalog {
@@ -255,6 +257,7 @@ async fn remote_catalog_snapshot_is_reused_across_context_and_turns() -> TestRes
         },
         read_requests: Arc::new(Mutex::new(Vec::new())),
         list_calls: Some(Arc::clone(&list_calls)),
+        fail_first_list: true,
     }));
     let mut builder = ExtensionRegistryBuilder::new();
     install_with_providers(&mut builder, providers);
@@ -273,9 +276,10 @@ async fn remote_catalog_snapshot_is_reused_across_context_and_turns() -> TestRes
         })
         .await;
 
-    let _ = registry.context_contributors()[0]
+    let initial_fragments = registry.context_contributors()[0]
         .contribute(&session_store, &thread_store)
         .await;
+    assert!(initial_fragments.is_empty());
 
     for turn_id in ["turn-1", "turn-2"] {
         let fragments = registry.turn_input_contributors()[0]
@@ -296,7 +300,7 @@ async fn remote_catalog_snapshot_is_reused_across_context_and_turns() -> TestRes
         assert_eq!(1, fragments.len());
         assert!(fragments[0].render().contains("<name>first</name>"));
     }
-    assert_eq!(1, list_calls.load(Ordering::Relaxed));
+    assert_eq!(2, list_calls.load(Ordering::Relaxed));
 
     Ok(())
 }
@@ -325,6 +329,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
         },
         read_requests: Arc::clone(&read_requests),
         list_calls: None,
+        fail_first_list: false,
     });
     let providers = SkillProviders::new().with_executor_provider(executor_provider);
     let mut builder = ExtensionRegistryBuilder::new();
@@ -410,6 +415,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         },
         read_requests: Arc::clone(&read_requests),
         list_calls: None,
+        fail_first_list: false,
     });
     let providers = SkillProviders::new().with_host_provider(provider);
     let mut builder = ExtensionRegistryBuilder::new();
@@ -466,15 +472,24 @@ struct StaticSkillProvider {
     catalog: SkillCatalog,
     read_requests: Arc<Mutex<Vec<SkillReadRequest>>>,
     list_calls: Option<Arc<AtomicUsize>>,
+    fail_first_list: bool,
 }
 
 impl SkillProvider for StaticSkillProvider {
     fn list(&self, _query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
-        if let Some(list_calls) = &self.list_calls {
-            list_calls.fetch_add(1, Ordering::Relaxed);
-        }
+        let list_call = self
+            .list_calls
+            .as_ref()
+            .map(|list_calls| list_calls.fetch_add(1, Ordering::Relaxed));
+        let fail = self.fail_first_list && list_call == Some(0);
         let catalog = self.catalog.clone();
-        Box::pin(async move { Ok(catalog) })
+        Box::pin(async move {
+            if fail {
+                Err(SkillProviderError::new("temporary remote failure"))
+            } else {
+                Ok(catalog)
+            }
+        })
     }
 
     fn read(&self, request: SkillReadRequest) -> SkillProviderFuture<'_, SkillReadResult> {

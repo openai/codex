@@ -385,6 +385,12 @@ impl ServerHandler for ResourceAppsMcpServer {
                 meta: None,
             });
         }
+        if cursor.as_deref() == Some("failing-page") {
+            return Err(rmcp::ErrorData::internal_error(
+                "simulated later-page failure",
+                /*data*/ None,
+            ));
+        }
         if cursor.as_deref() != Some("skills-page") {
             return Err(rmcp::ErrorData::invalid_params(
                 "unexpected resources/list cursor",
@@ -401,7 +407,7 @@ impl ServerHandler for ResourceAppsMcpServer {
                 "demo-plugin",
                 "deploy",
             )],
-            next_cursor: None,
+            next_cursor: Some("failing-page".to_string()),
             meta: None,
         })
     }

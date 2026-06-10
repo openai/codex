@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillProviderError;
+use crate::catalog::SkillProviderResult;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSearchResult;
 use crate::catalog::SkillSourceKind;
@@ -105,9 +106,27 @@ impl SkillProviders {
             .await
     }
 
-    pub(crate) async fn list_remote_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
-        self.list_matching(&query, |source| source.kind == SkillSourceKind::Remote)
-            .await
+    pub(crate) async fn list_remote_for_turn(
+        &self,
+        query: SkillListQuery,
+    ) -> SkillProviderResult<SkillCatalog> {
+        let mut catalog = SkillCatalog::default();
+
+        for source in self
+            .sources
+            .iter()
+            .filter(|source| source.kind == SkillSourceKind::Remote)
+        {
+            let source_catalog = source.provider.list(query.clone()).await.map_err(|err| {
+                SkillProviderError::new(format!(
+                    "{} skills unavailable: {}",
+                    source.label, err.message
+                ))
+            })?;
+            catalog.extend(source_catalog);
+        }
+
+        Ok(catalog)
     }
 
     async fn list_matching(
