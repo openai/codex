@@ -100,7 +100,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
     let mcp_tools = session
         .services
         .mcp_connection_manager
-        .current()
+        .load_full()
         .list_all_tools()
         .await;
     let router = ToolRouter::from_turn_context(

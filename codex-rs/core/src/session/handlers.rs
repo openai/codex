@@ -594,7 +594,7 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     }
     sess.services
         .mcp_connection_manager
-        .current()
+        .load_full()
         .shutdown()
         .await;
     sess.guardian_review_session.shutdown().await;

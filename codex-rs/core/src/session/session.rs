@@ -981,7 +981,7 @@ impl Session {
                 // before any MCP-related events. It is reasonable to consider
                 // changing this to use Option or OnceCell, though the current
                 // setup is straightforward enough and performs well.
-                mcp_connection_manager: McpConnectionManagerSlot::new(
+                mcp_connection_manager: arc_swap::ArcSwap::from_pointee(
                     McpConnectionManager::new_uninitialized_with_permission_profile(
                         &config.permissions.approval_policy,
                         config.permissions.permission_profile(),

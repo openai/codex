@@ -296,7 +296,6 @@ use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::AutoCompactWindowSnapshot;
-use crate::state::McpConnectionManagerSlot;
 use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -794,7 +793,7 @@ impl Codex {
                 ..Default::default()
             })
             .await?;
-        let mcp_connection_manager = self.session.services.mcp_connection_manager.current();
+        let mcp_connection_manager = self.session.services.mcp_connection_manager.load_full();
         mcp_connection_manager.set_elicitations_auto_deny(mcp_elicitations_auto_deny);
         Ok(())
     }
@@ -2841,7 +2840,7 @@ impl Session {
             }
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-            let mcp_connection_manager = self.services.mcp_connection_manager.current();
+            let mcp_connection_manager = self.services.mcp_connection_manager.load_full();
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(
                     &mcp_connection_manager,

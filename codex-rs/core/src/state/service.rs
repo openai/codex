@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::mcp_connection_manager::McpConnectionManagerSlot;
 use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::attestation::AttestationProvider;
@@ -40,7 +39,8 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
-    pub(crate) mcp_connection_manager: McpConnectionManagerSlot,
+    /// The latest manager; callers retain an owned handle while performing MCP I/O.
+    pub(crate) mcp_connection_manager: ArcSwap<McpConnectionManager>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -91,9 +91,9 @@ impl SessionServices {
         &self,
         manager: McpConnectionManager,
     ) -> Result<()> {
-        self.mcp_connection_manager.replace(manager);
+        self.mcp_connection_manager.store(Arc::new(manager));
         self.mcp_connection_manager
-            .current()
+            .load_full()
             .validate_required_servers()
             .await
     }

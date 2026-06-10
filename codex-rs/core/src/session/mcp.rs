@@ -91,7 +91,7 @@ impl Session {
         if self
             .services
             .mcp_connection_manager
-            .current()
+            .load_full()
             .elicitations_auto_deny()
         {
             return McpServerElicitationOutcome {
@@ -225,7 +225,7 @@ impl Session {
 
         self.services
             .mcp_connection_manager
-            .current()
+            .load_full()
             .resolve_elicitation(server_name, id, response)
             .await
     }
@@ -237,7 +237,7 @@ impl Session {
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
-            .current()
+            .load_full()
             .list_resources(server, params)
             .await
     }
@@ -249,7 +249,7 @@ impl Session {
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
-            .current()
+            .load_full()
             .list_resource_templates(server, params)
             .await
     }
@@ -261,7 +261,7 @@ impl Session {
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
-            .current()
+            .load_full()
             .read_resource(server, params)
             .await
     }
@@ -275,7 +275,7 @@ impl Session {
     ) -> anyhow::Result<CallToolResult> {
         self.services
             .mcp_connection_manager
-            .current()
+            .load_full()
             .call_tool(server, tool, arguments, meta)
             .await
     }
@@ -344,12 +344,12 @@ impl Session {
         )
         .await;
         {
-            let current_manager = self.services.mcp_connection_manager.current();
+            let current_manager = self.services.mcp_connection_manager.load_full();
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
         }
         self.services
             .mcp_connection_manager
-            .replace(refreshed_manager);
+            .store(Arc::new(refreshed_manager));
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(

@@ -315,7 +315,7 @@ async fn refresh_missing_requested_connectors(
         return Some(Vec::new());
     }
 
-    let manager = session.services.mcp_connection_manager.current();
+    let manager = session.services.mcp_connection_manager.load_full();
     let mcp_tools = manager.list_all_tools().await;
     let accessible_connectors = connectors::with_app_enabled_state(
         connectors::accessible_connectors_from_mcp_tools(&mcp_tools),

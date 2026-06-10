@@ -319,7 +319,7 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
     session
         .services
         .mcp_connection_manager
-        .current()
+        .load_full()
         .set_elicitations_auto_deny(/*auto_deny*/ true);
 
     let requested_schema: McpElicitationSchema = serde_json::from_value(json!({
@@ -4815,7 +4815,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let services = SessionServices {
-        mcp_connection_manager: McpConnectionManagerSlot::new(
+        mcp_connection_manager: arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
@@ -6893,7 +6893,7 @@ where
     );
 
     let services = SessionServices {
-        mcp_connection_manager: McpConnectionManagerSlot::new(
+        mcp_connection_manager: arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
@@ -9445,7 +9445,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         session
             .services
             .mcp_connection_manager
-            .current()
+            .load_full()
             .list_all_tools()
             .await
     };
