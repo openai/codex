@@ -182,6 +182,7 @@ fn populate_merged_regular_fields_with_sources(
         allowed_web_search_modes,
         allow_managed_hooks_only,
         allow_appshots,
+        allow_guardian_fail_open,
         computer_use,
         windows,
         feature_requirements,
@@ -210,6 +211,7 @@ fn populate_merged_regular_fields_with_sources(
     set_sourced!(allowed_web_search_modes, &["allowed_web_search_modes"]);
     set_sourced!(allow_managed_hooks_only, &["allow_managed_hooks_only"]);
     set_sourced!(allow_appshots, &["allow_appshots"]);
+    set_sourced!(allow_guardian_fail_open, &["allow_guardian_fail_open"]);
     set_sourced!(computer_use, &["computer_use"]);
     set_sourced!(windows, &["windows"]);
     set_sourced!(feature_requirements, &["features", "feature_requirements"]);

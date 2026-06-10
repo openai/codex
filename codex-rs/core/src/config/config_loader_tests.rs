@@ -315,6 +315,33 @@ async fn top_level_allow_managed_hooks_only_in_user_config_does_not_enable_requi
 }
 
 #[tokio::test]
+async fn allow_guardian_fail_open_in_user_config_does_not_enable_requirements_policy()
+-> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "allow_guardian_fail_open = true",
+    )
+    .expect("write config");
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert_eq!(layers.requirements_toml().allow_guardian_fail_open, None);
+    assert!(layers.requirements().allow_guardian_fail_open.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn hooks_allow_managed_hooks_only_in_user_config_does_not_enable_requirements_policy()
 -> std::io::Result<()> {
     let tmp = tempdir().expect("tempdir");

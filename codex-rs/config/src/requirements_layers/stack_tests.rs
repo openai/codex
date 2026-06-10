@@ -63,6 +63,7 @@ fn top_level_values_use_toml_priority() {
 allowed_approval_policies = ["on-request"]
 allowed_sandbox_modes = ["workspace-write"]
 default_permissions = ":workspace"
+allow_guardian_fail_open = true
 
 [allowed_permission_profiles]
 ":read-only" = true
@@ -76,6 +77,7 @@ default_permissions = ":workspace"
 allowed_approval_policies = ["never"]
 allowed_sandbox_modes = ["read-only"]
 default_permissions = ":read-only"
+allow_guardian_fail_open = false
 
 [allowed_permission_profiles]
 ":danger-full-access" = false
@@ -93,6 +95,7 @@ default_permissions = ":read-only"
 allowed_approval_policies = ["never"]
 allowed_sandbox_modes = ["read-only"]
 default_permissions = ":read-only"
+allow_guardian_fail_open = false
 
 [allowed_permission_profiles]
 ":danger-full-access" = false

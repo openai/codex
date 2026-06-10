@@ -149,6 +149,7 @@ pub struct ConfigRequirements {
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
+    pub allow_guardian_fail_open: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
@@ -189,6 +190,7 @@ impl Default for ConfigRequirements {
             ),
             allow_managed_hooks_only: None,
             allow_appshots: None,
+            allow_guardian_fail_open: None,
             computer_use: None,
             feature_requirements: None,
             managed_hooks: None,
@@ -828,6 +830,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     pub allow_managed_hooks_only: Option<bool>,
     pub allow_appshots: Option<bool>,
+    pub allow_guardian_fail_open: Option<bool>,
     pub computer_use: Option<ComputerUseRequirementsToml>,
     pub windows: Option<WindowsRequirementsToml>,
     #[serde(rename = "features", alias = "feature_requirements")]
@@ -882,6 +885,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
+    pub allow_guardian_fail_open: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub windows: Option<Sourced<WindowsRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
@@ -924,6 +928,7 @@ impl ConfigRequirementsWithSources {
             allowed_web_search_modes: _,
             allow_managed_hooks_only: _,
             allow_appshots: _,
+            allow_guardian_fail_open: _,
             computer_use: _,
             windows: _,
             feature_requirements: _,
@@ -959,6 +964,7 @@ impl ConfigRequirementsWithSources {
                 allowed_web_search_modes,
                 allow_managed_hooks_only,
                 allow_appshots,
+                allow_guardian_fail_open,
                 computer_use,
                 windows,
                 feature_requirements,
@@ -992,6 +998,7 @@ impl ConfigRequirementsWithSources {
             allowed_web_search_modes,
             allow_managed_hooks_only,
             allow_appshots,
+            allow_guardian_fail_open,
             computer_use,
             windows,
             feature_requirements,
@@ -1015,6 +1022,7 @@ impl ConfigRequirementsWithSources {
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
             allow_appshots: allow_appshots.map(|sourced| sourced.value),
+            allow_guardian_fail_open: allow_guardian_fail_open.map(|sourced| sourced.value),
             computer_use: computer_use.map(|sourced| sourced.value),
             windows: windows.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
@@ -1104,6 +1112,7 @@ impl ConfigRequirementsToml {
             && self.allowed_web_search_modes.is_none()
             && self.allow_managed_hooks_only.is_none()
             && self.allow_appshots.is_none()
+            && self.allow_guardian_fail_open.is_none()
             && self
                 .computer_use
                 .as_ref()
@@ -1156,6 +1165,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_web_search_modes,
             allow_managed_hooks_only,
             allow_appshots,
+            allow_guardian_fail_open,
             computer_use,
             windows,
             feature_requirements,
@@ -1434,6 +1444,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             web_search_mode,
             allow_managed_hooks_only,
             allow_appshots,
+            allow_guardian_fail_open,
             computer_use,
             feature_requirements,
             managed_hooks,
@@ -1525,6 +1536,7 @@ mod tests {
             allowed_web_search_modes,
             allow_managed_hooks_only,
             allow_appshots,
+            allow_guardian_fail_open,
             computer_use,
             windows,
             feature_requirements,
@@ -1554,6 +1566,8 @@ mod tests {
             allow_managed_hooks_only: allow_managed_hooks_only
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allow_appshots: allow_appshots
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_guardian_fail_open: allow_guardian_fail_open
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             windows: windows.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1745,6 +1759,7 @@ mod tests {
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             allow_managed_hooks_only: Some(true),
             allow_appshots: Some(false),
+            allow_guardian_fail_open: Some(true),
             computer_use: Some(computer_use.clone()),
             windows: None,
             feature_requirements: Some(feature_requirements.clone()),
@@ -1787,6 +1802,10 @@ mod tests {
                     enforce_source.clone(),
                 )),
                 allow_appshots: Some(Sourced::new(/*value*/ false, enforce_source.clone(),)),
+                allow_guardian_fail_open: Some(Sourced::new(
+                    /*value*/ true,
+                    enforce_source.clone(),
+                )),
                 computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
                 windows: None,
                 feature_requirements: Some(Sourced::new(
@@ -1835,6 +1854,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
                 allow_appshots: None,
+                allow_guardian_fail_open: None,
                 computer_use: None,
                 windows: None,
                 feature_requirements: None,
@@ -1888,6 +1908,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
                 allow_appshots: None,
+                allow_guardian_fail_open: None,
                 computer_use: None,
                 windows: None,
                 feature_requirements: None,

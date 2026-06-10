@@ -6628,6 +6628,39 @@ async fn load_config_uses_requirements_guardian_policy_config() -> std::io::Resu
     Ok(())
 }
 
+#[tokio::test]
+async fn load_config_uses_requirements_guardian_fail_open() -> std::io::Result<()> {
+    for (requirement, expected) in [(None, false), (Some(false), false), (Some(true), true)] {
+        let codex_home = TempDir::new()?;
+        let requirements_toml = codex_config::ConfigRequirementsToml {
+            allow_guardian_fail_open: requirement,
+            ..Default::default()
+        };
+        let mut requirements_with_sources = codex_config::ConfigRequirementsWithSources::default();
+        requirements_with_sources
+            .merge_unset_fields(RequirementSource::Unknown, requirements_toml.clone());
+        let requirements = codex_config::ConfigRequirements::try_from(requirements_with_sources)
+            .map_err(std::io::Error::other)?;
+        let config_layer_stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
+            .map_err(std::io::Error::other)?;
+
+        let config = Config::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
+            ConfigToml::default(),
+            ConfigOverrides {
+                cwd: Some(codex_home.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.abs(),
+            config_layer_stack,
+        )
+        .await?;
+
+        assert_eq!(config.allow_guardian_fail_open, expected);
+    }
+    Ok(())
+}
+
 #[test]
 fn config_toml_deserializes_auto_review_policy() {
     let cfg = toml::from_str::<ConfigToml>(
@@ -8357,6 +8390,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
         allow_managed_hooks_only: None,
         allow_appshots: None,
+        allow_guardian_fail_open: None,
         computer_use: None,
         windows: None,
         feature_requirements: None,

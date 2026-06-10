@@ -662,6 +662,10 @@ pub struct Config {
     /// guardian developer prompt.
     pub guardian_policy_config: Option<String>,
 
+    /// Whether managed organization policy allows Guardian infrastructure
+    /// failures to approve the reviewed action.
+    pub allow_guardian_fail_open: bool,
+
     /// Whether to inject the `<permissions instructions>` developer block.
     pub include_permissions_instructions: bool,
 
@@ -2591,6 +2595,7 @@ impl Config {
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
             allow_appshots: _,
+            allow_guardian_fail_open,
             computer_use: _,
             feature_requirements,
             managed_hooks: _,
@@ -3544,6 +3549,8 @@ impl Config {
                 .or(show_raw_agent_reasoning)
                 .unwrap_or(false),
             guardian_policy_config,
+            allow_guardian_fail_open: allow_guardian_fail_open
+                .is_some_and(|sourced| sourced.value),
             model_reasoning_effort: cfg.model_reasoning_effort,
             plan_mode_reasoning_effort: cfg.plan_mode_reasoning_effort,
             model_reasoning_summary: cfg.model_reasoning_summary,
