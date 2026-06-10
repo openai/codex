@@ -1,0 +1,31 @@
+[package]
+name = "codex-internal-persistent-mode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_internal_persistent_mode"
+path = "src/lib.rs"
+doctest = false
+test = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+codex-core = { workspace = true }
+codex-extension-api = { workspace = true }
+codex-protocol = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+codex-exec-server = { workspace = true }
+codex-login = { workspace = true }
+core_test_support = { workspace = true }
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+uuid = { workspace = true }
