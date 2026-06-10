@@ -477,6 +477,7 @@ use codex_app_server_protocol::ServerRequest;
 
 mod account_processor;
 mod apps_processor;
+mod automation_dispatch;
 mod automation_processor;
 mod catalog_processor;
 mod command_exec_processor;

@@ -8,7 +8,6 @@ use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::invalid_request;
-use crate::error_code::method_not_found;
 use crate::extensions::ThreadExtensionDependencies;
 use crate::extensions::app_server_extension_event_sink;
 use crate::extensions::guardian_agent_spawner;
@@ -1218,8 +1217,10 @@ impl MessageProcessor {
                     .automation_delete(connection_id, params)
                     .await
             }
-            ClientRequest::AutomationRunNow { .. } => {
-                Err(automation_api_not_implemented("automation/runNow"))
+            ClientRequest::AutomationRunNow { params, .. } => {
+                self.thread_processor
+                    .automation_run_now(connection_id, params)
+                    .await
             }
             ClientRequest::ThreadSearch { params, .. } => {
                 self.thread_processor.thread_search(params).await
@@ -1521,10 +1522,6 @@ impl MessageProcessor {
         }
         Ok(())
     }
-}
-
-fn automation_api_not_implemented(method: &str) -> JSONRPCErrorError {
-    method_not_found(format!("{method} is not supported yet"))
 }
 
 #[cfg(test)]

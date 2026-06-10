@@ -10,6 +10,8 @@ use codex_app_server_protocol::AutomationDeleteResponse;
 use codex_app_server_protocol::AutomationListParams;
 use codex_app_server_protocol::AutomationListResponse;
 use codex_app_server_protocol::AutomationReadResponse;
+use codex_app_server_protocol::AutomationRunNowParams;
+use codex_app_server_protocol::AutomationRunNowResponse;
 use codex_app_server_protocol::AutomationStatus;
 use codex_app_server_protocol::AutomationTarget;
 use codex_app_server_protocol::AutomationUpdateResponse;
@@ -45,6 +47,23 @@ async fn automation_api_rejects_disabled_feature() -> Result<()> {
         )
         .await?;
 
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(err.error.code, -32600);
+    assert_eq!(err.error.message, "automations feature is disabled");
+
+    let request_id = app_server
+        .send_raw_request(
+            "automation/runNow",
+            Some(serde_json::to_value(AutomationRunNowParams {
+                automation_id: "automation-missing".to_string(),
+                thread_id: None,
+            })?),
+        )
+        .await?;
     let err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
         app_server.read_stream_until_error_message(RequestId::Integer(request_id)),
@@ -108,6 +127,40 @@ async fn automation_crud_is_scoped_to_subscribed_threads() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn automation_run_now_dispatches_loaded_heartbeat() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    write_config(
+        codex_home.path(),
+        &server.uri(),
+        /*automations_enabled*/ true,
+    )?;
+    let cwd = codex_home.path().join("workspace");
+    std::fs::create_dir(&cwd)?;
+
+    let mut app_server = init_app_server(codex_home.path()).await?;
+    let thread = start_thread(&mut app_server, &cwd).await?.thread;
+    let automation = create_heartbeat_automation(&mut app_server, thread.id.as_str()).await?;
+
+    let run_now =
+        run_now_automation(&mut app_server, automation.id.as_str(), Some(&thread.id)).await?;
+    assert_eq!(
+        run_now,
+        AutomationRunNowResponse {
+            found: true,
+            started_count: 1,
+        }
+    );
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
 async fn init_app_server(codex_home: &Path) -> Result<TestAppServer> {
     let mut app_server = TestAppServer::new(codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
@@ -157,6 +210,48 @@ async fn create_cron_automation(app_server: &mut TestAppServer, cwd: &Path) -> R
         .await?;
     let resp = response_for(app_server, request_id).await?;
     Ok(to_response::<AutomationCreateResponse>(resp)?.automation)
+}
+
+async fn create_heartbeat_automation(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+) -> Result<Automation> {
+    let request_id = app_server
+        .send_raw_request(
+            "automation/create",
+            Some(serde_json::to_value(AutomationCreateParams {
+                name: "gentle nudge".to_string(),
+                prompt: "check whether anything needs attention".to_string(),
+                rrule: Some("FREQ=MINUTELY;INTERVAL=30".to_string()),
+                model: None,
+                reasoning_effort: None,
+                status: Some(AutomationStatus::Active),
+                target: AutomationTarget::Heartbeat {
+                    thread_id: thread_id.to_string(),
+                },
+            })?),
+        )
+        .await?;
+    let resp = response_for(app_server, request_id).await?;
+    Ok(to_response::<AutomationCreateResponse>(resp)?.automation)
+}
+
+async fn run_now_automation(
+    app_server: &mut TestAppServer,
+    automation_id: &str,
+    thread_id: Option<&str>,
+) -> Result<AutomationRunNowResponse> {
+    let request_id = app_server
+        .send_raw_request(
+            "automation/runNow",
+            Some(serde_json::to_value(AutomationRunNowParams {
+                automation_id: automation_id.to_string(),
+                thread_id: thread_id.map(ToString::to_string),
+            })?),
+        )
+        .await?;
+    let resp = response_for(app_server, request_id).await?;
+    to_response::<AutomationRunNowResponse>(resp)
 }
 
 async fn list_automations(app_server: &mut TestAppServer) -> Result<AutomationListResponse> {

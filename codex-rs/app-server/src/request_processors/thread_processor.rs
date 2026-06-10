@@ -853,7 +853,7 @@ impl ThreadRequestProcessor {
         .await
     }
 
-    async fn ensure_listener_task_running(
+    pub(super) async fn ensure_listener_task_running(
         &self,
         conversation_id: ThreadId,
         conversation: Arc<CodexThread>,
@@ -4327,7 +4327,7 @@ fn permission_profile_trusts_project(
     }
 }
 
-fn build_thread_from_snapshot(
+pub(super) fn build_thread_from_snapshot(
     thread_id: ThreadId,
     session_id: String,
     config_snapshot: &ThreadConfigSnapshot,
