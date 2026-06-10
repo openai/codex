@@ -51,6 +51,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::PromptSlot;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -417,6 +418,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) environment_selections: ResolvedTurnEnvironments,
+    pub(crate) thread_extension_init: ExtensionDataInit,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
@@ -497,6 +499,7 @@ impl Codex {
             parent_rollout_thread_trace,
             parent_trace: _,
             environment_selections,
+            thread_extension_init,
             analytics_events_client,
             thread_store,
             attestation_provider,
@@ -641,6 +644,7 @@ impl Codex {
             plugins_manager,
             mcp_manager.clone(),
             extensions,
+            thread_extension_init,
             agent_control,
             environment_manager,
             analytics_events_client,
@@ -789,7 +793,7 @@ impl Codex {
                 ..Default::default()
             })
             .await?;
-        let mcp_connection_manager = self.session.services.mcp_connection_manager.read().await;
+        let mcp_connection_manager = self.session.services.mcp_connection_manager.load_full();
         mcp_connection_manager.set_elicitations_auto_deny(mcp_elicitations_auto_deny);
         Ok(())
     }
@@ -1128,7 +1132,6 @@ impl Session {
                 additional_context: Default::default(),
                 thread_settings: Default::default(),
             },
-            /*mirror_user_text_to_realtime*/ None,
             /*client_user_message_id*/ None,
         )
         .await;
@@ -1296,15 +1299,20 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Option<PreviousTurnSettings> {
-        let reconstructed_rollout = self
+        let rollout_reconstruction::RolloutReconstruction {
+            history,
+            previous_turn_settings,
+            reference_context_item,
+            window_id,
+        } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
-        self.replace_history(
-            reconstructed_rollout.history,
-            reconstructed_rollout.reference_context_item,
-        )
-        .await;
+        {
+            let mut state = self.state.lock().await;
+            state.replace_history(history, reference_context_item);
+            state.set_auto_compact_window_id(window_id);
+            state.set_previous_turn_settings(previous_turn_settings.clone());
+        }
         let prefix_tokens = if matches!(
             turn_context.config.model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix
@@ -1319,8 +1327,6 @@ impl Session {
             self.set_auto_compact_window_estimated_prefill_for_scope(turn_context, prefix_tokens)
                 .await;
         }
-        self.set_previous_turn_settings(previous_turn_settings.clone())
-            .await;
         previous_turn_settings
     }
 
@@ -2652,6 +2658,7 @@ impl Session {
             .await;
     }
 
+    #[cfg(test)]
     pub(crate) async fn replace_history(
         &self,
         items: Vec<ResponseItem>,
@@ -2665,13 +2672,14 @@ impl Session {
         &self,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
-        compacted_item: CompactedItem,
+        mut compacted_item: CompactedItem,
     ) {
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
-            state.start_next_auto_compact_window();
         }
+
+        compacted_item.window_id = Some(self.advance_auto_compact_window_id().await);
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
             .await;
@@ -2683,7 +2691,6 @@ impl Session {
             let mut state = self.state.lock().await;
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
-        self.services.model_client.advance_window_generation();
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -2745,10 +2752,6 @@ impl Session {
         }
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP app context rendering reads through the session-owned manager guard"
-    )]
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
@@ -2841,7 +2844,7 @@ impl Session {
             }
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+            let mcp_connection_manager = self.services.mcp_connection_manager.load_full();
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(
                     &mcp_connection_manager,
@@ -2990,6 +2993,18 @@ impl Session {
         state.clone_history()
     }
 
+    pub(crate) async fn current_window_id(&self) -> String {
+        let state = self.state.lock().await;
+        let thread_id = self.thread_id;
+        let window_id = state.auto_compact_window_id();
+        format!("{thread_id}:{window_id}")
+    }
+
+    async fn advance_auto_compact_window_id(&self) -> u64 {
+        let mut state = self.state.lock().await;
+        state.advance_auto_compact_window_id()
+    }
+
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
         let state = self.state.lock().await;
         state.reference_context_item()
@@ -3008,6 +3023,7 @@ impl Session {
     /// Mid-turn compaction is the other path that can re-establish that baseline when it
     /// reinjects full initial context into replacement history. Other non-regular tasks
     /// intentionally do not update the baseline.
+    #[instrument(level = "trace", skip_all)]
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,

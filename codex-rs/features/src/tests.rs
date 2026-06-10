@@ -94,6 +94,27 @@ fn external_migration_is_removed_and_disabled_by_default() {
 }
 
 #[test]
+fn removed_apps_mcp_path_override_shapes_are_ignored() {
+    let features = [
+        toml::from_str::<FeaturesToml>("apps_mcp_path_override = true")
+            .expect("boolean compatibility form should deserialize"),
+        toml::from_str::<FeaturesToml>(
+            r#"
+[apps_mcp_path_override]
+enabled = true
+path = "/custom/mcp"
+"#,
+        )
+        .expect("structured compatibility form should deserialize"),
+    ];
+
+    assert_eq!(
+        features.map(|features| features.entries()),
+        [BTreeMap::new(), BTreeMap::new()]
+    );
+}
+
+#[test]
 fn code_mode_only_requires_code_mode() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeModeOnly);

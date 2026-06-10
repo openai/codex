@@ -706,7 +706,7 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         turn_id: String,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TypedRequestError> {
         let request_id = self.next_request_id();
         let _: TurnInterruptResponse = self
             .client
@@ -717,12 +717,14 @@ impl AppServerSession {
                     turn_id,
                 },
             })
-            .await
-            .wrap_err("turn/interrupt failed in TUI")?;
+            .await?;
         Ok(())
     }
 
-    pub(crate) async fn startup_interrupt(&mut self, thread_id: ThreadId) -> Result<()> {
+    pub(crate) async fn startup_interrupt(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> std::result::Result<(), TypedRequestError> {
         self.turn_interrupt(thread_id, String::new()).await
     }
 

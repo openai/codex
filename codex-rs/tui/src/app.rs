@@ -11,6 +11,7 @@ use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
 use crate::app_event::PermissionProfileSelection;
+use crate::app_event::PluginLocation;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
@@ -694,6 +695,25 @@ fn archived_session_guidance(err: &color_eyre::eyre::Report) -> Option<String> {
         .split_once(" (code ")
         .map_or(message, |(message, _)| message);
     Some(message.to_string())
+}
+
+fn active_turn_interrupt_race(error: &TypedRequestError) -> Option<String> {
+    let TypedRequestError::Server { method, source } = error else {
+        return None;
+    };
+    if method != "turn/interrupt" {
+        return None;
+    }
+    let mismatch_prefix = "expected active turn id ";
+    let mismatch_separator = " but found ";
+    Some(
+        source
+            .message
+            .strip_prefix(mismatch_prefix)?
+            .split_once(mismatch_separator)?
+            .1
+            .to_string(),
+    )
 }
 
 impl App {

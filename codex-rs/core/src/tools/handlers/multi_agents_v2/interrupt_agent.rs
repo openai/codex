@@ -6,7 +6,6 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("interrupt_agent")
@@ -16,13 +15,12 @@ impl ToolExecutor<ToolInvocation> for Handler {
         create_interrupt_agent_tool_v2()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        handle_interrupt_agent(invocation)
-            .await
-            .map(boxed_tool_output)
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async move {
+            handle_interrupt_agent(invocation)
+                .await
+                .map(boxed_tool_output)
+        })
     }
 }
 

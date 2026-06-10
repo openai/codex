@@ -28,7 +28,7 @@ Accept any of the following:
 3. Inspect the `actions` list in the JSON response.
 4. If `diagnose_ci_failure` is present, inspect failed run logs and classify the failure.
 5. If the failure is likely caused by the current branch, patch code locally, commit, and push. Do not patch random flaky tests, CI infrastructure, dependency outages, runner issues, or other failures that are unrelated to the branch.
-6. If `process_review_comment` is present, inspect surfaced review items and decide whether to address them.
+6. If `process_review_comment` is present, inspect surfaced published review items and decide whether to address them.
 7. If a review item is actionable and correct, patch code locally, commit, push, and then resolve the associated review thread only when allowed by the GitHub state mutation policy below.
 8. Do not post replies to human-authored review comments/threads unless the user explicitly confirms the exact response. If a human review item is non-actionable, already addressed, or not valid, surface the item and recommended response to the user instead of replying on GitHub.
 9. If the failure is likely flaky/unrelated and `retry_failed_checks` is present, rerun failed jobs with `--retry-failed-now`.
@@ -92,9 +92,13 @@ The watcher surfaces review items from:
 - Inline review comments
 - Review submissions (COMMENT / APPROVED / CHANGES_REQUESTED)
 
+Only act on published feedback. Ignore review submissions in GitHub's `PENDING` state and inline
+comments attached to those pending reviews. Do not mark pending review feedback as seen; it should
+be eligible to surface after the reviewer submits the review.
+
 It intentionally surfaces Codex reviewer bot feedback (for example comments/reviews from `chatgpt-codex-connector[bot]`) in addition to human reviewer feedback. Most unrelated bot noise should still be ignored.
 For safety, the watcher only auto-surfaces trusted human review authors (for example repo OWNER/MEMBER/COLLABORATOR, plus the authenticated operator) and approved review bots such as Codex.
-On a fresh watcher state file, existing pending review feedback may be surfaced immediately (not only comments that arrive after monitoring starts). This is intentional so already-open review comments are not missed.
+On a fresh watcher state file, existing unaddressed published review feedback may be surfaced immediately (not only comments that arrive after monitoring starts). This is intentional so already-open review comments are not missed.
 
 When you agree with a comment and it is actionable:
 

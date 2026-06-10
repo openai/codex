@@ -4709,6 +4709,23 @@ fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
     );
 }
 
+#[test]
+fn active_turn_interrupt_race_extracts_actual_turn_id_from_mismatch() {
+    let error = TypedRequestError::Server {
+        method: "turn/interrupt".to_string(),
+        source: JSONRPCErrorError {
+            code: -32602,
+            message: "expected active turn id turn-expected but found turn-actual".to_string(),
+            data: None,
+        },
+    };
+
+    assert_eq!(
+        active_turn_interrupt_race(&error),
+        Some("turn-actual".to_string())
+    );
+}
+
 #[tokio::test]
 async fn fresh_session_config_uses_current_service_tier() {
     let mut app = make_test_app().await;

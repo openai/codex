@@ -124,7 +124,6 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("shell_command")
@@ -141,7 +140,13 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ShellCommandHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {

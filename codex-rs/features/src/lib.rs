@@ -16,13 +16,13 @@ use toml::Table;
 
 mod feature_configs;
 mod legacy;
-pub use feature_configs::AppsMcpPathOverrideConfigToml;
 pub use feature_configs::CodeModeConfigToml;
 pub use feature_configs::MultiAgentV2ConfigToml;
 pub use feature_configs::NetworkProxyConfigToml;
 pub use feature_configs::NetworkProxyDomainPermissionToml;
 pub use feature_configs::NetworkProxyModeToml;
 pub use feature_configs::NetworkProxyUnixSocketPermissionToml;
+use feature_configs::RemovedAppsMcpPathOverrideConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -143,7 +143,7 @@ pub enum Feature {
     Apps,
     /// Enable MCP apps.
     EnableMcpApps,
-    /// Use the new path for the host-owned apps MCP server.
+    /// Removed compatibility flag for the legacy Apps MCP path override.
     AppsMcpPathOverride,
     /// Removed compatibility flag retained as a no-op now that tool_search is always enabled.
     ToolSearch,
@@ -443,7 +443,7 @@ impl Features {
                 "apply_patch_freeform" => {
                     continue;
                 }
-                "tool_search" => {
+                "tool_search" | "apps_mcp_path_override" => {
                     continue;
                 }
                 "image_detail_original" => {
@@ -605,8 +605,9 @@ pub struct FeaturesToml {
     pub code_mode: Option<FeatureToml<CodeModeConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub apps_mcp_path_override: Option<FeatureToml<AppsMcpPathOverrideConfigToml>>,
+    #[serde(default, rename = "apps_mcp_path_override", skip_serializing)]
+    #[schemars(skip)]
+    removed_apps_mcp_path_override: Option<FeatureToml<RemovedAppsMcpPathOverrideConfigToml>>,
     pub network_proxy: Option<FeatureToml<NetworkProxyConfigToml>>,
     /// Boolean feature toggles keyed by canonical or legacy feature name.
     #[serde(flatten)]
@@ -621,6 +622,13 @@ impl Features {
 }
 
 impl FeaturesToml {
+    /// Removes compatibility-only inputs that no longer affect runtime
+    /// behavior or belong in newly materialized config.
+    pub fn clear_removed_compatibility_entries(&mut self) {
+        self.removed_apps_mcp_path_override = None;
+        self.entries.remove("apps_mcp_path_override");
+    }
+
     pub fn entries(&self) -> BTreeMap<String, bool> {
         let mut entries = self.entries.clone();
         if let Some(enabled) = self.code_mode.as_ref().and_then(FeatureToml::enabled) {
@@ -629,13 +637,6 @@ impl FeaturesToml {
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
         }
-        if let Some(enabled) = self
-            .apps_mcp_path_override
-            .as_ref()
-            .and_then(FeatureToml::enabled)
-        {
-            entries.insert(Feature::AppsMcpPathOverride.key().to_string(), enabled);
-        }
         if let Some(enabled) = self.network_proxy.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::NetworkProxy.key().to_string(), enabled);
         }
@@ -643,10 +644,11 @@ impl FeaturesToml {
     }
 
     pub fn materialize_resolved_enabled(&mut self, features: &Features) {
+        self.clear_removed_compatibility_entries();
         let Self {
             code_mode,
             multi_agent_v2,
-            apps_mcp_path_override,
+            removed_apps_mcp_path_override: _,
             network_proxy,
             entries,
         } = self;
@@ -659,8 +661,6 @@ impl FeaturesToml {
                 materialize_resolved_feature_enabled(code_mode, enabled);
             } else if spec.id == Feature::MultiAgentV2 {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
-            } else if spec.id == Feature::AppsMcpPathOverride {
-                materialize_resolved_feature_enabled(apps_mcp_path_override, enabled);
             } else if spec.id == Feature::NetworkProxy {
                 materialize_resolved_feature_enabled(network_proxy, enabled);
             } else {
@@ -987,7 +987,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::AppsMcpPathOverride,
         key: "apps_mcp_path_override",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
