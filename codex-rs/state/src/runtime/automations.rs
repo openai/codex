@@ -517,6 +517,51 @@ WHERE id = ?
         })
     }
 
+    pub async fn defer_scheduled_automation_dispatch(
+        &self,
+        claim: &AutomationDispatchClaim,
+        retry_at: chrono::DateTime<Utc>,
+        reason: &str,
+    ) -> anyhow::Result<bool> {
+        anyhow::ensure!(
+            claim.dispatch_mode == AutomationDispatchMode::Scheduled,
+            "only scheduled automation dispatches can be deferred",
+        );
+        let now = Utc::now().timestamp();
+        let retry_at_ts = retry_at.timestamp();
+        let next_run_at = claim
+            .next_run_at_after_claim
+            .map(|value| value.timestamp().min(retry_at_ts))
+            .unwrap_or(retry_at_ts);
+        let result = sqlx::query(
+            r#"
+UPDATE automations
+SET
+    claimed_by = NULL,
+    ownership_token = NULL,
+    lease_until = NULL,
+    in_flight_run_at = NULL,
+    in_flight_dispatch_mode = NULL,
+    dispatch_cwd_index = 0,
+    retry_at = NULL,
+    attempt_count = 0,
+    next_run_at = ?,
+    last_error = ?,
+    updated_at = ?
+WHERE id = ?
+  AND ownership_token = ?
+            "#,
+        )
+        .bind(next_run_at)
+        .bind(reason)
+        .bind(now)
+        .bind(claim.automation.id.as_str())
+        .bind(claim.ownership_token.as_str())
+        .execute(self.automations_pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn mark_automation_dispatch_failed_terminal(
         &self,
         automation_id: &str,

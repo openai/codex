@@ -1,4 +1,5 @@
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::request_processors::automation_dispatch::AutomationDispatchResult;
 use crate::request_processors::thread_processor::ThreadRequestProcessor;
 use codex_rollout::StateDbHandle;
 use codex_state::AUTOMATION_DISPATCH_BATCH_SIZE;
@@ -66,36 +67,58 @@ impl ThreadRequestProcessor {
         state_db: &StateDbHandle,
         claim: &AutomationDispatchClaim,
     ) {
-        if let Err(err) = self.dispatch_claimed_automation(state_db, claim).await {
-            let result = if err.code == INVALID_REQUEST_ERROR_CODE {
-                state_db
-                    .mark_automation_dispatch_failed_terminal(
-                        claim.automation.id.as_str(),
-                        claim.ownership_token.as_str(),
-                        err.message.as_str(),
+        match self.dispatch_claimed_automation(state_db, claim).await {
+            Ok(AutomationDispatchResult::Started(dispatch_result)) => {
+                match state_db
+                    .mark_automation_dispatch_completed(
+                        claim,
+                        dispatch_result.last_error.as_deref(),
                     )
                     .await
-                    .map(|_| ())
-            } else {
-                state_db
-                    .release_automation_dispatch_after_retryable_failure(
-                        claim.automation.id.as_str(),
-                        claim.ownership_token.as_str(),
-                        err.message.as_str(),
-                    )
-                    .await
-                    .map(|_| ())
-            };
-            if let Err(state_err) = result {
+                {
+                    Ok(true) => {}
+                    Ok(false) => warn!(
+                        "automation {} dispatch claim was lost before completion",
+                        claim.automation.id
+                    ),
+                    Err(err) => warn!(
+                        "failed to complete automation {} dispatch: {err:#}",
+                        claim.automation.id
+                    ),
+                }
+            }
+            Ok(AutomationDispatchResult::Deferred) => {}
+            Err(err) => {
+                let result = if err.code == INVALID_REQUEST_ERROR_CODE {
+                    state_db
+                        .mark_automation_dispatch_failed_terminal(
+                            claim.automation.id.as_str(),
+                            claim.ownership_token.as_str(),
+                            err.message.as_str(),
+                        )
+                        .await
+                        .map(|_| ())
+                } else {
+                    state_db
+                        .release_automation_dispatch_after_retryable_failure(
+                            claim.automation.id.as_str(),
+                            claim.ownership_token.as_str(),
+                            err.message.as_str(),
+                        )
+                        .await
+                        .map(|_| ())
+                };
+                if let Err(state_err) = result {
+                    warn!(
+                        "failed to persist automation {} dispatch failure: {state_err:#}",
+                        claim.automation.id
+                    );
+                }
                 warn!(
-                    "failed to persist automation {} dispatch failure: {state_err:#}",
-                    claim.automation.id
+                    "automation {} dispatch failed: {}",
+                    claim.automation.id, err.message
                 );
             }
-            warn!(
-                "automation {} dispatch failed: {}",
-                claim.automation.id, err.message
-            );
         }
     }
 }

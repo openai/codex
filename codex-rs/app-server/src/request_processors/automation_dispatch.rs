@@ -9,6 +9,8 @@ use crate::request_processors::thread_processor::ThreadRequestProcessor;
 use crate::request_processors::thread_processor::build_thread_from_snapshot;
 use crate::request_processors::thread_summary::thread_started_notification;
 use crate::thread_status::resolve_thread_status;
+use chrono::Duration as ChronoDuration;
+use chrono::Utc;
 use codex_app_server_protocol::AutomationRunNowParams;
 use codex_app_server_protocol::AutomationRunNowResponse;
 use codex_app_server_protocol::ClientResponsePayload;
@@ -27,8 +29,10 @@ use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
 use codex_rollout::StateDbHandle;
+use codex_state::AUTOMATION_HEARTBEAT_BLOCKED_RETRY_SECS;
 use codex_state::Automation;
 use codex_state::AutomationDispatchClaim;
+use codex_state::AutomationDispatchMode;
 use codex_state::AutomationDispatchOutcome;
 use codex_state::AutomationDispatchSettings;
 use codex_state::AutomationTarget;
@@ -91,7 +95,12 @@ impl ThreadRequestProcessor {
         };
 
         let dispatch_result = match self.dispatch_claimed_automation(state_db, &claim).await {
-            Ok(dispatch_result) => dispatch_result,
+            Ok(AutomationDispatchResult::Started(dispatch_result)) => dispatch_result,
+            Ok(AutomationDispatchResult::Deferred) => {
+                return Err(internal_error(
+                    "automation runNow was deferred before dispatch",
+                ));
+            }
             Err(err) => {
                 let _ = state_db
                     .mark_automation_dispatch_failed_terminal(
@@ -146,7 +155,7 @@ impl ThreadRequestProcessor {
         &self,
         state_db: &StateDbHandle,
         claim: &AutomationDispatchClaim,
-    ) -> Result<RunNowDispatchResult, JSONRPCErrorError> {
+    ) -> Result<AutomationDispatchResult, JSONRPCErrorError> {
         let started = state_db
             .mark_automation_dispatch_started(
                 claim.automation.id.as_str(),
@@ -165,7 +174,8 @@ impl ThreadRequestProcessor {
                 self.dispatch_cron_automation(state_db, claim, cwds).await
             }
             AutomationTarget::Heartbeat { thread_id } => {
-                self.dispatch_heartbeat_run_now(claim, *thread_id).await
+                self.dispatch_heartbeat_automation(state_db, claim, *thread_id)
+                    .await
             }
         }
     }
@@ -175,7 +185,7 @@ impl ThreadRequestProcessor {
         state_db: &StateDbHandle,
         claim: &AutomationDispatchClaim,
         cwds: &[PathBuf],
-    ) -> Result<RunNowDispatchResult, JSONRPCErrorError> {
+    ) -> Result<AutomationDispatchResult, JSONRPCErrorError> {
         let mut started_count = 0_usize;
         let mut last_error = None;
         for (cwd_index, cwd) in cwds.iter().enumerate().skip(claim.dispatch_cwd_index) {
@@ -214,17 +224,36 @@ impl ThreadRequestProcessor {
         {
             return Err(internal_error(last_error));
         }
-        Ok(RunNowDispatchResult {
-            started_count,
-            last_error,
-        })
+        Ok(AutomationDispatchResult::Started(
+            StartedAutomationDispatch {
+                started_count,
+                last_error,
+            },
+        ))
     }
 
-    async fn dispatch_heartbeat_run_now(
+    async fn dispatch_heartbeat_automation(
+        &self,
+        state_db: &StateDbHandle,
+        claim: &AutomationDispatchClaim,
+        thread_id: ThreadId,
+    ) -> Result<AutomationDispatchResult, JSONRPCErrorError> {
+        match claim.dispatch_mode {
+            AutomationDispatchMode::Manual => {
+                self.dispatch_manual_heartbeat(claim, thread_id).await
+            }
+            AutomationDispatchMode::Scheduled => {
+                self.dispatch_scheduled_heartbeat(state_db, claim, thread_id)
+                    .await
+            }
+        }
+    }
+
+    async fn dispatch_manual_heartbeat(
         &self,
         claim: &AutomationDispatchClaim,
         thread_id: ThreadId,
-    ) -> Result<RunNowDispatchResult, JSONRPCErrorError> {
+    ) -> Result<AutomationDispatchResult, JSONRPCErrorError> {
         let loaded_status = self
             .thread_watch_manager
             .loaded_status_for_thread(&thread_id.to_string())
@@ -243,10 +272,66 @@ impl ThreadRequestProcessor {
             .await?;
         self.submit_automation_prompt(thread.as_ref(), build_heartbeat_prompt(&claim.automation))
             .await?;
-        Ok(RunNowDispatchResult {
-            started_count: 1,
-            last_error: None,
-        })
+        Ok(AutomationDispatchResult::Started(
+            StartedAutomationDispatch {
+                started_count: 1,
+                last_error: None,
+            },
+        ))
+    }
+
+    async fn dispatch_scheduled_heartbeat(
+        &self,
+        state_db: &StateDbHandle,
+        claim: &AutomationDispatchClaim,
+        thread_id: ThreadId,
+    ) -> Result<AutomationDispatchResult, JSONRPCErrorError> {
+        let loaded_status = self
+            .thread_watch_manager
+            .loaded_status_for_thread(&thread_id.to_string())
+            .await;
+        if matches!(loaded_status, ThreadStatus::Active { .. }) {
+            self.defer_scheduled_heartbeat(state_db, claim, "heartbeat target thread is busy")
+                .await?;
+            return Ok(AutomationDispatchResult::Deferred);
+        }
+
+        let thread = match self.thread_manager.get_thread(thread_id).await {
+            Ok(thread) => {
+                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+                self.ensure_listener_task_running(thread_id, thread.clone(), thread_state)
+                    .await?;
+                thread
+            }
+            Err(_) => self.resume_automation_thread(thread_id).await?,
+        };
+        self.submit_automation_prompt(thread.as_ref(), build_heartbeat_prompt(&claim.automation))
+            .await?;
+        Ok(AutomationDispatchResult::Started(
+            StartedAutomationDispatch {
+                started_count: 1,
+                last_error: None,
+            },
+        ))
+    }
+
+    async fn defer_scheduled_heartbeat(
+        &self,
+        state_db: &StateDbHandle,
+        claim: &AutomationDispatchClaim,
+        reason: &str,
+    ) -> Result<(), JSONRPCErrorError> {
+        let retry_at =
+            Utc::now() + ChronoDuration::seconds(AUTOMATION_HEARTBEAT_BLOCKED_RETRY_SECS.max(0));
+        let deferred = state_db
+            .defer_scheduled_automation_dispatch(claim, retry_at, reason)
+            .await
+            .map_err(|err| internal_error(format!("failed to defer automation: {err}")))?;
+        if deferred {
+            Ok(())
+        } else {
+            Err(internal_error("automation run claim was lost before defer"))
+        }
     }
 
     async fn spawn_and_submit_automation_thread(
@@ -359,9 +444,14 @@ fn run_now_response(found: bool, started_count: u32) -> ClientResponsePayload {
     .into()
 }
 
-pub(super) struct RunNowDispatchResult {
-    started_count: usize,
-    last_error: Option<String>,
+pub(super) enum AutomationDispatchResult {
+    Started(StartedAutomationDispatch),
+    Deferred,
+}
+
+pub(super) struct StartedAutomationDispatch {
+    pub(super) started_count: usize,
+    pub(super) last_error: Option<String>,
 }
 
 fn ensure_cwd_in_dispatch_scope(

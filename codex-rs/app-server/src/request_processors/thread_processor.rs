@@ -881,6 +881,76 @@ impl ThreadRequestProcessor {
         .await
     }
 
+    pub(super) async fn resume_automation_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<Arc<CodexThread>, JSONRPCErrorError> {
+        let thread_id_str = thread_id.to_string();
+        let stored_thread = self
+            .read_stored_thread_for_resume(
+                thread_id_str.as_str(),
+                /*path*/ None,
+                /*include_history*/ true,
+            )
+            .await?;
+        let history = self
+            .stored_thread_to_initial_history(&stored_thread)
+            .await?;
+        let mut request_overrides = None;
+        if let Some(reasoning_effort) = stored_thread.reasoning_effort.as_ref() {
+            request_overrides.get_or_insert_with(HashMap::new).insert(
+                "model_reasoning_effort".to_string(),
+                serde_json::Value::String(reasoning_effort.to_string()),
+            );
+        }
+        let cwd = stored_thread.cwd.clone();
+        let config = self
+            .config_manager
+            .load_for_cwd(
+                request_overrides,
+                ConfigOverrides {
+                    cwd: Some(cwd.clone()),
+                    model: stored_thread.model.clone(),
+                    model_provider: Some(stored_thread.model_provider.clone()),
+                    approval_policy: Some(stored_thread.approval_mode),
+                    permission_profile: Some(stored_thread.permission_profile.clone()),
+                    ..ConfigOverrides::default()
+                },
+                Some(cwd),
+            )
+            .await
+            .map_err(|err| config_load_error(&err))?;
+        let NewThread {
+            thread_id: resumed_thread_id,
+            thread,
+            ..
+        } = self
+            .thread_manager
+            .resume_thread_with_history(
+                config,
+                history,
+                Arc::clone(&self.auth_manager),
+                /*parent_trace*/ None,
+            )
+            .await
+            .map_err(|err| match err {
+                CodexErr::ThreadNotFound(thread_id) => {
+                    invalid_request(format!("no rollout found for thread id {thread_id}"))
+                }
+                CodexErr::InvalidRequest(message) => invalid_request(message),
+                err => internal_error(format!("failed to resume automation thread: {err}")),
+            })?;
+        if resumed_thread_id != thread_id {
+            return Err(internal_error(format!(
+                "resumed automation thread id mismatch: requested {thread_id}, got {resumed_thread_id}"
+            )));
+        }
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        self.ensure_listener_task_running(thread_id, thread.clone(), thread_state)
+            .await?;
+        Ok(thread)
+    }
+
     async fn thread_start_inner(
         &self,
         request_id: ConnectionRequestId,

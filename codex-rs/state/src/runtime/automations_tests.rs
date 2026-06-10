@@ -33,6 +33,20 @@ fn cron_create_params(owner_thread_id: ThreadId, cwd: PathBuf) -> AutomationCrea
     }
 }
 
+fn heartbeat_create_params(thread_id: ThreadId) -> AutomationCreateParams {
+    AutomationCreateParams {
+        owner_thread_id: thread_id,
+        name: "Heartbeat".to_string(),
+        prompt: "Check whether to continue.".to_string(),
+        status: AutomationStatus::Active,
+        rrule: Some("FREQ=MINUTELY;INTERVAL=30".to_string()),
+        model: None,
+        reasoning_effort: None,
+        target: AutomationTarget::Heartbeat { thread_id },
+        dispatch_settings: None,
+    }
+}
+
 #[tokio::test]
 async fn create_update_delete_cron_automation_round_trips() {
     let codex_home = unique_temp_dir();
@@ -286,6 +300,71 @@ async fn retryable_failure_requeues_until_retry_budget_is_exhausted() {
         .expect("automation should exist");
     assert_eq!(reloaded.status, AutomationStatus::Paused);
     assert_eq!(reloaded.next_run_at, None);
+
+    let _ = tokio::fs::remove_dir_all(codex_home).await;
+}
+
+#[tokio::test]
+async fn deferred_scheduled_heartbeat_reopens_next_run_without_consuming() {
+    let codex_home = unique_temp_dir();
+    let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+        .await
+        .expect("state runtime should initialize");
+    let automation = runtime
+        .create_automation(&heartbeat_create_params(thread_id()))
+        .await
+        .expect("create automation");
+    sqlx::query("UPDATE automations SET next_run_at = ? WHERE id = ?")
+        .bind((Utc::now() - Duration::seconds(1)).timestamp())
+        .bind(automation.id.as_str())
+        .execute(runtime.automations_pool.as_ref())
+        .await
+        .expect("force due automation");
+
+    let claim = runtime
+        .claim_due_automation_dispatch("worker-a")
+        .await
+        .expect("claim due automation")
+        .expect("automation should be due");
+    assert_eq!(claim.dispatch_mode, AutomationDispatchMode::Scheduled);
+    assert!(
+        runtime
+            .mark_automation_dispatch_started(
+                claim.automation.id.as_str(),
+                claim.ownership_token.as_str(),
+            )
+            .await
+            .expect("mark started")
+    );
+    let retry_at = Utc::now() + Duration::seconds(60);
+
+    assert!(
+        runtime
+            .defer_scheduled_automation_dispatch(&claim, retry_at, "busy")
+            .await
+            .expect("defer heartbeat")
+    );
+
+    let reloaded = runtime
+        .get_automation(automation.id.as_str())
+        .await
+        .expect("load automation")
+        .expect("automation should exist");
+    assert_eq!(reloaded.last_run_at, None);
+    assert_eq!(
+        reloaded
+            .next_run_at
+            .expect("defer should set next run")
+            .timestamp(),
+        retry_at.timestamp()
+    );
+    assert_eq!(
+        runtime
+            .claim_due_automation_dispatch("worker-b")
+            .await
+            .expect("deferred heartbeat should not be immediately due"),
+        None
+    );
 
     let _ = tokio::fs::remove_dir_all(codex_home).await;
 }

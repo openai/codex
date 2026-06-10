@@ -119,6 +119,7 @@ pub const STATE_DB_FILENAME: &str = "state_5.sqlite";
 pub const DEFAULT_AUTOMATION_RRULE: &str = "FREQ=HOURLY;INTERVAL=24;BYMINUTE=0";
 pub const AUTOMATION_CLAIM_LEASE_SECS: i64 = 120;
 pub const AUTOMATION_DISPATCH_BATCH_SIZE: usize = 8;
+pub const AUTOMATION_HEARTBEAT_BLOCKED_RETRY_SECS: i64 = 60;
 pub const AUTOMATION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 pub const AUTOMATION_RETRY_BACKOFF_SECS: i64 = 10;
 pub const AUTOMATION_RETRY_BUDGET: i64 = 3;
