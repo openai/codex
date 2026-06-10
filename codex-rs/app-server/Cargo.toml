@@ -57,7 +57,6 @@ codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
 codex-image-generation-extension = { workspace = true }
-codex-internal-persistent-mode = { workspace = true } # copybara:strip-for-public
 codex-memories-extension = { workspace = true }
 codex-web-search-extension = { workspace = true }
 codex-memories-write = { workspace = true }

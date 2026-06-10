@@ -102,6 +102,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional workflow URL to reuse for native artifacts.",
     )
     parser.add_argument(
+        "--artifacts-dir",
+        type=Path,
+        help="Directory containing previously downloaded workflow artifacts.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -496,6 +501,7 @@ def main() -> int:
     vendor_temp_roots: list[Path] = []
     vendor_src_by_components: dict[tuple[str, ...], Path] = {}
     artifacts_temp_root: Path | None = None
+    remove_artifacts_temp_root = False
     resolved_head_sha: str | None = None
 
     final_messages = []
@@ -506,10 +512,15 @@ def main() -> int:
                 args.release_version, args.workflow_url
             )
             print(f"Using native artifacts from {workflow_url}", flush=True)
-            artifacts_temp_root = Path(
-                tempfile.mkdtemp(prefix="npm-native-artifacts-", dir=runner_temp)
-            )
-            print(f"Caching downloaded artifacts in {artifacts_temp_root}", flush=True)
+            if args.artifacts_dir is not None:
+                artifacts_temp_root = args.artifacts_dir.resolve()
+                artifacts_temp_root.mkdir(parents=True, exist_ok=True)
+            else:
+                artifacts_temp_root = Path(
+                    tempfile.mkdtemp(prefix="npm-native-artifacts-", dir=runner_temp)
+                )
+                remove_artifacts_temp_root = True
+            print(f"Using artifact cache at {artifacts_temp_root}", flush=True)
             for components in native_component_sets:
                 vendor_temp_root = Path(
                     tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp)
@@ -570,7 +581,7 @@ def main() -> int:
         if not args.keep_staging_dirs:
             for vendor_temp_root in vendor_temp_roots:
                 shutil.rmtree(vendor_temp_root, ignore_errors=True)
-        if artifacts_temp_root is not None:
+        if remove_artifacts_temp_root and artifacts_temp_root is not None:
             shutil.rmtree(artifacts_temp_root, ignore_errors=True)
 
     for msg in final_messages:
