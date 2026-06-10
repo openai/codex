@@ -515,17 +515,6 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
-        let window_generation = match &initial_history {
-            InitialHistory::Resumed(resumed_history) => u64::try_from(
-                resumed_history
-                    .history
-                    .iter()
-                    .filter(|item| matches!(item, RolloutItem::Compacted(_)))
-                    .count(),
-            )
-            .unwrap_or(u64::MAX),
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
-        };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -981,13 +970,13 @@ impl Session {
                 // before any MCP-related events. It is reasonable to consider
                 // changing this to use Option or OnceCell, though the current
                 // setup is straightforward enough and performs well.
-                mcp_connection_manager: Arc::new(RwLock::new(
+                mcp_connection_manager: arc_swap::ArcSwap::from_pointee(
                     McpConnectionManager::new_uninitialized_with_permission_profile(
                         &config.permissions.approval_policy,
                         config.permissions.permission_profile(),
                         config.prefix_mcp_tool_names(),
                     ),
-                )),
+                ),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
@@ -1047,9 +1036,6 @@ impl Session {
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
             };
-            services
-                .model_client
-                .set_window_generation(window_generation);
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
 

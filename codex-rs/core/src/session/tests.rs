@@ -319,8 +319,7 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
     session
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .set_elicitations_auto_deny(/*auto_deny*/ true);
 
     let requested_schema: McpElicitationSchema = serde_json::from_value(json!({
@@ -1586,6 +1585,7 @@ async fn reconstruct_history_matches_live_compactions() {
         .await;
 
     assert_eq!(expected, reconstructed.history);
+    assert_eq!(2, reconstructed.window_id);
 }
 
 #[tokio::test]
@@ -1613,6 +1613,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
     let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
         message: String::new(),
         replacement_history: Some(replacement_history.clone()),
+        window_id: Some(42),
     })];
 
     let reconstructed = session
@@ -1620,6 +1621,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         .await;
 
     assert_eq!(reconstructed.history, replacement_history);
+    assert_eq!(42, reconstructed.window_id);
 }
 
 #[tokio::test]
@@ -2920,6 +2922,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         RolloutItem::Compacted(CompactedItem {
             message: "summary after compaction".to_string(),
             replacement_history: Some(compacted_history.clone()),
+            window_id: Some(7),
         }),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: compact_turn_id,
@@ -2966,6 +2969,10 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         Some(first_context_item),
     )
     .await;
+    {
+        let mut state = sess.state.lock().await;
+        state.set_auto_compact_window_id(/*window_id*/ 99);
+    }
 
     handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
@@ -2973,6 +2980,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
 
     assert_eq!(sess.clone_history().await.raw_items(), compacted_history);
     assert!(sess.reference_context_item().await.is_none());
+    assert!(sess.current_window_id().await.ends_with(":7"));
 }
 
 #[tokio::test]
@@ -4816,13 +4824,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(
+        mcp_connection_manager: arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
                 config.prefix_mcp_tool_names(),
             ),
-        )),
+        ),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -6894,13 +6902,13 @@ where
     );
 
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(
+        mcp_connection_manager: arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
                 config.prefix_mcp_tool_names(),
             ),
-        )),
+        ),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -9440,18 +9448,13 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
 }
 
 #[tokio::test]
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "test builds a router from session-owned MCP manager state"
-)]
 async fn fatal_tool_error_stops_turn_and_reports_error() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let tools = {
         session
             .services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .list_all_tools()
             .await
     };
@@ -9587,6 +9590,7 @@ async fn sample_rollout(
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary1.to_string(),
         replacement_history: None,
+        window_id: None,
     }));
 
     let user2 = ResponseItem::Message {
@@ -9627,6 +9631,7 @@ async fn sample_rollout(
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary2.to_string(),
         replacement_history: None,
+        window_id: None,
     }));
 
     let user3 = ResponseItem::Message {
