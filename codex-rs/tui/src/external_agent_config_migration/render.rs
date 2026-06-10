@@ -80,13 +80,13 @@ impl WidgetRef for &ExternalAgentConfigMigrationScreen {
             MigrationView::Summary => vec![
                 Line::from("Bring over your setup, current project, and recent chats."),
                 Line::from("Codex may add files to your current project folder."),
-                Line::from("Your existing Claude Code setup will not be changed."),
-                Line::from("Standard Claude Chat data cannot be imported."),
+                Line::from("Your existing agent setup will not be changed."),
+                Line::from("Cloud-hosted chat data cannot be imported."),
             ],
             MigrationView::Customize => vec![
-                Line::from("Choose the Claude Code items to import."),
+                Line::from("Choose the items to import."),
                 Line::from("Codex may add files to your current project folder."),
-                Line::from("Your existing Claude Code setup will not be changed."),
+                Line::from("Your existing agent setup will not be changed."),
             ],
         };
         let intro_height = intro_lines.len() as u16;
@@ -119,7 +119,7 @@ impl WidgetRef for &ExternalAgentConfigMigrationScreen {
         .areas(inner_area);
 
         let title = match self.view {
-            MigrationView::Summary => "Import from Claude Code",
+            MigrationView::Summary => "Import from another coding agent",
             MigrationView::Customize => "Choose what to import",
         };
         let heading = Line::from(vec!["> ".into(), title.bold()]);

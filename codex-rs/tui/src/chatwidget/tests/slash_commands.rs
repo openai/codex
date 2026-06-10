@@ -1862,6 +1862,18 @@ async fn slash_resume_opens_picker() {
 }
 
 #[tokio::test]
+async fn slash_import_opens_claude_code_import_picker() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Import);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenExternalAgentConfigMigration)
+    );
+}
+
+#[tokio::test]
 async fn slash_archive_confirmation_requests_current_thread_archive() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
