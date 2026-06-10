@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::File;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
@@ -25,7 +26,7 @@ pub struct SessionIndexEntry {
 }
 
 /// Append a thread name update to the session index.
-/// The index is append-only; the most recent entry wins when resolving names or ids.
+/// Name updates are append-only; the most recent entry wins when resolving names or ids.
 pub async fn append_thread_name(
     codex_home: &Path,
     thread_id: ThreadId,
@@ -46,7 +47,7 @@ pub async fn append_thread_name(
 }
 
 /// Append a raw session index entry to `session_index.jsonl`.
-/// The file is append-only; consumers scan from the end to find the newest match.
+/// Consumers scan from the end to find the newest match.
 pub async fn append_session_index_entry(
     codex_home: &Path,
     entry: &SessionIndexEntry,
@@ -62,6 +63,37 @@ pub async fn append_session_index_entry(
     file.write_all(line.as_bytes()).await?;
     file.flush().await?;
     Ok(())
+}
+
+/// Remove all recorded names for a thread from the session index.
+pub async fn remove_thread_name_entries(
+    codex_home: &Path,
+    thread_id: ThreadId,
+) -> std::io::Result<()> {
+    let path = session_index_path(codex_home);
+    let contents = match tokio::fs::read_to_string(&path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let mut removed = false;
+    let mut remaining = String::with_capacity(contents.len());
+    for line in contents.lines() {
+        let should_remove = serde_json::from_str::<SessionIndexEntry>(line.trim())
+            .is_ok_and(|entry| entry.id == thread_id);
+        if should_remove {
+            removed = true;
+        } else {
+            remaining.push_str(line);
+            remaining.push('\n');
+        }
+    }
+    if !removed {
+        return Ok(());
+    }
+    let temp_path = path.with_extension("jsonl.tmp");
+    tokio::fs::write(&temp_path, remaining).await?;
+    tokio::fs::rename(temp_path, path).await
 }
 
 /// Find the latest thread name for a thread id, if any.
