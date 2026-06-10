@@ -152,10 +152,10 @@ mod tests {
     #[test]
     fn openai_provider_rejects_bedrock_api_key_auth() {
         let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
-        let auth = CodexAuth::BedrockApiKey(
-            BedrockApiKeyAuth::try_new("bedrock-api-key-test")
-                .expect("Bedrock API key should be valid"),
-        );
+        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+            api_key: "bedrock-api-key-test".to_string(),
+            region: "us-east-1".to_string(),
+        });
 
         match resolve_provider_auth(Some(&auth), &provider) {
             Err(CodexErr::UnsupportedOperation(message)) => {

@@ -1531,10 +1531,6 @@ impl AuthManager {
         self.inner.read().ok().and_then(|c| c.auth.clone())
     }
 
-    pub(super) fn auth_storage(&self) -> Arc<dyn AuthStorageBackend> {
-        create_auth_storage(self.codex_home.clone(), self.auth_credentials_store_mode)
-    }
-
     /// Subscribes to cached auth changes that can affect request recovery.
     pub fn auth_change_receiver(&self) -> watch::Receiver<u64> {
         self.auth_change_tx.subscribe()

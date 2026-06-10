@@ -386,10 +386,10 @@ mod tests {
     }
 
     fn bedrock_api_key_auth() -> CodexAuth {
-        CodexAuth::BedrockApiKey(
-            BedrockApiKeyAuth::try_new("bedrock-api-key-test")
-                .expect("Bedrock API key should be valid"),
-        )
+        CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+            api_key: "bedrock-api-key-test".to_string(),
+            region: "us-east-1".to_string(),
+        })
     }
 
     #[test]
