@@ -1095,6 +1095,133 @@
       ],
       "type": "string"
     },
+    "Automation": {
+      "description": "EXPERIMENTAL - durable recurring automation or heartbeat.",
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastRunAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "nextRunAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "reasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/AutomationStatus"
+        },
+        "target": {
+          "$ref": "#/definitions/AutomationTarget"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAt",
+        "id",
+        "name",
+        "prompt",
+        "rrule",
+        "status",
+        "target",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "AutomationStatus": {
+      "enum": [
+        "ACTIVE",
+        "PAUSED"
+      ],
+      "type": "string"
+    },
+    "AutomationTarget": {
+      "description": "EXPERIMENTAL - typed automation target for recurring scheduled work.",
+      "oneOf": [
+        {
+          "properties": {
+            "cwds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "cron"
+              ],
+              "title": "CronAutomationTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cwds",
+            "type"
+          ],
+          "title": "CronAutomationTarget",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "threadId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "heartbeat"
+              ],
+              "title": "HeartbeatAutomationTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "threadId",
+            "type"
+          ],
+          "title": "HeartbeatAutomationTarget",
+          "type": "object"
+        }
+      ]
+    },
     "ByteRange": {
       "properties": {
         "end": {

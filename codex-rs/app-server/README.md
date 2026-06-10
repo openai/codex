@@ -148,6 +148,12 @@ Example with notification opt-out:
 - `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes.
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
+- `automation/list` — experimental; list recurring automations visible from the initialized client, with cursor pagination.
+- `automation/read` — experimental; read one automation by id; returns `automation: null` when it is missing or not visible.
+- `automation/create` — experimental; create a recurring cron automation or heartbeat. Cron targets provide `cwds` and spawn a new thread per cwd when dispatched. Heartbeat targets provide `threadId` and deliver to that existing thread.
+- `automation/update` — experimental; update an automation's name, prompt, schedule, status, model, reasoning effort, or target when the target remains valid for the caller.
+- `automation/delete` — experimental; delete an automation by id; returns `deleted: false` when it is missing or not visible.
+- `automation/runNow` — experimental; immediately dispatch an automation once. Returns `{ found, startedCount }`; `found: true, startedCount: 0` means another app-server already owns an in-flight run.
 - `thread/settings/updated` — experimental notification emitted to subscribed clients when a loaded thread’s effective next-turn settings change; includes `threadId` and the full `threadSettings`.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.

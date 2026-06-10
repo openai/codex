@@ -170,6 +170,61 @@
         }
       ]
     },
+    "AutomationStatus": {
+      "enum": [
+        "ACTIVE",
+        "PAUSED"
+      ],
+      "type": "string"
+    },
+    "AutomationTarget": {
+      "description": "EXPERIMENTAL - typed automation target for recurring scheduled work.",
+      "oneOf": [
+        {
+          "properties": {
+            "cwds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "cron"
+              ],
+              "title": "CronAutomationTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cwds",
+            "type"
+          ],
+          "title": "CronAutomationTarget",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "threadId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "heartbeat"
+              ],
+              "title": "HeartbeatAutomationTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "threadId",
+            "type"
+          ],
+          "title": "HeartbeatAutomationTarget",
+          "type": "object"
+        }
+      ]
+    },
     "ByteRange": {
       "properties": {
         "end": {

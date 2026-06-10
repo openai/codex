@@ -618,6 +618,42 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadListResponse,
     },
+    #[experimental("automation/list")]
+    AutomationList => "automation/list" {
+        params: v2::AutomationListParams,
+        serialization: global_shared_read("automation"),
+        response: v2::AutomationListResponse,
+    },
+    #[experimental("automation/read")]
+    AutomationRead => "automation/read" {
+        params: v2::AutomationReadParams,
+        serialization: global_shared_read("automation"),
+        response: v2::AutomationReadResponse,
+    },
+    #[experimental("automation/create")]
+    AutomationCreate => "automation/create" {
+        params: v2::AutomationCreateParams,
+        serialization: global("automation"),
+        response: v2::AutomationCreateResponse,
+    },
+    #[experimental("automation/update")]
+    AutomationUpdate => "automation/update" {
+        params: v2::AutomationUpdateParams,
+        serialization: global("automation"),
+        response: v2::AutomationUpdateResponse,
+    },
+    #[experimental("automation/delete")]
+    AutomationDelete => "automation/delete" {
+        params: v2::AutomationDeleteParams,
+        serialization: global("automation"),
+        response: v2::AutomationDeleteResponse,
+    },
+    #[experimental("automation/runNow")]
+    AutomationRunNow => "automation/runNow" {
+        params: v2::AutomationRunNowParams,
+        serialization: global("automation"),
+        response: v2::AutomationRunNowResponse,
+    },
     #[experimental("thread/search")]
     ThreadSearch => "thread/search" {
         params: v2::ThreadSearchParams,

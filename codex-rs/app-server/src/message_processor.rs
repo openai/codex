@@ -8,6 +8,7 @@ use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::invalid_request;
+use crate::error_code::method_not_found;
 use crate::extensions::ThreadExtensionDependencies;
 use crate::extensions::app_server_extension_event_sink;
 use crate::extensions::guardian_agent_spawner;
@@ -1183,6 +1184,24 @@ impl MessageProcessor {
             ClientRequest::ThreadList { params, .. } => {
                 self.thread_processor.thread_list(params).await
             }
+            ClientRequest::AutomationList { .. } => {
+                Err(automation_api_not_implemented("automation/list"))
+            }
+            ClientRequest::AutomationRead { .. } => {
+                Err(automation_api_not_implemented("automation/read"))
+            }
+            ClientRequest::AutomationCreate { .. } => {
+                Err(automation_api_not_implemented("automation/create"))
+            }
+            ClientRequest::AutomationUpdate { .. } => {
+                Err(automation_api_not_implemented("automation/update"))
+            }
+            ClientRequest::AutomationDelete { .. } => {
+                Err(automation_api_not_implemented("automation/delete"))
+            }
+            ClientRequest::AutomationRunNow { .. } => {
+                Err(automation_api_not_implemented("automation/runNow"))
+            }
             ClientRequest::ThreadSearch { params, .. } => {
                 self.thread_processor.thread_search(params).await
             }
@@ -1483,6 +1502,10 @@ impl MessageProcessor {
         }
         Ok(())
     }
+}
+
+fn automation_api_not_implemented(method: &str) -> JSONRPCErrorError {
+    method_not_found(format!("{method} is not supported yet"))
 }
 
 #[cfg(test)]
