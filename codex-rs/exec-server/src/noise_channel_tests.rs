@@ -1,7 +1,7 @@
 use pretty_assertions::assert_eq;
 
-use super::NOISE_CHANNEL_SUITE;
 use super::InitiatorHandshake;
+use super::NOISE_CHANNEL_SUITE;
 use super::NoiseChannelIdentity;
 use super::NoiseChannelPublicKey;
 
