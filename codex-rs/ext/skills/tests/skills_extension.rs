@@ -491,7 +491,7 @@ struct ChannelEventSink(std::sync::mpsc::Sender<Event>);
 
 impl ExtensionEventSink for ChannelEventSink {
     fn emit(&self, event: Event) {
-        self.0.send(event).expect("recording event sink receiver");
+        let _ = self.0.send(event);
     }
 }
 
