@@ -130,6 +130,18 @@ async fn resolve_session_target(
     target: &str,
 ) -> Result<ResolvedSessionTarget> {
     if let Ok(session_id) = ThreadId::from_string(target) {
+        if matches!(
+            action,
+            SessionArchiveAction::Delete(DeleteConfirmation::Prompt)
+        ) {
+            let thread = app_server
+                .thread_read(session_id, /*include_turns*/ false)
+                .await
+                .with_context(|| {
+                    format!("No active or archived session found matching '{target}'.")
+                })?;
+            return session_target_from_app_server_thread(thread);
+        }
         return Ok(ResolvedSessionTarget {
             session_id,
             session_name: None,
@@ -166,38 +178,42 @@ async fn lookup_session_by_exact_name(
     name: &str,
     archived: bool,
 ) -> Result<Option<AppServerThread>> {
-    let mut cursor = None;
-    loop {
-        let response = app_server
-            .thread_list(ThreadListParams {
-                cursor: cursor.clone(),
-                limit: Some(100),
-                sort_key: Some(ThreadSortKey::UpdatedAt),
-                sort_direction: None,
-                model_providers: None,
-                source_kinds: Some(super::resume_source_kinds(
-                    /*include_non_interactive*/ false,
-                )),
-                archived: Some(archived),
-                cwd: None,
-                use_state_db_only: false,
-                search_term: Some(name.to_string()),
-            })
-            .await
-            .wrap_err("failed to list sessions while resolving session name")?;
+    // Search is the fast path, but some stores attach renamed titles after applying the filter.
+    for search_term in [Some(name), None] {
+        let mut cursor = None;
+        loop {
+            let response = app_server
+                .thread_list(ThreadListParams {
+                    cursor: cursor.clone(),
+                    limit: Some(100),
+                    sort_key: Some(ThreadSortKey::UpdatedAt),
+                    sort_direction: None,
+                    model_providers: None,
+                    source_kinds: Some(super::resume_source_kinds(
+                        /*include_non_interactive*/ false,
+                    )),
+                    archived: Some(archived),
+                    cwd: None,
+                    use_state_db_only: false,
+                    search_term: search_term.map(str::to_string),
+                })
+                .await
+                .wrap_err("failed to list sessions while resolving session name")?;
 
-        if let Some(thread) = response
-            .data
-            .into_iter()
-            .find(|thread| thread.name.as_deref() == Some(name))
-        {
-            return Ok(Some(thread));
+            if let Some(thread) = response
+                .data
+                .into_iter()
+                .find(|thread| thread.name.as_deref() == Some(name))
+            {
+                return Ok(Some(thread));
+            }
+            let Some(next_cursor) = response.next_cursor else {
+                break;
+            };
+            cursor = Some(next_cursor);
         }
-        if response.next_cursor.is_none() {
-            return Ok(None);
-        }
-        cursor = response.next_cursor;
     }
+    Ok(None)
 }
 
 fn session_target_from_app_server_thread(thread: AppServerThread) -> Result<ResolvedSessionTarget> {
@@ -227,7 +243,7 @@ fn confirm_session_delete(target: &ResolvedSessionTarget) -> Result<bool> {
     }?;
     writeln!(
         stderr,
-        "This cannot be undone. Spawned sessions will also be deleted."
+        "This cannot be undone. Subagent threads will also be deleted."
     )?;
     write!(stderr, "Continue? [y/N]: ")?;
     stderr.flush()?;

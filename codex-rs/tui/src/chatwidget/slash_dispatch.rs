@@ -197,7 +197,7 @@ impl ChatWidget {
                 self.bottom_pane.show_selection_view(SelectionViewParams {
                     title: Some("Delete this session?".to_string()),
                     subtitle: Some(
-                        "Cannot be undone. Spawned sessions will also be deleted.".to_string(),
+                        "Cannot be undone. Subagent threads will also be deleted.".to_string(),
                     ),
                     footer_hint: Some(standard_popup_hint_line()),
                     items: vec![

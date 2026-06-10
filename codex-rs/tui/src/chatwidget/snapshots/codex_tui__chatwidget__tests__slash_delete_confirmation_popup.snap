@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/slash_commands.rs
 expression: popup
 ---
   Delete this session?
-  Cannot be undone. Spawned sessions will also be deleted.
+  Cannot be undone. Subagent threads will also be deleted.
 
 › 1. No, keep this session  Return to the current session
   2. Yes, delete and exit   Permanently delete this session now
