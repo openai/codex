@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_context_fragments::ContextualUserFragment;
@@ -36,6 +37,9 @@ pub use turn_lifecycle::TurnErrorInput;
 pub use turn_lifecycle::TurnStartInput;
 pub use turn_lifecycle::TurnStopInput;
 
+/// Boxed, sendable future returned by asynchronous extension contributors.
+pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
 /// Extension contribution that resolves runtime MCP servers from host config.
 ///
 /// Contributors run in registration order. Later contributions for the same
@@ -43,9 +47,8 @@ pub use turn_lifecycle::TurnStopInput;
 /// own and must apply any source-specific policy before returning a server.
 /// Plugin-owned servers and their provenance continue to be resolved by the
 /// plugin manager until that ownership moves into an extension explicitly.
-#[async_trait::async_trait]
 pub trait McpServerContributor<C: Sync>: Send + Sync {
-    async fn contribute(&self, config: &C) -> Vec<McpServerContribution>;
+    fn contribute<'a>(&'a self, config: &'a C) -> ExtensionFuture<'a, Vec<McpServerContribution>>;
 }
 
 /// Extension contribution that adds prompt fragments during prompt assembly.
@@ -54,7 +57,7 @@ pub trait ContextContributor: Send + Sync {
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Vec<PromptFragment>> + Send + 'a>>;
+    ) -> ExtensionFuture<'a, Vec<PromptFragment>>;
 }
 
 /// Contributor for host-owned thread lifecycle gates.
@@ -62,24 +65,43 @@ pub trait ContextContributor: Send + Sync {
 /// Implementations should use these callbacks to seed, rehydrate, or flush
 /// extension-private thread state. Heavy dependencies belong on the extension
 /// value created by the host, not in these inputs.
-#[async_trait::async_trait]
 pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
     /// Called after thread-scoped extension stores are created, before later
     /// contributors can read from them.
-    async fn on_thread_start(&self, _input: ThreadStartInput<'_, C>) {}
+    fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+        })
+    }
 
     /// Called after the host constructs a runtime from persisted history.
-    async fn on_thread_resume(&self, _input: ThreadResumeInput<'_>) {}
+    fn on_thread_resume<'a>(&'a self, input: ThreadResumeInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+        })
+    }
 
     /// Called after the host has drained immediately pending thread work.
     ///
     /// Implementations may use host capabilities captured by the extension to
     /// submit follow-up input. The host remains responsible for deciding
     /// whether that input starts a turn, is queued, or is ignored.
-    async fn on_thread_idle(&self, _input: ThreadIdleInput<'_>) {}
+    fn on_thread_idle<'a>(&'a self, input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+        })
+    }
 
     /// Called before the host drops the thread runtime and thread-scoped store.
-    async fn on_thread_stop(&self, _input: ThreadStopInput<'_>) {}
+    fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+        })
+    }
 }
 
 /// Contributor for host-owned turn lifecycle gates.
@@ -87,20 +109,39 @@ pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
 /// Implementations should use these callbacks to seed, observe, or clear
 /// extension-private turn state. The host exposes stable identifiers and
 /// extension stores instead of core runtime objects.
-#[async_trait::async_trait]
 pub trait TurnLifecycleContributor: Send + Sync {
     /// Called after turn-scoped extension stores are created, before the task
     /// for the turn starts running.
-    async fn on_turn_start(&self, _input: TurnStartInput<'_>) {}
+    fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+        })
+    }
 
     /// Called before the host drops the completed turn runtime and turn store.
-    async fn on_turn_stop(&self, _input: TurnStopInput<'_>) {}
+    fn on_turn_stop<'a>(&'a self, input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+        })
+    }
 
     /// Called after the host aborts a running turn.
-    async fn on_turn_abort(&self, _input: TurnAbortInput<'_>) {}
+    fn on_turn_abort<'a>(&'a self, input: TurnAbortInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+        })
+    }
 
     /// Called when the host observes an error for a running turn.
-    async fn on_turn_error(&self, _input: TurnErrorInput<'_>) {}
+    fn on_turn_error<'a>(&'a self, input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+        })
+    }
 }
 
 /// Extension contribution that can add turn-local model input.
@@ -109,16 +150,15 @@ pub trait TurnLifecycleContributor: Send + Sync {
 /// must preserve authority boundaries for external resources. Expensive or
 /// host-specific dependencies belong on the extension value installed by the
 /// host, not in this input.
-#[async_trait::async_trait]
 pub trait TurnInputContributor: Send + Sync {
     /// Returns additional contextual fragments for one submitted turn.
-    async fn contribute(
-        &self,
+    fn contribute<'a>(
+        &'a self,
         input: TurnInputContext,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-        turn_store: &ExtensionData,
-    ) -> Vec<Box<dyn ContextualUserFragment + Send>>;
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+    ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>>;
 }
 
 /// Contributor for host-owned configuration changes.
@@ -142,16 +182,19 @@ pub trait ConfigContributor<C>: Send + Sync {
 /// Implementations should keep this callback cheap. The host calls it after
 /// updating cached token usage and before emitting the corresponding client
 /// token-count notification.
-#[async_trait::async_trait]
 pub trait TokenUsageContributor: Send + Sync {
     /// Called each time the host records token usage from a model response.
-    async fn on_token_usage(
-        &self,
-        _session_store: &ExtensionData,
-        _thread_store: &ExtensionData,
-        _turn_store: &ExtensionData,
-        _token_usage: &TokenUsageInfo,
-    ) {
+    fn on_token_usage<'a>(
+        &'a self,
+        _session_store: &'a ExtensionData,
+        _thread_store: &'a ExtensionData,
+        _turn_store: &'a ExtensionData,
+        _token_usage: &'a TokenUsageInfo,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _inputs = (_session_store, _thread_store, _turn_store, _token_usage);
+        })
     }
 }
 
@@ -183,14 +226,13 @@ pub trait ToolLifecycleContributor: Send + Sync {
 }
 
 /// Extension contribution that can claim rendered approval-review prompts.
-#[async_trait::async_trait]
 pub trait ApprovalReviewContributor: Send + Sync {
-    async fn contribute(
-        &self,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-        prompt: &str,
-    ) -> Option<ReviewDecision>;
+    fn contribute<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+        prompt: &'a str,
+    ) -> ExtensionFuture<'a, Option<ReviewDecision>>;
 }
 
 /// Ordered post-processing contribution for one parsed turn item.
@@ -198,12 +240,11 @@ pub trait ApprovalReviewContributor: Send + Sync {
 /// Implementations may mutate the item before it is emitted and may use the
 /// explicitly exposed thread- and turn-lifetime stores when they need durable
 /// extension-private state.
-#[async_trait::async_trait]
 pub trait TurnItemContributor: Send + Sync {
-    async fn contribute(
-        &self,
-        thread_store: &ExtensionData,
-        turn_store: &ExtensionData,
-        item: &mut TurnItem,
-    ) -> Result<(), String>;
+    fn contribute<'a>(
+        &'a self,
+        thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+        item: &'a mut TurnItem,
+    ) -> ExtensionFuture<'a, Result<(), String>>;
 }

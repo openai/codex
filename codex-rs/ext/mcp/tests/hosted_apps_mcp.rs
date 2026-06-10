@@ -150,11 +150,15 @@ fn installed_manager(config: &Config) -> McpManager {
 
 struct RemoveCodexApps;
 
-#[async_trait::async_trait]
 impl McpServerContributor<Config> for RemoveCodexApps {
-    async fn contribute(&self, _config: &Config) -> Vec<McpServerContribution> {
-        vec![McpServerContribution::Remove {
-            name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        }]
+    fn contribute<'a>(
+        &'a self,
+        _config: &'a Config,
+    ) -> codex_extension_api::ExtensionFuture<'a, Vec<McpServerContribution>> {
+        Box::pin(async move {
+            vec![McpServerContribution::Remove {
+                name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            }]
+        })
     }
 }
