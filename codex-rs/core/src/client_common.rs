@@ -53,7 +53,41 @@ impl Default for Prompt {
 
 impl Prompt {
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
-        self.input.clone()
+        self.input
+            .iter()
+            .cloned()
+            .filter_map(model_api_safe_response_item)
+            .collect()
+    }
+}
+
+pub(crate) fn model_api_safe_response_item(item: ResponseItem) -> Option<ResponseItem> {
+    match item {
+        ResponseItem::ContextCompaction {
+            encrypted_content: Some(encrypted_content),
+        } => Some(ResponseItem::Compaction { encrypted_content }),
+        ResponseItem::ContextCompaction {
+            encrypted_content: None,
+        } => {
+            // Empty context-compaction items are UI lifecycle markers. The app-server UI path
+            // receives those as TurnItem::ContextCompaction; model/API history only preserves the
+            // encrypted compaction payload supported by the Responses API.
+            None
+        }
+        item @ (ResponseItem::Message { .. }
+        | ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::CompactionTrigger
+        | ResponseItem::Other) => Some(item),
     }
 }
 

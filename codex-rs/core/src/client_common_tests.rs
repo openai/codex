@@ -141,6 +141,37 @@ fn omits_text_when_not_set() {
 }
 
 #[test]
+fn formatted_input_normalizes_context_compaction_for_responses_api() {
+    let prompt = Prompt {
+        input: vec![
+            ResponseItem::ContextCompaction {
+                encrypted_content: Some("encrypted".to_string()),
+            },
+            ResponseItem::ContextCompaction {
+                encrypted_content: None,
+            },
+            ResponseItem::Other,
+        ],
+        ..Default::default()
+    };
+
+    let formatted_input = prompt.get_formatted_input();
+    let formatted_input_json = serde_json::to_string(&formatted_input).expect("json");
+
+    assert_eq!(
+        formatted_input,
+        vec![
+            ResponseItem::Compaction {
+                encrypted_content: "encrypted".to_string(),
+            },
+            ResponseItem::Other,
+        ]
+    );
+    assert!(formatted_input_json.contains(r#""type":"compaction""#));
+    assert!(!formatted_input_json.contains("context_compaction"));
+}
+
+#[test]
 fn serializes_flex_service_tier_when_set() {
     let req = ResponsesApiRequest {
         model: "gpt-5.4".to_string(),

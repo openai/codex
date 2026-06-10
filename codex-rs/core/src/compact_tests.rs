@@ -408,6 +408,27 @@ async fn process_compacted_history_drops_legacy_warnings() {
 }
 
 #[tokio::test]
+async fn process_compacted_history_normalizes_context_compaction_items() {
+    let compacted_history = vec![
+        ResponseItem::ContextCompaction {
+            encrypted_content: Some("encrypted".to_string()),
+        },
+        ResponseItem::ContextCompaction {
+            encrypted_content: None,
+        },
+    ];
+    let (refreshed, mut expected) = process_compacted_history_with_test_session(
+        compacted_history,
+        /*previous_turn_settings*/ None,
+    )
+    .await;
+    expected.push(ResponseItem::Compaction {
+        encrypted_content: "encrypted".to_string(),
+    });
+    assert_eq!(refreshed, expected);
+}
+
+#[tokio::test]
 async fn process_compacted_history_inserts_context_before_last_real_user_message_only() {
     let compacted_history = vec![
         ResponseItem::Message {

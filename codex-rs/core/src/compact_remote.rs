@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::Prompt;
 use crate::client::CompactConversationRequestSettings;
+use crate::client_common::model_api_safe_response_item;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
@@ -317,7 +318,11 @@ pub(crate) async fn process_compacted_history(
         Vec::new()
     };
 
-    compacted_history.retain(should_keep_compacted_history_item);
+    compacted_history = compacted_history
+        .into_iter()
+        .filter(should_keep_compacted_history_item)
+        .filter_map(model_api_safe_response_item)
+        .collect();
     insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
 }
 
