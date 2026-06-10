@@ -193,12 +193,25 @@ impl InitiatorHandshake {
     }
 }
 
+// This layer deliberately lands the responder state before the remote opt-in
+// layer calls it. Bazel therefore sees the type as dead in this independently
+// landable PR, while Cargo's test compilation exercises it and rejects an
+// `expect(dead_code)` as unfulfilled. Keep the allowance on exactly the staged
+// type and implementation; the next layer makes both production-reachable.
+#[allow(
+    dead_code,
+    reason = "used by the remote Noise opt-in in the next stacked change"
+)]
 pub(crate) struct PendingResponderHandshake {
     handshake: Handshake,
     initiator_public_key: NoiseChannelPublicKey,
     payload: Vec<u8>,
 }
 
+#[allow(
+    dead_code,
+    reason = "used by the remote Noise opt-in in the next stacked change"
+)]
 impl PendingResponderHandshake {
     /// Authenticate and parse the first IK message without completing it.
     ///
