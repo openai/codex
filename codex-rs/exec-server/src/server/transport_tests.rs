@@ -6,6 +6,9 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_otel::MetricsConfig;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::ScopeMetrics;
 use pretty_assertions::assert_eq;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
@@ -110,6 +113,76 @@ async fn stdio_listen_transport_serves_initialize() {
         .expect("stdio transport should finish after client disconnect")
         .expect("stdio transport task should join")
         .expect("stdio transport should not fail");
+}
+
+#[tokio::test]
+async fn stdio_listen_transport_emits_connection_and_request_metrics() {
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = codex_otel::MetricsClient::new(MetricsConfig::in_memory(
+        "test",
+        "codex-exec-server",
+        env!("CARGO_PKG_VERSION"),
+        exporter.clone(),
+    ))
+    .expect("metrics");
+    let telemetry = crate::ExecServerTelemetry::new(Some(metrics.clone()));
+    let (mut client_writer, server_reader) = duplex(1 << 20);
+    let (server_writer, client_reader) = duplex(1 << 20);
+    let server_task = tokio::spawn(run_stdio_connection_with_io(
+        server_reader,
+        server_writer,
+        test_runtime_paths(),
+        telemetry,
+    ));
+    let mut client_lines = BufReader::new(client_reader).lines();
+
+    write_jsonrpc_line(
+        &mut client_writer,
+        &JSONRPCMessage::Request(JSONRPCRequest {
+            id: RequestId::Integer(1),
+            method: INITIALIZE_METHOD.to_string(),
+            params: Some(
+                serde_json::to_value(InitializeParams {
+                    client_name: "exec-server-metrics-test".to_string(),
+                    resume_session_id: None,
+                })
+                .expect("initialize params should serialize"),
+            ),
+            trace: None,
+        }),
+    )
+    .await;
+    let _response = timeout(Duration::from_secs(1), client_lines.next_line())
+        .await
+        .expect("initialize response should arrive")
+        .expect("initialize response read should succeed")
+        .expect("initialize response should be present");
+
+    drop(client_writer);
+    drop(client_lines);
+    timeout(Duration::from_secs(1), server_task)
+        .await
+        .expect("stdio transport should finish after client disconnect")
+        .expect("stdio transport task should join")
+        .expect("stdio transport should not fail");
+    metrics.shutdown().expect("shutdown metrics");
+
+    let metric_names = exporter
+        .get_finished_metrics()
+        .expect("finished metrics")
+        .into_iter()
+        .flat_map(|metrics| {
+            metrics
+                .scope_metrics()
+                .flat_map(ScopeMetrics::metrics)
+                .map(|metric| metric.name().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert!(metric_names.contains(&"exec_server_connections_active".to_string()));
+    assert!(metric_names.contains(&"exec_server_connections_total".to_string()));
+    assert!(metric_names.contains(&"exec_server_requests_total".to_string()));
+    assert!(metric_names.contains(&"exec_server_request_duration_seconds".to_string()));
 }
 
 #[test]
