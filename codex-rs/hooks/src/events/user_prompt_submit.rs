@@ -50,7 +50,7 @@ pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     _request: &UserPromptSubmitRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    dispatcher::select_sync_handlers(
         handlers,
         HookEventName::UserPromptSubmit,
         /*matcher_input*/ None,
@@ -63,6 +63,7 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    async_runtime: &crate::engine::async_command::AsyncCommandRuntime,
     request: UserPromptSubmitRequest,
 ) -> UserPromptSubmitOutcome {
     let matched = dispatcher::select_handlers(
@@ -108,6 +109,11 @@ pub(crate) async fn run(
         input_json,
         request.cwd.as_path(),
         Some(request.turn_id),
+        dispatcher::AsyncHandlerExecution {
+            session_id: request.session_id,
+            runtime: async_runtime,
+            delivery_timing: crate::engine::async_command::AsyncDeliveryTiming::NextAcceptedTurn,
+        },
         parse_completed,
     )
     .await;
@@ -428,6 +434,7 @@ mod tests {
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             env: std::collections::HashMap::new(),
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         }
     }
 

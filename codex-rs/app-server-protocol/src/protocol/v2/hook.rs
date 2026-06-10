@@ -33,6 +33,12 @@ v2_enum_from_core!(
     }
 );
 
+impl Default for HookExecutionMode {
+    fn default() -> Self {
+        Self::Sync
+    }
+}
+
 v2_enum_from_core!(
     pub enum HookScope from CoreHookScope {
         Thread, Turn

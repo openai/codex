@@ -26,6 +26,7 @@ use super::HookListEntry;
 use crate::config_rules::hook_states_from_stack;
 use crate::events::common::matcher_pattern_for_event;
 use crate::events::common::validate_matcher_pattern;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
@@ -465,13 +466,6 @@ fn append_matcher_groups(
                     } else {
                         command
                     };
-                    if r#async {
-                        warnings.push(format!(
-                            "skipping async hook in {}: async hooks are not supported yet",
-                            source.path.display()
-                        ));
-                        continue;
-                    }
                     if command.trim().is_empty() {
                         warnings.push(format!(
                             "skipping empty hook command in {}",
@@ -500,6 +494,11 @@ fn append_matcher_groups(
                     let trusted_hash = hook_trusted_hash(source.is_managed, state);
                     let trust_status =
                         hook_trust_status(source.is_managed, &current_hash, trusted_hash);
+                    let execution_mode = if r#async {
+                        HookExecutionMode::Async
+                    } else {
+                        HookExecutionMode::Sync
+                    };
                     hook_entries.push(HookListEntry {
                         key,
                         event_name,
@@ -516,6 +515,7 @@ fn append_matcher_groups(
                         is_managed: source.is_managed,
                         current_hash,
                         trust_status,
+                        execution_mode,
                     });
                     if enabled
                         && (source.bypass_hook_trust
@@ -534,6 +534,7 @@ fn append_matcher_groups(
                             source: source.source,
                             display_order: *display_order,
                             env: source.env.clone(),
+                            execution_mode,
                         });
                     }
                     *display_order += 1;
@@ -651,6 +652,7 @@ mod tests {
     use codex_config::HookEventsToml;
     use codex_config::RequirementSource;
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookExecutionMode;
     use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -755,6 +757,40 @@ mod tests {
     }
 
     #[test]
+    fn async_command_mode_is_exposed_in_discovery_results() {
+        let mut handlers = Vec::new();
+        let mut hook_entries = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::new();
+        let group = MatcherGroup {
+            matcher: None,
+            hooks: vec![HookHandlerConfig::Command {
+                command: "echo hello".to_string(),
+                command_windows: None,
+                timeout_sec: None,
+                r#async: true,
+                status_message: None,
+            }],
+        };
+
+        append_matcher_groups(
+            &mut handlers,
+            &mut hook_entries,
+            &mut warnings,
+            &mut display_order,
+            &hook_handler_source(&source_path, &hook_states),
+            HookEventName::UserPromptSubmit,
+            vec![group],
+        );
+
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(handlers[0].execution_mode, HookExecutionMode::Async);
+        assert_eq!(hook_entries[0].execution_mode, HookExecutionMode::Async);
+    }
+
+    #[test]
     fn user_prompt_submit_ignores_invalid_matcher_during_discovery() {
         let mut handlers = Vec::new();
         let mut warnings = Vec::new();
@@ -785,6 +821,7 @@ mod tests {
                 source: hook_source(),
                 display_order: 0,
                 env: std::collections::HashMap::new(),
+                execution_mode: HookExecutionMode::Sync,
             }]
         );
     }
@@ -820,6 +857,7 @@ mod tests {
                 source: hook_source(),
                 display_order: 0,
                 env: std::collections::HashMap::new(),
+                execution_mode: HookExecutionMode::Sync,
             }]
         );
     }

@@ -20,6 +20,7 @@ use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_async_hook_delivery;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
@@ -164,8 +165,16 @@ pub(crate) async fn run_turn(
         return None;
     }
     let mut can_drain_pending_input = input.is_empty();
-    if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
+    let async_hook_delivery_cutoff = sess.hooks().async_delivery_cutoff();
+    let hook_input_outcome = run_hooks_and_record_inputs(&sess, &turn_context, &input).await;
+    if hook_input_outcome.should_stop {
         return None;
+    }
+    if hook_input_outcome.accepted_user_input {
+        let delivery = sess
+            .hooks()
+            .commit_accepted_turn_and_drain_async_output(async_hook_delivery_cutoff);
+        record_async_hook_delivery(&sess, &turn_context, delivery).await;
     }
 
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
@@ -209,8 +218,17 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        if run_hooks_and_record_inputs(&sess, &turn_context, &pending_input).await {
+        let async_hook_delivery_cutoff = sess.hooks().async_delivery_cutoff();
+        let hook_input_outcome =
+            run_hooks_and_record_inputs(&sess, &turn_context, &pending_input).await;
+        if hook_input_outcome.should_stop {
             break;
+        }
+        if hook_input_outcome.accepted_user_input {
+            let delivery = sess
+                .hooks()
+                .commit_accepted_turn_and_drain_async_output(async_hook_delivery_cutoff);
+            record_async_hook_delivery(&sess, &turn_context, delivery).await;
         }
 
         // Construct the input that we will send to the model.
@@ -396,11 +414,16 @@ async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, Pat
     display_roots
 }
 
+struct HookInputOutcome {
+    should_stop: bool,
+    accepted_user_input: bool,
+}
+
 async fn run_hooks_and_record_inputs(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     input: &[TurnInput],
-) -> bool {
+) -> HookInputOutcome {
     let mut blocked_input = false;
     let mut accepted_user_input = false;
     for input_item in input {
@@ -421,7 +444,10 @@ async fn run_hooks_and_record_inputs(
             .await;
         }
     }
-    blocked_input && !accepted_user_input
+    HookInputOutcome {
+        should_stop: blocked_input && !accepted_user_input,
+        accepted_user_input,
+    }
 }
 
 #[expect(

@@ -68,6 +68,7 @@ fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
             key: hook.key.clone(),
             event_name: hook.event_name.into(),
             handler_type: hook.handler_type.into(),
+            execution_mode: hook.execution_mode.into(),
             matcher: hook.matcher.clone(),
             command: hook.command.clone(),
             timeout_sec: hook.timeout_sec,

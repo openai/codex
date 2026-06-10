@@ -865,6 +865,7 @@ mod tests {
     use crate::test_support::test_path_display;
     use codex_app_server_protocol::HookErrorInfo;
     use codex_app_server_protocol::HookEventName;
+    use codex_app_server_protocol::HookExecutionMode;
     use codex_app_server_protocol::HookHandlerType;
     use codex_app_server_protocol::HookMetadata;
     use codex_app_server_protocol::HookSource;
@@ -929,6 +930,7 @@ mod tests {
             key: key.to_string(),
             event_name,
             handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
             is_managed,
             matcher: Some("Bash".to_string()),
             command: Some(command.to_string()),

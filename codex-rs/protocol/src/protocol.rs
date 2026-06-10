@@ -1377,9 +1377,10 @@ pub enum HookHandlerType {
     Agent,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum HookExecutionMode {
+    #[default]
     Sync,
     Async,
 }

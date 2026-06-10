@@ -5,6 +5,7 @@ use std::time::Duration;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
+use codex_hooks::AsyncHookDelivery;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
@@ -34,6 +35,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::WarningEvent;
 use codex_thread_store::ReadThreadParams;
 use serde_json::Value;
 
@@ -593,6 +595,18 @@ pub(crate) async fn record_additional_contexts(
 
     sess.record_conversation_items(turn_context, developer_messages.as_slice())
         .await;
+}
+
+pub(crate) async fn record_async_hook_delivery(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    delivery: AsyncHookDelivery,
+) {
+    record_additional_contexts(sess, turn_context, delivery.additional_contexts).await;
+    for message in delivery.system_messages {
+        sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+            .await;
+    }
 }
 
 fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {

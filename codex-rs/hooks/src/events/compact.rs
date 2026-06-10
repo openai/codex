@@ -59,7 +59,7 @@ pub(crate) fn preview_pre(
     handlers: &[ConfiguredHandler],
     request: &PreCompactRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    dispatcher::select_sync_handlers(
         handlers,
         HookEventName::PreCompact,
         Some(request.trigger.as_str()),
@@ -72,6 +72,7 @@ pub(crate) fn preview_pre(
 pub(crate) async fn run_pre(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    async_runtime: &crate::engine::async_command::AsyncCommandRuntime,
     request: PreCompactRequest,
 ) -> PreCompactOutcome {
     let matched = dispatcher::select_handlers(
@@ -108,6 +109,11 @@ pub(crate) async fn run_pre(
         input_json,
         request.cwd.as_path(),
         Some(request.turn_id),
+        dispatcher::AsyncHandlerExecution {
+            session_id: request.session_id,
+            runtime: async_runtime,
+            delivery_timing: crate::engine::async_command::AsyncDeliveryTiming::NextAcceptedTurn,
+        },
         parse_pre_completed,
     )
     .await;
@@ -141,7 +147,7 @@ pub(crate) fn preview_post(
     handlers: &[ConfiguredHandler],
     request: &PostCompactRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    dispatcher::select_sync_handlers(
         handlers,
         HookEventName::PostCompact,
         Some(request.trigger.as_str()),
@@ -154,6 +160,7 @@ pub(crate) fn preview_post(
 pub(crate) async fn run_post(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    async_runtime: &crate::engine::async_command::AsyncCommandRuntime,
     request: PostCompactRequest,
 ) -> StatelessHookOutcome {
     let matched = dispatcher::select_handlers(
@@ -190,6 +197,11 @@ pub(crate) async fn run_post(
         input_json,
         request.cwd.as_path(),
         Some(request.turn_id),
+        dispatcher::AsyncHandlerExecution {
+            session_id: request.session_id,
+            runtime: async_runtime,
+            delivery_timing: crate::engine::async_command::AsyncDeliveryTiming::NextAcceptedTurn,
+        },
         parse_post_completed,
     )
     .await;
@@ -604,6 +616,7 @@ mod tests {
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             env: std::collections::HashMap::new(),
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         }
     }
 

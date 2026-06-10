@@ -2,6 +2,8 @@ use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
 use tokio::process::Command;
 
+use crate::engine::AsyncHookDelivery;
+use crate::engine::AsyncHookDeliveryCutoff;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
 use crate::engine::HookListEntry;
@@ -58,27 +60,85 @@ impl Default for Hooks {
 
 impl Hooks {
     pub fn new(config: HooksConfig) -> Self {
-        let after_agent = config
-            .legacy_notify_argv
+        let HooksConfig {
+            legacy_notify_argv,
+            feature_enabled,
+            bypass_hook_trust,
+            config_layer_stack,
+            plugin_hook_sources,
+            plugin_hook_load_warnings,
+            shell_program,
+            shell_args,
+        } = config;
+        let after_agent = legacy_notify_argv
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
             .map(crate::notify_hook)
             .into_iter()
             .collect();
         let engine = ClaudeHooksEngine::new(
-            config.feature_enabled,
-            config.bypass_hook_trust,
-            config.config_layer_stack.as_ref(),
-            config.plugin_hook_sources,
-            config.plugin_hook_load_warnings,
+            feature_enabled,
+            bypass_hook_trust,
+            config_layer_stack.as_ref(),
+            plugin_hook_sources,
+            plugin_hook_load_warnings,
             CommandShell {
-                program: config.shell_program.unwrap_or_default(),
-                args: config.shell_args,
+                program: shell_program.unwrap_or_default(),
+                args: shell_args,
             },
         );
         Self {
             after_agent,
             engine,
         }
+    }
+
+    pub fn reconfigured(&self, config: HooksConfig) -> Self {
+        let HooksConfig {
+            legacy_notify_argv,
+            feature_enabled,
+            bypass_hook_trust,
+            config_layer_stack,
+            plugin_hook_sources,
+            plugin_hook_load_warnings,
+            shell_program,
+            shell_args,
+        } = config;
+        let after_agent = legacy_notify_argv
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(crate::notify_hook)
+            .into_iter()
+            .collect();
+        let engine = self.engine.reconfigured(
+            feature_enabled,
+            bypass_hook_trust,
+            config_layer_stack.as_ref(),
+            plugin_hook_sources,
+            plugin_hook_load_warnings,
+            CommandShell {
+                program: shell_program.unwrap_or_default(),
+                args: shell_args,
+            },
+        );
+        Self {
+            after_agent,
+            engine,
+        }
+    }
+
+    pub fn async_delivery_cutoff(&self) -> AsyncHookDeliveryCutoff {
+        self.engine.async_delivery_cutoff()
+    }
+
+    pub fn commit_accepted_turn_and_drain_async_output(
+        &self,
+        cutoff: AsyncHookDeliveryCutoff,
+    ) -> AsyncHookDelivery {
+        self.engine
+            .commit_accepted_turn_and_drain_async_output(cutoff)
+    }
+
+    pub async fn shutdown(&self) {
+        self.engine.shutdown().await;
     }
 
     pub fn startup_warnings(&self) -> &[String] {

@@ -302,6 +302,115 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     Ok(())
 }
 
+fn write_async_user_prompt_submit_hooks(home: &Path) -> Result<()> {
+    let blocking_script_path = home.join("blocking_user_prompt_submit_hook.py");
+    let async_script_path = home.join("async_user_prompt_submit_hook.py");
+    let ready_path = home.join("async_user_prompt_submit_ready");
+    let blocking_script = r#"import json
+import sys
+
+payload = json.load(sys.stdin)
+if payload.get("prompt") == "blocked first prompt":
+    print(json.dumps({"decision": "block", "reason": "blocked synchronously"}))
+"#;
+    let async_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+prompt = payload.get("prompt")
+print(json.dumps({{
+    "continue": False,
+    "stopReason": "ignored",
+    "systemMessage": f"async message for {{prompt}}",
+    "decision": "block",
+    "reason": "ignored",
+    "hookSpecificOutput": {{
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": f"async context for {{prompt}}"
+    }}
+}}))
+Path(r"{ready_path}").write_text(prompt, encoding="utf-8")
+"#,
+        ready_path = ready_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [{
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": format!("python3 {}", blocking_script_path.display()),
+                    },
+                    {
+                        "type": "command",
+                        "command": format!("python3 {}", async_script_path.display()),
+                        "async": true,
+                    }
+                ]
+            }]
+        }
+    });
+
+    fs::write(blocking_script_path, blocking_script)
+        .context("write blocking user prompt submit hook")?;
+    fs::write(async_script_path, async_script).context("write async user prompt submit hook")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_async_session_start_hook(home: &Path) -> Result<()> {
+    let script_path = home.join("async_session_start_hook.py");
+    let ready_path = home.join("async_session_start_ready");
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+json.load(sys.stdin)
+print(json.dumps({{
+    "continue": False,
+    "stopReason": "ignored",
+    "systemMessage": "async startup message",
+    "hookSpecificOutput": {{
+        "hookEventName": "SessionStart",
+        "additionalContext": "async startup context"
+    }}
+}}))
+Path(r"{ready_path}").write_text("ready", encoding="utf-8")
+"#,
+        ready_path = ready_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "async": true,
+                }]
+            }]
+        }
+    });
+
+    fs::write(script_path, script).context("write async session start hook")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+async fn wait_for_async_hook(path: &Path) -> Result<()> {
+    timeout(Duration::from_secs(5), async {
+        while !path.exists() {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for async hook")?;
+    sleep(Duration::from_millis(100)).await;
+    Ok(())
+}
+
 fn write_pre_tool_use_hook(
     home: &Path,
     matcher: Option<&str>,
@@ -1243,6 +1352,211 @@ async fn session_start_runs_before_user_prompt_submit_on_first_turn() -> Result<
     assert_eq!(
         hook_inputs[1].get("prompt").and_then(Value::as_str),
         Some("hello")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn async_user_prompt_output_waits_for_next_accepted_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "accepted"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_async_user_prompt_submit_hooks(home)
+                .expect("write async user prompt submit hooks");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("blocked first prompt").await?;
+    wait_for_async_hook(
+        &test
+            .codex_home_path()
+            .join("async_user_prompt_submit_ready"),
+    )
+    .await?;
+    assert_eq!(responses.requests().len(), 0);
+
+    test.submit_turn("accepted second prompt").await?;
+
+    let request = responses.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    assert!(developer_messages.contains(&"async context for blocked first prompt".to_string()));
+    assert!(!developer_messages.contains(&"async context for accepted second prompt".to_string()));
+    assert!(
+        request
+            .message_input_texts("user")
+            .iter()
+            .all(|text| !text.contains("blocked first prompt"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn async_user_prompt_output_is_delivered_to_an_accepted_steer() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-1", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("first response")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_done("msg-1", "first response")),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_completed_rx),
+            body: sse_event(ev_completed("resp-1")),
+        },
+    ];
+    let second_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "steer handled"),
+            ev_completed("resp-2"),
+        ]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_async_user_prompt_submit_hooks(home)
+                .expect("write async user prompt submit hooks");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build_with_streaming_server(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "initial prompt".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::AgentMessageContentDelta(_))
+    })
+    .await;
+    wait_for_async_hook(
+        &test
+            .codex_home_path()
+            .join("async_user_prompt_submit_ready"),
+    )
+    .await?;
+    test.codex
+        .steer_input(
+            vec![UserInput::Text {
+                text: "steered prompt".to_string(),
+                text_elements: Vec::new(),
+            }],
+            /*additional_context*/ Default::default(),
+            /*expected_turn_id*/ None,
+            /*client_user_message_id*/ None,
+            /*responsesapi_client_metadata*/ None,
+        )
+        .await
+        .unwrap_or_else(|err| panic!("steer user input: {err:?}"));
+    let _ = gate_completed_tx.send(());
+
+    let requests = timeout(Duration::from_secs(30), async {
+        loop {
+            let requests = server.requests().await;
+            if requests.len() >= 2 {
+                break requests;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("second request should arrive");
+    assert_eq!(requests.len(), 2);
+    assert!(
+        request_message_input_texts(&requests[1], "developer")
+            .contains(&"async context for initial prompt".to_string())
+    );
+    assert!(
+        !request_message_input_texts(&requests[1], "developer")
+            .contains(&"async context for steered prompt".to_string())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn async_startup_output_skips_first_accepted_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "first"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "second"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_async_session_start_hook(home).expect("write async session start hook");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("first prompt").await?;
+    wait_for_async_hook(&test.codex_home_path().join("async_session_start_ready")).await?;
+    test.submit_turn("second prompt").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        !requests[0]
+            .message_input_texts("developer")
+            .contains(&"async startup context".to_string())
+    );
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&"async startup context".to_string())
     );
 
     Ok(())
