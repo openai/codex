@@ -35,6 +35,10 @@ impl MemoryStore {
         Self { pool, state_pool }
     }
 
+    pub(crate) async fn close(&self) {
+        self.pool.close().await;
+    }
+
     /// Deletes all persisted memory state in one transaction.
     ///
     /// This removes every `stage1_outputs` row and all `jobs` rows for the
