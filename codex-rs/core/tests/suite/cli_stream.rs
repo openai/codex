@@ -114,6 +114,9 @@ impl Drop for ChildProcessCleanupGuard {
     }
 }
 
+// Use this for new `codex exec` subprocess tests in this file. These commands
+// can spawn shell/Python grandchildren, so the timeout path must reap the whole
+// process group instead of only the direct CLI child.
 fn run_cli_command(command: &mut Command) -> io::Result<Output> {
     #[cfg(unix)]
     command.process_group(0);
