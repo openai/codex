@@ -1,0 +1,64 @@
+# What: use a host-native V8 snapshot generator for hermetic cross-builds while
+# retaining an opt-in target-native path for Windows CI.
+# Scope: V8 Bazel snapshot tool selection only.
+
+diff --git a/orig/v8-14.9.207.2/bazel/defs.bzl b/mod/v8-14.9.207.2/bazel/defs.bzl
+--- a/orig/v8-14.9.207.2/bazel/defs.bzl
++++ b/mod/v8-14.9.207.2/bazel/defs.bzl
+@@ -488,11 +488,7 @@
+ def _mksnapshot(ctx):
+     prefix = ctx.attr.prefix
+     suffix = ctx.attr.suffix
+-    # Windows cross-builds use Linux for the exec configuration, but the
+-    # snapshot generator must match the target ABI and run on the Windows
+-    # runner. Action strategies only choose where an action runs; they cannot
+-    # change this executable from the exec to the target configuration.
+-    tool = ctx.executable.target_tool if ctx.attr.target_os == "win" else ctx.executable.tool
++    tool = ctx.executable.target_tool if ctx.attr.use_target_tool else ctx.executable.tool
+     outs = [
+         ctx.actions.declare_file(prefix + "/snapshot" + suffix + ".cc"),
+         ctx.actions.declare_file(prefix + "/embedded" + suffix + ".S"),
+@@ -531,6 +527,7 @@
+             executable = True,
+             cfg = "target",
+         ),
++        "use_target_tool": attr.bool(mandatory = True),
+         "target_os": attr.string(mandatory = True),
+         "prefix": attr.string(mandatory = True),
+         "suffix": attr.string(mandatory = True),
+@@ -545,8 +542,14 @@
+         prefix = "noicu",
+         tool = ":noicu/mksnapshot" + suffix,
+         target_tool = ":noicu/mksnapshot" + suffix,
++        use_target_tool = select({
++            "@v8//:is_v8_use_target_mksnapshot": True,
++            "//conditions:default": False,
++        }),
+         suffix = suffix,
+         target_os = select({
++            "@v8//bazel/config:is_android": "android",
++            "@v8//bazel/config:is_linux": "linux",
+             "@v8//bazel/config:is_macos": "mac",
+             "@v8//bazel/config:is_windows": "win",
+             "//conditions:default": "",
+@@ -558,8 +561,14 @@
+         prefix = "icu",
+         tool = ":icu/mksnapshot" + suffix,
+         target_tool = ":icu/mksnapshot" + suffix,
++        use_target_tool = select({
++            "@v8//:is_v8_use_target_mksnapshot": True,
++            "//conditions:default": False,
++        }),
+         suffix = suffix,
+         target_os = select({
++            "@v8//bazel/config:is_android": "android",
++            "@v8//bazel/config:is_linux": "linux",
+             "@v8//bazel/config:is_macos": "mac",
+             "@v8//bazel/config:is_windows": "win",
+             "//conditions:default": "",
+diff --git a/orig/v8-14.9.207.2/BUILD.bazel b/mod/v8-14.9.207.2/BUILD.bazel
+--- a/orig/v8-14.9.207.2/BUILD.bazel
++++ b/mod/v8-14.9.207.2/BUILD.bazel
+@@ -154,0 +155,2 @@
++v8_flag(name = "v8_use_target_mksnapshot")
++

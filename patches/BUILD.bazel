@@ -21,6 +21,7 @@ exports_files([
     "rusty_v8_prebuilt_out_dir.patch",
     "ring_windows_msvc_include_dirs.patch",
     "v8_bazel_rules.patch",
+    "v8_host_mksnapshot.patch",
     "v8_module_deps.patch",
     "v8_source_portability.patch",
     "webrtc-sys_hermetic_darwin_sysroot.patch",
