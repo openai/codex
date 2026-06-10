@@ -12,8 +12,10 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::identity::sandbox_setup_is_complete;
 use crate::logging::current_log_file_path;
 use crate::logging::log_note;
@@ -209,7 +211,7 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(request.codex_home);
     let sbx_dir = sandbox_dir(request.codex_home);
     let log_path = current_log_file_path(&sbx_dir);
     let cleared_report = match clear_setup_error_report(request.codex_home) {
@@ -223,9 +225,12 @@ fn run_setup_refresh_inner(
         }
     };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
+    let cwd = request.codex_home.to_path_buf();
     let mut cmd = Command::new(&exe);
-    cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
-    let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
+    cmd.arg(&b64)
+        .current_dir(&cwd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     log_note(
         &format!(
             "setup refresh: spawning {} (cwd={}, payload_len={})",
@@ -662,13 +667,12 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
-    {
-        return setup_exe;
-    }
-    PathBuf::from(SETUP_EXE_FILENAME)
+fn find_setup_exe(codex_home: &Path) -> PathBuf {
+    resolve_helper_for_launch(
+        HelperExecutable::Setup,
+        codex_home,
+        Some(&sandbox_dir(codex_home)),
+    )
 }
 
 fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
@@ -716,7 +720,7 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(codex_home);
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
@@ -740,6 +744,7 @@ fn run_setup_exe(
     if !needs_elevation {
         let status = Command::new(&exe)
             .arg(&payload_b64)
+            .current_dir(codex_home)
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .stdin(Stdio::null())
             .stdout(Stdio::null())
