@@ -24,8 +24,13 @@ pub struct FileHandleManager {
 }
 
 enum FileHandle {
+    Opening(Arc<OpeningHandleEntry>),
     Read(Arc<ReadHandleEntry>),
     Write(Arc<WriteHandleEntry>),
+}
+
+struct OpeningHandleEntry {
+    cancellation: CancellationToken,
 }
 
 struct ReadHandleEntry {
@@ -48,15 +53,25 @@ impl FileHandleManager {
         path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<usize> {
-        self.ensure_available(&handle_id).await?;
-        let handle = file_system.open_file_for_read(path, sandbox).await?;
+        let opening = self.reserve_opening(&handle_id).await?;
+        let handle = match file_system.open_file_for_read(path, sandbox).await {
+            Ok(handle) => handle,
+            Err(err) => {
+                self.remove_if_opening(&handle_id, &opening).await;
+                return if opening.cancellation.is_cancelled() {
+                    Err(cancelled_handle_error())
+                } else {
+                    Err(err)
+                };
+            }
+        };
         let max_chunk_bytes = handle.max_chunk_bytes();
         let entry = FileHandle::Read(Arc::new(ReadHandleEntry {
             handle,
-            cancellation: CancellationToken::new(),
+            cancellation: opening.cancellation.clone(),
             max_chunk_bytes,
         }));
-        self.insert(handle_id, entry).await?;
+        self.promote_opening(handle_id, &opening, entry).await?;
         Ok(max_chunk_bytes)
     }
 
@@ -111,15 +126,25 @@ impl FileHandleManager {
         path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<usize> {
-        self.ensure_available(&handle_id).await?;
-        let handle = file_system.open_file_for_write(path, sandbox).await?;
+        let opening = self.reserve_opening(&handle_id).await?;
+        let handle = match file_system.open_file_for_write(path, sandbox).await {
+            Ok(handle) => handle,
+            Err(err) => {
+                self.remove_if_opening(&handle_id, &opening).await;
+                return if opening.cancellation.is_cancelled() {
+                    Err(cancelled_handle_error())
+                } else {
+                    Err(err)
+                };
+            }
+        };
         let max_chunk_bytes = handle.max_chunk_bytes();
         let entry = FileHandle::Write(Arc::new(WriteHandleEntry {
             handle,
-            cancellation: CancellationToken::new(),
+            cancellation: opening.cancellation.clone(),
             max_chunk_bytes,
         }));
-        self.insert(handle_id, entry).await?;
+        self.promote_opening(handle_id, &opening, entry).await?;
         Ok(max_chunk_bytes)
     }
 
@@ -154,6 +179,7 @@ impl FileHandleManager {
     pub async fn close(&self, handle_id: &str) {
         let handle = self.handles.lock().await.remove(handle_id);
         match handle {
+            Some(FileHandle::Opening(entry)) => entry.cancellation.cancel(),
             Some(FileHandle::Read(entry)) => entry.cancellation.cancel(),
             Some(FileHandle::Write(entry)) => entry.cancellation.cancel(),
             None => {}
@@ -164,35 +190,53 @@ impl FileHandleManager {
         let handles = std::mem::take(&mut *self.handles.lock().await);
         for handle in handles.into_values() {
             match handle {
+                FileHandle::Opening(entry) => entry.cancellation.cancel(),
                 FileHandle::Read(entry) => entry.cancellation.cancel(),
                 FileHandle::Write(entry) => entry.cancellation.cancel(),
             }
         }
     }
 
-    async fn ensure_available(&self, handle_id: &str) -> io::Result<()> {
+    async fn reserve_opening(&self, handle_id: &str) -> io::Result<Arc<OpeningHandleEntry>> {
         if handle_id.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "file handle id cannot be empty",
             ));
         }
-        if self.handles.lock().await.contains_key(handle_id) {
+        let mut handles = self.handles.lock().await;
+        if handles.contains_key(handle_id) {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 format!("file handle `{handle_id}` is already open"),
             ));
         }
-        Ok(())
+        let opening = Arc::new(OpeningHandleEntry {
+            cancellation: CancellationToken::new(),
+        });
+        handles.insert(
+            handle_id.to_string(),
+            FileHandle::Opening(Arc::clone(&opening)),
+        );
+        Ok(opening)
     }
 
-    async fn insert(&self, handle_id: String, handle: FileHandle) -> io::Result<()> {
+    async fn promote_opening(
+        &self,
+        handle_id: String,
+        opening: &Arc<OpeningHandleEntry>,
+        handle: FileHandle,
+    ) -> io::Result<()> {
         let mut handles = self.handles.lock().await;
-        if handles.contains_key(&handle_id) {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("file handle `{handle_id}` is already open"),
-            ));
+        let owns_reservation = matches!(
+            handles.get(&handle_id),
+            Some(FileHandle::Opening(current)) if Arc::ptr_eq(current, opening)
+        );
+        if opening.cancellation.is_cancelled() || !owns_reservation {
+            if owns_reservation {
+                handles.remove(&handle_id);
+            }
+            return Err(cancelled_handle_error());
         }
         handles.insert(handle_id, handle);
         Ok(())
@@ -202,6 +246,7 @@ impl FileHandleManager {
         match self.handles.lock().await.get(handle_id) {
             Some(FileHandle::Read(entry)) => Ok(Arc::clone(entry)),
             Some(FileHandle::Write(_)) => Err(wrong_handle_type_error(handle_id, "read")),
+            Some(FileHandle::Opening(_)) => Err(opening_handle_error(handle_id)),
             None => Err(unknown_handle_error(handle_id)),
         }
     }
@@ -210,7 +255,18 @@ impl FileHandleManager {
         match self.handles.lock().await.get(handle_id) {
             Some(FileHandle::Write(entry)) => Ok(Arc::clone(entry)),
             Some(FileHandle::Read(_)) => Err(wrong_handle_type_error(handle_id, "write")),
+            Some(FileHandle::Opening(_)) => Err(opening_handle_error(handle_id)),
             None => Err(unknown_handle_error(handle_id)),
+        }
+    }
+
+    async fn remove_if_opening(&self, handle_id: &str, expected: &Arc<OpeningHandleEntry>) {
+        let mut handles = self.handles.lock().await;
+        if matches!(
+            handles.get(handle_id),
+            Some(FileHandle::Opening(entry)) if Arc::ptr_eq(entry, expected)
+        ) {
+            handles.remove(handle_id);
         }
     }
 
@@ -251,6 +307,17 @@ fn wrong_handle_type_error(handle_id: &str, expected: &str) -> io::Error {
     )
 }
 
+fn opening_handle_error(handle_id: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::WouldBlock,
+        format!("file handle `{handle_id}` is still opening"),
+    )
+}
+
 fn cancelled_handle_error() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "file operation was cancelled")
 }
+
+#[cfg(test)]
+#[path = "file_handle_manager_tests.rs"]
+mod tests;

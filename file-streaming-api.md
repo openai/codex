@@ -192,10 +192,11 @@ Response:
   should use a bounded pipeline of up to two read requests to hide transport
   round-trip latency without accumulating unbounded response data.
 - Close operations are idempotent. App-server close requests bypass queued
-  operations and cancel an active chunk operation. Once commit starts, it runs
-  to completion so the server never reports cancellation while an atomic
-  replacement may still publish. Exec-server handles bounded file RPCs in
-  request order, so close takes effect before the next file operation.
+  operations and cancel an active open or chunk operation. A close received
+  while open is pending prevents that handle from becoming live. Once commit
+  starts, it runs to completion so the server never reports cancellation while
+  an atomic replacement may still publish. Exec-server handles bounded file
+  RPCs in request order, so close takes effect before the next file operation.
 - Closing a connection closes all of its handles.
 - Any filesystem or I/O error closes the affected handle. Protocol errors such
   as an unknown handle do not affect other handles.
