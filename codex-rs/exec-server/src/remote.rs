@@ -247,6 +247,11 @@ impl RemoteEnvironmentConfig {
 /// reconnects. The registration and rendezvous URL are also reused until
 /// rendezvous rejects the URL, at which point the next attempt registers again.
 /// The websocket carries cleartext routing metadata and encrypted payloads.
+#[tracing::instrument(
+    name = "codex.exec_server",
+    skip_all,
+    fields(otel.kind = "internal")
+)]
 pub async fn run_remote_environment(
     config: RemoteEnvironmentConfig,
     runtime_paths: ExecServerRuntimePaths,

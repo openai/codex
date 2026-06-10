@@ -49,6 +49,7 @@ mod app_cmd;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
 mod doctor;
+mod exec_server_telemetry;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod plugin_cmd;
@@ -1692,6 +1693,7 @@ async fn run_exec_server_command(
             .environment_id
             .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
         let config = load_exec_server_config(root_config_overrides, strict_config).await?;
+        let _otel = exec_server_telemetry::init(Some(&config));
         let auth_provider =
             load_exec_server_remote_auth_provider(&config, &base_url, cmd.use_agent_identity_auth)
                 .await?;
@@ -1706,12 +1708,14 @@ async fn run_exec_server_command(
         codex_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
         Ok(())
     } else {
-        if strict_config {
-            // Local exec-server startup does not consume Config, but strict
-            // mode should still reject unknown fields before opening a listener.
-            let _validated_config =
-                load_exec_server_config(root_config_overrides, strict_config).await?;
-        }
+        let config = if strict_config {
+            Some(load_exec_server_config(root_config_overrides, strict_config).await?)
+        } else {
+            load_exec_server_config(root_config_overrides, /*strict_config*/ false)
+                .await
+                .ok()
+        };
+        let _otel = exec_server_telemetry::init(config.as_ref());
         let listen_url = cmd
             .listen
             .as_deref()

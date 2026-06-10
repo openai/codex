@@ -440,15 +440,7 @@ pub(crate) trait HarnessKeyValidator: Send + Sync {
 ///
 /// Parsing the first Noise message authenticates the harness key. Only a
 /// successful registry check turns that pending handshake into a virtual stream.
-#[tracing::instrument(
-    level = "debug",
-    skip_all,
-    fields(
-        noise_side = "executor",
-        environment_id = %environment_id,
-        executor_registration_id = %executor_registration_id,
-    )
-)]
+#[tracing::instrument(level = "debug", skip_all, fields(noise_side = "executor"))]
 pub(crate) async fn run_multiplexed_environment<S, V>(
     stream: WebSocketStream<S>,
     processor: ConnectionProcessor,
@@ -460,6 +452,10 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     V: HarnessKeyValidator + Clone + 'static,
 {
+    debug!(
+        environment_id,
+        executor_registration_id, "Noise executor relay details"
+    );
     let (mut websocket_sink, mut websocket_stream) = stream.split();
     let (physical_outgoing_tx, mut physical_outgoing_rx) =
         mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
