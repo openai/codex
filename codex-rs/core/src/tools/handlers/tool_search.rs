@@ -71,6 +71,15 @@ impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        self.handle_call(invocation).await
+    }
+}
+
+impl ToolSearchHandler {
+    async fn handle_call(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
         let args = match payload {
