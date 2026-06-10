@@ -552,3 +552,69 @@ jobs:
         with:
           path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
+
+  cross-release-build:
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    name: Verify cross-platform release build under RBE
+    environment:
+      name: bazel
+      deployment: false
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
+          cache-scope: bazel-${{ github.job }}
+
+      - name: Bazel build cross-platform release binaries
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          # The release bundle transition cross-compiles every supported
+          # platform from Linux RBE. Fork PRs do not receive the BuildBuddy
+          # credential, and compiling the full matrix locally is too costly.
+          if [[ -z "${BUILDBUDDY_API_KEY}" ]]; then
+            echo "BuildBuddy API key unavailable; skipping the RBE cross-release build."
+            exit 0
+          fi
+
+          # Keep this in sync with `just build-for-release` by selecting the
+          # shared release-binaries config.
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            -- \
+            build \
+            --config=release-binaries \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            --build_metadata=TAG_job=cross-release-build \
+            --build_metadata=TAG_rust_debug_assertions=off \
+            -- \
+            //codex-rs/cli:release_binaries
+
+      - name: Upload Bazel execution logs
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: bazel-execution-logs-cross-release-build
+          path: ${{ runner.temp }}/bazel-execution-logs
+          if-no-files-found: ignore
+
+      # Save the job-scoped Bazel repository cache after cache misses. Keep the
+      # upload non-fatal so cache service issues never fail the job itself.
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
+          key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}

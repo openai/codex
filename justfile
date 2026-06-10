@@ -133,8 +133,9 @@ bazel-clippy:
 bazel-argument-comment-lint:
     bazel build --config=argument-comment-lint -- $({{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh)
 
+# Keep this in sync with CI by selecting the shared release-binaries config.
 build-for-release:
-    bazel build //codex-rs/cli:release_binaries
+    bazel build --config=release-binaries //codex-rs/cli:release_binaries
 
 # Run the MCP server
 mcp-server-run *args:

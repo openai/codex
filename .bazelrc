@@ -110,6 +110,15 @@ common:ci-bazel --build_metadata=TAG_workflow=bazel
 # snapshot on the Windows runner.
 common:ci-bazel --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::
 
+# Shared settings for local and CI release binary builds. `fastbuild` avoids
+# optimizer and debug-info work while disabling Rust debug assertions still
+# compiles the release-only code paths.
+# TODO: Align this with Cargo's release profile, including optimized codegen,
+# ThinLTO, line-table debug info, and a single codegen unit.
+build:release-binaries --compilation_mode=fastbuild
+build:release-binaries --@rules_rust//rust/settings:extra_rustc_flag=-Cdebug-assertions=no
+build:release-binaries --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebug-assertions=no
+
 # Shared config for Bazel-backed Rust linting.
 build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
 build:clippy --output_groups=+clippy_checks
