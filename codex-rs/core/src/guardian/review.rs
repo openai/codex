@@ -88,13 +88,13 @@ pub(crate) fn guardian_timeout_message() -> String {
 }
 
 #[derive(Debug)]
-pub(super) enum GuardianReviewOutcome {
+pub(crate) enum GuardianReviewOutcome {
     Completed(GuardianAssessment),
     Error(GuardianReviewError),
 }
 
 #[derive(Debug)]
-pub(super) enum GuardianReviewError {
+pub(crate) enum GuardianReviewError {
     PromptBuild { message: String },
     Session { message: String },
     Parse { message: String },
@@ -657,7 +657,7 @@ pub(crate) fn spawn_approval_request_review(
 /// context. It may still reuse the parent's managed-network allowlist for
 /// read-only checks, but it intentionally runs without inherited exec-policy
 /// rules.
-pub(super) async fn run_guardian_review_session(
+pub(crate) async fn run_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     request: GuardianApprovalRequest,

@@ -40,6 +40,8 @@ mod exec_policy;
 #[cfg(test)]
 mod git_info_tests;
 mod guardian;
+#[doc(hidden)]
+pub mod guardian_eval;
 mod hook_runtime;
 mod installation_id;
 pub(crate) mod landlock;

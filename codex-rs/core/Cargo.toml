@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "codex-write-config-schema"
 path = "src/bin/config_schema.rs"
 
+[[bin]]
+name = "codex-guardian-eval"
+path = "src/bin/guardian_eval.rs"
+
 [lints]
 workspace = true
 

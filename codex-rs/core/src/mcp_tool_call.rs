@@ -979,6 +979,30 @@ pub(crate) struct McpToolApprovalMetadata {
     openai_file_input_params: Option<Vec<String>>,
 }
 
+impl McpToolApprovalMetadata {
+    pub(crate) fn new_for_guardian_review(
+        annotations: Option<ToolAnnotations>,
+        connector_id: Option<String>,
+        connector_name: Option<String>,
+        connector_description: Option<String>,
+        tool_title: Option<String>,
+        tool_description: Option<String>,
+    ) -> Self {
+        Self {
+            annotations,
+            connector_id,
+            connector_name,
+            connector_description,
+            plugin_id: None,
+            tool_title,
+            tool_description,
+            mcp_app_resource_uri: None,
+            codex_apps_meta: None,
+            openai_file_input_params: None,
+        }
+    }
+}
+
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
