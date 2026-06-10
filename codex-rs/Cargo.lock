@@ -3821,10 +3821,15 @@ dependencies = [
  "codex-extension-api",
  "codex-mcp",
  "codex-protocol",
+ "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-string",
  "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
  "tokio",
+ "url",
 ]
 
 [[package]]

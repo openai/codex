@@ -64,8 +64,13 @@ const RAW_SKILL_DESCRIPTION: &str = "Deploy\nthrough the <hosted> orchestrator."
 const SKILL_DESCRIPTION: &str = "Deploy through the &lt;hosted&gt; orchestrator.";
 const SKILL_RESOURCE_URI: &str = "skill://plugin_demo/deploy";
 const SKILL_MAIN_PROMPT_URI: &str = "skill://plugin_demo/deploy/SKILL.md";
+const SKILL_REFERENCE_URI: &str = "skill://plugin_demo/deploy/references/deploy.md";
 const SKILL_MARKER: &str = "ORCHESTRATOR_SKILL_BODY_MARKER";
 const SKILL_CONTENTS: &str = "---\nname: deploy\ndescription: Deploy through the orchestrator.\n---\n\n# Deploy\n\nORCHESTRATOR_SKILL_BODY_MARKER\n";
+const SKILL_REFERENCE_CONTENTS: &str =
+    "# Deploy reference\n\nUse the orchestrator deployment API.\n";
+const SKILLS_LIST_CALL_ID: &str = "skills-list";
+const SKILLS_READ_CALL_ID: &str = "skills-read";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
@@ -132,13 +137,43 @@ async fn codex_apps_resources_support_orchestrator_skills_without_an_environment
     .await??;
     let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
 
-    let response_mock = responses::mount_sse_once(
+    let response_mock = responses::mount_sse_sequence(
         &responses_server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-orchestrator-skill"),
-            responses::ev_assistant_message("msg-orchestrator-skill", "Done"),
-            responses::ev_completed("resp-orchestrator-skill"),
-        ]),
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-skills-list"),
+                responses::ev_function_call_with_namespace(
+                    SKILLS_LIST_CALL_ID,
+                    "skills",
+                    "list",
+                    "{}",
+                ),
+                responses::ev_completed("resp-skills-list"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-skills-read"),
+                responses::ev_function_call_with_namespace(
+                    SKILLS_READ_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({
+                        "authority": {
+                            "kind": "remote",
+                            "id": "codex_apps",
+                        },
+                        "package": SKILL_RESOURCE_URI,
+                        "resource": SKILL_REFERENCE_URI,
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("resp-skills-read"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-orchestrator-skill"),
+                responses::ev_assistant_message("msg-orchestrator-skill", "Done"),
+                responses::ev_completed("resp-orchestrator-skill"),
+            ]),
+        ],
     )
     .await;
     let turn_start_id = mcp
@@ -162,8 +197,14 @@ async fn codex_apps_resources_support_orchestrator_skills_without_an_environment
     )
     .await??;
 
-    let request = response_mock.single_request();
-    let developer_messages = request.message_input_texts("developer");
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let first_request = &requests[0];
+    assert!(first_request.tool_by_name("skills", "list").is_some());
+    assert!(first_request.tool_by_name("skills", "read").is_some());
+    assert!(first_request.tool_by_name("skills", "search").is_none());
+
+    let developer_messages = first_request.message_input_texts("developer");
     let catalog_line = format!("- {SKILL_NAME}: {SKILL_DESCRIPTION} (file: {SKILL_RESOURCE_URI})");
     assert_eq!(
         1,
@@ -177,7 +218,7 @@ async fn codex_apps_resources_support_orchestrator_skills_without_an_environment
             .iter()
             .all(|text| !text.contains("ignored-plugin:ignored"))
     );
-    let skill_fragments = request
+    let skill_fragments = first_request
         .message_input_texts("user")
         .into_iter()
         .filter(|text| text.starts_with("<skill>"))
@@ -186,6 +227,40 @@ async fn codex_apps_resources_support_orchestrator_skills_without_an_environment
     assert!(skill_fragments[0].contains(&format!("<name>{SKILL_NAME}</name>")));
     assert!(skill_fragments[0].contains(SKILL_MARKER));
 
+    let list_output = requests[1]
+        .function_call_output_text(SKILLS_LIST_CALL_ID)
+        .ok_or_else(|| anyhow::anyhow!("skills.list output should be sent to the model"))?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&list_output)?,
+        json!({
+            "skills": [{
+                "authority": {
+                    "kind": "remote",
+                    "id": "codex_apps",
+                },
+                "package": SKILL_RESOURCE_URI,
+                "name": SKILL_NAME,
+                "description": SKILL_DESCRIPTION,
+                "main_resource": SKILL_MAIN_PROMPT_URI,
+            }],
+            "next_cursor": null,
+            "warnings": ["Orchestrator skill discovery stopped after 2 resource pages: failed to list orchestrator skill resources: resources/list failed for `codex_apps`: Mcp error: -32603: simulated later-page failure"],
+            "truncated": false,
+        })
+    );
+
+    let read_output = requests[2]
+        .function_call_output_text(SKILLS_READ_CALL_ID)
+        .ok_or_else(|| anyhow::anyhow!("skills.read output should be sent to the model"))?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&read_output)?,
+        json!({
+            "resource": SKILL_REFERENCE_URI,
+            "contents": SKILL_REFERENCE_CONTENTS,
+            "next_cursor": null,
+            "truncated": false,
+        })
+    );
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
     Ok(())
@@ -457,6 +532,16 @@ impl ServerHandler for ResourceAppsMcpServer {
                     uri: SKILL_MAIN_PROMPT_URI.to_string(),
                     mime_type: Some("text/markdown".to_string()),
                     text: SKILL_CONTENTS.to_string(),
+                    meta: None,
+                },
+            ]));
+        }
+        if uri == SKILL_REFERENCE_URI {
+            return Ok(ReadResourceResult::new(vec![
+                ResourceContents::TextResourceContents {
+                    uri: SKILL_REFERENCE_URI.to_string(),
+                    mime_type: Some("text/markdown".to_string()),
+                    text: SKILL_REFERENCE_CONTENTS.to_string(),
                     meta: None,
                 },
             ]));

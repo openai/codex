@@ -20,9 +20,14 @@ codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-mcp = { workspace = true }
 codex-protocol = { workspace = true }
+codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
+url = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

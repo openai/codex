@@ -4,6 +4,7 @@ use std::time::Duration;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceContent;
+use url::Url;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -28,7 +29,8 @@ const MAX_ORCHESTRATOR_SKILLS: usize = 100;
 const MAX_SKILL_NAME_CHARS: usize = 64;
 const MAX_QUALIFIED_SKILL_NAME_CHARS: usize = 128;
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 1_024;
-const MAX_SKILL_URI_CHARS: usize = 1_024;
+const MAX_SKILL_PACKAGE_URI_CHARS: usize = 1_024;
+const MAX_SKILL_RESOURCE_URI_CHARS: usize = 2_048;
 
 /// Discovers and reads skills owned by the orchestrator.
 ///
@@ -156,8 +158,7 @@ impl SkillProvider for OrchestratorSkillProvider {
                     request.authority.id
                 )));
             }
-            let expected_resource = main_prompt_uri(&request.package.0);
-            if request.resource.as_str() != expected_resource {
+            if !resource_belongs_to_package(&request.package.0, request.resource.as_str()) {
                 return Err(SkillProviderError::new(
                     "orchestrator skill resource does not match its package",
                 ));
@@ -213,7 +214,7 @@ impl SkillProvider for OrchestratorSkillProvider {
 }
 
 fn catalog_entry_from_resource(resource: &Resource) -> Option<SkillCatalogEntry> {
-    let uri = validated_skill_uri(resource.uri.as_str())?;
+    let uri = validated_skill_uri(resource.uri.as_str(), MAX_SKILL_PACKAGE_URI_CHARS)?;
     let meta = resource.meta.as_ref()?.as_object()?;
     let skill_name = normalized_label(meta.get("skill_name")?.as_str()?, MAX_SKILL_NAME_CHARS)?;
     let name = if meta.get("source").and_then(|value| value.as_str()) == Some("user") {
@@ -240,14 +241,57 @@ fn catalog_entry_from_resource(resource: &Resource) -> Option<SkillCatalogEntry>
     )
 }
 
-fn validated_skill_uri(uri: &str) -> Option<&str> {
-    let path = uri.strip_prefix("skill://")?;
-    let invalid = path.is_empty()
-        || uri.chars().count() > MAX_SKILL_URI_CHARS
+fn validated_skill_uri(uri: &str, max_chars: usize) -> Option<&str> {
+    validated_skill_url(uri, max_chars).map(|_| uri)
+}
+
+fn validated_skill_url(uri: &str, max_chars: usize) -> Option<Url> {
+    if uri.chars().count() > max_chars
         || uri
             .chars()
-            .any(|ch| ch.is_control() || ch.is_whitespace() || matches!(ch, '<' | '>'));
-    (!invalid).then_some(uri)
+            .any(|ch| ch.is_control() || ch.is_whitespace() || matches!(ch, '<' | '>'))
+    {
+        return None;
+    }
+
+    let url = Url::parse(uri).ok()?;
+    let path_is_valid = url.path_segments().is_some_and(|segments| {
+        let segments = segments.collect::<Vec<_>>();
+        !segments.is_empty() && segments.iter().all(|segment| !segment.is_empty())
+    });
+    (url.scheme() == "skill"
+        && url.as_str() == uri
+        && url.host_str().is_some_and(|host| !host.is_empty())
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && path_is_valid)
+        .then_some(url)
+}
+
+fn resource_belongs_to_package(package: &str, resource: &str) -> bool {
+    let Some(package) = validated_skill_url(package, MAX_SKILL_PACKAGE_URI_CHARS) else {
+        return false;
+    };
+    let Some(resource) = validated_skill_url(resource, MAX_SKILL_RESOURCE_URI_CHARS) else {
+        return false;
+    };
+
+    let Some(package_segments) = package.path_segments() else {
+        return false;
+    };
+    let Some(resource_segments) = resource.path_segments() else {
+        return false;
+    };
+    let package_segments = package_segments.collect::<Vec<_>>();
+    let resource_segments = resource_segments.collect::<Vec<_>>();
+
+    package.scheme() == resource.scheme()
+        && package.host_str() == resource.host_str()
+        && resource_segments.len() > package_segments.len()
+        && resource_segments.starts_with(&package_segments)
 }
 
 fn normalized_label(value: &str, max_chars: usize) -> Option<String> {
