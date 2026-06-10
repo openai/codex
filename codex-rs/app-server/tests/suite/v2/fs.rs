@@ -476,6 +476,31 @@ async fn fs_streaming_read_supports_stat_and_positional_reads() -> Result<()> {
         }
     );
 
+    let final_read_id = mcp
+        .send_raw_request(
+            "fs/readFile/read",
+            Some(json!({
+                "handleId": "read-1",
+                "offset": 6,
+                "maxBytes": 4,
+            })),
+        )
+        .await?;
+    let final_read: FsReadFileReadResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(final_read_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(
+        final_read,
+        FsReadFileReadResponse {
+            data_base64: STANDARD.encode("6789"),
+            eof: true,
+        }
+    );
+
     Ok(())
 }
 

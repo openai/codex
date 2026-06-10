@@ -503,7 +503,7 @@ mod tests {
             .await
             .expect("read chunk");
         assert_eq!(read.data_base64, STANDARD.encode("ew"));
-        assert!(!read.eof);
+        assert!(read.eof);
         handler
             .read_file_close(FsReadFileCloseParams {
                 handle_id: "read-1".to_string(),

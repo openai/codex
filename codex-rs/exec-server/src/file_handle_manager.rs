@@ -96,10 +96,26 @@ impl FileHandleManager {
             result = entry.handle.read(offset, max_bytes) => result,
         };
         match result {
-            Ok(data) => Ok(FileReadChunk {
-                eof: data.len() < max_bytes,
-                data,
-            }),
+            Ok(data) => {
+                let eof = if data.len() < max_bytes {
+                    true
+                } else {
+                    let metadata = tokio::select! {
+                        _ = entry.cancellation.cancelled() => Err(cancelled_handle_error()),
+                        result = entry.handle.metadata() => result,
+                    };
+                    match metadata {
+                        Ok(metadata) => {
+                            offset.saturating_add(data.len() as u64) >= metadata.size_bytes
+                        }
+                        Err(err) => {
+                            self.remove_if_read(handle_id, &entry).await;
+                            return Err(err);
+                        }
+                    }
+                };
+                Ok(FileReadChunk { data, eof })
+            }
             Err(err) => {
                 self.remove_if_read(handle_id, &entry).await;
                 Err(err)
