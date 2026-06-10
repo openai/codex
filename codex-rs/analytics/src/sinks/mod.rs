@@ -1,8 +1,7 @@
 mod codex_backend;
 mod local;
 
-use crate::events::AnalyticsEvent;
-use crate::events::AnalyticsEventSinkKind;
+use crate::events::TrackEventRequest;
 use codex_login::AuthManager;
 use std::sync::Arc;
 
@@ -23,37 +22,13 @@ pub(crate) enum AnalyticsEventSink {
 }
 
 impl AnalyticsEventSink {
-    pub(crate) async fn write(&self, events: &[AnalyticsEvent]) {
+    pub(crate) async fn write(&self, events: &[TrackEventRequest]) {
         match self {
             Self::CodexBackend {
                 auth_manager,
                 base_url,
-            } => {
-                let sink = self.kind();
-                let events = events
-                    .iter()
-                    .filter(|event| event.is_writable_to(sink))
-                    .map(|event| match event {
-                        AnalyticsEvent::CodexAnalytics(event) => event,
-                    })
-                    .collect::<Vec<_>>();
-                codex_backend::write(auth_manager, base_url, &events).await;
-            }
-            Self::Local(sink) => {
-                let sink_kind = self.kind();
-                for event in events {
-                    if event.is_writable_to(sink_kind) {
-                        local::write(sink, event);
-                    }
-                }
-            }
-        }
-    }
-
-    fn kind(&self) -> AnalyticsEventSinkKind {
-        match self {
-            Self::CodexBackend { .. } => AnalyticsEventSinkKind::CodexBackend,
-            Self::Local(_) => AnalyticsEventSinkKind::Local,
+            } => codex_backend::write(auth_manager, base_url, events).await,
+            Self::Local(sink) => local::write(sink, events),
         }
     }
 }

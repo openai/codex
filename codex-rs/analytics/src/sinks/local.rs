@@ -1,4 +1,4 @@
-use crate::events::AnalyticsEvent;
+use crate::events::TrackEventRequest;
 use crate::now_unix_millis;
 use serde::Deserialize;
 use serde::Serialize;
@@ -8,7 +8,6 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::BufWriter;
 use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -16,20 +15,21 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 
 pub const LOCAL_ANALYTICS_SCHEMA_VERSION: u32 = 1;
-pub const LOCAL_ANALYTICS_SINK_PATH_ENV_VAR: &str = "CODEX_ANALYTICS_LOCAL_SINK_PATH";
+const LOCAL_ANALYTICS_SINK_PATH_ENV_VAR: &str = "CODEX_ANALYTICS_LOCAL_SINK_PATH";
 
-pub(crate) type SharedLocalAnalyticsSink = Arc<Mutex<LocalAnalyticsSink>>;
+type LocalAnalyticsWriter = BufWriter<File>;
+pub(crate) type SharedLocalAnalyticsSink = Arc<Mutex<LocalAnalyticsWriter>>;
 
-static PROCESS_LOCAL_SINKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<LocalAnalyticsSink>>>>> =
+static PROCESS_LOCAL_SINKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<LocalAnalyticsWriter>>>>> =
     OnceLock::new();
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalAnalyticsRecordType {
     CodexAnalyticsEvent,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct LocalAnalyticsRecord {
     pub schema_version: u32,
     pub recorded_at_epoch_millis: u64,
@@ -49,20 +49,17 @@ pub(crate) fn local_analytics_sink_from_env() -> Option<SharedLocalAnalyticsSink
     local_analytics_sink_for_path(PathBuf::from(path))
 }
 
-pub(super) fn write(sink: &SharedLocalAnalyticsSink, event: &AnalyticsEvent) {
-    let Some(record) = LocalAnalyticsRecord::from_event(event) else {
-        return;
-    };
-    append_record_best_effort(sink, &record);
-}
-
-fn append_record_best_effort(sink: &SharedLocalAnalyticsSink, record: &LocalAnalyticsRecord) {
-    let result = sink
+pub(super) fn write(sink: &SharedLocalAnalyticsSink, events: &[TrackEventRequest]) {
+    let mut writer = sink
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .append(record);
-    if let Err(err) = result {
-        tracing::warn!(error = %err, "failed to append local analytics record");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for event in events {
+        let Some(record) = LocalAnalyticsRecord::from_codex_analytics_event(event) else {
+            continue;
+        };
+        if let Err(err) = append_record(&mut writer, &record) {
+            tracing::warn!(error = %err, "failed to append local analytics record");
+        }
     }
 }
 
@@ -76,9 +73,9 @@ pub(crate) fn local_analytics_sink_for_path(path: PathBuf) -> Option<SharedLocal
         return Some(sink);
     }
 
-    match LocalAnalyticsSink::open(path.clone()) {
-        Ok(sink) => {
-            let sink = Arc::new(Mutex::new(sink));
+    match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(file) => {
+            let sink = Arc::new(Mutex::new(BufWriter::new(file)));
             sinks.insert(path, Arc::downgrade(&sink));
             Some(sink)
         }
@@ -94,48 +91,34 @@ pub(crate) fn local_analytics_sink_for_path(path: PathBuf) -> Option<SharedLocal
 }
 
 impl LocalAnalyticsRecord {
-    fn from_event(event: &AnalyticsEvent) -> Option<Self> {
-        match event {
-            AnalyticsEvent::CodexAnalytics(event) => {
-                let payload = match serde_json::to_value(event) {
-                    Ok(payload) => payload,
-                    Err(err) => {
-                        tracing::warn!(error = %err, "failed to serialize local analytics event");
-                        return None;
-                    }
-                };
-                let event_params = payload.get("event_params");
-                Some(Self {
-                    schema_version: LOCAL_ANALYTICS_SCHEMA_VERSION,
-                    recorded_at_epoch_millis: now_unix_millis(),
-                    record_type: LocalAnalyticsRecordType::CodexAnalyticsEvent,
-                    session_id: string_field(event_params, "session_id"),
-                    thread_id: string_field(event_params, "thread_id"),
-                    turn_id: string_field(event_params, "turn_id"),
-                    payload,
-                })
+    fn from_codex_analytics_event(event: &TrackEventRequest) -> Option<Self> {
+        let payload = match serde_json::to_value(event) {
+            Ok(payload) => payload,
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to serialize local analytics event");
+                return None;
             }
-        }
-    }
-}
-
-pub(crate) struct LocalAnalyticsSink {
-    writer: BufWriter<File>,
-}
-
-impl LocalAnalyticsSink {
-    fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(Self {
-            writer: BufWriter::new(file),
+        };
+        let event_params = payload.get("event_params");
+        Some(Self {
+            schema_version: LOCAL_ANALYTICS_SCHEMA_VERSION,
+            recorded_at_epoch_millis: now_unix_millis(),
+            record_type: LocalAnalyticsRecordType::CodexAnalyticsEvent,
+            session_id: string_field(event_params, "session_id"),
+            thread_id: string_field(event_params, "thread_id"),
+            turn_id: string_field(event_params, "turn_id"),
+            payload,
         })
     }
+}
 
-    fn append(&mut self, record: &LocalAnalyticsRecord) -> std::io::Result<()> {
-        serde_json::to_writer(&mut self.writer, record)?;
-        self.writer.write_all(b"\n")?;
-        self.writer.flush()
-    }
+fn append_record(
+    writer: &mut BufWriter<File>,
+    record: &LocalAnalyticsRecord,
+) -> std::io::Result<()> {
+    serde_json::to_writer(&mut *writer, record)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
 }
 
 fn string_field(value: Option<&JsonValue>, field: &str) -> Option<String> {

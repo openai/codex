@@ -1,15 +1,14 @@
 use super::AnalyticsEventsClient;
 use super::AnalyticsEventsQueue;
 use crate::LocalAnalyticsRecord;
-use crate::events::AppServerRpcTransport;
 use crate::facts::AnalyticsFact;
+use crate::facts::InvocationType;
+use crate::facts::SkillInvocation;
+use crate::facts::TrackEventsContext;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
-use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
-use codex_app_server_protocol::InitializeCapabilities;
-use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
@@ -28,6 +27,7 @@ use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use std::collections::HashSet;
@@ -196,32 +196,24 @@ async fn local_sink_reduces_events_when_backend_analytics_are_disabled() {
     );
 
     assert!(client.queue.is_some());
-    client.track_initialize(
-        /*connection_id*/ 7,
-        InitializeParams {
-            client_info: ClientInfo {
-                name: "codex-tui".to_string(),
-                title: None,
-                version: "1.0.0".to_string(),
-            },
-            capabilities: Some(InitializeCapabilities {
-                experimental_api: false,
-                request_attestation: false,
-                opt_out_notification_methods: None,
-            }),
+    client.track_skill_invocations(
+        TrackEventsContext {
+            model_slug: "gpt-5.1-codex".to_string(),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
         },
-        "codex".to_string(),
-        AppServerRpcTransport::Stdio,
-    );
-    client.track_response(
-        /*connection_id*/ 7,
-        RequestId::Integer(1),
-        sample_thread_start_response(),
+        vec![SkillInvocation {
+            skill_name: "doc".to_string(),
+            skill_scope: SkillScope::User,
+            skill_path: test_path_buf("/tmp/skills/doc/SKILL.md"),
+            plugin_id: None,
+            invocation_type: InvocationType::Explicit,
+        }],
     );
 
     let records = wait_for_local_records(&path, 1).await;
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].payload["event_type"], "codex_thread_initialized");
+    assert_eq!(records[0].payload["event_type"], "skill_invocation");
     assert_eq!(records[0].thread_id.as_deref(), Some("thread-1"));
 }
 

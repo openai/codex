@@ -50,7 +50,7 @@ pub enum AppServerRpcTransport {
 
 #[derive(Serialize)]
 pub(crate) struct TrackEventsRequest<'a> {
-    pub(crate) events: &'a [&'a TrackEventRequest],
+    pub(crate) events: &'a [TrackEventRequest],
 }
 
 #[derive(Serialize)]
@@ -86,34 +86,6 @@ impl TrackEventRequest {
     pub(crate) fn should_send_in_isolated_request(&self) -> bool {
         matches!(self, Self::AcceptedLineFingerprints(_))
     }
-}
-
-pub(crate) enum AnalyticsEvent {
-    CodexAnalytics(TrackEventRequest),
-}
-
-impl AnalyticsEvent {
-    pub(crate) fn is_writable_to(&self, sink: AnalyticsEventSinkKind) -> bool {
-        matches!(
-            (self, sink),
-            (
-                Self::CodexAnalytics(_),
-                AnalyticsEventSinkKind::CodexBackend | AnalyticsEventSinkKind::Local,
-            )
-        )
-    }
-}
-
-impl From<TrackEventRequest> for AnalyticsEvent {
-    fn from(event: TrackEventRequest) -> Self {
-        Self::CodexAnalytics(event)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum AnalyticsEventSinkKind {
-    CodexBackend,
-    Local,
 }
 
 #[derive(Serialize)]

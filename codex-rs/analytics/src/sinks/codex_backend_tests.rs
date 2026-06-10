@@ -4,9 +4,7 @@ use crate::events::CodexAcceptedLineFingerprintsEventRequest;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
 use crate::events::TrackEventRequest;
-use crate::events::TrackEventsRequest;
 use crate::facts::InvocationType;
-use serde_json::json;
 
 #[test]
 fn track_event_request_batches_only_isolates_accepted_line_fingerprint_events() {
@@ -18,7 +16,6 @@ fn track_event_request_batches_only_isolates_accepted_line_fingerprint_events() 
         sample_regular_track_event("thread-5"),
         sample_regular_track_event("thread-6"),
     ];
-    let events = events.iter().collect::<Vec<_>>();
     let batches = track_event_request_batches(&events);
 
     assert_eq!(batches.len(), 4);
@@ -28,22 +25,6 @@ fn track_event_request_batches_only_isolates_accepted_line_fingerprint_events() 
     assert_eq!(batches[3].len(), 2);
     assert!(batches[1][0].should_send_in_isolated_request());
     assert!(batches[2][0].should_send_in_isolated_request());
-}
-
-#[test]
-fn track_events_request_serializes_borrowed_events() {
-    let event = sample_regular_track_event("thread-1");
-    let events = [&event];
-
-    let payload = serde_json::to_value(TrackEventsRequest { events: &events })
-        .expect("serialize track events request");
-
-    assert_eq!(
-        payload,
-        json!({
-            "events": [serde_json::to_value(&event).expect("serialize track event")]
-        })
-    );
 }
 
 fn sample_accepted_line_fingerprint_event(thread_id: &str) -> TrackEventRequest {

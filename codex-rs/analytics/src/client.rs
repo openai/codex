@@ -1,4 +1,3 @@
-use crate::events::AnalyticsEvent;
 use crate::events::AppServerRpcTransport;
 use crate::events::GuardianReviewAnalyticsResult;
 use crate::events::GuardianReviewTrackContext;
@@ -67,12 +66,8 @@ impl AnalyticsEventsQueue {
         tokio::spawn(async move {
             let mut reducer = AnalyticsReducer::default();
             while let Some(input) = receiver.recv().await {
-                let mut codex_analytics_events = Vec::new();
-                reducer.ingest(input, &mut codex_analytics_events).await;
-                let events = codex_analytics_events
-                    .into_iter()
-                    .map(AnalyticsEvent::from)
-                    .collect::<Vec<_>>();
+                let mut events = Vec::new();
+                reducer.ingest(input, &mut events).await;
                 for sink in &sinks {
                     sink.write(&events).await;
                 }

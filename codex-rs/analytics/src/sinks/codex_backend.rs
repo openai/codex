@@ -10,7 +10,7 @@ const ANALYTICS_EVENTS_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) async fn write(
     auth_manager: &AuthManager,
     base_url: &str,
-    events: &[&TrackEventRequest],
+    events: &[TrackEventRequest],
 ) {
     if events.is_empty() {
         return;
@@ -30,9 +30,7 @@ pub(super) async fn write(
     }
 }
 
-fn track_event_request_batches<'a>(
-    events: &'a [&'a TrackEventRequest],
-) -> Vec<&'a [&'a TrackEventRequest]> {
+fn track_event_request_batches(events: &[TrackEventRequest]) -> Vec<&[TrackEventRequest]> {
     let mut batches = Vec::new();
     let mut current_batch_start = 0;
 
@@ -53,11 +51,7 @@ fn track_event_request_batches<'a>(
     batches
 }
 
-async fn send_track_events_request(auth: &CodexAuth, url: &str, events: &[&TrackEventRequest]) {
-    if events.is_empty() {
-        return;
-    }
-
+async fn send_track_events_request(auth: &CodexAuth, url: &str, events: &[TrackEventRequest]) {
     let payload = TrackEventsRequest { events };
 
     let response = create_client()
