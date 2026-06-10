@@ -2277,6 +2277,11 @@ async fn guardian_recovers_from_eager_compaction_failure_and_timeout() -> anyhow
         .await
         .expect("discarded guardian rollout path");
     let committed_rollout = tokio::fs::read(&discarded_rollout_path).await?;
+    tokio::time::timeout(
+        EAGER_COMPACTION_TEST_TIMEOUT,
+        server.wait_for_request_count(/*count*/ 2),
+    )
+    .await?;
     failed_compaction_tx
         .send(())
         .expect("failed compaction response gate should still be open");
