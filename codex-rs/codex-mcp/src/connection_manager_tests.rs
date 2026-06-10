@@ -1108,39 +1108,66 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
 }
 
 #[tokio::test]
-async fn required_local_stdio_without_local_runtime_fails_validation() {
+async fn required_local_stdio_without_local_runtime_fails_validation_but_keeps_http_server() {
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let (tx_event, rx_event) = async_channel::unbounded();
     drop(rx_event);
     let codex_home = tempdir().expect("tempdir");
-    let mcp_servers = HashMap::from([(
-        "stdio".to_string(),
-        EffectiveMcpServer::configured(McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
-                command: "echo".to_string(),
-                args: Vec::new(),
-                env: None,
-                env_vars: Vec::new(),
-                cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: true,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        }),
-    )]);
+    let mcp_servers = HashMap::from([
+        (
+            "stdio".to_string(),
+            EffectiveMcpServer::configured(McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "echo".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                enabled: true,
+                required: true,
+                supports_parallel_tool_calls: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            }),
+        ),
+        (
+            "http".to_string(),
+            EffectiveMcpServer::configured(McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "http://127.0.0.1:1".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            }),
+        ),
+    ]);
 
-    let result = McpConnectionManager::new(
+    let manager = McpConnectionManager::new(
         &mcp_servers,
         OAuthCredentialsStoreMode::default(),
         HashMap::new(),
@@ -1166,11 +1193,16 @@ async fn required_local_stdio_without_local_runtime_fails_validation() {
         /*auth*/ None,
         /*elicitation_reviewer*/ None,
     )
-    .await
-    .validate_required_servers()
     .await;
 
-    let error = match result {
+    assert!(manager.clients.contains_key("stdio"));
+    assert!(manager.clients.contains_key("http"));
+    assert!(
+        !manager
+            .wait_for_server_ready("stdio", Duration::from_millis(10))
+            .await
+    );
+    let error = match manager.validate_required_servers().await {
         Ok(_) => panic!("required MCP startup should fail"),
         Err(error) => error,
     };
