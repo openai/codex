@@ -14,7 +14,6 @@ use crate::PluginsConfigInput;
 use crate::PluginsManager;
 use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
-use crate::remote::RemotePluginScope;
 
 const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "github@openai-curated",
@@ -69,6 +68,7 @@ pub struct ToolSuggestPluginDiscoveryInput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolSuggestDiscoverablePlugin {
     pub id: String,
+    pub remote_plugin_id: Option<String>,
     pub name: String,
     pub description: Option<String>,
     pub has_skills: bool,
@@ -100,7 +100,9 @@ impl PluginsManager {
             .collect::<HashSet<_>>();
         installed_app_connector_ids.extend(input.loaded_plugin_app_connector_ids.iter().cloned());
         let remote_installed_marketplaces = if input.plugins.remote_plugin_enabled {
-            self.build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Global])
+            self.build_remote_installed_plugin_marketplaces_from_cache(&[
+                REMOTE_GLOBAL_MARKETPLACE_NAME,
+            ])
         } else {
             None
         };
@@ -161,6 +163,7 @@ impl PluginsManager {
 
                         discoverable_plugins.push(ToolSuggestDiscoverablePlugin {
                             id: plugin.config_name,
+                            remote_plugin_id: None,
                             name: plugin.display_name,
                             description: plugin.description,
                             has_skills: plugin.has_skills,
@@ -216,6 +219,7 @@ impl PluginsManager {
 
                 discoverable_plugins.push(ToolSuggestDiscoverablePlugin {
                     id: plugin.config_id,
+                    remote_plugin_id: Some(plugin.remote_plugin_id),
                     name: plugin.name,
                     description: plugin.description,
                     has_skills: plugin.has_skills,

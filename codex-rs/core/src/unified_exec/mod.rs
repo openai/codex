@@ -155,6 +155,8 @@ struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
     call_id: String,
     process_id: i32,
+    cwd: AbsolutePathBuf,
+    initial_exec_command_active: Arc<std::sync::atomic::AtomicBool>,
     hook_command: String,
     tty: bool,
     network_approval: Option<DeferredNetworkApproval>,

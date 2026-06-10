@@ -9,8 +9,11 @@ use codex_config::types::McpServerConfig;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginListBackgroundTaskOptions;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
 use codex_core_plugins::remote::RemoteAppTemplateUnavailableReason;
-use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
 use codex_mcp::McpOAuthLoginSupport;
@@ -149,15 +152,18 @@ fn convert_configured_marketplace_plugin_to_plugin_summary(
     }
 }
 
-fn remote_installed_plugin_visible_scopes(config: &Config) -> Vec<RemotePluginScope> {
-    let mut scopes = Vec::new();
+fn remote_installed_plugin_visible_marketplaces(config: &Config) -> Vec<&'static str> {
+    let mut marketplaces = Vec::new();
     if config.features.enabled(Feature::RemotePlugin) {
-        scopes.push(RemotePluginScope::Global);
+        marketplaces.push(REMOTE_GLOBAL_MARKETPLACE_NAME);
     }
+    marketplaces.push(REMOTE_WORKSPACE_MARKETPLACE_NAME);
     if config.features.enabled(Feature::PluginSharing) {
-        scopes.push(RemotePluginScope::Workspace);
+        marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME);
+        marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME);
+        marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME);
     }
-    scopes
+    marketplaces
 }
 
 fn filter_openai_curated_installed_conflicts(
@@ -776,8 +782,8 @@ impl PluginRequestProcessor {
         }
 
         let plugins_input = config.plugins_config_input();
-        let remote_installed_plugin_visible_scopes =
-            remote_installed_plugin_visible_scopes(&config);
+        let remote_installed_plugin_visible_marketplaces =
+            remote_installed_plugin_visible_marketplaces(&config);
         plugins_manager.maybe_start_remote_installed_plugin_bundle_sync(
             &plugins_input,
             auth.clone(),
@@ -798,7 +804,7 @@ impl PluginRequestProcessor {
             self.load_remote_installed_plugins(
                 plugins_manager,
                 &plugins_input,
-                &remote_installed_plugin_visible_scopes,
+                &remote_installed_plugin_visible_marketplaces,
                 auth.as_ref(),
             )
             .await,
@@ -898,11 +904,11 @@ impl PluginRequestProcessor {
         &self,
         plugins_manager: Arc<codex_core_plugins::PluginsManager>,
         plugins_input: &codex_core_plugins::PluginsConfigInput,
-        visible_scopes: &[RemotePluginScope],
+        visible_marketplaces: &[&str],
         auth: Option<&CodexAuth>,
     ) -> Vec<PluginMarketplaceEntry> {
-        let remote_marketplaces = if let Some(remote_marketplaces) =
-            plugins_manager.build_remote_installed_plugin_marketplaces_from_cache(visible_scopes)
+        let remote_marketplaces = if let Some(remote_marketplaces) = plugins_manager
+            .build_remote_installed_plugin_marketplaces_from_cache(visible_marketplaces)
         {
             Ok(remote_marketplaces)
         } else {
@@ -910,7 +916,7 @@ impl PluginRequestProcessor {
                 .build_and_cache_remote_installed_plugin_marketplaces(
                     plugins_input,
                     auth,
-                    visible_scopes,
+                    visible_marketplaces,
                     Some(self.effective_plugins_changed_callback()),
                 )
                 .await
@@ -1030,6 +1036,7 @@ impl PluginRequestProcessor {
                     &config,
                     &outcome.plugin.apps,
                     Arc::clone(&environment_manager),
+                    self.thread_manager.mcp_manager(),
                 )
                 .await;
                 let visible_skills = outcome
@@ -1112,6 +1119,7 @@ impl PluginRequestProcessor {
                     &config,
                     &plugin_apps,
                     Arc::clone(&environment_manager),
+                    self.thread_manager.mcp_manager(),
                 )
                 .await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
@@ -1519,7 +1527,7 @@ impl PluginRequestProcessor {
         // Cache first so a backend install cannot succeed when local materialization fails.
         // If this backend call fails, the cache entry is harmless because remote installed state
         // is still backend-gated.
-        codex_core_plugins::remote::install_remote_plugin(
+        let install_result = codex_core_plugins::remote::install_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
             &actual_remote_marketplace_name,
@@ -1538,7 +1546,7 @@ impl PluginRequestProcessor {
 
         let mut plugin_metadata =
             plugin_telemetry_metadata_from_root(&result.plugin_id, &result.installed_path).await;
-        plugin_metadata.remote_plugin_id = Some(remote_plugin_id);
+        plugin_metadata.remote_plugin_id = Some(remote_plugin_id.clone());
         self.analytics_events_client
             .track_plugin_installed(plugin_metadata);
 
@@ -1548,15 +1556,42 @@ impl PluginRequestProcessor {
                 .await;
         }
 
-        let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
-        let apps_needing_auth = self
-            .plugin_apps_needing_auth_for_install(
-                &config,
-                auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
-                &result.plugin_id.as_key(),
-                &plugin_apps,
-            )
-            .await;
+        let is_chatgpt_auth = auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth);
+        let apps_needing_auth =
+            if let Some(app_ids_needing_auth) = install_result.app_ids_needing_auth {
+                if app_ids_needing_auth.is_empty()
+                    || !config.features.apps_enabled_for_auth(is_chatgpt_auth)
+                {
+                    Vec::new()
+                } else {
+                    let plugin_apps = app_ids_needing_auth
+                        .into_iter()
+                        .map(codex_plugin::AppConnectorId)
+                        .collect::<Vec<_>>();
+                    let all_connectors = connectors::list_cached_all_connectors(&config)
+                        .await
+                        .unwrap_or_default();
+                    connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps)
+                        .into_iter()
+                        .map(|connector| AppSummary {
+                            id: connector.id,
+                            name: connector.name,
+                            description: connector.description,
+                            install_url: connector.install_url,
+                            needs_auth: true,
+                        })
+                        .collect()
+                }
+            } else {
+                let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
+                self.plugin_apps_needing_auth_for_install(
+                    &config,
+                    is_chatgpt_auth,
+                    &result.plugin_id.as_key(),
+                    &plugin_apps,
+                )
+                .await
+            };
 
         Ok(PluginInstallResponse {
             auth_policy: remote_detail.summary.auth_policy,
@@ -1578,10 +1613,11 @@ impl PluginRequestProcessor {
         let environment_manager = self.thread_manager.environment_manager();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
             connectors::list_all_connectors_with_options(config, /*force_refetch*/ false),
-            connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+            connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 config,
                 /*force_refetch*/ true,
-                Arc::clone(&environment_manager)
+                Arc::clone(&environment_manager),
+                self.thread_manager.mcp_manager(),
             ),
         );
 
@@ -1848,6 +1884,7 @@ async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[codex_plugin::AppConnectorId],
     environment_manager: Arc<EnvironmentManager>,
+    mcp_manager: Arc<McpManager>,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
@@ -1867,10 +1904,11 @@ async fn load_plugin_app_summaries(
     let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
 
     let accessible_connectors =
-        match connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+        match connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
             config,
             /*force_refetch*/ false,
             environment_manager,
+            mcp_manager,
         )
         .await
         {

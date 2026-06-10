@@ -32,6 +32,7 @@ pub(crate) use approval_request::guardian_approval_request_to_json;
 pub(crate) use prompt::GuardianPromptMode;
 pub(crate) use prompt::build_guardian_prompt_items_with_parent_turn;
 pub(crate) use prompt::guardian_output_schema;
+pub(crate) use review::GUARDIAN_REVIEW_MAX_ATTEMPTS;
 pub(crate) use review::GuardianReviewOutcome;
 pub(crate) use review::guardian_rejection_message;
 pub(crate) use review::guardian_timeout_message;
@@ -44,7 +45,7 @@ pub(crate) use review::review_approval_request;
 pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
 pub(crate) use review::routes_approval_to_guardian_with_reviewer;
-pub(crate) use review::run_guardian_review_session;
+pub(crate) use review::run_guardian_review_session_with_retry;
 pub(crate) use review::spawn_approval_request_review;
 pub(crate) use review_session::GuardianReviewSessionManager;
 pub(crate) use review_session::prompt_cache_key_override_for_review_session;
@@ -165,7 +166,7 @@ use prompt::parse_guardian_assessment;
 #[cfg(test)]
 use prompt::render_guardian_transcript_entries;
 #[cfg(test)]
-use review::run_guardian_review_session as run_guardian_review_session_for_test;
+use review::run_guardian_review_session_with_retry as run_guardian_review_session_for_test;
 #[cfg(test)]
 use review_session::build_guardian_review_session_config as build_guardian_review_session_config_for_test;
 

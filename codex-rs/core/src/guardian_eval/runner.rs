@@ -230,13 +230,14 @@ async fn run_guardian_eval_case_inner(
         .await?;
     }
 
-    let (outcome, analytics) = guardian::run_guardian_review_session(
+    let (outcome, analytics) = guardian::run_guardian_review_session_with_retry(
         Arc::clone(&session),
         turn,
         request,
         case.retry_reason.clone(),
         guardian::guardian_output_schema(),
         /*external_cancel*/ None,
+        guardian::GUARDIAN_REVIEW_MAX_ATTEMPTS,
     )
     .await;
 
