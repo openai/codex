@@ -204,7 +204,7 @@ async fn handle_spawn_agent(
     turn.session_telemetry.counter(
         "codex.multi_agent.spawn",
         /*inc*/ 1,
-        &[("role", role_tag)],
+        &[("role", role_tag), ("version", "v1")],
     );
 
     Ok(SpawnAgentResult {
