@@ -4,6 +4,7 @@ use std::sync::PoisonError;
 use std::sync::Weak;
 use std::time::Duration;
 
+use codex_analytics::AnalyticsEventsClient;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -1114,6 +1115,7 @@ async fn installed_tools_with_start(
     install_with_backend(
         &mut builder,
         runtime,
+        AnalyticsEventsClient::disabled(),
         /*metrics_client*/ None,
         Weak::new(),
         goal_service,
@@ -1164,6 +1166,7 @@ impl GoalExtensionHarness {
         install_with_backend(
             &mut builder,
             runtime,
+            AnalyticsEventsClient::disabled(),
             /*metrics_client*/ None,
             Weak::new(),
             Arc::clone(&goal_service),
