@@ -45,6 +45,15 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        self.handle_call(invocation).await
+    }
+}
+
+impl WriteStdinHandler {
+    async fn handle_call(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,

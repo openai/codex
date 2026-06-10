@@ -66,6 +66,15 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        self.handle_call(invocation).await
+    }
+}
+
+impl RequestPluginInstallHandler {
+    async fn handle_call(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             payload,
             session,
@@ -304,10 +313,6 @@ fn is_remote_plugin_install_suggestion(plugin_id: &str) -> bool {
         .is_some_and(|(_, marketplace_name)| marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME)
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "connector cache refresh reads through the session-owned manager guard"
-)]
 async fn refresh_missing_requested_connectors(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
@@ -319,7 +324,7 @@ async fn refresh_missing_requested_connectors(
         return Some(Vec::new());
     }
 
-    let manager = session.services.mcp_connection_manager.read().await;
+    let manager = session.services.mcp_connection_manager.load_full();
     let mcp_tools = manager.list_all_tools().await;
     let accessible_connectors = connectors::with_app_enabled_state(
         connectors::accessible_connectors_from_mcp_tools(&mcp_tools),

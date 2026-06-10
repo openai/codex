@@ -40,11 +40,16 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
         true
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource listing reads through the session-owned manager guard"
-    )]
     async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        self.handle_call(invocation).await
+    }
+}
+
+impl ListMcpResourcesHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -105,8 +110,7 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
                 let resources = session
                     .services
                     .mcp_connection_manager
-                    .read()
-                    .await
+                    .load_full()
                     .list_all_resources()
                     .await;
                 Ok(ListResourcesPayload::from_all_servers(resources))
@@ -115,7 +119,7 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
         .await;
 
         match payload_result {
-            Ok(payload) => match serialize_function_output(payload) {
+            Ok(payload) => match serialize_function_output(payload, turn.truncation_policy) {
                 Ok(output) => {
                     let content = function_call_output_content_items_to_text(&output.body)
                         .unwrap_or_default();

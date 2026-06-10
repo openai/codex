@@ -1892,6 +1892,7 @@ dependencies = [
  "codex-model-provider",
  "codex-plugin",
  "codex-protocol",
+ "codex-state",
  "codex-utils-absolute-path",
  "os_info",
  "pretty_assertions",
@@ -2920,7 +2921,6 @@ dependencies = [
 name = "codex-extension-api"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-config",
  "codex-context-fragments",
  "codex-protocol",
@@ -3049,6 +3049,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "codex-analytics",
  "codex-core",
  "codex-extension-api",
  "codex-otel",
@@ -3068,7 +3069,6 @@ dependencies = [
 name = "codex-guardian"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-core",
  "codex-extension-api",
  "codex-protocol",
@@ -3253,7 +3253,6 @@ dependencies = [
 name = "codex-mcp-extension"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-config",
  "codex-core",
  "codex-core-plugins",
@@ -3342,6 +3341,8 @@ dependencies = [
  "codex-features",
  "codex-git-utils",
  "codex-login",
+ "codex-model-provider",
+ "codex-model-provider-info",
  "codex-models-manager",
  "codex-otel",
  "codex-protocol",

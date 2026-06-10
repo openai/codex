@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::info;
 use tracing::warn;
 
@@ -19,7 +20,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 
 pub(crate) struct SessionStartupPrewarmHandle {
-    task: JoinHandle<CodexResult<ModelClientSession>>,
+    task: AbortOnDropHandle<CodexResult<ModelClientSession>>,
     started_at: Instant,
     timeout: Duration,
 }
@@ -40,10 +41,15 @@ impl SessionStartupPrewarmHandle {
         timeout: Duration,
     ) -> Self {
         Self {
-            task,
+            task: AbortOnDropHandle::new(task),
             started_at,
             timeout,
         }
+    }
+
+    pub(crate) async fn abort(self) {
+        self.task.abort();
+        let _ = self.task.await;
     }
 
     async fn resolve(
@@ -260,7 +266,7 @@ async fn schedule_startup_prewarm_inner(
         build_prompt_started_at.elapsed(),
         /*status*/ None,
     );
-    let window_id = session.services.model_client.current_window_id();
+    let window_id = session.current_window_id().await;
     let startup_turn_metadata_header = startup_turn_context
         .turn_metadata_state
         .current_header_value_for_prewarm(&window_id);
@@ -268,6 +274,7 @@ async fn schedule_startup_prewarm_inner(
     let websocket_warmup_started_at = Instant::now();
     client_session
         .prewarm_websocket(
+            &window_id,
             &startup_prompt,
             &startup_turn_context.model_info,
             &startup_turn_context.session_telemetry,

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
+use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
@@ -25,23 +26,38 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadStateManager;
 
+pub(crate) struct ThreadExtensionDependencies {
+    pub(crate) event_sink: Arc<dyn ExtensionEventSink>,
+    pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) state_db: Option<StateDbHandle>,
+    pub(crate) analytics_events_client: AnalyticsEventsClient,
+    pub(crate) thread_manager: Weak<ThreadManager>,
+    pub(crate) goal_service: Arc<GoalService>,
+    pub(crate) executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider>,
+}
+
 pub(crate) fn thread_extensions<S>(
     guardian_agent_spawner: S,
-    event_sink: Arc<dyn ExtensionEventSink>,
-    auth_manager: Arc<AuthManager>,
-    state_db: Option<StateDbHandle>,
-    thread_manager: Weak<ThreadManager>,
-    goal_service: Arc<GoalService>,
-    executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider>,
+    dependencies: ThreadExtensionDependencies,
 ) -> Arc<ExtensionRegistry<Config>>
 where
     S: AgentSpawner<StartThreadOptions, Spawned = NewThread, Error = CodexErr> + 'static,
 {
+    let ThreadExtensionDependencies {
+        event_sink,
+        auth_manager,
+        state_db,
+        analytics_events_client,
+        thread_manager,
+        goal_service,
+        executor_skill_provider,
+    } = dependencies;
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
     if let Some(state_db) = state_db {
         codex_goal_extension::install_with_backend(
             &mut builder,
             state_db,
+            analytics_events_client,
             codex_otel::global(),
             thread_manager,
             goal_service,
@@ -140,7 +156,6 @@ pub(crate) fn guardian_agent_spawner(
 mod tests {
     use std::time::Duration;
 
-    use codex_analytics::AnalyticsEventsClient;
     use codex_protocol::protocol::ThreadGoal as CoreThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;

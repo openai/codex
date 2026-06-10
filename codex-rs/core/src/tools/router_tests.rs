@@ -77,6 +77,15 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
         &self,
         call: ExtensionToolCall,
     ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+        self.handle_call(call).await
+    }
+}
+
+impl ExtensionEchoExecutor {
+    async fn handle_call(
+        &self,
+        call: ExtensionToolCall,
+    ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
         let arguments: serde_json::Value =
             serde_json::from_str(call.function_arguments()?).expect("test arguments should parse");
         Ok(Box::new(codex_tools::JsonToolOutput::new(json!({
@@ -95,17 +104,12 @@ fn extension_tool_test_registry() -> Arc<ExtensionRegistry<Config>> {
 }
 
 #[tokio::test]
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "test builds a router from session-owned MCP manager state"
-)]
 async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
     let mcp_tools = session
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .list_all_tools()
         .await;
     let router = ToolRouter::from_turn_context(

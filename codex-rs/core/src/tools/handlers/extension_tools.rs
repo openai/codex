@@ -222,6 +222,15 @@ mod tests {
             &self,
             call: codex_tools::ToolCall,
         ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+            self.handle_call(call).await
+        }
+    }
+
+    impl CapturingExtensionExecutor {
+        async fn handle_call(
+            &self,
+            call: codex_tools::ToolCall,
+        ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
             let item = ExtensionTurnItem::WebSearch(WebSearchItem {
                 id: call.call_id.clone(),
                 query: "rust trait object".to_string(),
@@ -388,16 +397,17 @@ mod tests {
 
     struct RecordExtensionTurnItemContributor;
 
-    #[async_trait::async_trait]
     impl TurnItemContributor for RecordExtensionTurnItemContributor {
-        async fn contribute(
-            &self,
-            _thread_store: &ExtensionData,
-            turn_store: &ExtensionData,
-            _item: &mut TurnItem,
-        ) -> Result<(), String> {
-            turn_store.insert(ExtensionTurnItemContributorRan);
-            Ok(())
+        fn contribute<'a>(
+            &'a self,
+            _thread_store: &'a ExtensionData,
+            turn_store: &'a ExtensionData,
+            _item: &'a mut TurnItem,
+        ) -> codex_extension_api::ExtensionFuture<'a, Result<(), String>> {
+            Box::pin(async move {
+                turn_store.insert(ExtensionTurnItemContributorRan);
+                Ok(())
+            })
         }
     }
 
@@ -449,6 +459,15 @@ mod tests {
         }
 
         async fn handle(
+            &self,
+            call: codex_tools::ToolCall,
+        ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+            self.handle_call(call).await
+        }
+    }
+
+    impl ImageGenerationExtensionExecutor {
+        async fn handle_call(
             &self,
             call: codex_tools::ToolCall,
         ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {

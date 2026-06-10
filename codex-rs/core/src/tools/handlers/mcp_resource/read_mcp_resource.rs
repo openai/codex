@@ -44,6 +44,15 @@ impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        self.handle_call(invocation).await
+    }
+}
+
+impl ReadMcpResourceHandler {
+    async fn handle_call(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -93,7 +102,7 @@ impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
         .await;
 
         match payload_result {
-            Ok(payload) => match serialize_function_output(payload) {
+            Ok(payload) => match serialize_function_output(payload, turn.truncation_policy) {
                 Ok(output) => {
                     let content = function_call_output_content_items_to_text(&output.body)
                         .unwrap_or_default();

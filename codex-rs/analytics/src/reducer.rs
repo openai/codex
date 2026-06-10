@@ -15,6 +15,7 @@ use crate::events::CodexDynamicToolCallEventParams;
 use crate::events::CodexDynamicToolCallEventRequest;
 use crate::events::CodexFileChangeEventParams;
 use crate::events::CodexFileChangeEventRequest;
+use crate::events::CodexGoalEventRequest;
 use crate::events::CodexHookRunEventRequest;
 use crate::events::CodexImageGenerationEventParams;
 use crate::events::CodexImageGenerationEventRequest;
@@ -51,6 +52,7 @@ use crate::events::TrackEventRequest;
 use crate::events::WebSearchActionKind;
 use crate::events::codex_app_metadata;
 use crate::events::codex_compaction_event_params;
+use crate::events::codex_goal_event_params;
 use crate::events::codex_hook_run_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
@@ -62,6 +64,7 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginState;
@@ -187,6 +190,16 @@ impl<'a> AnalyticsDropSite<'a> {
             event_name: "compaction",
             thread_id: &input.thread_id,
             turn_id: Some(&input.turn_id),
+            review_id: None,
+            item_id: None,
+        }
+    }
+
+    fn goal(input: &'a CodexGoalEvent) -> Self {
+        Self {
+            event_name: "goal",
+            thread_id: &input.thread_id,
+            turn_id: input.turn_id.as_deref(),
             review_id: None,
             item_id: None,
         }
@@ -460,6 +473,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::Compaction(input) => {
                     self.ingest_compaction(*input, out);
+                }
+                CustomAnalyticsFact::Goal(input) => {
+                    self.ingest_goal(*input, out);
                 }
                 CustomAnalyticsFact::GuardianReview(input) => {
                     self.ingest_guardian_review(*input, out);
@@ -1269,6 +1285,26 @@ impl AnalyticsReducer {
                 ),
             },
         )));
+    }
+
+    fn ingest_goal(&mut self, input: CodexGoalEvent, out: &mut Vec<TrackEventRequest>) {
+        let Some((connection_state, thread_metadata)) =
+            self.thread_context_or_warn(AnalyticsDropSite::goal(&input))
+        else {
+            return;
+        };
+        out.push(TrackEventRequest::Goal(Box::new(CodexGoalEventRequest {
+            event_type: "codex_goal_event",
+            event_params: codex_goal_event_params(
+                input,
+                thread_metadata.session_id.clone(),
+                connection_state.app_server_client.clone(),
+                connection_state.runtime.clone(),
+                thread_metadata.thread_source.clone(),
+                thread_metadata.subagent_source.clone(),
+                thread_metadata.parent_thread_id.clone(),
+            ),
+        })));
     }
 
     fn ingest_guardian_review_completed(
