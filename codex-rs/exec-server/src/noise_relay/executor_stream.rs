@@ -168,7 +168,7 @@ pub(super) fn spawn_noise_virtual_stream(
         incoming_rx,
         disconnected_rx,
         task_handles: vec![writer_task],
-        transport: JsonRpcTransport::External,
+        transport: JsonRpcTransport::Plain,
     };
     tokio::spawn(async move {
         processor.run_connection(connection).await;

@@ -22,15 +22,12 @@ the wire.
 The CLI entrypoint supports:
 
 - `ws://IP:PORT` (default)
-- `--remote URL --environment-id ID [--name NAME] [--disable-noise]`
+- `--remote URL --environment-id ID [--name NAME]`
 
 Remote mode registers the local exec-server with the environment registry,
 then reconnects to the service-provided rendezvous websocket as the environment.
-It uses Noise-encrypted relay registration by default and requires both the
-registry and harness to support the Noise relay contract. `--disable-noise`
-explicitly selects the legacy plaintext relay contract when compatibility with
-an older registry or harness is required. Container entrypoints can make the
-same explicit choice by setting `CODEX_EXEC_SERVER_DISABLE_NOISE=true`.
+Remote communication uses the Noise relay contract; the registry and harness
+must support it.
 It uses the standard Codex ChatGPT sign-in state; run `codex login` first when
 remote registration needs authentication. Containerized callers that receive an
 Agent Identity JWT in `CODEX_ACCESS_TOKEN` can opt into that auth path with
@@ -50,7 +47,6 @@ codex exec-server \
 Wire framing:
 
 - local websocket: one JSON-RPC message per websocket frame
-- legacy remote websocket: binary protobuf relay frames carrying JSON-RPC payloads
 - Noise remote websocket: binary protobuf relay frames carrying encrypted payloads
 
 ## Remote Relay Message Format

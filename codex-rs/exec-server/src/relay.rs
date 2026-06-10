@@ -1,16 +1,11 @@
-use std::collections::HashMap;
-
 use codex_app_server_protocol::JSONRPCMessage;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
 use prost::Message as ProstMessage;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
-use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::debug;
 use tracing::warn;
@@ -27,7 +22,6 @@ use crate::relay_proto::RelayMessageFrame;
 use crate::relay_proto::RelayReset;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
-use crate::server::ConnectionProcessor;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
 const MAX_RELAY_RESET_REASON_BYTES: usize = 256;
@@ -369,198 +363,6 @@ where
         disconnected_rx,
         task_handles: vec![websocket_task],
         transport: JsonRpcTransport::Plain,
-    }
-}
-
-/// Runs the backwards-compatible, cleartext multiplexed relay protocol.
-///
-/// The physical websocket carries protobuf [`RelayMessageFrame`] values. Each
-/// frame's `stream_id` selects an independent logical JSON-RPC connection, so a
-/// single registered exec-server can serve multiple orchestrator sessions.
-/// This runner intentionally preserves the protocol used before Noise relay
-/// support was introduced. Callers must select the separate secure runner when
-/// Noise protection was explicitly negotiated during registration.
-///
-/// Relay framing is not an authentication boundary. Every frame is validated
-/// before its routing metadata or payload is used, and malformed frames are
-/// dropped without affecting the other virtual streams on the connection.
-pub(crate) async fn run_multiplexed_environment<S>(
-    stream: WebSocketStream<S>,
-    processor: ConnectionProcessor,
-) where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-{
-    let mut websocket = stream;
-    let (physical_outgoing_tx, mut physical_outgoing_rx) =
-        mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
-
-    let mut streams: HashMap<String, VirtualStream> = HashMap::new();
-    loop {
-        // Serialize all logical-stream writes through this task so only one
-        // owner writes to the physical websocket. Reads remain in the same
-        // select loop, which also keeps disconnect handling deterministic.
-        let frame = tokio::select! {
-            maybe_encoded = physical_outgoing_rx.recv() => {
-                let Some(encoded) = maybe_encoded else {
-                    break;
-                };
-                if websocket.send(Message::Binary(encoded.into())).await.is_err() {
-                    break;
-                }
-                continue;
-            }
-            incoming_message = websocket.next() => match incoming_message {
-                Some(Ok(Message::Binary(payload))) => {
-                    match decode_relay_message_frame(payload.as_ref()) {
-                        Ok(frame) => frame,
-                        Err(err) => {
-                            warn!("dropping malformed relay message frame from harness: {err}");
-                            continue;
-                        }
-                    }
-                }
-                Some(Ok(Message::Close(_))) | None => break,
-                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => continue,
-                Some(Ok(Message::Text(_))) => {
-                    warn!("dropping non-binary relay message frame from harness");
-                    continue;
-                }
-                Some(Err(err)) => {
-                    debug!("multiplexed environment websocket read failed: {err}");
-                    break;
-                }
-            }
-        };
-
-        let kind = match frame.validate() {
-            Ok(kind) => kind,
-            Err(err) => {
-                warn!("dropping invalid relay message frame: {err}");
-                continue;
-            }
-        };
-
-        match kind {
-            RelayFrameBodyKind::Data => {
-                let stream_id = frame.stream_id.clone();
-                let message = match frame.into_jsonrpc_message() {
-                    Ok(message) => message,
-                    Err(err) => {
-                        warn!("dropping malformed relay data message frame: {err}");
-                        continue;
-                    }
-                };
-
-                // A logical connection is created lazily on its first data
-                // frame. The connection processor owns the JSON-RPC lifecycle;
-                // this task only translates between relay and connection
-                // events.
-                let stream = streams.entry(stream_id.clone()).or_insert_with(|| {
-                    spawn_virtual_stream(
-                        stream_id.clone(),
-                        processor.clone(),
-                        physical_outgoing_tx.clone(),
-                    )
-                });
-                if stream
-                    .incoming_tx
-                    .send(JsonRpcConnectionEvent::Message(message))
-                    .await
-                    .is_err()
-                {
-                    streams.remove(&stream_id);
-                }
-            }
-            RelayFrameBodyKind::Reset => {
-                if let Some(stream) = streams.remove(&frame.stream_id) {
-                    stream.disconnect(frame.into_reset_reason()).await;
-                }
-            }
-            // These control frames are meaningful to other relay protocol
-            // variants. The legacy protocol has no resume or handshake state,
-            // so ignoring them preserves its existing wire behavior.
-            RelayFrameBodyKind::Ack
-            | RelayFrameBodyKind::Resume
-            | RelayFrameBodyKind::Heartbeat
-            | RelayFrameBodyKind::Handshake => {}
-        }
-    }
-
-    // A physical disconnect ends every virtual connection. Notify each
-    // processor explicitly so requests do not remain live after the relay
-    // websocket has disappeared.
-    for (_stream_id, stream) in streams {
-        stream.disconnect(/*reason*/ None).await;
-    }
-    drop(physical_outgoing_tx);
-}
-
-/// The exec-server-facing half of one logical connection on the shared relay.
-struct VirtualStream {
-    incoming_tx: mpsc::Sender<JsonRpcConnectionEvent>,
-    disconnected_tx: watch::Sender<bool>,
-}
-
-impl VirtualStream {
-    /// Marks the logical connection disconnected and supplies the peer's reset
-    /// reason, when one was provided.
-    async fn disconnect(self, reason: Option<String>) {
-        let _ = self.disconnected_tx.send(true);
-        let _ = self
-            .incoming_tx
-            .send(JsonRpcConnectionEvent::Disconnected { reason })
-            .await;
-    }
-}
-
-/// Creates a logical JSON-RPC connection and forwards its outgoing messages
-/// back to the physical relay writer as legacy cleartext data frames.
-fn spawn_virtual_stream(
-    stream_id: String,
-    processor: ConnectionProcessor,
-    physical_outgoing_tx: mpsc::Sender<Vec<u8>>,
-) -> VirtualStream {
-    let (json_outgoing_tx, mut json_outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (disconnected_tx, disconnected_rx) = watch::channel(false);
-
-    let writer_stream_id = stream_id;
-    let writer_task = tokio::spawn(async move {
-        let mut next_seq = 0u32;
-        while let Some(message) = json_outgoing_rx.recv().await {
-            let payload = match jsonrpc_payload(&message) {
-                Ok(payload) => payload,
-                Err(err) => {
-                    warn!("failed to serialize virtual stream JSON-RPC payload: {err}");
-                    break;
-                }
-            };
-            let frame = RelayMessageFrame::data(writer_stream_id.clone(), next_seq, payload);
-            next_seq = next_seq.wrapping_add(1);
-            if physical_outgoing_tx
-                .send(encode_relay_message_frame(&frame))
-                .await
-                .is_err()
-            {
-                break;
-            }
-        }
-    });
-
-    let connection = JsonRpcConnection {
-        outgoing_tx: json_outgoing_tx,
-        incoming_rx,
-        disconnected_rx,
-        task_handles: vec![writer_task],
-        transport: JsonRpcTransport::Plain,
-    };
-    tokio::spawn(async move {
-        processor.run_connection(connection).await;
-    });
-
-    VirtualStream {
-        incoming_tx,
-        disconnected_tx,
     }
 }
 

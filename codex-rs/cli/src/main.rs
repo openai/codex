@@ -568,14 +568,6 @@ struct ExecServerCommand {
     /// Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration.
     #[arg(long = "use-agent-identity-auth", requires = "remote")]
     use_agent_identity_auth: bool,
-
-    /// Use the legacy plaintext relay protocol instead of Noise for remote communication.
-    #[arg(
-        long = "disable-noise",
-        env = "CODEX_EXEC_SERVER_DISABLE_NOISE",
-        requires = "remote"
-    )]
-    disable_noise: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1646,9 +1638,6 @@ async fn run_exec_server_command(
         )?;
         if let Some(name) = cmd.name {
             remote_config.name = name;
-        }
-        if cmd.disable_noise {
-            remote_config.relay_protocol = codex_exec_server::RemoteRelayProtocol::Legacy;
         }
         codex_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
         Ok(())
@@ -3359,47 +3348,6 @@ mod tests {
 
         reject_root_strict_config_for_subcommand(cli.interactive.strict_config, &cli.subcommand)
             .expect("exec-server should support root --strict-config");
-    }
-
-    #[test]
-    fn exec_server_disable_noise_is_explicit_remote_opt_out() {
-        let noise_cli = MultitoolCli::try_parse_from([
-            "codex",
-            "exec-server",
-            "--remote",
-            "https://registry.example",
-            "--environment-id",
-            "environment-1",
-        ])
-        .expect("parse Noise default");
-        assert_matches!(
-            noise_cli.subcommand,
-            Some(Subcommand::ExecServer(ExecServerCommand {
-                disable_noise: false,
-                ..
-            }))
-        );
-
-        let legacy_cli = MultitoolCli::try_parse_from([
-            "codex",
-            "exec-server",
-            "--remote",
-            "https://registry.example",
-            "--environment-id",
-            "environment-1",
-            "--disable-noise",
-        ])
-        .expect("parse");
-
-        assert_matches!(
-            legacy_cli.subcommand,
-            Some(Subcommand::ExecServer(ExecServerCommand {
-                disable_noise: true,
-                ..
-            }))
-        );
-        MultitoolCli::try_parse_from(["codex", "exec-server", "--disable-noise"])
-            .expect_err("--disable-noise should require --remote");
     }
 
     #[test]
