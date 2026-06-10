@@ -137,6 +137,15 @@ fn test_supports_remote_compaction_for_openai() {
     let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
 
     assert!(provider.supports_remote_compaction());
+    assert!(provider.supports_remote_compaction_v2());
+}
+
+#[test]
+fn test_supports_remote_compaction_for_amazon_bedrock() {
+    let provider = ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+
+    assert!(provider.supports_remote_compaction());
+    assert!(!provider.supports_remote_compaction_v2());
 }
 
 #[test]
@@ -171,6 +180,7 @@ fn test_supports_remote_compaction_for_azure_name() {
     };
 
     assert!(provider.supports_remote_compaction());
+    assert!(!provider.supports_remote_compaction_v2());
 }
 
 #[test]
@@ -196,6 +206,7 @@ fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
     };
 
     assert!(!provider.supports_remote_compaction());
+    assert!(!provider.supports_remote_compaction_v2());
 }
 
 #[test]

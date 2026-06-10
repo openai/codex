@@ -36,7 +36,7 @@ use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
-use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::test_codex as base_test_codex;
 use core_test_support::test_path_buf;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
@@ -158,6 +158,12 @@ fn compacted_summary_only_output(summary: &str) -> Vec<ResponseItem> {
     vec![ResponseItem::Compaction {
         encrypted_content: summary_with_prefix(summary),
     }]
+}
+
+fn test_codex() -> TestCodexBuilder {
+    base_test_codex().with_config(|config| {
+        let _ = config.features.disable(Feature::RemoteCompactionV2);
+    })
 }
 
 fn remote_realtime_test_codex_builder(
@@ -1126,7 +1132,8 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut builder =
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let mut test = builder.build(&server).await?;
     let hidden_tool = "hidden_dynamic_tool";
     let visible_tool = "visible_dynamic_tool";
@@ -2594,7 +2601,8 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
     let server = wiremock::MockServer::start().await;
     let stale_developer_message = "STALE_DEVELOPER_INSTRUCTIONS_SHOULD_BE_REMOVED";
 
-    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut builder =
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let test = builder.build(&server).await?;
 
     let responses_mock = responses::mount_sse_sequence(

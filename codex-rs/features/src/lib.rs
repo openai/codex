@@ -209,7 +209,7 @@ pub enum Feature {
     RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
-    /// Enable remote compaction v2 over the normal Responses API.
+    /// Use remote compaction v2 for OpenAI over the normal Responses API.
     RemoteCompactionV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
@@ -1237,8 +1237,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteCompactionV2,
         key: "remote_compaction_v2",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WorkspaceDependencies,

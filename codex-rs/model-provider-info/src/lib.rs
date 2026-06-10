@@ -397,7 +397,13 @@ impl ModelProviderInfo {
     }
 
     pub fn supports_remote_compaction(&self) -> bool {
-        self.is_openai() || is_azure_responses_provider(&self.name, self.base_url.as_deref())
+        self.is_openai()
+            || self.is_amazon_bedrock()
+            || is_azure_responses_provider(&self.name, self.base_url.as_deref())
+    }
+
+    pub fn supports_remote_compaction_v2(&self) -> bool {
+        self.is_openai()
     }
 
     pub fn has_command_auth(&self) -> bool {

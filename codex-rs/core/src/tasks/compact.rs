@@ -33,6 +33,7 @@ impl SessionTask for CompactTask {
             if ctx
                 .features
                 .enabled(codex_features::Feature::RemoteCompactionV2)
+                && ctx.provider.info().supports_remote_compaction_v2()
             {
                 emit_compact_metric(
                     &session.services.session_telemetry,

@@ -849,7 +849,9 @@ async fn run_auto_compact(
     phase: CompactionPhase,
 ) -> CodexResult<()> {
     if should_use_remote_compact_task(turn_context.provider.info()) {
-        if turn_context.features.enabled(Feature::RemoteCompactionV2) {
+        if turn_context.features.enabled(Feature::RemoteCompactionV2)
+            && turn_context.provider.info().supports_remote_compaction_v2()
+        {
             emit_compact_metric(
                 &sess.services.session_telemetry,
                 "remote_v2",
