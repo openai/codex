@@ -1203,6 +1203,7 @@ async fn handle_handoff_output(
     let result = match event_parser {
         RealtimeEventParser::V1 => match handoff_output {
             HandoffOutput::StandaloneAssistantOutput { output_text } => {
+                // TODO(guinness): Use the new client event for standalone handoffs once the API changes are complete.
                 writer
                     .send_conversation_handoff_append(
                         STANDALONE_HANDOFF_ID.to_string(),
