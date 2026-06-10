@@ -36,7 +36,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
 use codex_utils_cli::SharedCliOptions;
-use codex_utils_cli::resume_hint;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::io::Write;
@@ -685,10 +684,11 @@ fn parse_socket_path(raw: &str) -> Result<AbsolutePathBuf, String> {
 }
 
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
+    let is_fatal = matches!(&exit_info.exit_reason, ExitReason::Fatal(_));
     let AppExitInfo {
         token_usage,
         thread_id: conversation_id,
-        thread_name,
+        resume_hint,
         ..
     } = exit_info;
 
@@ -697,13 +697,15 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         lines.push(token_usage.to_string());
     }
 
-    if let Some(resume_cmd) = resume_hint(thread_name.as_deref(), conversation_id) {
+    if let Some(resume_cmd) = resume_hint {
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
             resume_cmd
         };
         lines.push(format!("To continue this session, run {command}"));
+    } else if is_fatal && let Some(conversation_id) = conversation_id {
+        lines.push(format!("Session ID: {conversation_id}"));
     }
 
     lines
@@ -2982,12 +2984,13 @@ mod tests {
             total_tokens: 2,
             ..Default::default()
         };
+        let thread_id = conversation_id
+            .map(ThreadId::from_string)
+            .map(Result::unwrap);
         AppExitInfo {
             token_usage,
-            thread_id: conversation_id
-                .map(ThreadId::from_string)
-                .map(Result::unwrap),
-            thread_name: thread_name.map(str::to_string),
+            thread_id,
+            resume_hint: codex_utils_cli::resume_hint(thread_name, thread_id),
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         }
@@ -2998,12 +3001,28 @@ mod tests {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
             thread_id: None,
-            thread_name: None,
+            resume_hint: None,
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         };
         let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn format_exit_messages_includes_session_id_for_fatal_exit_without_resume_hint() {
+        let exit_info = AppExitInfo {
+            token_usage: TokenUsage::default(),
+            thread_id: Some(ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap()),
+            resume_hint: None,
+            update_action: None,
+            exit_reason: ExitReason::Fatal("boom".to_string()),
+        };
+        let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
+        assert_eq!(
+            lines,
+            vec!["Session ID: 123e4567-e89b-12d3-a456-426614174000".to_string()]
+        );
     }
 
     #[test]
