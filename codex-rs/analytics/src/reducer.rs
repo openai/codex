@@ -1300,7 +1300,7 @@ impl AnalyticsReducer {
                 thread_metadata.session_id.clone(),
                 connection_state.app_server_client.clone(),
                 connection_state.runtime.clone(),
-                thread_metadata.thread_source,
+                thread_metadata.thread_source.clone(),
                 thread_metadata.subagent_source.clone(),
                 thread_metadata.parent_thread_id.clone(),
             ),
