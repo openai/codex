@@ -992,7 +992,10 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
+        Ok(Op::RunUserShellCommand {
+            environment_id: None,
+            command,
+        }) => assert_eq!(command, "echo hi"),
         other => panic!("expected RunUserShellCommand op, got {other:?}"),
     }
     assert_matches!(
