@@ -275,7 +275,7 @@ impl ExternalAgentConfigMigrationScreen {
             })
             .collect::<Vec<_>>();
         let selected_item_idx = (!groups.is_empty()).then_some(0);
-        Self {
+        let mut screen = Self {
             request_frame,
             items,
             groups,
@@ -287,7 +287,9 @@ impl ExternalAgentConfigMigrationScreen {
             done: false,
             outcome: ExternalAgentConfigMigrationOutcome::Skip,
             error,
-        }
+        };
+        screen.normalize_highlighted_action();
+        screen
     }
 
     fn plugin_detail_lines(plugin_groups: &[PluginsMigration]) -> Vec<Line<'static>> {
@@ -947,6 +949,22 @@ mod tests {
         screen.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
 
+        assert_eq!(screen.view, MigrationView::Customize);
+    }
+
+    #[test]
+    fn empty_selection_enter_opens_customize_instead_of_proceeding() {
+        let items = sample_items();
+        let mut screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &[],
+            /*error*/ None,
+        );
+
+        screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(!screen.is_done());
         assert_eq!(screen.view, MigrationView::Customize);
     }
 
