@@ -515,6 +515,7 @@ required = true
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let response: JSONRPCResponse = timeout(

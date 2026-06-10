@@ -48,6 +48,10 @@ mod tests {
     use crate::ListTurnsParams;
     use crate::SortDirection;
     use crate::StoredTurnItemsView;
+    use crate::ThreadPersistenceMetadata;
+    use crate::ThreadSortKey;
+    use codex_protocol::models::BaseInstructions;
+    use codex_protocol::protocol::SessionSource;
 
     #[tokio::test]
     async fn default_turn_pagination_methods_return_unsupported() {
@@ -89,6 +93,68 @@ mod tests {
                 operation: "list_items"
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn list_threads_filters_by_parent_thread_id() {
+        let store = InMemoryThreadStore::default();
+        let parent_thread_id = ThreadId::default();
+        let child_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+        let unrelated_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread id");
+
+        for (thread_id, parent_thread_id) in [
+            (child_thread_id, Some(parent_thread_id)),
+            (unrelated_thread_id, None),
+        ] {
+            store
+                .create_thread(CreateThreadParams {
+                    thread_id,
+                    extra_config: None,
+                    forked_from_id: None,
+                    parent_thread_id,
+                    source: SessionSource::Exec,
+                    thread_source: None,
+                    base_instructions: BaseInstructions::default(),
+                    dynamic_tools: Vec::new(),
+                    multi_agent_version: None,
+                    metadata: ThreadPersistenceMetadata {
+                        cwd: None,
+                        model_provider: "test-provider".to_string(),
+                        memory_mode: ThreadMemoryMode::Enabled,
+                    },
+                })
+                .await
+                .expect("create thread");
+        }
+
+        let page = ThreadStore::list_threads(
+            &store,
+            ListThreadsParams {
+                page_size: 10,
+                cursor: None,
+                sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: Vec::new(),
+                model_providers: None,
+                cwd_filters: None,
+                archived: false,
+                search_term: None,
+                parent_thread_id: Some(parent_thread_id),
+                use_state_db_only: false,
+            },
+        )
+        .await
+            .expect("list child threads");
+
+        assert_eq!(
+            page.items
+                .into_iter()
+                .map(|item| item.thread_id)
+                .collect::<Vec<_>>(),
+            vec![child_thread_id]
+        );
     }
 }
 
@@ -385,8 +451,15 @@ impl ThreadStore for InMemoryThreadStore {
         ))
     }
 
-    fn list_threads(&self, _params: ListThreadsParams) -> ThreadStoreFuture<'_, ThreadPage> {
-        Box::pin(InMemoryThreadStore::list_threads(self))
+    fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreFuture<'_, ThreadPage> {
+        Box::pin(async move {
+            let mut page = InMemoryThreadStore::list_threads(self).await?;
+            if let Some(parent_thread_id) = params.parent_thread_id {
+                page.items
+                    .retain(|thread| thread.parent_thread_id == Some(parent_thread_id));
+            }
+            Ok(page)
+        })
     }
 
     fn update_thread_metadata(

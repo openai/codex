@@ -137,19 +137,34 @@ pub struct ThreadListConfig<'a> {
     pub layout: ThreadListLayout,
 }
 
-/// Pagination cursor identifying the timestamp of the last item in a page.
+/// Pagination cursor identifying the last item in a page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
     ts: OffsetDateTime,
+    thread_id: Option<ThreadId>,
 }
 
 impl Cursor {
     fn new(ts: OffsetDateTime) -> Self {
-        Self { ts }
+        Self {
+            ts,
+            thread_id: None,
+        }
+    }
+
+    fn with_thread_id(ts: OffsetDateTime, thread_id: ThreadId) -> Self {
+        Self {
+            ts,
+            thread_id: Some(thread_id),
+        }
     }
 
     pub(crate) fn timestamp(&self) -> OffsetDateTime {
         self.ts
+    }
+
+    pub(crate) fn thread_id(&self) -> Option<ThreadId> {
+        self.thread_id
     }
 }
 
@@ -287,7 +302,10 @@ impl serde::Serialize for Cursor {
             .ts
             .format(&Rfc3339)
             .map_err(|e| serde::ser::Error::custom(format!("format error: {e}")))?;
-        serializer.serialize_str(&ts_str)
+        match self.thread_id {
+            Some(thread_id) => serializer.serialize_str(&format!("{ts_str}|{thread_id}")),
+            None => serializer.serialize_str(&ts_str),
+        }
     }
 }
 
@@ -308,7 +326,10 @@ impl From<codex_state::Anchor> for Cursor {
             .timestamp_nanos_opt()
             .and_then(|nanos| OffsetDateTime::from_unix_timestamp_nanos(nanos as i128).ok())
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-        Self::new(ts)
+        match anchor.thread_id {
+            Some(thread_id) => Self::with_thread_id(ts, thread_id),
+            None => Self::new(ts),
+        }
     }
 }
 
@@ -702,21 +723,29 @@ async fn traverse_flat_paths_updated(
     })
 }
 
-/// Pagination cursor token format: an RFC3339 timestamp.
+/// Pagination cursor token format: an RFC3339 timestamp with an optional thread ID tie-breaker.
 pub fn parse_cursor(token: &str) -> Option<Cursor> {
-    if token.contains('|') {
+    let mut parts = token.split('|');
+    let timestamp = parts.next()?;
+    let thread_id = parts.next().map(ThreadId::from_string).transpose().ok()?;
+    if parts.next().is_some() {
         return None;
     }
 
-    let ts = OffsetDateTime::parse(token, &Rfc3339).ok().or_else(|| {
-        let format: &[FormatItem] =
-            format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-        PrimitiveDateTime::parse(token, format)
-            .ok()
-            .map(PrimitiveDateTime::assume_utc)
-    })?;
+    let ts = OffsetDateTime::parse(timestamp, &Rfc3339)
+        .ok()
+        .or_else(|| {
+            let format: &[FormatItem] =
+                format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+            PrimitiveDateTime::parse(timestamp, format)
+                .ok()
+                .map(PrimitiveDateTime::assume_utc)
+        })?;
 
-    Some(Cursor::new(ts))
+    Some(match thread_id {
+        Some(thread_id) => Cursor::with_thread_id(ts, thread_id),
+        None => Cursor::new(ts),
+    })
 }
 
 fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cursor> {
