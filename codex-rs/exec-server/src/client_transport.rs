@@ -49,8 +49,7 @@ impl ExecServerClient {
             }
             crate::client_api::ExecServerTransportParams::NoiseRendezvous { provider } => {
                 let args = provider.connect_args().await?;
-                // Keep the configured environment and the freshly authorized
-                // bundle bound together before opening the websocket.
+                // A provider must not return credentials for another environment.
                 if args.bundle.environment_id != provider.environment_id() {
                     return Err(ExecServerError::Protocol(
                         "Noise rendezvous provider returned a different environment id".to_string(),
@@ -99,20 +98,15 @@ impl ExecServerClient {
         Self::connect(connection, args.into()).await
     }
 
-    /// Connects to one exec-server through an authenticated, encrypted rendezvous stream.
-    ///
-    /// This method pins the executor's Noise public key from `args`, completes
-    /// the encrypted channel before starting JSON-RPC, and uses the rendezvous
-    /// websocket only as a ciphertext transport. Callers are responsible for
-    /// obtaining a fresh atomic connect bundle for every physical connection.
+    /// Connect to one exec-server through an authenticated rendezvous stream.
+    /// The executor key is pinned before JSON-RPC starts; the websocket carries
+    /// only ciphertext after that.
     pub async fn connect_noise_rendezvous(
         args: NoiseRendezvousConnectArgs,
     ) -> Result<Self, ExecServerError> {
         ensure_rustls_crypto_provider();
-        // This connect call owns the complete registry-issued bundle. Move each
-        // sensitive value into the transport task exactly once rather than
-        // leaving extra copies of the harness authorization or endpoint identity
-        // alive in `args` after the handshake starts.
+        // Keep the registry-issued URL, key, and authorization together for this
+        // connection attempt.
         let NoiseRendezvousConnectArgs {
             bundle,
             harness_identity,

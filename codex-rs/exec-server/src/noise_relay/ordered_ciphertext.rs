@@ -6,13 +6,8 @@ const MAX_REORDER_DISTANCE: u32 = 64;
 const MAX_PENDING_FRAMES: usize = 64;
 const MAX_PENDING_BYTES: usize = 1024 * 1024;
 
-/// Bounded pre-decryption reorder buffer for Noise transport records.
-///
-/// Relay delivery can be duplicated or reordered, but Noise transport nonces
-/// are strictly ordered. This type absorbs only a small reliable-delivery
-/// window and releases ciphertexts exactly once in nonce order. It must sit
-/// before `NoiseTransport::decrypt`; attempting to decrypt a future record
-/// would advance or desynchronize cryptographic state.
+/// Reorders relay records before they reach Noise's implicit receive nonce.
+/// The window is bounded, and each sequence number is released at most once.
 #[derive(Default)]
 pub(crate) struct OrderedCiphertextFrames {
     next_seq: u32,
@@ -30,16 +25,12 @@ impl OrderedCiphertextFrames {
         seq: u32,
         payload: Vec<u8>,
     ) -> Result<Vec<Vec<u8>>, ExecServerError> {
-        // Already-delivered and already-buffered frames are retries. Keep the
-        // first buffered ciphertext for a sequence so a duplicate cannot
-        // replace it before authentication.
+        // Keep the first ciphertext for a sequence. Later copies are duplicates.
         if seq < self.next_seq || self.pending.contains_key(&seq) {
             return Ok(Vec::new());
         }
         if seq > self.next_seq {
-            // Bound both sequence distance and actual buffered memory. Without
-            // both limits, an authenticated peer could hold the stream open
-            // while forcing unbounded pre-decryption state.
+            // Bound both the sequence gap and buffered bytes.
             if seq - self.next_seq > MAX_REORDER_DISTANCE {
                 return Err(ExecServerError::Protocol(
                     "Noise relay ciphertext exceeds reorder window".to_string(),
@@ -63,8 +54,7 @@ impl OrderedCiphertextFrames {
             return Ok(Vec::new());
         }
 
-        // The expected record closes the current gap. Release it and every
-        // contiguous buffered successor so Noise sees exactly nonce order.
+        // Release the expected record and anything now contiguous behind it.
         let mut ready = vec![payload];
         self.advance()?;
         while let Some(payload) = self.pending.remove(&self.next_seq) {

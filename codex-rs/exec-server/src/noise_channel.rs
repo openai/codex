@@ -139,10 +139,9 @@ pub(crate) struct InitiatorHandshake {
 }
 
 impl InitiatorHandshake {
-    /// Start hybrid IK while pinning the expected responder static key.
-    ///
-    /// `payload` is encrypted by the first IK message. The relay uses it for
-    /// the short-lived registry authorization naming this harness public key.
+    /// Start hybrid IK and pin the expected executor key.
+    /// `payload` carries the short-lived registry authorization inside the first
+    /// encrypted handshake message.
     pub(crate) fn start(
         identity: &NoiseChannelIdentity,
         responder_public_key: &NoiseChannelPublicKey,
@@ -151,9 +150,7 @@ impl InitiatorHandshake {
     ) -> Result<(Self, Vec<u8>), NoiseChannelError> {
         let (responder_dh, responder_kem) = responder_public_key.decode()?;
 
-        // IK authenticates both static identities. Supplying both responder
-        // components here is what makes a misrouted or impersonating
-        // exec-server fail before any JSON-RPC plaintext is released.
+        // Both executor key components are pinned before any JSON-RPC is sent.
         let params = HybridHandshakeParams::new(noise_hybrid_ik(), true)
             .with_prologue(prologue)
             .with_s(identity.dh.clone())
@@ -166,10 +163,8 @@ impl InitiatorHandshake {
         Ok((Self { handshake }, output[..output_len].to_vec()))
     }
 
-    /// Consume the responder message and enter transport mode.
-    ///
-    /// The responder message carries no application payload in v1. Rejecting
-    /// one keeps future protocol additions from becoming an implicit channel.
+    /// Consume the executor response and enter transport mode.
+    /// The v1 response does not carry an application payload.
     pub(crate) fn finish(mut self, response: &[u8]) -> Result<NoiseTransport, NoiseChannelError> {
         ensure_noise_frame_len(response.len(), "handshake response is too large")?;
         let mut payload = [0u8; MAX_MESSAGE_LEN];
@@ -193,10 +188,7 @@ pub(crate) struct NoiseTransport {
 }
 
 impl NoiseTransport {
-    /// Encrypt exactly one ordered transport record.
-    ///
-    /// The caller owns relay sequence assignment and must never encrypt the
-    /// same logical record twice under different transport nonces.
+    /// Encrypt the next transport record.
     pub(crate) fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, NoiseChannelError> {
         if self.transport.sending_nonce() >= MAX_TRANSPORT_RECORDS_PER_DIRECTION {
             return Err(NoiseChannelError::InvalidState(
@@ -210,10 +202,7 @@ impl NoiseTransport {
         Ok(self.transport.send_vec(plaintext)?)
     }
 
-    /// Decrypt exactly the next ordered transport record.
-    ///
-    /// Clatter advances the receiving nonce during this call, so callers must
-    /// reorder and deduplicate relay frames before invoking it.
+    /// Decrypt the next ordered transport record.
     pub(crate) fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, NoiseChannelError> {
         if self.transport.receiving_nonce() >= MAX_TRANSPORT_RECORDS_PER_DIRECTION {
             return Err(NoiseChannelError::InvalidState(
@@ -230,11 +219,9 @@ impl NoiseTransport {
     }
 }
 
-/// Build the transcript prologue that binds cryptographic identity to routing.
-///
-/// A handshake captured from one environment, exec-server registration, or
-/// relay stream cannot be replayed into another because every participant must
-/// construct the same prologue before the first Noise message is processed.
+/// Bind the handshake to one environment registration and relay stream.
+/// Both peers include these values in the Noise transcript before processing
+/// the first handshake message.
 pub(crate) fn noise_channel_prologue(
     environment_id: &str,
     executor_registration_id: &str,
