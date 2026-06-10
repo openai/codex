@@ -11,6 +11,7 @@ use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
 use crate::app_event::PermissionProfileSelection;
+use crate::app_event::PluginLocation;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
@@ -62,6 +63,7 @@ use crate::multi_agents::agent_picker_status_dot_spans;
 use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
+use crate::multi_agents::sub_agent_activity_display;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -198,6 +200,7 @@ use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_message_consolidation;
 mod agent_navigation;
+mod agent_status_feed;
 mod app_server_event_targets;
 mod app_server_events;
 pub(crate) mod app_server_requests;
@@ -261,6 +264,20 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
                 receiver_thread_ids,
                 ..
             } => Some(receiver_thread_ids),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn sub_agent_activity_item(notification: &ServerNotification) -> Option<&ThreadItem> {
+    match notification {
+        ServerNotification::ItemStarted(notification) => match &notification.item {
+            ThreadItem::SubAgentActivity { .. } => Some(&notification.item),
+            _ => None,
+        },
+        ServerNotification::ItemCompleted(notification) => match &notification.item {
+            ThreadItem::SubAgentActivity { .. } => Some(&notification.item),
             _ => None,
         },
         _ => None,
@@ -680,6 +697,25 @@ fn archived_session_guidance(err: &color_eyre::eyre::Report) -> Option<String> {
         .split_once(" (code ")
         .map_or(message, |(message, _)| message);
     Some(message.to_string())
+}
+
+fn active_turn_interrupt_race(error: &TypedRequestError) -> Option<String> {
+    let TypedRequestError::Server { method, source } = error else {
+        return None;
+    };
+    if method != "turn/interrupt" {
+        return None;
+    }
+    let mismatch_prefix = "expected active turn id ";
+    let mismatch_separator = " but found ";
+    Some(
+        source
+            .message
+            .strip_prefix(mismatch_prefix)?
+            .split_once(mismatch_separator)?
+            .1
+            .to_string(),
+    )
 }
 
 impl App {

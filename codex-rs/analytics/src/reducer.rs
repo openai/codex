@@ -360,7 +360,9 @@ impl TurnToolCounts {
             ThreadItem::FileChange { .. } => self.file_change += 1,
             ThreadItem::McpToolCall { .. } => self.mcp_tool_call += 1,
             ThreadItem::DynamicToolCall { .. } => self.dynamic_tool_call += 1,
-            ThreadItem::CollabAgentToolCall { .. } => self.subagent_tool_call += 1,
+            ThreadItem::CollabAgentToolCall { .. } | ThreadItem::SubAgentActivity { .. } => {
+                self.subagent_tool_call += 1;
+            }
             ThreadItem::WebSearch { .. } => self.web_search += 1,
             ThreadItem::ImageGeneration { .. } => self.image_generation += 1,
             ThreadItem::UserMessage { .. }
@@ -1091,6 +1093,18 @@ impl AnalyticsReducer {
                 );
             }
             ServerNotification::ItemCompleted(notification) => {
+                if matches!(notification.item, ThreadItem::SubAgentActivity { .. }) {
+                    let Some(turn_state) = self.turns.get_mut(&notification.turn_id) else {
+                        tracing::warn!(
+                            thread_id = %notification.thread_id,
+                            turn_id = %notification.turn_id,
+                            "dropping sub-agent activity tool count update: missing turn state"
+                        );
+                        return;
+                    };
+                    turn_state.tool_counts.record(&notification.item);
+                    return;
+                }
                 let Some(item_id) = tracked_tool_item_id(&notification.item) else {
                     return;
                 };
@@ -1249,7 +1263,7 @@ impl AnalyticsReducer {
                     thread_metadata.session_id.clone(),
                     connection_state.app_server_client.clone(),
                     connection_state.runtime.clone(),
-                    thread_metadata.thread_source,
+                    thread_metadata.thread_source.clone(),
                     thread_metadata.subagent_source.clone(),
                     thread_metadata.parent_thread_id.clone(),
                 ),
@@ -1354,7 +1368,7 @@ impl AnalyticsReducer {
                 accepted_turn_id,
                 app_server_client: connection_state.app_server_client.clone(),
                 runtime: connection_state.runtime.clone(),
-                thread_source: thread_metadata.thread_source,
+                thread_source: thread_metadata.thread_source.clone(),
                 subagent_source: thread_metadata.subagent_source.clone(),
                 parent_thread_id: thread_metadata.parent_thread_id.clone(),
                 num_input_images: pending_request.num_input_images,
@@ -1397,7 +1411,7 @@ impl AnalyticsReducer {
                 review_id: pending_review.review_id,
                 app_server_client: connection_state.app_server_client.clone(),
                 runtime: connection_state.runtime.clone(),
-                thread_source: thread_metadata.thread_source,
+                thread_source: thread_metadata.thread_source.clone(),
                 subagent_source: thread_metadata.subagent_source.clone(),
                 parent_thread_id: thread_metadata.parent_thread_id.clone(),
                 subject_kind: pending_review.subject_kind,
@@ -1562,6 +1576,7 @@ fn tracked_tool_item_id(item: &ThreadItem) -> Option<&str> {
         | ThreadItem::AgentMessage { .. }
         | ThreadItem::Plan { .. }
         | ThreadItem::Reasoning { .. }
+        | ThreadItem::SubAgentActivity { .. }
         | ThreadItem::ImageView { .. }
         | ThreadItem::EnteredReviewMode { .. }
         | ThreadItem::ExitedReviewMode { .. }
@@ -1964,7 +1979,7 @@ fn tool_item_base(
         item_id,
         app_server_client: context.connection_state.app_server_client.clone(),
         runtime: context.connection_state.runtime.clone(),
-        thread_source: thread_metadata.thread_source,
+        thread_source: thread_metadata.thread_source.clone(),
         subagent_source: thread_metadata.subagent_source.clone(),
         parent_thread_id: thread_metadata.parent_thread_id.clone(),
         tool_name,
@@ -2444,7 +2459,7 @@ fn codex_turn_event_params(
         runtime,
         submission_type,
         ephemeral,
-        thread_source: thread_metadata.thread_source,
+        thread_source: thread_metadata.thread_source.clone(),
         initialization_mode: thread_metadata.initialization_mode,
         subagent_source: thread_metadata.subagent_source.clone(),
         parent_thread_id: thread_metadata.parent_thread_id.clone(),

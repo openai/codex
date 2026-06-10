@@ -51,6 +51,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::PromptSlot;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -416,6 +417,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) environment_selections: ResolvedTurnEnvironments,
+    pub(crate) thread_extension_init: ExtensionDataInit,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
@@ -496,6 +498,7 @@ impl Codex {
             parent_rollout_thread_trace,
             parent_trace: _,
             environment_selections,
+            thread_extension_init,
             analytics_events_client,
             thread_store,
             attestation_provider,
@@ -640,6 +643,7 @@ impl Codex {
             plugins_manager,
             mcp_manager.clone(),
             extensions,
+            thread_extension_init,
             agent_control,
             environment_manager,
             analytics_events_client,

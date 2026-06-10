@@ -1,4 +1,5 @@
 use codex_core::config::Config;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use std::sync::Mutex;
 
 use crate::catalog::SkillCatalog;
@@ -22,12 +23,17 @@ impl SkillsExtensionConfig {
 #[derive(Debug)]
 pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
+    selected_roots: Vec<SelectedCapabilityRoot>,
 }
 
 impl SkillsThreadState {
-    pub(crate) fn new(config: SkillsExtensionConfig) -> Self {
+    pub(crate) fn new(
+        config: SkillsExtensionConfig,
+        selected_roots: Vec<SelectedCapabilityRoot>,
+    ) -> Self {
         Self {
             config: Mutex::new(config),
+            selected_roots,
         }
     }
 
@@ -43,6 +49,10 @@ impl SkillsThreadState {
             .config
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+    }
+
+    pub(crate) fn selected_roots(&self) -> &[SelectedCapabilityRoot] {
+        &self.selected_roots
     }
 }
 

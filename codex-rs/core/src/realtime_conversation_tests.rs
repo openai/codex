@@ -8,6 +8,7 @@ use async_channel::bounded;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
+use codex_utils_output_truncation::approx_token_count;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -176,6 +177,22 @@ async fn assistant_output_without_handoff_has_no_active_id() {
             output_text: "finished".to_string(),
         }
     );
+}
+
+#[tokio::test]
+async fn assistant_output_is_capped_for_realtime_context() {
+    let (tx, _rx) = bounded(1);
+    let state = RealtimeHandoffState::new(tx);
+    *state.active_handoff.lock().await = Some("handoff_1".to_string());
+    let output = state
+        .assistant_output(format!("start {} end", "middle ".repeat(2_000)))
+        .await;
+
+    assert_eq!(output.handoff_id.as_deref(), Some("handoff_1"));
+    assert!(approx_token_count(&output.output_text) <= 1_000);
+    assert!(output.output_text.starts_with("start "));
+    assert!(output.output_text.ends_with(" end"));
+    assert!(output.output_text.contains("tokens truncated"));
 }
 
 #[tokio::test]

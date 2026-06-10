@@ -88,11 +88,19 @@ impl AppsRequestProcessor {
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
+        let mcp_manager = self.thread_manager.mcp_manager();
         let shutdown_token = self.shutdown_token.child_token();
         tokio::spawn(async move {
             tokio::select! {
                 _ = shutdown_token.cancelled() => {}
-                _ = Self::apps_list_task(outgoing, request, params, config, environment_manager) => {}
+                _ = Self::apps_list_task(
+                    outgoing,
+                    request,
+                    params,
+                    config,
+                    environment_manager,
+                    mcp_manager,
+                ) => {}
             }
         });
         Ok(None)
@@ -108,11 +116,15 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        mcp_manager: Arc<McpManager>,
     ) {
         let retry_params = params.clone();
         let retry_config = config.clone();
         let retry_environment_manager = Arc::clone(&environment_manager);
-        let result = Self::apps_list_response(&outgoing, params, config, environment_manager).await;
+        let retry_mcp_manager = Arc::clone(&mcp_manager);
+        let result =
+            Self::apps_list_response(&outgoing, params, config, environment_manager, mcp_manager)
+                .await;
         let should_retry = result
             .as_ref()
             .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
@@ -128,6 +140,7 @@ impl AppsRequestProcessor {
                 retry_params,
                 retry_config,
                 retry_environment_manager,
+                retry_mcp_manager,
             )
             .await
             {
@@ -141,6 +154,7 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        mcp_manager: Arc<McpManager>,
     ) -> Result<(AppsListResponse, bool), JSONRPCErrorError> {
         let AppsListParams {
             cursor,
@@ -167,14 +181,14 @@ impl AppsRequestProcessor {
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
-            let result =
-                connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
-                    &accessible_config,
-                    force_refetch,
-                    Arc::clone(&environment_manager),
-                )
-                .await
-                .map_err(|err| format!("failed to load accessible apps: {err}"));
+            let result = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+                &accessible_config,
+                force_refetch,
+                Arc::clone(&environment_manager),
+                mcp_manager,
+            )
+            .await
+            .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
 

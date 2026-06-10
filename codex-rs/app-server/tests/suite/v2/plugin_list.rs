@@ -2372,6 +2372,92 @@ plugin_sharing = true
 }
 
 #[tokio::test]
+async fn plugin_installed_includes_workspace_directory_without_plugin_sharing() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = true
+remote_plugin = false
+plugin_sharing = false
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let mut workspace_installed_body: serde_json::Value =
+        serde_json::from_str(&workspace_remote_plugin_page_body(
+            "plugins~Plugin_11111111111111111111111111111111",
+            "workspace-linear",
+            "Workspace Linear",
+            "LISTED",
+            /*enabled*/ Some(true),
+        ))?;
+    let shared_installed_body: serde_json::Value =
+        serde_json::from_str(&workspace_remote_plugin_page_body(
+            "plugins~Plugin_22222222222222222222222222222222",
+            "shared-linear",
+            "Shared Linear",
+            "PRIVATE",
+            /*enabled*/ Some(true),
+        ))?;
+    workspace_installed_body["plugins"]
+        .as_array_mut()
+        .expect("installed plugins should be an array")
+        .push(shared_installed_body["plugins"][0].clone());
+    let workspace_installed_body = serde_json::to_string(&workspace_installed_body)?;
+    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
+    mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstalledResponse = to_response(response)?;
+
+    assert_eq!(response.marketplaces.len(), 1);
+    let marketplace = &response.marketplaces[0];
+    assert_eq!(marketplace.name, "workspace-directory");
+    assert_eq!(
+        marketplace
+            .plugins
+            .iter()
+            .map(|plugin| (plugin.id.clone(), plugin.installed, plugin.enabled))
+            .collect::<Vec<_>>(),
+        vec![(
+            "workspace-linear@workspace-directory".to_string(),
+            true,
+            true
+        )]
+    );
+    wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
+    wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_installed_starts_remote_installed_bundle_sync() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;

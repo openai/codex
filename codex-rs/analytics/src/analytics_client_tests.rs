@@ -108,6 +108,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
+use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -1373,7 +1374,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             },
             model: "gpt-5".to_string(),
             ephemeral: true,
-            thread_source: Some(ThreadSource::User),
+            thread_source: Some(ThreadSource::Feature("automation".to_string())),
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
@@ -1406,7 +1407,7 @@ fn thread_initialized_event_serializes_expected_shape() {
                 },
                 "model": "gpt-5",
                 "ephemeral": true,
-                "thread_source": "user",
+                "thread_source": "automation",
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
@@ -3794,6 +3795,12 @@ async fn turn_event_counts_completed_tool_items() {
             reasoning_effort: None,
             agents_states: Default::default(),
         },
+        ThreadItem::SubAgentActivity {
+            id: "sub-agent-activity-1".to_string(),
+            kind: SubAgentActivityKind::Interacted,
+            agent_thread_id: "thread-child".to_string(),
+            agent_path: "/root/child".to_string(),
+        },
         ThreadItem::WebSearch {
             id: "web-1".to_string(),
             query: "codex".to_string(),
@@ -3841,14 +3848,14 @@ async fn turn_event_counts_completed_tool_items() {
         .find(|event| matches!(event, TrackEventRequest::TurnEvent(_)))
         .expect("turn event should be emitted");
     let payload = serde_json::to_value(turn_event).expect("serialize turn event");
-    assert_eq!(payload["event_params"]["total_tool_call_count"], json!(7));
+    assert_eq!(payload["event_params"]["total_tool_call_count"], json!(8));
     assert_eq!(payload["event_params"]["shell_command_count"], json!(1));
     assert_eq!(payload["event_params"]["file_change_count"], json!(1));
     assert_eq!(payload["event_params"]["mcp_tool_call_count"], json!(1));
     assert_eq!(payload["event_params"]["dynamic_tool_call_count"], json!(1));
     assert_eq!(
         payload["event_params"]["subagent_tool_call_count"],
-        json!(1)
+        json!(2)
     );
     assert_eq!(payload["event_params"]["web_search_count"], json!(1));
     assert_eq!(payload["event_params"]["image_generation_count"], json!(1));

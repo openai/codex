@@ -221,7 +221,7 @@ async fn apply_metadata_update(
                     patch.source.clone().unwrap_or(SessionSource::Unknown),
                 );
                 builder.model_provider = patch.model_provider.clone();
-                builder.thread_source = patch.thread_source.flatten();
+                builder.thread_source = patch.thread_source.clone().flatten();
                 builder.agent_nickname = patch.agent_nickname.clone().flatten();
                 builder.agent_role = patch.agent_role.clone().flatten();
                 builder.agent_path = patch.agent_path.clone().flatten();

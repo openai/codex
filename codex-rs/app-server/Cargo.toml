@@ -49,6 +49,7 @@ codex-hooks = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-shell-command = { workspace = true }
+codex-skills-extension = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-backend-client = { workspace = true }
@@ -60,6 +61,7 @@ codex-memories-extension = { workspace = true }
 codex-web-search-extension = { workspace = true }
 codex-memories-write = { workspace = true }
 codex-mcp = { workspace = true }
+codex-mcp-extension = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }

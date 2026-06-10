@@ -1,5 +1,6 @@
 use crate::client::ModelClient;
 use crate::realtime_context::build_realtime_startup_context;
+use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_prompt::prepare_realtime_backend_prompt;
 use crate::session::session::Session;
 use anyhow::Context;
@@ -64,6 +65,7 @@ const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const ASSISTANT_OUTPUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_300;
+const REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET: usize = 1_000;
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
 pub(crate) const REALTIME_USER_TEXT_PREFIX: &str = "[USER] ";
 const DEFAULT_HANDOFF_ID: &str = "codex";
@@ -202,7 +204,10 @@ impl RealtimeHandoffState {
     async fn assistant_output(&self, output_text: String) -> RealtimeAssistantOutput {
         RealtimeAssistantOutput {
             handoff_id: self.active_handoff.lock().await.clone(),
-            output_text,
+            output_text: truncate_realtime_text_to_token_budget(
+                &output_text,
+                REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET,
+            ),
         }
     }
 
