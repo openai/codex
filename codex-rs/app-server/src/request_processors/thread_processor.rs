@@ -1075,22 +1075,27 @@ impl ThreadRequestProcessor {
                 .default_environment_selections(&config.cwd)
         });
         let dynamic_tools = dynamic_tools.unwrap_or_default();
+        let core_dynamic_tool_count = dynamic_tools.len();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
         } else {
             validate_dynamic_tools(&dynamic_tools).map_err(invalid_request)?;
-            dynamic_tools
+            let tools = dynamic_tools
                 .into_iter()
-                .map(|tool| CoreDynamicToolSpec {
-                    namespace: tool.namespace,
-                    name: tool.name,
-                    description: tool.description,
-                    input_schema: tool.input_schema,
-                    defer_loading: tool.defer_loading,
+                .map(|tool| {
+                    (
+                        tool.namespace,
+                        DynamicToolFunctionSpec {
+                            name: tool.name,
+                            description: tool.description,
+                            input_schema: tool.input_schema,
+                            defer_loading: tool.defer_loading,
+                        },
+                    )
                 })
-                .collect()
+                .collect();
+            group_dynamic_tools_by_namespace(tools)
         };
-        let core_dynamic_tool_count = core_dynamic_tools.len();
         let mut thread_extension_init = ExtensionDataInit::new();
         if !selected_capability_roots.is_empty() {
             thread_extension_init.insert(selected_capability_roots);

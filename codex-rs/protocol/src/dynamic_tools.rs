@@ -2,19 +2,44 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde::de::Error as _;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, PartialEq, JsonSchema, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum DynamicToolSpec {
+    Function(DynamicToolFunctionSpec),
+    Namespace(DynamicToolNamespaceSpec),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct DynamicToolSpec {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
+#[ts(export_to = "v2/")]
+pub struct DynamicToolFunctionSpec {
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub defer_loading: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DynamicToolNamespaceSpec {
+    pub name: String,
+    pub description: String,
+    pub tools: Vec<DynamicToolNamespaceTool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum DynamicToolNamespaceTool {
+    Function(DynamicToolFunctionSpec),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -49,7 +74,7 @@ pub enum DynamicToolCallOutputContentItem {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DynamicToolSpecDe {
+struct LegacyDynamicToolSpec {
     namespace: Option<String>,
     name: String,
     description: String,
@@ -58,84 +83,84 @@ struct DynamicToolSpecDe {
     expose_to_context: Option<bool>,
 }
 
-impl<'de> Deserialize<'de> for DynamicToolSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let DynamicToolSpecDe {
-            namespace,
-            name,
-            description,
-            input_schema,
-            defer_loading,
-            expose_to_context,
-        } = DynamicToolSpecDe::deserialize(deserializer)?;
-
-        Ok(Self {
-            namespace,
-            name,
-            description,
-            input_schema,
-            defer_loading: defer_loading
-                .unwrap_or_else(|| expose_to_context.map(|visible| !visible).unwrap_or(false)),
-        })
+pub fn normalize_dynamic_tool_specs(
+    values: Vec<JsonValue>,
+) -> Result<Vec<DynamicToolSpec>, serde_json::Error> {
+    let has_legacy_format = values.iter().any(|value| {
+        value.get("namespace").is_some()
+            || value.get("exposeToContext").is_some()
+            || value.get("type").is_none()
+    });
+    let has_canonical_namespace = values
+        .iter()
+        .any(|value| value.get("type").and_then(JsonValue::as_str) == Some("namespace"));
+    if has_legacy_format && has_canonical_namespace {
+        return Err(serde_json::Error::custom(
+            "dynamic tools must use either canonical or legacy format consistently",
+        ));
     }
+    if !has_legacy_format {
+        return values.into_iter().map(serde_json::from_value).collect();
+    }
+
+    let tools = values
+        .into_iter()
+        .map(|value| {
+            let tool: LegacyDynamicToolSpec = serde_json::from_value(value)?;
+            let function = DynamicToolFunctionSpec {
+                name: tool.name,
+                description: tool.description,
+                input_schema: tool.input_schema,
+                defer_loading: tool.defer_loading.unwrap_or_else(|| {
+                    tool.expose_to_context
+                        .map(|visible| !visible)
+                        .unwrap_or(false)
+                }),
+            };
+            Ok((tool.namespace, function))
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    Ok(group_dynamic_tools_by_namespace(tools))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::DynamicToolSpec;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-
-    #[test]
-    fn dynamic_tool_spec_deserializes_defer_loading() {
-        let value = json!({
-            "name": "lookup_ticket",
-            "description": "Fetch a ticket",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string" }
-                }
-            },
-            "deferLoading": true,
-        });
-
-        let actual: DynamicToolSpec = serde_json::from_value(value).expect("deserialize");
-
-        assert_eq!(
-            actual,
-            DynamicToolSpec {
-                namespace: None,
-                name: "lookup_ticket".to_string(),
-                description: "Fetch a ticket".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string" }
-                    }
-                }),
-                defer_loading: true,
-            }
-        );
+pub fn group_dynamic_tools_by_namespace(
+    tools: Vec<(Option<String>, DynamicToolFunctionSpec)>,
+) -> Vec<DynamicToolSpec> {
+    let mut grouped_tools = Vec::with_capacity(tools.len());
+    let mut namespace_indices = HashMap::<String, usize>::new();
+    for (namespace, function) in tools {
+        let Some(namespace) = namespace else {
+            grouped_tools.push(DynamicToolSpec::Function(function));
+            continue;
+        };
+        let function = DynamicToolNamespaceTool::Function(function);
+        if let Some(index) = namespace_indices.get(&namespace).copied() {
+            let DynamicToolSpec::Namespace(namespace) = &mut grouped_tools[index] else {
+                unreachable!("namespace index must point to a namespace");
+            };
+            namespace.tools.push(function);
+            continue;
+        }
+        namespace_indices.insert(namespace.clone(), grouped_tools.len());
+        grouped_tools.push(DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+            name: namespace,
+            description: String::new(),
+            tools: vec![function],
+        }));
     }
+    grouped_tools
+}
 
-    #[test]
-    fn dynamic_tool_spec_legacy_expose_to_context_inverts_to_defer_loading() {
-        let value = json!({
-            "name": "lookup_ticket",
-            "description": "Fetch a ticket",
-            "inputSchema": {
-                "type": "object",
-                "properties": {}
-            },
-            "exposeToContext": false,
-        });
-
-        let actual: DynamicToolSpec = serde_json::from_value(value).expect("deserialize");
-
-        assert!(actual.defer_loading);
-    }
+pub fn deserialize_dynamic_tool_specs<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<DynamicToolSpec>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(values) = Option::<Vec<JsonValue>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    normalize_dynamic_tool_specs(values)
+        .map(Some)
+        .map_err(D::Error::custom)
 }

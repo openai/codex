@@ -7,6 +7,9 @@ use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -117,8 +120,7 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
     )
     .await;
 
-    let dynamic_tool = DynamicToolSpec {
-        namespace: None,
+    let dynamic_function = DynamicToolFunctionSpec {
         name: "resume_lookup".to_string(),
         description: "Look up a value after resume.".to_string(),
         input_schema: json!({
@@ -129,6 +131,12 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
         }),
         defer_loading: false,
     };
+    let dynamic_namespace = DynamicToolNamespaceSpec {
+        name: "resume_tools".to_string(),
+        description: "Tools restored after resume.".to_string(),
+        tools: vec![DynamicToolNamespaceTool::Function(dynamic_function.clone())],
+    };
+    let dynamic_tool = DynamicToolSpec::Namespace(dynamic_namespace.clone());
     let mut builder = test_codex().with_config(|config| {
         config
             .features
@@ -182,17 +190,24 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
         .get("tools")
         .and_then(serde_json::Value::as_array)
         .expect("resumed request tools");
-    let restored_tool = tools
+    let restored_namespace = tools
         .iter()
-        .find(|tool| tool.get("name") == Some(&json!(dynamic_tool.name.as_str())))
-        .expect("dynamic tool should be restored from rollout metadata");
+        .find(|tool| tool.get("name") == Some(&json!(dynamic_namespace.name.as_str())))
+        .expect("dynamic tool namespace should be restored from rollout metadata");
     assert_eq!(
-        restored_tool.get("description"),
-        Some(&json!(dynamic_tool.description.as_str()))
-    );
-    assert_eq!(
-        restored_tool.get("parameters"),
-        Some(&dynamic_tool.input_schema)
+        restored_namespace,
+        &json!({
+            "type": "namespace",
+            "name": dynamic_namespace.name,
+            "description": dynamic_namespace.description,
+            "tools": [{
+                "type": "function",
+                "name": dynamic_function.name,
+                "description": dynamic_function.description,
+                "strict": false,
+                "parameters": dynamic_function.input_schema,
+            }],
+        })
     );
 
     Ok(())

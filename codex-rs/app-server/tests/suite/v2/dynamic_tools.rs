@@ -42,9 +42,8 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Ensures dynamic tool specs are serialized into the model request payload.
 #[tokio::test]
-async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> {
+async fn thread_start_normalizes_legacy_dynamic_tool_namespaces() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -54,29 +53,46 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    // Use a minimal JSON schema so we can assert the tool payload round-trips.
-    let input_schema = json!({
+    let visible_schema = json!({
         "type": "object",
         "properties": {
-            "city": { "type": "string" }
+            "ticket_id": { "type": "string" }
         },
-        "required": ["city"],
+        "required": ["ticket_id"],
         "additionalProperties": false,
     });
-    let dynamic_tool = DynamicToolSpec {
-        namespace: None,
-        name: "demo_tool".to_string(),
-        description: "Demo dynamic tool".to_string(),
-        input_schema: input_schema.clone(),
-        defer_loading: false,
-    };
-
-    // Thread start injects dynamic tools into the thread's tool registry.
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
-            dynamic_tools: Some(vec![dynamic_tool.clone()]),
-            ..Default::default()
-        })
+        .send_raw_request(
+            "thread/start",
+            Some(json!({
+                "dynamicTools": [
+                    {
+                        "type": "function",
+                        "name": "lookup_ticket",
+                        "description": "Look up a ticket",
+                        "inputSchema": visible_schema,
+                    },
+                    {
+                        "namespace": "legacy_app",
+                        "name": "lookup_status",
+                        "description": "Look up a ticket status",
+                        "inputSchema": visible_schema,
+                        "exposeToContext": true
+                    },
+                    {
+                        "namespace": "legacy_app",
+                        "name": "update_ticket",
+                        "description": "Update a ticket",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false
+                        },
+                        "exposeToContext": false
+                    }
+                ]
+            })),
+        )
         .await?;
     let thread_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -85,13 +101,12 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
-    // Start a turn so a model request is issued.
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
+            thread_id: thread.id,
             client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                text: "Hello".to_string(),
+                text: "Look up the ticket".to_string(),
                 text_elements: Vec::new(),
             }],
             ..Default::default()
@@ -103,26 +118,42 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
     )
     .await??;
     let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
-
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
-    // Inspect the captured model request to assert the tool spec made it through.
     let bodies = responses_bodies(&server).await?;
-    let body = bodies
-        .first()
-        .context("expected at least one responses request")?;
-    let tool = find_tool(body, &dynamic_tool.name)
-        .context("expected dynamic tool to be injected into request")?;
-
+    let function =
+        find_tool(&bodies[0], "lookup_ticket").context("expected normalized legacy function")?;
     assert_eq!(
-        tool.get("description"),
-        Some(&Value::String(dynamic_tool.description.clone()))
+        function,
+        &json!({
+            "type": "function",
+            "name": "lookup_ticket",
+            "description": "Look up a ticket",
+            "strict": false,
+            "parameters": visible_schema,
+        })
     );
-    assert_eq!(tool.get("parameters"), Some(&input_schema));
+    let namespace =
+        find_tool(&bodies[0], "legacy_app").context("expected normalized legacy namespace")?;
+    assert_eq!(
+        namespace,
+        &json!({
+            "type": "namespace",
+            "name": "legacy_app",
+            "description": "Tools in the legacy_app namespace.",
+            "tools": [{
+                "type": "function",
+                "name": "lookup_status",
+                "description": "Look up a ticket status",
+                "strict": false,
+                "parameters": visible_schema,
+            }],
+        })
+    );
 
     Ok(())
 }
