@@ -24,6 +24,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_secrets::LocalSecretsNamespace;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
+use codex_secrets::SecretsBackendKind;
 use codex_secrets::SecretsManager;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
@@ -220,8 +221,9 @@ fn load_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     url: &str,
 ) -> Result<Option<StoredOAuthTokens>> {
     let codex_home = find_codex_home()?;
-    let manager = SecretsManager::new_local_with_keyring_store(
+    let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
+        SecretsBackendKind::Local,
         Arc::new(keyring_store.clone()),
         LocalSecretsNamespace::McpOAuth,
     );
@@ -313,8 +315,9 @@ fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
 ) -> Result<()> {
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
     let codex_home = find_codex_home()?;
-    let manager = SecretsManager::new_local_with_keyring_store(
+    let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
+        SecretsBackendKind::Local,
         Arc::new(keyring_store.clone()),
         LocalSecretsNamespace::McpOAuth,
     );
@@ -428,8 +431,9 @@ fn delete_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     url: &str,
 ) -> Result<bool> {
     let codex_home = find_codex_home()?;
-    let manager = SecretsManager::new_local_with_keyring_store(
+    let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
+        SecretsBackendKind::Local,
         Arc::new(keyring_store.clone()),
         LocalSecretsNamespace::McpOAuth,
     );
@@ -991,8 +995,9 @@ mod tests {
             &tokens,
         )?;
 
-        let manager = SecretsManager::new_local_with_keyring_store(
+        let manager = SecretsManager::new_with_keyring_store_and_namespace(
             env.path().to_path_buf(),
+            SecretsBackendKind::Local,
             Arc::new(store.clone()),
             LocalSecretsNamespace::McpOAuth,
         );
@@ -1102,8 +1107,9 @@ mod tests {
             &tokens.url,
         )?;
 
-        let manager = SecretsManager::new_local_with_keyring_store(
+        let manager = SecretsManager::new_with_keyring_store_and_namespace(
             env.path().to_path_buf(),
+            SecretsBackendKind::Local,
             Arc::new(store.clone()),
             LocalSecretsNamespace::McpOAuth,
         );

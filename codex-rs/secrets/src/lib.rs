@@ -110,11 +110,6 @@ impl SecretsManager {
         Self { backend }
     }
 
-    pub fn new_local(codex_home: PathBuf, namespace: LocalSecretsNamespace) -> Self {
-        let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
-        Self::new_local_with_keyring_store(codex_home, keyring_store, namespace)
-    }
-
     pub fn new_with_keyring_store(
         codex_home: PathBuf,
         backend_kind: SecretsBackendKind,
@@ -128,18 +123,20 @@ impl SecretsManager {
         Self { backend }
     }
 
-    pub fn new_local_with_keyring_store(
+    pub fn new_with_keyring_store_and_namespace(
         codex_home: PathBuf,
+        backend_kind: SecretsBackendKind,
         keyring_store: Arc<dyn KeyringStore>,
         namespace: LocalSecretsNamespace,
     ) -> Self {
-        Self {
-            backend: Arc::new(LocalSecretsBackend::new_with_namespace(
+        let backend: Arc<dyn SecretsBackend> = match backend_kind {
+            SecretsBackendKind::Local => Arc::new(LocalSecretsBackend::new_with_namespace(
                 codex_home,
                 keyring_store,
                 namespace,
             )),
-        }
+        };
+        Self { backend }
     }
 
     pub fn set(&self, scope: &SecretScope, name: &SecretName, value: &str) -> Result<()> {

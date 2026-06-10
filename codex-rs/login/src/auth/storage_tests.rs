@@ -4,6 +4,7 @@ use anyhow::Context;
 use base64::Engine;
 use codex_secrets::LocalSecretsNamespace;
 use codex_secrets::SecretScope;
+use codex_secrets::SecretsBackendKind;
 use codex_secrets::SecretsManager;
 use codex_secrets::compute_keyring_account;
 use pretty_assertions::assert_eq;
@@ -199,8 +200,9 @@ fn seed_secrets_backend_and_fallback_auth_file_for_delete(
     codex_home: &Path,
     auth: &AuthDotJson,
 ) -> anyhow::Result<PathBuf> {
-    let manager = SecretsManager::new_local_with_keyring_store(
+    let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
+        SecretsBackendKind::Local,
         Arc::new(mock_keyring.clone()),
         LocalSecretsNamespace::CliAuth,
     );
@@ -219,8 +221,9 @@ fn seed_secrets_backend_with_auth(
     codex_home: &Path,
     auth: &AuthDotJson,
 ) -> anyhow::Result<()> {
-    let manager = SecretsManager::new_local_with_keyring_store(
+    let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
+        SecretsBackendKind::Local,
         Arc::new(mock_keyring.clone()),
         LocalSecretsNamespace::CliAuth,
     );
@@ -237,8 +240,9 @@ fn assert_keyring_saved_auth_and_removed_fallback(
     codex_home: &Path,
     expected: &AuthDotJson,
 ) -> anyhow::Result<()> {
-    let manager = SecretsManager::new_local_with_keyring_store(
+    let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
+        SecretsBackendKind::Local,
         Arc::new(mock_keyring.clone()),
         LocalSecretsNamespace::CliAuth,
     );
