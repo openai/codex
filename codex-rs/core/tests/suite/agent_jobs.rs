@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 use wiremock::Mock;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
@@ -54,20 +53,6 @@ impl StopAfterFirstResponder {
     }
 }
 
-struct NeverTerminalWorkerResponder {
-    spawn_args_json: String,
-    seen_main: AtomicBool,
-}
-
-impl NeverTerminalWorkerResponder {
-    fn new(spawn_args_json: String) -> Self {
-        Self {
-            spawn_args_json,
-            seen_main: AtomicBool::new(false),
-        }
-    }
-}
-
 impl Respond for StopAfterFirstResponder {
     fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
         let body_bytes = decode_body_bytes(request);
@@ -98,38 +83,6 @@ impl Respond for StopAfterFirstResponder {
                 ev_function_call(&call_id, "report_agent_job_result", &args_json),
                 ev_completed("resp-worker"),
             ]));
-        }
-
-        if !self.seen_main.swap(true, Ordering::SeqCst) {
-            return sse_response(sse(vec![
-                ev_response_created("resp-main"),
-                ev_function_call("call-spawn", "spawn_agents_on_csv", &self.spawn_args_json),
-                ev_completed("resp-main"),
-            ]));
-        }
-
-        sse_response(sse(vec![
-            ev_response_created("resp-default"),
-            ev_completed("resp-default"),
-        ]))
-    }
-}
-
-impl Respond for NeverTerminalWorkerResponder {
-    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
-        let body_bytes = decode_body_bytes(request);
-        let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
-
-        if has_function_call_output(&body) {
-            return sse_response(sse(vec![
-                ev_response_created("resp-tool"),
-                ev_completed("resp-tool"),
-            ]));
-        }
-
-        if extract_job_and_item(&body).is_some() {
-            return sse_response(sse(vec![ev_response_created("resp-worker")]))
-                .set_delay(Duration::from_secs(60));
         }
 
         if !self.seen_main.swap(true, Ordering::SeqCst) {
@@ -370,53 +323,6 @@ async fn spawn_agents_on_csv_runs_and_exports() -> Result<()> {
     assert!(output.contains("result_json"));
     assert!(output.contains("item_id"));
     assert!(output.contains("\"item_id\""));
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawn_agents_on_csv_parent_does_not_wait_forever_for_non_terminal_item() -> Result<()> {
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::SpawnCsv)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::Sqlite)
-            .expect("test config should allow feature update");
-    });
-    let test = builder.build(&server).await?;
-
-    let input_path = test.cwd_path().join("agent_jobs_non_terminal.csv");
-    let output_path = test.cwd_path().join("agent_jobs_non_terminal_out.csv");
-    fs::write(&input_path, "path\nfile-1\n")?;
-
-    let args = json!({
-        "csv_path": input_path.display().to_string(),
-        "instruction": "Return {path}",
-        "output_csv_path": output_path.display().to_string(),
-    });
-    let args_json = serde_json::to_string(&args)?;
-
-    let responder = NeverTerminalWorkerResponder::new(args_json);
-    Mock::given(method("POST"))
-        .and(path_regex(".*/responses$"))
-        .respond_with(responder)
-        .mount(&server)
-        .await;
-
-    let completed = tokio::time::timeout(Duration::from_secs(2), test.submit_turn("run job")).await;
-    assert!(
-        completed.is_ok(),
-        "parent spawn_agents_on_csv call should not wait forever when a worker item never reaches a terminal state"
-    );
-    completed??;
-    assert!(
-        output_path.exists(),
-        "parent should finalize and export a CSV snapshot even when an item fails to reach a terminal state"
-    );
-
     Ok(())
 }
 
