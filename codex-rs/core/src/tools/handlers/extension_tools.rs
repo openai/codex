@@ -222,6 +222,15 @@ mod tests {
             &self,
             call: codex_tools::ToolCall,
         ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+            self.handle_call(call).await
+        }
+    }
+
+    impl CapturingExtensionExecutor {
+        async fn handle_call(
+            &self,
+            call: codex_tools::ToolCall,
+        ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
             let item = ExtensionTurnItem::WebSearch(WebSearchItem {
                 id: call.call_id.clone(),
                 query: "rust trait object".to_string(),
@@ -450,6 +459,15 @@ mod tests {
         }
 
         async fn handle(
+            &self,
+            call: codex_tools::ToolCall,
+        ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+            self.handle_call(call).await
+        }
+    }
+
+    impl ImageGenerationExtensionExecutor {
+        async fn handle_call(
             &self,
             call: codex_tools::ToolCall,
         ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {

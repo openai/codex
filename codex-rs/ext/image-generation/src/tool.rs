@@ -97,6 +97,12 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
 
     /// Executes the selected image operation and returns the completed image result.
     async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+        self.handle_call(call).await
+    }
+}
+
+impl ImageGenerationTool {
+    async fn handle_call(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
         let request = request_for_args(&args, call.conversation_history.items())?;
         call.turn_item_emitter
