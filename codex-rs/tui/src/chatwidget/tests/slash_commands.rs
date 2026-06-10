@@ -669,8 +669,8 @@ async fn goal_slash_command_materializes_attached_images() {
     let local_image = chat.config.codex_home.join("goal-local.png");
     std::fs::write(&local_image, b"png bytes").expect("write local image");
     let placeholder = "[Image #2]";
-    let command = format!("/goal describe {placeholder}");
-    let placeholder_start = command.find(placeholder).expect("placeholder in command");
+    let command = format!("/goal literal {placeholder} describe {placeholder}");
+    let placeholder_start = command.rfind(placeholder).expect("placeholder in command");
     chat.set_remote_image_urls(vec![remote_url.clone()]);
     chat.bottom_pane.set_composer_text(
         command,
@@ -693,7 +693,7 @@ async fn goal_slash_command_materializes_attached_images() {
         panic!("expected SetThreadGoalObjective, got {event:?}");
     };
     assert_eq!(actual_thread_id, thread_id);
-    assert!(objective.contains("describe image file: "));
+    assert!(objective.contains(&format!("literal {placeholder} describe image file: ")));
     assert!(objective.contains("Referenced image URLs:"));
     assert!(objective.contains(&remote_url));
     let copied_image = objective

@@ -178,6 +178,27 @@ async fn goal_slash_command_materializes_large_paste() {
 }
 
 #[tokio::test]
+async fn goal_slash_command_rejects_whitespace_only_large_paste() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.bottom_pane
+        .set_composer_text("/goal ".to_string(), Vec::new(), Vec::new());
+    chat.handle_paste(" ".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1));
+
+    submit_current_composer(&mut chat);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::SetThreadGoalObjective { .. })),
+        "expected no goal objective event, got {events:?}"
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn queued_goal_materialization_error_drains_next_input() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);

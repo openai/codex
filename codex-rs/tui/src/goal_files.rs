@@ -35,6 +35,15 @@ pub(crate) fn materialize_goal_draft(codex_home: &Path, draft: GoalDraft) -> Res
     if objective.trim().is_empty() {
         bail!("Goal objective must not be empty.");
     }
+    let text_elements = draft.text_elements;
+    let (validation_objective, _) = ChatComposer::expand_pending_pastes(
+        &objective,
+        text_elements.clone(),
+        &draft.pending_pastes,
+    );
+    if validation_objective.trim().is_empty() {
+        bail!("Goal objective must not be empty.");
+    }
 
     let mut output_dir = None;
     let mut materialized_pastes = Vec::new();
@@ -50,11 +59,12 @@ pub(crate) fn materialize_goal_draft(codex_home: &Path, draft: GoalDraft) -> Res
             ));
         }
     }
-    let (expanded_objective, _) =
-        ChatComposer::expand_pending_pastes(&objective, draft.text_elements, &materialized_pastes);
-    objective = expanded_objective.trim().to_string();
+    let (expanded_objective, text_elements) =
+        ChatComposer::expand_pending_pastes(&objective, text_elements, &materialized_pastes);
+    objective = expanded_objective;
 
     let mut image_lines = Vec::new();
+    let mut materialized_images = Vec::new();
     for (idx, image) in draft.local_images.iter().enumerate() {
         let extension = image_extension(&image.path);
         let path = ensure_output_dir(codex_home, &mut output_dir)?.join(format!(
@@ -72,12 +82,15 @@ pub(crate) fn materialize_goal_draft(codex_home: &Path, draft: GoalDraft) -> Res
         if image.placeholder.is_empty() {
             image_lines.push(format!("- [Image #{}]: {}", idx + 1, path.display()));
         } else {
-            objective = objective.replace(
-                &image.placeholder,
-                &format!("image file: {}", path.display()),
-            );
+            materialized_images.push((
+                image.placeholder.clone(),
+                format!("image file: {}", path.display()),
+            ));
         }
     }
+    let (expanded_objective, _) =
+        ChatComposer::expand_pending_pastes(&objective, text_elements, &materialized_images);
+    objective = expanded_objective.trim().to_string();
     append_section(&mut objective, "Referenced image files:", image_lines);
 
     append_section(
