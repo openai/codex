@@ -569,6 +569,24 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_background_terminals_list(
+        &self,
+        params: ThreadBackgroundTerminalsListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_background_terminals_list_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_background_terminals_terminate(
+        &self,
+        params: ThreadBackgroundTerminalsTerminateParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_background_terminals_terminate_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_rollback(
         &self,
         request_id: &ConnectionRequestId,
@@ -1723,6 +1741,54 @@ impl ThreadRequestProcessor {
                 internal_error(format!("failed to clean background terminals: {err}"))
             })?;
         Ok(ThreadBackgroundTerminalsCleanResponse {})
+    }
+
+    async fn thread_background_terminals_list_inner(
+        &self,
+        params: ThreadBackgroundTerminalsListParams,
+    ) -> Result<ThreadBackgroundTerminalsListResponse, JSONRPCErrorError> {
+        let ThreadBackgroundTerminalsListParams {
+            thread_id,
+            cursor,
+            limit,
+        } = params;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let terminals = thread
+            .list_background_terminals()
+            .await
+            .into_iter()
+            .map(|terminal| ThreadBackgroundTerminal {
+                item_id: terminal.item_id,
+                process_id: terminal.process_id,
+                command: terminal.command,
+                cwd: terminal.cwd,
+                os_pid: None,
+                cpu_percent: None,
+                rss_kb: None,
+            })
+            .collect::<Vec<_>>();
+
+        let (data, next_cursor) = paginate_background_terminals(&terminals, cursor, limit)?;
+
+        Ok(ThreadBackgroundTerminalsListResponse { data, next_cursor })
+    }
+
+    async fn thread_background_terminals_terminate_inner(
+        &self,
+        params: ThreadBackgroundTerminalsTerminateParams,
+    ) -> Result<ThreadBackgroundTerminalsTerminateResponse, JSONRPCErrorError> {
+        let ThreadBackgroundTerminalsTerminateParams {
+            thread_id,
+            process_id,
+        } = params;
+        let process_id = process_id.parse::<i32>().map_err(|err| {
+            invalid_request(format!("invalid background terminal process id: {err}"))
+        })?;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let terminated = thread.terminate_background_terminal(process_id).await;
+        Ok(ThreadBackgroundTerminalsTerminateResponse { terminated })
     }
 
     async fn thread_shell_command_inner(
@@ -4248,6 +4314,34 @@ fn build_thread_from_snapshot(
         name: None,
         turns: Vec::new(),
     }
+}
+
+fn paginate_background_terminals(
+    terminals: &[ThreadBackgroundTerminal],
+    cursor: Option<String>,
+    limit: Option<u32>,
+) -> Result<(Vec<ThreadBackgroundTerminal>, Option<String>), JSONRPCErrorError> {
+    let start = match cursor {
+        Some(cursor) => {
+            let cursor = cursor
+                .parse::<i32>()
+                .map_err(|err| invalid_request(format!("invalid cursor: {err}")))?;
+            terminals
+                .iter()
+                .position(|terminal| {
+                    terminal
+                        .process_id
+                        .parse::<i32>()
+                        .is_ok_and(|process_id| process_id > cursor)
+                })
+                .unwrap_or(terminals.len())
+        }
+        None => 0,
+    };
+    let effective_limit = limit.unwrap_or(terminals.len() as u32).max(1) as usize;
+    let end = start.saturating_add(effective_limit).min(terminals.len());
+    let next_cursor = (end < terminals.len()).then(|| terminals[end - 1].process_id.clone());
+    Ok((terminals[start..end].to_vec(), next_cursor))
 }
 
 fn build_thread_from_loaded_snapshot(
