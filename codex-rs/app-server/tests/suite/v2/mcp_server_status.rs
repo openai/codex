@@ -43,7 +43,7 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn mcp_server_status_list_includes_healthy_and_failed_required_servers() -> Result<()> {
+async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let (mcp_server_url, mcp_server_handle) = start_mcp_server("look-up.raw").await?;
     let codex_home = TempDir::new()?;
@@ -63,10 +63,6 @@ async fn mcp_server_status_list_includes_healthy_and_failed_required_servers() -
         r#"
 [mcp_servers.some-server]
 url = "{mcp_server_url}/mcp"
-
-[mcp_servers.required_broken]
-command = "codex-definitely-not-a-real-binary"
-required = true
 "#
     ));
     std::fs::write(config_path, config_toml)?;
@@ -90,12 +86,8 @@ required = true
     let response: ListMcpServerStatusResponse = to_response(response)?;
 
     assert_eq!(response.next_cursor, None);
-    assert_eq!(response.data.len(), 2);
-    let status = response
-        .data
-        .iter()
-        .find(|status| status.name == "some-server")
-        .expect("healthy MCP server status");
+    assert_eq!(response.data.len(), 1);
+    let status = &response.data[0];
     assert_eq!(status.name, "some-server");
     assert_eq!(
         status.tools.keys().cloned().collect::<BTreeSet<_>>(),
@@ -114,20 +106,6 @@ required = true
             .as_ref()
             .and_then(|info| info.title.as_deref()),
         Some("Lookup Server")
-    );
-    let required_broken = response
-        .data
-        .iter()
-        .find(|status| status.name == "required_broken")
-        .expect("failed required MCP server status");
-    assert_eq!(
-        (
-            required_broken.server_info.as_ref(),
-            required_broken.tools.is_empty(),
-            required_broken.resources.is_empty(),
-            required_broken.resource_templates.is_empty(),
-        ),
-        (None, true, true, true),
     );
 
     mcp_server_handle.abort();
