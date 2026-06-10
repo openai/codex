@@ -61,6 +61,7 @@ const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".pki",
     ".terraform.d",
 ];
+const USERPROFILE_WRITE_ROOT_EXCLUSIONS: &[&str] = &["AppData"];
 const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     r"C:\Windows",
     r"C:\Program Files",
@@ -498,6 +499,7 @@ pub(crate) fn effective_write_roots_for_permissions(
     let write_roots = expand_user_profile_root(write_roots);
     let write_roots = filter_user_profile_root(write_roots);
     let write_roots = filter_user_profile_root_exclusions(write_roots);
+    let write_roots = filter_user_profile_write_root_exclusions(write_roots);
     let write_roots = filter_ssh_config_dependency_roots(write_roots);
     filter_sensitive_write_roots(write_roots, codex_home)
 }
@@ -1006,11 +1008,32 @@ fn filter_user_profile_root_exclusions(mut roots: Vec<PathBuf>) -> Vec<PathBuf> 
         return roots;
     };
     let user_profile = Path::new(&user_profile);
-    roots.retain(|root| !is_user_profile_root_exclusion(root, user_profile));
+    roots.retain(|root| {
+        !is_user_profile_top_level_exclusion(root, user_profile, USERPROFILE_ROOT_EXCLUSIONS)
+    });
+    roots
+}
+
+fn filter_user_profile_write_root_exclusions(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    let Ok(user_profile) = std::env::var("USERPROFILE") else {
+        return roots;
+    };
+    let user_profile = Path::new(&user_profile);
+    roots.retain(|root| {
+        !is_user_profile_top_level_exclusion(root, user_profile, USERPROFILE_WRITE_ROOT_EXCLUSIONS)
+    });
     roots
 }
 
 fn is_user_profile_root_exclusion(root: &Path, user_profile: &Path) -> bool {
+    is_user_profile_top_level_exclusion(root, user_profile, USERPROFILE_ROOT_EXCLUSIONS)
+}
+
+fn is_user_profile_top_level_exclusion(
+    root: &Path,
+    user_profile: &Path,
+    exclusions: &[&str],
+) -> bool {
     let root_key = canonical_path_key(root);
     let profile_key = canonical_path_key(user_profile);
     let profile_prefix = format!("{}/", profile_key.trim_end_matches('/'));
@@ -1025,7 +1048,7 @@ fn is_user_profile_root_exclusion(root: &Path, user_profile: &Path) -> bool {
         return false;
     };
 
-    USERPROFILE_ROOT_EXCLUSIONS
+    exclusions
         .iter()
         .any(|excluded| child_name.eq_ignore_ascii_case(excluded))
 }
@@ -1562,8 +1585,10 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         let user_profile = tmp.path().join("user-profile");
         let codex_home = user_profile.join("CodexHome");
+        let app_data = user_profile.join("AppData");
         let documents = user_profile.join("Documents");
         fs::create_dir_all(&codex_home).expect("create codex home");
+        fs::create_dir_all(&app_data).expect("create app data");
         fs::create_dir_all(&documents).expect("create documents");
 
         let mut roots =
@@ -1571,6 +1596,13 @@ mod tests {
         let user_profile_key = super::canonical_path_key(&user_profile);
         roots.retain(|root| super::canonical_path_key(root) != user_profile_key);
         roots.retain(|root| !super::is_user_profile_root_exclusion(root, &user_profile));
+        roots.retain(|root| {
+            !super::is_user_profile_top_level_exclusion(
+                root,
+                &user_profile,
+                super::USERPROFILE_WRITE_ROOT_EXCLUSIONS,
+            )
+        });
         let roots = super::filter_sensitive_write_roots(roots, &codex_home);
 
         assert_eq!(vec![documents], roots);
