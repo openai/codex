@@ -228,7 +228,7 @@ async fn run_compact_task_inner_impl(
             personality: turn_context.personality,
             ..Default::default()
         };
-        let window_id = sess.services.model_client.current_window_id();
+        let window_id = sess.current_window_id().await;
         let turn_metadata_header = turn_context
             .turn_metadata_state
             .current_header_value_for_compaction(&window_id, compaction_metadata);
@@ -236,6 +236,7 @@ async fn run_compact_task_inner_impl(
             &sess,
             turn_context.as_ref(),
             &mut client_session,
+            &window_id,
             turn_metadata_header.as_deref(),
             &prompt,
         )
@@ -309,6 +310,7 @@ async fn run_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
+        window_id: None,
     };
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
@@ -579,11 +581,13 @@ async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
     client_session: &mut ModelClientSession,
+    window_id: &str,
     turn_metadata_header: Option<&str>,
     prompt: &Prompt,
 ) -> CodexResult<()> {
     let mut stream = client_session
         .stream(
+            window_id,
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
