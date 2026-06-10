@@ -108,6 +108,7 @@ rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_r
 # `libssp_nonshared`, so strip the forwarded stack-protector flags there.
 rules_rust.patch(
     patches = [
+        "//patches:rules_rust_cargo_opt_profile.patch",
         "//patches:rules_rust_windows_gnullvm_build_script.patch",
         "//patches:rules_rust_windows_exec_msvc_build_script_env.patch",
         "//patches:rules_rust_windows_bootstrap_process_wrapper_linker.patch",

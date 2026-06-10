@@ -1,0 +1,73 @@
+# What: align rules_rust's default `opt` compilation mode with Cargo's release
+# profile, including Cargo's build-override defaults for exec-side tools.
+# Why: release binaries should have the same optimization, LTO, codegen-unit,
+# debug-info, and stripping behavior whether they are built by Cargo or Bazel.
+
+diff --git a/rust/private/lto.bzl b/rust/private/lto.bzl
+--- a/rust/private/lto.bzl
++++ b/rust/private/lto.bzl
+@@ -45 +45,9 @@ rust_lto_flag = rule(
+ )
++
++def _effective_lto_mode(ctx, toolchain):
++    mode = toolchain.lto.mode
++    if mode == "unspecified" and not is_exec_configuration(ctx) and ctx.var["COMPILATION_MODE"] == "opt":
++        # Match Cargo's release profile while preserving explicit command-line
++        # overrides of the rules_rust LTO build setting.
++        return "thin"
++    return mode
+@@ -63 +71 @@ def _determine_lto_object_format(ctx, toolchain, crate_info):
+-    mode = toolchain.lto.mode
++    mode = _effective_lto_mode(ctx, toolchain)
+@@ -97 +105 @@ def construct_lto_arguments(ctx, toolchain, crate_info):
+-    mode = toolchain.lto.mode
++    mode = _effective_lto_mode(ctx, toolchain)
+diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -198 +198,9 @@ def get_compilation_mode_opts(ctx, toolchain):
+         fail("Unrecognized compilation mode {} for toolchain.".format(comp_mode))
++
++    if comp_mode == "opt" and is_exec_configuration(ctx):
++        # Cargo's release profile keeps build scripts and proc macros cheap.
++        return struct(
++            debug_info = "0",
++            opt_level = "0",
++            strip_level = "none",
++        )
+@@ -1145 +1154,3 @@ def construct_arguments(
+     rustc_flags.add(compilation_mode.strip_level, format = "--codegen=strip=%s")
++    if ctx.var["COMPILATION_MODE"] == "opt" and not is_exec_configuration(ctx):
++        rustc_flags.add("-Csplit-debuginfo=off")
+@@ -1186 +1196 @@ def construct_arguments(
+-    _add_codegen_units_flags(toolchain, emit, rustc_flags)
++    _add_codegen_units_flags(ctx, toolchain, emit, rustc_flags)
+@@ -1941 +1951 @@ def _add_lto_flags(ctx, toolchain, args, crate):
+-def _add_codegen_units_flags(toolchain, emit, args):
++def _add_codegen_units_flags(ctx, toolchain, emit, args):
+@@ -1946,2 +1956,3 @@ def _add_codegen_units_flags(toolchain, emit, args):
+     Args:
++        ctx (ctx): The current rule's context.
+         toolchain (rust_toolchain): The current target's `rust_toolchain`.
+@@ -1958 +1969,5 @@ def _add_codegen_units_flags(toolchain, emit, args):
+-    if not is_codegen_units_enabled(toolchain):
++    if is_codegen_units_enabled(toolchain):
++        args.add("-Ccodegen-units={}".format(toolchain._codegen_units))
++        return
++
++    if ctx.var["COMPILATION_MODE"] != "opt":
+@@ -1961 +1976,4 @@ def _add_codegen_units_flags(toolchain, emit, args):
+-    args.add("-Ccodegen-units={}".format(toolchain._codegen_units))
++    # Match Cargo's release and build-override defaults while preserving an
++    # explicit rules_rust codegen_units build setting above.
++    codegen_units = 256 if is_exec_configuration(ctx) else 1
++    args.add("-Ccodegen-units={}".format(codegen_units))
+diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
+--- a/rust/toolchain.bzl
++++ b/rust/toolchain.bzl
+@@ -692 +692 @@ rust_toolchain = rule(
+-                "opt": "0",
++                "opt": "line-tables-only",
+@@ -863 +863 @@ rust_toolchain = rule(
+-                "opt": "debuginfo",
++                "opt": "none",
