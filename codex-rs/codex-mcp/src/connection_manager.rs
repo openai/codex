@@ -277,7 +277,10 @@ impl McpConnectionManager {
         manager
     }
 
-    /// Validates that every required server initialized successfully.
+    /// Waits for every required server and reports their startup failures together.
+    ///
+    /// Callers must make the manager reachable to request handlers before awaiting this method,
+    /// because server initialization may require client elicitation.
     pub async fn validate_required_servers(&self) -> Result<()> {
         let failures = async {
             let mut failures = Vec::new();

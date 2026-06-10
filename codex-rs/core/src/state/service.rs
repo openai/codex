@@ -85,6 +85,8 @@ pub(crate) struct SessionServices {
 }
 
 impl SessionServices {
+    /// Installs the manager before validating required servers so startup-time elicitation can
+    /// resolve through the session's manager while validation waits.
     pub(crate) async fn install_mcp_connection_manager(
         &self,
         manager: McpConnectionManager,
