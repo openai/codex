@@ -1348,32 +1348,56 @@ async fn find_thread_path_by_id_str_in_subdir(
     if !root.exists() {
         return Ok(unverified_db_path);
     }
-    // This is safe because we know the values are valid.
-    #[allow(clippy::unwrap_used)]
-    let limit = NonZero::new(1).unwrap();
-    let options = file_search::FileSearchOptions {
-        limit,
-        compute_indices: false,
-        respect_gitignore: false,
-        ..Default::default()
+    let (filename_match, filename_scan_error) = match find_rollout_path_by_id_from_filenames(
+        root.as_path(),
+        id_str,
+    )
+    .await
+    {
+        Ok(path) => (path, None),
+        Err(err) => {
+            tracing::warn!(
+                "rollout filename lookup failed during find_thread_path_by_id_str_in_subdir: {err}"
+            );
+            (None, Some(err))
+        }
     };
 
-    let results = file_search::run(
-        id_str,
-        vec![root.clone()],
-        options,
-        /*cancel_flag*/ None,
-    )
-    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+    let found = match filename_match {
+        Some(path) => Some(path),
+        None => {
+            // This is safe because we know the values are valid.
+            #[allow(clippy::unwrap_used)]
+            let limit = NonZero::new(1).unwrap();
+            let options = file_search::FileSearchOptions {
+                limit,
+                compute_indices: false,
+                respect_gitignore: false,
+                ..Default::default()
+            };
 
-    let found = match results
-        .matches
-        .into_iter()
-        .map(|m| m.full_path())
-        .find_map(compression::RolloutFile::from_path)
-    {
-        Some(rollout_file) => Some(rollout_file.into_path()),
-        None => find_rollout_path_by_id_from_filenames(root.as_path(), id_str).await?,
+            let results = file_search::run(
+                id_str,
+                vec![root.clone()],
+                options,
+                /*cancel_flag*/ None,
+            )
+            .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+
+            let found = results
+                .matches
+                .into_iter()
+                .map(|m| m.full_path())
+                .find_map(compression::RolloutFile::from_path)
+                .map(compression::RolloutFile::into_path);
+
+            if found.is_none()
+                && let Some(err) = filename_scan_error
+            {
+                return Err(err);
+            }
+            found
+        }
     };
     if let Some(found_path) = found.as_ref() {
         tracing::debug!("state db missing rollout path for thread {id_str}");
