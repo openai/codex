@@ -124,7 +124,7 @@ pub(crate) fn websocket_url_supports_auth_token(url: &Url) -> bool {
 
 enum RemoteClientCommand {
     Request {
-        request: Box<JSONRPCRequest>,
+        request: Box<ClientRequest>,
         response_tx: oneshot::Sender<IoResult<RequestResult>>,
     },
     Notify {
@@ -151,16 +151,7 @@ pub struct RemoteAppServerClient {
     event_rx: mpsc::UnboundedReceiver<AppServerEvent>,
     pending_events: VecDeque<AppServerEvent>,
     server_version: Option<String>,
-    codex_home: Option<String>,
-    platform_family: Option<String>,
     worker_handle: tokio::task::JoinHandle<()>,
-}
-
-#[derive(Debug, Default)]
-struct RemoteInitializeInfo {
-    server_version: Option<String>,
-    codex_home: Option<String>,
-    platform_family: Option<String>,
 }
 
 #[derive(Clone)]
@@ -194,14 +185,6 @@ impl RemoteAppServerClient {
         self.server_version.as_deref()
     }
 
-    pub fn codex_home(&self) -> Option<&str> {
-        self.codex_home.as_deref()
-    }
-
-    pub fn platform_family(&self) -> Option<&str> {
-        self.platform_family.as_deref()
-    }
-
     async fn connect_with_stream<S>(
         channel_capacity: usize,
         endpoint: String,
@@ -212,7 +195,7 @@ impl RemoteAppServerClient {
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let mut stream = stream;
-        let (pending_events, initialize_info) = initialize_remote_connection(
+        let (pending_events, server_version) = initialize_remote_connection(
             &mut stream,
             &endpoint,
             initialize_params,
@@ -235,17 +218,36 @@ impl RemoteAppServerClient {
                         };
                         match command {
                             RemoteClientCommand::Request { request, response_tx } => {
-                                if !write_remote_request(
+                                let request_id = request_id_from_client_request(&request);
+                                if pending_requests.contains_key(&request_id) {
+                                    let _ = response_tx.send(Err(IoError::new(
+                                        ErrorKind::InvalidInput,
+                                        format!("duplicate remote app-server request id `{request_id}`"),
+                                    )));
+                                    continue;
+                                }
+                                pending_requests.insert(request_id.clone(), response_tx);
+                                if let Err(err) = write_jsonrpc_message(
                                     &mut stream,
+                                    JSONRPCMessage::Request(jsonrpc_request_from_client_request(*request)),
                                     &endpoint,
-                                    &mut pending_requests,
-                                    *request,
-                                    response_tx,
-                                    &event_tx,
-                                    &mut worker_exit_error,
                                 )
                                 .await
                                 {
+                                    let err_message = err.to_string();
+                                    let message = format!(
+                                        "remote app server at `{endpoint}` write failed: {err_message}"
+                                    );
+                                    if let Some(response_tx) = pending_requests.remove(&request_id) {
+                                        let _ = response_tx.send(Err(err));
+                                    }
+                                    let _ = deliver_event(
+                                        &event_tx,
+                                        AppServerEvent::Disconnected {
+                                            message: message.clone(),
+                                        },
+                                    );
+                                    worker_exit_error = Some((ErrorKind::BrokenPipe, message));
                                     break;
                                 }
                             }
@@ -469,9 +471,7 @@ impl RemoteAppServerClient {
             command_tx,
             event_rx,
             pending_events: pending_events.into(),
-            server_version: initialize_info.server_version,
-            codex_home: initialize_info.codex_home,
-            platform_family: initialize_info.platform_family,
+            server_version,
             worker_handle,
         })
     }
@@ -483,11 +483,6 @@ impl RemoteAppServerClient {
     }
 
     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
-        self.request_json_rpc(jsonrpc_request_from_client_request(request))
-            .await
-    }
-
-    pub async fn request_json_rpc(&self, request: JSONRPCRequest) -> IoResult<RequestResult> {
         let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
             .send(RemoteClientCommand::Request {
@@ -618,8 +613,6 @@ impl RemoteAppServerClient {
             event_rx,
             pending_events: _pending_events,
             server_version: _server_version,
-            codex_home: _codex_home,
-            platform_family: _platform_family,
             worker_handle,
         } = self;
         let mut worker_handle = worker_handle;
@@ -644,11 +637,6 @@ impl RemoteAppServerClient {
 
 impl RemoteAppServerRequestHandle {
     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
-        self.request_json_rpc(jsonrpc_request_from_client_request(request))
-            .await
-    }
-
-    async fn request_json_rpc(&self, request: JSONRPCRequest) -> IoResult<RequestResult> {
         let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
             .send(RemoteClientCommand::Request {
@@ -812,13 +800,13 @@ async fn initialize_remote_connection<S>(
     endpoint: &str,
     params: InitializeParams,
     initialize_timeout: Duration,
-) -> IoResult<(Vec<AppServerEvent>, RemoteInitializeInfo)>
+) -> IoResult<(Vec<AppServerEvent>, Option<String>)>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let initialize_request_id = RequestId::String("initialize".to_string());
     let mut pending_events = Vec::new();
-    let mut initialize_info = RemoteInitializeInfo::default();
+    let mut server_version = None;
     write_jsonrpc_message(
         stream,
         JSONRPCMessage::Request(jsonrpc_request_from_client_request(
@@ -842,7 +830,7 @@ where
                     })?;
                     match message {
                         JSONRPCMessage::Response(response) if response.id == initialize_request_id => {
-                            initialize_info.server_version = response
+                            server_version = response
                                 .result
                                 .get("userAgent")
                                 .and_then(serde_json::Value::as_str)
@@ -850,17 +838,6 @@ where
                                     let (_, rest) = user_agent.split_once('/')?;
                                     rest.split_whitespace().next().map(str::to_string)
                                 });
-                            initialize_info.codex_home = response
-                                .result
-                                .get("codexHome")
-                                .and_then(serde_json::Value::as_str)
-                                .filter(|codex_home| !codex_home.is_empty())
-                                .map(str::to_string);
-                            initialize_info.platform_family = response
-                                .result
-                                .get("platformFamily")
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::to_string);
                             break Ok(());
                         }
                         JSONRPCMessage::Error(error) if error.id == initialize_request_id => {
@@ -952,7 +929,7 @@ where
     )
     .await?;
 
-    Ok((pending_events, initialize_info))
+    Ok((pending_events, server_version))
 }
 
 fn app_server_event_from_notification(notification: JSONRPCNotification) -> Option<AppServerEvent> {
@@ -974,45 +951,8 @@ fn deliver_event(
     })
 }
 
-async fn write_remote_request<S>(
-    stream: &mut WebSocketStream<S>,
-    endpoint: &str,
-    pending_requests: &mut HashMap<RequestId, oneshot::Sender<IoResult<RequestResult>>>,
-    request: JSONRPCRequest,
-    response_tx: oneshot::Sender<IoResult<RequestResult>>,
-    event_tx: &mpsc::UnboundedSender<AppServerEvent>,
-    worker_exit_error: &mut Option<(ErrorKind, String)>,
-) -> bool
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    let request_id = request.id.clone();
-    if pending_requests.contains_key(&request_id) {
-        let _ = response_tx.send(Err(IoError::new(
-            ErrorKind::InvalidInput,
-            format!("duplicate remote app-server request id `{request_id}`"),
-        )));
-        return true;
-    }
-    pending_requests.insert(request_id.clone(), response_tx);
-    if let Err(err) =
-        write_jsonrpc_message(stream, JSONRPCMessage::Request(request), endpoint).await
-    {
-        let err_message = err.to_string();
-        let message = format!("remote app server at `{endpoint}` write failed: {err_message}");
-        if let Some(response_tx) = pending_requests.remove(&request_id) {
-            let _ = response_tx.send(Err(err));
-        }
-        let _ = deliver_event(
-            event_tx,
-            AppServerEvent::Disconnected {
-                message: message.clone(),
-            },
-        );
-        *worker_exit_error = Some((ErrorKind::BrokenPipe, message));
-        return false;
-    }
-    true
+fn request_id_from_client_request(request: &ClientRequest) -> RequestId {
+    jsonrpc_request_from_client_request(request.clone()).id
 }
 
 fn jsonrpc_request_from_client_request(request: ClientRequest) -> JSONRPCRequest {
@@ -1084,8 +1024,6 @@ mod tests {
             event_rx,
             pending_events: VecDeque::new(),
             server_version: None,
-            codex_home: None,
-            platform_family: None,
             worker_handle,
         };
 

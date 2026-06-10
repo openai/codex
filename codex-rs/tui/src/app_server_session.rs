@@ -4,7 +4,6 @@
 //! request/response plumbing out of `App` and `ChatWidget`.
 
 use crate::bottom_pane::FeedbackAudience;
-use crate::goal_files::GoalFilePath;
 use crate::legacy_core::config::Config;
 use crate::permission_compat::legacy_compatible_permission_profile;
 use crate::service_tier_resolution;
@@ -35,7 +34,6 @@ use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
@@ -131,8 +129,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
-use serde::de::DeserializeOwned;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -151,11 +147,6 @@ fn is_thread_settings_update_unsupported(source: &JSONRPCErrorError) -> bool {
     source.code == JSONRPC_METHOD_NOT_FOUND
         || (source.code == JSONRPC_INVALID_REQUEST
             && source.message.contains(THREAD_SETTINGS_UPDATE_METHOD))
-}
-
-fn local_goal_file_path(path: &GoalFilePath) -> Result<AbsolutePathBuf> {
-    AbsolutePathBuf::from_absolute_path_checked(path.as_str())
-        .wrap_err_with(|| format!("invalid local goal file path {}", path.display()))
 }
 
 /// Data collected during the TUI bootstrap phase that the main event loop
@@ -245,19 +236,6 @@ impl AppServerSession {
 
     pub(crate) fn uses_remote_workspace(&self) -> bool {
         matches!(self.thread_params_mode, ThreadParamsMode::Remote)
-    }
-
-    pub(crate) fn goal_files_codex_home(
-        &self,
-        local_codex_home: &AbsolutePathBuf,
-    ) -> Option<GoalFilePath> {
-        match self.thread_params_mode {
-            ThreadParamsMode::Embedded => Some(GoalFilePath::from_local(local_codex_home)),
-            ThreadParamsMode::Remote => self
-                .client
-                .remote_codex_home()
-                .map(|path| GoalFilePath::from_remote(path, self.client.remote_platform_family())),
-        }
     }
 
     pub(crate) fn server_version(&self) -> Option<&str> {
@@ -902,19 +880,6 @@ impl AppServerSession {
             .wrap_err("fs/readFile returned invalid base64 data")
     }
 
-    pub(crate) async fn fs_read_file_for_goal(&mut self, path: GoalFilePath) -> Result<Vec<u8>> {
-        if !self.uses_remote_workspace() {
-            return self.fs_read_file(local_goal_file_path(&path)?).await;
-        }
-
-        let response: FsReadFileResponse = self
-            .request_json_rpc_typed("fs/readFile", json!({ "path": path.as_str() }))
-            .await?;
-        STANDARD
-            .decode(response.data_base64)
-            .wrap_err("fs/readFile returned invalid base64 data")
-    }
-
     pub(crate) async fn fs_write_file(
         &mut self,
         path: AbsolutePathBuf,
@@ -935,29 +900,6 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn fs_write_file_for_goal(
-        &mut self,
-        path: GoalFilePath,
-        bytes: Vec<u8>,
-    ) -> Result<()> {
-        if !self.uses_remote_workspace() {
-            return self
-                .fs_write_file(local_goal_file_path(&path)?, bytes)
-                .await;
-        }
-
-        let _: FsWriteFileResponse = self
-            .request_json_rpc_typed(
-                "fs/writeFile",
-                json!({
-                    "path": path.as_str(),
-                    "dataBase64": STANDARD.encode(bytes),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
     pub(crate) async fn fs_create_directory(&mut self, path: AbsolutePathBuf) -> Result<()> {
         let request_id = self.next_request_id();
         let _: FsCreateDirectoryResponse = self
@@ -972,48 +914,6 @@ impl AppServerSession {
             .await
             .wrap_err("fs/createDirectory failed in TUI")?;
         Ok(())
-    }
-
-    pub(crate) async fn fs_create_directory_for_goal(&mut self, path: GoalFilePath) -> Result<()> {
-        if !self.uses_remote_workspace() {
-            return self.fs_create_directory(local_goal_file_path(&path)?).await;
-        }
-
-        let _: FsCreateDirectoryResponse = self
-            .request_json_rpc_typed(
-                "fs/createDirectory",
-                json!({
-                    "path": path.as_str(),
-                    "recursive": true,
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn request_json_rpc_typed<T>(
-        &mut self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        let request_id = self.next_request_id();
-        let response = self
-            .client
-            .request_json_rpc(JSONRPCRequest {
-                id: request_id,
-                method: method.to_string(),
-                params: Some(params),
-                trace: None,
-            })
-            .await
-            .wrap_err_with(|| format!("{method} failed in TUI"))?;
-        let result = response.map_err(|source| {
-            color_eyre::eyre::eyre!("{method} failed in TUI: {}", source.message)
-        })?;
-        serde_json::from_value(result).wrap_err_with(|| format!("{method} returned invalid data"))
     }
 
     pub(crate) async fn logout_account(&mut self) -> Result<()> {

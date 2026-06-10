@@ -660,43 +660,6 @@ async fn goal_slash_command_uses_plain_text_for_mentions() {
 }
 
 #[tokio::test]
-async fn goal_slash_command_preserves_selected_file_path_text() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    chat.bottom_pane
-        .set_composer_text("/goal inspect @read".to_string(), Vec::new(), Vec::new());
-    chat.bottom_pane.on_file_search_result(
-        "read".to_string(),
-        vec![codex_file_search::FileMatch {
-            score: 1,
-            path: PathBuf::from("README.md"),
-            match_type: codex_file_search::MatchType::File,
-            root: test_project_path(),
-            indices: None,
-        }],
-    );
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    submit_current_composer(&mut chat);
-
-    let (actual_thread_id, draft) = loop {
-        match rx.try_recv().expect("expected goal draft event") {
-            AppEvent::SetThreadGoalDraft {
-                thread_id, draft, ..
-            } => break (thread_id, draft),
-            _ => continue,
-        }
-    };
-    assert_eq!(actual_thread_id, thread_id);
-    assert_eq!(draft.objective, "inspect README.md");
-    assert!(draft.pending_pastes.is_empty());
-    assert!(draft.local_images.is_empty());
-    assert_no_submit_op(&mut op_rx);
-}
-
-#[tokio::test]
 async fn goal_slash_command_emits_attached_images() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
