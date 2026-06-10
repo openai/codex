@@ -15,7 +15,9 @@ use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider::BearerAuthProvider;
+use codex_model_provider::ProviderAuthScope;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
@@ -68,8 +70,27 @@ fn test_model_client_with_parent(
     session_source: SessionSource,
     parent_thread_id: Option<ThreadId>,
 ) -> ModelClient {
+    test_model_client_with_thread_id_and_parent(ThreadId::new(), session_source, parent_thread_id)
+}
+
+fn test_model_client_with_thread_id(
+    conversation_id: ThreadId,
+    session_source: SessionSource,
+) -> ModelClient {
+    test_model_client_with_thread_id_and_parent(
+        conversation_id,
+        session_source,
+        /*parent_thread_id*/ None,
+    )
+}
+
+fn test_model_client_with_thread_id_and_parent(
+    conversation_id: ThreadId,
+    session_source: SessionSource,
+    parent_thread_id: Option<ThreadId>,
+) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
-    let thread_id = ThreadId::new();
+    let thread_id = conversation_id;
     ModelClient::new(
         /*auth_manager*/ None,
         thread_id.into(),
@@ -84,6 +105,22 @@ fn test_model_client_with_parent(
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
     )
+}
+
+#[test]
+fn provider_auth_scope_uses_run_scope() {
+    let conversation_id =
+        ThreadId::from_string("018f4f4c-43f5-7b28-8e24-000000000001").expect("valid thread id");
+    let client = test_model_client_with_thread_id(conversation_id, SessionSource::Cli);
+
+    assert_eq!(
+        client.provider_auth_scope(),
+        ProviderAuthScope::Run {
+            agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
+            session_source: SessionSource::Cli,
+            chatgpt_base_url: None,
+        }
+    );
 }
 
 fn test_model_info() -> ModelInfo {

@@ -18,6 +18,7 @@ use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::Result;
 use codex_protocol::openai_models::ModelsResponse;
 
+use crate::auth::ProviderAuthScope;
 use crate::provider::ModelProvider;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
@@ -102,6 +103,10 @@ impl ModelProvider for AmazonBedrockModelProvider {
     }
 
     async fn api_auth(&self) -> Result<SharedAuthProvider> {
+        resolve_provider_auth(&self.aws).await
+    }
+
+    async fn api_auth_for_scope(&self, _scope: ProviderAuthScope) -> Result<SharedAuthProvider> {
         resolve_provider_auth(&self.aws).await
     }
 
