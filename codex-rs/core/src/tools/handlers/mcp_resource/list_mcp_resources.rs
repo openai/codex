@@ -40,10 +40,6 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
         true
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource listing reads through the session-owned manager guard"
-    )]
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -105,8 +101,7 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
                 let resources = session
                     .services
                     .mcp_connection_manager
-                    .read()
-                    .await
+                    .current()
                     .list_all_resources()
                     .await;
                 Ok(ListResourcesPayload::from_all_servers(resources))

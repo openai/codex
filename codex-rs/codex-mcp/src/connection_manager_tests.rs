@@ -981,6 +981,48 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
 }
 
 #[tokio::test]
+async fn shutdown_cancels_pending_tool_listing() {
+    let cancel_token = CancellationToken::new();
+    let cancel_token_for_startup = cancel_token.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let pending_client = async move {
+        let _ = started_tx.send(());
+        cancel_token_for_startup.cancelled().await;
+        Err(StartupOutcomeError::Cancelled)
+    }
+    .boxed()
+    .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token,
+        },
+    );
+    let manager = Arc::new(manager);
+    let manager_for_list = Arc::clone(&manager);
+    let list_task = tokio::spawn(async move { manager_for_list.list_all_tools().await });
+
+    started_rx.await.expect("tool listing should start");
+    tokio::time::timeout(Duration::from_secs(1), manager.shutdown())
+        .await
+        .expect("shutdown should cancel speculative tool listing");
+    let tools = list_task.await.expect("tool listing task should not panic");
+    assert!(tools.is_empty());
+}
+
+#[tokio::test]
 async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
