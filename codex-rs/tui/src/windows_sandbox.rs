@@ -1,4 +1,10 @@
 //! TUI-owned Windows sandbox helpers retained while setup still runs in the local client process.
+//!
+//! TODO: These helpers inspect and modify the TUI host, so they do not support
+//! cross-platform remote app servers. Move readiness and setup to the existing
+//! `windowsSandbox/*` RPCs while preserving the pending permission profile,
+//! use the server platform reported during initialization, and add a remote
+//! equivalent for read-root grants.
 
 use crate::legacy_core::config::Config;
 use codex_config::types::WindowsSandboxModeToml;
