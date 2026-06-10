@@ -129,7 +129,7 @@ async fn exec_command_with_tty(
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone(),
-            initial_exec_command_returned: false,
+            initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             hook_command: cmd.to_string(),
             tty,
             network_approval: None,
@@ -180,7 +180,9 @@ async fn exec_command_with_tty(
             .processes
             .get_mut(&process_id)
     {
-        entry.initial_exec_command_returned = true;
+        entry
+            .initial_exec_command_active
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     Ok(ExecCommandToolOutput {
@@ -656,7 +658,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             call_id: "call".to_string(),
             process_id,
             cwd,
-            initial_exec_command_returned: false,
+            initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             hook_command: "sleep 60".to_string(),
             tty: true,
             network_approval: None,
@@ -683,7 +685,9 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             .processes
             .get_mut(&process_id)
             .expect("process should remain stored until initial response returns");
-        entry.initial_exec_command_returned = true;
+        entry
+            .initial_exec_command_active
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     allow_terminate.notify_waiters();
@@ -727,7 +731,7 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
             call_id: "call".to_string(),
             process_id,
             cwd,
-            initial_exec_command_returned: true,
+            initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hook_command: "sleep 60".to_string(),
             tty: true,
             network_approval: None,

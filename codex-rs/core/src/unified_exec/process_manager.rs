@@ -181,6 +181,16 @@ struct PreparedProcessHandles {
     tty: bool,
 }
 
+struct InitialExecCommandGuard {
+    active: Arc<AtomicBool>,
+}
+
+impl Drop for InitialExecCommandGuard {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Release);
+    }
+}
+
 fn exec_server_process_id(process_id: i32) -> String {
     process_id.to_string()
 }
@@ -415,7 +425,8 @@ impl UnifiedExecProcessManager {
         // Persist live sessions before the initial yield wait so interrupting the
         // turn cannot drop the last Arc and terminate the background process.
         let process_started_alive = !process.has_exited() && process.exit_code().is_none();
-        if process_started_alive {
+        let _initial_exec_command_guard = if process_started_alive {
+            let initial_exec_command_active = Arc::new(AtomicBool::new(true));
             self.store_process(
                 Arc::clone(&process),
                 context,
@@ -427,9 +438,15 @@ impl UnifiedExecProcessManager {
                 request.tty,
                 deferred_network_approval.clone(),
                 Arc::clone(&transcript),
+                Arc::clone(&initial_exec_command_active),
             )
             .await;
-        }
+            Some(InitialExecCommandGuard {
+                active: initial_exec_command_active,
+            })
+        } else {
+            None
+        };
 
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
         // For the initial exec_command call, we both stream output to events
@@ -762,7 +779,9 @@ impl UnifiedExecProcessManager {
                 entry: Box::new(entry),
             }
         } else {
-            entry.initial_exec_command_returned = true;
+            entry
+                .initial_exec_command_active
+                .store(false, Ordering::Release);
             ProcessStatus::Alive {
                 exit_code,
                 call_id: entry.call_id.clone(),
@@ -824,13 +843,14 @@ impl UnifiedExecProcessManager {
         tty: bool,
         network_approval: Option<DeferredNetworkApproval>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+        initial_exec_command_active: Arc<AtomicBool>,
     ) {
         let entry = ProcessEntry {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone(),
-            initial_exec_command_returned: false,
+            initial_exec_command_active,
             hook_command,
             tty,
             network_approval,
@@ -1315,7 +1335,10 @@ impl UnifiedExecProcessManager {
             let Some(entry) = store.processes.get(&process_id) else {
                 return true;
             };
-            if !entry.initial_exec_command_returned {
+            if !Arc::ptr_eq(&entry.process, &process) {
+                return true;
+            }
+            if entry.initial_exec_command_active.load(Ordering::Acquire) {
                 return true;
             }
             let Some(entry) = store.remove(process_id) else {

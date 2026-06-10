@@ -72,9 +72,18 @@ mod background_terminal_pagination_tests {
 
         assert_eq!(data, vec![terminal("1"), terminal("2")]);
         assert_eq!(next_cursor, Some("2".to_string()));
+        let first_cursor = next_cursor;
+
+        let terminals_without_anchor = vec![terminal("1"), terminal("3"), terminal("4")];
+        let (data, next_cursor) =
+            paginate_background_terminals(&terminals_without_anchor, first_cursor.clone(), Some(2))
+                .expect("valid page");
+
+        assert_eq!(data, vec![terminal("3"), terminal("4")]);
+        assert_eq!(next_cursor, None);
 
         let (data, next_cursor) =
-            paginate_background_terminals(&terminals, next_cursor, Some(2)).expect("valid page");
+            paginate_background_terminals(&terminals, first_cursor, Some(2)).expect("valid page");
 
         assert_eq!(data, vec![terminal("3"), terminal("4")]);
         assert_eq!(next_cursor, Some("4".to_string()));

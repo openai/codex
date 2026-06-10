@@ -4322,11 +4322,20 @@ fn paginate_background_terminals(
     limit: Option<u32>,
 ) -> Result<(Vec<ThreadBackgroundTerminal>, Option<String>), JSONRPCErrorError> {
     let start = match cursor {
-        Some(cursor) => terminals
-            .iter()
-            .position(|terminal| terminal.process_id == cursor)
-            .map(|index| index + 1)
-            .ok_or_else(|| invalid_request(format!("invalid cursor: {cursor}")))?,
+        Some(cursor) => {
+            let cursor = cursor
+                .parse::<i32>()
+                .map_err(|err| invalid_request(format!("invalid cursor: {err}")))?;
+            terminals
+                .iter()
+                .position(|terminal| {
+                    terminal
+                        .process_id
+                        .parse::<i32>()
+                        .is_ok_and(|process_id| process_id > cursor)
+                })
+                .unwrap_or(terminals.len())
+        }
         None => 0,
     };
     let effective_limit = limit.unwrap_or(terminals.len() as u32).max(1) as usize;
