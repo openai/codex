@@ -8,7 +8,8 @@
 //!    action and return strict JSON.
 //!    The guardian clones the parent config, so it inherits any managed
 //!    network proxy / allowlist that the parent turn already had.
-//! 3. Fail closed on timeout, execution failure, or malformed output.
+//! 3. Apply the managed failure policy to timeouts, execution failures, and
+//!    malformed output. The default remains fail closed.
 //! 4. Apply the guardian's explicit allow/deny outcome.
 
 mod approval_request;
@@ -35,6 +36,7 @@ pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::new_guardian_review_id;
 #[cfg(test)]
 pub(crate) use review::record_guardian_denial_for_test;
+pub(crate) use review::resolve_spawned_approval_review;
 pub(crate) use review::review_approval_request;
 #[cfg(test)]
 pub(crate) use review::review_approval_request_with_cancel;

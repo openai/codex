@@ -80,6 +80,11 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
             rejection.rationale.trim(),
             GUARDIAN_REJECTION_INSTRUCTIONS
         ),
+        GuardianAssessmentDecisionSource::OrganizationPolicy => format!(
+            "This action was rejected by organization policy.\nReason: {}\n{}",
+            rejection.rationale.trim(),
+            GUARDIAN_REJECTION_INSTRUCTIONS
+        ),
     }
 }
 
@@ -91,6 +96,26 @@ pub(crate) fn guardian_timeout_message() -> String {
 pub(super) enum GuardianReviewOutcome {
     Completed(GuardianAssessment),
     Error(GuardianReviewError),
+}
+
+impl GuardianReviewOutcome {
+    fn with_cancellation_precedence(self, external_cancel: Option<&CancellationToken>) -> Self {
+        if external_cancel.is_some_and(CancellationToken::is_cancelled) {
+            Self::Error(GuardianReviewError::Cancelled)
+        } else {
+            self
+        }
+    }
+}
+
+enum GuardianReviewExecution {
+    RunSession {
+        external_cancel: Option<CancellationToken>,
+    },
+    Error {
+        error: GuardianReviewError,
+        external_cancel: CancellationToken,
+    },
 }
 
 #[derive(Debug)]
@@ -128,6 +153,16 @@ impl GuardianReviewError {
             Self::Parse { .. } => GuardianReviewFailureReason::ParseError,
             Self::Timeout => GuardianReviewFailureReason::Timeout,
             Self::Cancelled => GuardianReviewFailureReason::Cancelled,
+        }
+    }
+
+    fn can_fail_open(&self) -> bool {
+        match self {
+            Self::PromptBuild { .. }
+            | Self::Session { .. }
+            | Self::Parse { .. }
+            | Self::Timeout => true,
+            Self::Cancelled => false,
         }
     }
 }
@@ -248,9 +283,10 @@ pub(crate) async fn record_guardian_denial_for_test(
     record_guardian_denial(session, turn, turn_id).await;
 }
 
-/// This function always fails closed: timeouts, review-session failures, and
-/// parse failures all block execution, but timeouts are still surfaced to the
-/// caller as distinct from explicit guardian denials.
+/// Reviews an approval request and applies the managed Guardian failure policy.
+/// Explicit denials and cancellations always block execution. Infrastructure
+/// failures only approve the request when organization policy opts into
+/// fail-open behavior.
 async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -258,8 +294,14 @@ async fn run_guardian_review(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     approval_request_source: GuardianApprovalRequestSource,
-    external_cancel: Option<CancellationToken>,
+    execution: GuardianReviewExecution,
 ) -> ReviewDecision {
+    let external_cancel_for_policy = match &execution {
+        GuardianReviewExecution::RunSession { external_cancel } => external_cancel.clone(),
+        GuardianReviewExecution::Error {
+            external_cancel, ..
+        } => Some(external_cancel.clone()),
+    };
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
@@ -293,7 +335,7 @@ async fn run_guardian_review(
         )
         .await;
 
-    if external_cancel
+    if external_cancel_for_policy
         .as_ref()
         .is_some_and(CancellationToken::is_cancelled)
     {
@@ -335,15 +377,24 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let (outcome, analytics_result) = Box::pin(run_guardian_review_session(
-        session.clone(),
-        turn.clone(),
-        request,
-        retry_reason.clone(),
-        schema,
-        external_cancel,
-    ))
-    .await;
+    let (outcome, analytics_result) = match execution {
+        GuardianReviewExecution::RunSession { external_cancel } => {
+            Box::pin(run_guardian_review_session(
+                session.clone(),
+                turn.clone(),
+                request,
+                retry_reason.clone(),
+                schema,
+                external_cancel,
+            ))
+            .await
+        }
+        GuardianReviewExecution::Error { error, .. } => (
+            GuardianReviewOutcome::Error(error),
+            GuardianReviewAnalyticsResult::without_session(),
+        ),
+    };
+    let outcome = outcome.with_cancellation_precedence(external_cancel_for_policy.as_ref());
 
     let completed_at_ms = now_unix_timestamp_ms();
     let (assessment, count_denial_for_circuit_breaker) = match outcome {
@@ -376,6 +427,63 @@ async fn run_guardian_review(
             let count_denial_for_circuit_breaker =
                 matches!(assessment.outcome, GuardianAssessmentOutcome::Deny);
             (assessment, count_denial_for_circuit_breaker)
+        }
+        GuardianReviewOutcome::Error(error)
+            if turn.config.allow_guardian_fail_open && error.can_fail_open() =>
+        {
+            let rationale = match &error {
+                GuardianReviewError::Timeout => {
+                    "Automatic approval review timed out. Organization policy allowed the request to proceed."
+                        .to_string()
+                }
+                GuardianReviewError::PromptBuild { message }
+                | GuardianReviewError::Session { message }
+                | GuardianReviewError::Parse { message } => format!(
+                    "Automatic approval review failed: {message}. Organization policy allowed the request to proceed."
+                ),
+                GuardianReviewError::Cancelled => unreachable!(),
+            };
+            track_guardian_review(
+                session.as_ref(),
+                &review_tracking,
+                approval_request_source,
+                &reviewed_action,
+                GuardianReviewAnalyticsResult {
+                    decision: GuardianReviewDecision::Approved,
+                    terminal_status: GuardianReviewTerminalStatus::FailedOpen,
+                    failure_reason: Some(error.failure_reason()),
+                    ..analytics_result
+                },
+                completed_at_ms.try_into().unwrap_or_default(),
+            );
+            session
+                .send_event(
+                    turn.as_ref(),
+                    EventMsg::GuardianWarning(WarningEvent {
+                        message: rationale.clone(),
+                    }),
+                )
+                .await;
+            session
+                .send_event(
+                    turn.as_ref(),
+                    EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                        id: review_id,
+                        target_item_id,
+                        turn_id: assessment_turn_id.clone(),
+                        started_at_ms,
+                        completed_at_ms: Some(completed_at_ms),
+                        status: GuardianAssessmentStatus::Approved,
+                        risk_level: None,
+                        user_authorization: None,
+                        rationale: Some(rationale),
+                        decision_source: Some(GuardianAssessmentDecisionSource::OrganizationPolicy),
+                        action: terminal_action,
+                    }),
+                )
+                .await;
+            record_guardian_non_denial(&session, &assessment_turn_id).await;
+            return ReviewDecision::Approved;
         }
         GuardianReviewOutcome::Error(error) => match error {
             GuardianReviewError::Timeout => {
@@ -585,7 +693,9 @@ pub(crate) async fn review_approval_request(
         request,
         retry_reason,
         GuardianApprovalRequestSource::MainTurn,
-        /*external_cancel*/ None,
+        GuardianReviewExecution::RunSession {
+            external_cancel: None,
+        },
     ))
     .await
 }
@@ -606,9 +716,17 @@ pub(crate) async fn review_approval_request_with_cancel(
         request,
         retry_reason,
         approval_request_source,
-        Some(cancel_token),
+        GuardianReviewExecution::RunSession {
+            external_cancel: Some(cancel_token),
+        },
     )
     .await
+}
+
+pub(crate) async fn resolve_spawned_approval_review(
+    review_rx: oneshot::Receiver<ReviewDecision>,
+) -> ReviewDecision {
+    review_rx.await.unwrap_or(ReviewDecision::Denied)
 }
 
 pub(crate) fn spawn_approval_request_review(
@@ -621,24 +739,43 @@ pub(crate) fn spawn_approval_request_review(
     cancel_token: CancellationToken,
 ) -> oneshot::Receiver<ReviewDecision> {
     let (tx, rx) = oneshot::channel();
+    let fallback_runtime_handle = session.services.runtime_handle.clone();
     std::thread::spawn(move || {
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-        else {
-            let _ = tx.send(ReviewDecision::Denied);
-            return;
-        };
-        let decision = runtime.block_on(review_approval_request_with_cancel(
-            &session,
-            &turn,
-            review_id,
-            request,
-            retry_reason,
-            approval_request_source,
-            cancel_token,
-        ));
-        let _ = tx.send(decision);
+        {
+            Ok(runtime) => {
+                let decision = runtime.block_on(review_approval_request_with_cancel(
+                    &session,
+                    &turn,
+                    review_id,
+                    request,
+                    retry_reason,
+                    approval_request_source,
+                    cancel_token,
+                ));
+                let _ = tx.send(decision);
+            }
+            Err(err) => {
+                drop(fallback_runtime_handle.spawn(async move {
+                    let decision = run_guardian_review(
+                        session,
+                        turn,
+                        review_id,
+                        request,
+                        retry_reason,
+                        approval_request_source,
+                        GuardianReviewExecution::Error {
+                            error: GuardianReviewError::session(err.into()),
+                            external_cancel: cancel_token,
+                        },
+                    )
+                    .await;
+                    let _ = tx.send(decision);
+                }));
+            }
+        }
     });
     rx
 }
@@ -795,7 +932,7 @@ pub(super) async fn run_guardian_review_session(
             GuardianReviewOutcome::Error(GuardianReviewError::Timeout),
             session_analytics_result,
         ),
-        GuardianReviewSessionOutcome::Aborted => (
+        GuardianReviewSessionOutcome::Cancelled => (
             GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
             session_analytics_result,
         ),
@@ -825,5 +962,44 @@ mod review_tests {
             session_error.failure_reason(),
             GuardianReviewFailureReason::SessionError
         ));
+    }
+
+    #[test]
+    fn guardian_failure_policy_excludes_only_cancellation() {
+        let failures = [
+            GuardianReviewError::prompt_build(anyhow::anyhow!("bad prompt/config")),
+            GuardianReviewError::session(anyhow::anyhow!("guardian runtime failed")),
+            GuardianReviewError::parse(anyhow::anyhow!("bad guardian JSON")),
+            GuardianReviewError::Timeout,
+        ];
+
+        assert!(failures.iter().all(GuardianReviewError::can_fail_open));
+        assert!(!GuardianReviewError::Cancelled.can_fail_open());
+    }
+
+    #[test]
+    fn guardian_cancellation_takes_precedence_over_fail_open_error() {
+        let external_cancel = CancellationToken::new();
+        external_cancel.cancel();
+
+        let outcome = GuardianReviewOutcome::Error(GuardianReviewError::session(anyhow::anyhow!(
+            "guardian runtime failed"
+        )))
+        .with_cancellation_precedence(Some(&external_cancel));
+
+        assert!(matches!(
+            outcome,
+            GuardianReviewOutcome::Error(GuardianReviewError::Cancelled)
+        ));
+    }
+
+    #[tokio::test]
+    async fn closed_spawned_review_channel_fails_closed() {
+        let (tx, rx) = oneshot::channel();
+        drop(tx);
+        assert_eq!(
+            resolve_spawned_approval_review(rx).await,
+            ReviewDecision::Denied
+        );
     }
 }

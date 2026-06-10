@@ -364,6 +364,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         }),
         allow_managed_hooks_only: requirements.allow_managed_hooks_only,
         allow_appshots: requirements.allow_appshots,
+        allow_guardian_fail_open: requirements.allow_guardian_fail_open,
         computer_use: requirements
             .computer_use
             .map(map_computer_use_requirements_to_api),
@@ -616,6 +617,16 @@ mod tests {
 
         assert_eq!(mapped.allow_appshots, Some(false));
         assert_eq!(mapped.hooks, None);
+    }
+
+    #[test]
+    fn requirements_api_includes_allow_guardian_fail_open() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allow_guardian_fail_open: Some(false),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.allow_guardian_fail_open, Some(false));
     }
 
     #[test]

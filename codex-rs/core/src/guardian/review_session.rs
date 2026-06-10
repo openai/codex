@@ -62,7 +62,7 @@ pub(crate) enum GuardianReviewSessionOutcome {
     PromptBuildFailed(anyhow::Error),
     SessionFailed(anyhow::Error),
     TimedOut,
-    Aborted,
+    Cancelled,
 }
 
 pub(crate) struct GuardianReviewSessionParams {
@@ -851,7 +851,7 @@ async fn wait_for_guardian_review(
                 )
                 .await
                 .is_ok();
-                return (GuardianReviewSessionOutcome::Aborted, keep_review_session, false);
+                return (GuardianReviewSessionOutcome::Cancelled, keep_review_session, false);
             }
             event = review_session.codex.next_event() => {
                 match event {
@@ -880,7 +880,7 @@ async fn wait_for_guardian_review(
                             last_error_message = Some(error.message);
                         }
                         EventMsg::TurnAborted(_) => {
-                            return (GuardianReviewSessionOutcome::Aborted, true, false);
+                            return (GuardianReviewSessionOutcome::Cancelled, true, false);
                         }
                         _ => {}
                     },
@@ -999,7 +999,7 @@ async fn run_before_review_deadline<T>(
             } else {
                 std::future::pending::<()>().await;
             }
-        } => Err(GuardianReviewSessionOutcome::Aborted),
+        } => Err(GuardianReviewSessionOutcome::Cancelled),
     }
 }
 
@@ -1101,16 +1101,20 @@ mod tests {
         }
     }
 
-    fn turn_aborted_event(turn_id: &str) -> Event {
+    fn turn_aborted_event_with_reason(turn_id: &str, reason: TurnAbortReason) -> Event {
         Event {
             id: turn_id.to_string(),
             msg: EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some(turn_id.to_string()),
-                reason: TurnAbortReason::Interrupted,
+                reason,
                 completed_at: None,
                 duration_ms: None,
             }),
         }
+    }
+
+    fn turn_aborted_event(turn_id: &str) -> Event {
+        turn_aborted_event_with_reason(turn_id, TurnAbortReason::Interrupted)
     }
 
     async fn test_review_params() -> GuardianReviewSessionParams {
@@ -1321,7 +1325,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            Err(GuardianReviewSessionOutcome::Aborted)
+            Err(GuardianReviewSessionOutcome::Cancelled)
         ));
     }
 
@@ -1366,7 +1370,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            Err(GuardianReviewSessionOutcome::Aborted)
+            Err(GuardianReviewSessionOutcome::Cancelled)
         ));
         assert!(cancel_token.is_cancelled());
     }
@@ -1577,6 +1581,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wait_for_guardian_review_treats_current_turn_abort_as_cancelled() {
+        let (review_session, tx_event, _rx_sub) = test_review_session().await;
+        tx_event
+            .send(turn_aborted_event_with_reason(
+                "current-turn",
+                TurnAbortReason::Replaced,
+            ))
+            .await
+            .expect("queue current turn abort");
+
+        let mut analytics_result = GuardianReviewAnalyticsResult::without_session();
+        let (outcome, keep_review_session, capture_token_usage) = wait_for_guardian_review(
+            &review_session,
+            "current-turn",
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            /*external_cancel*/ None,
+            &mut analytics_result,
+        )
+        .await;
+
+        assert!(matches!(outcome, GuardianReviewSessionOutcome::Cancelled));
+        assert!(keep_review_session);
+        assert!(!capture_token_usage);
+    }
+
+    #[tokio::test]
     async fn wait_for_guardian_review_timeout_drains_expected_turn_after_stale_terminal_event() {
         let (review_session, tx_event, rx_sub) = test_review_session().await;
         tx_event
@@ -1643,7 +1673,7 @@ mod tests {
         interrupt_response
             .await
             .expect("interrupt response task should complete");
-        assert!(matches!(outcome, GuardianReviewSessionOutcome::Aborted));
+        assert!(matches!(outcome, GuardianReviewSessionOutcome::Cancelled));
         assert!(keep_review_session);
         assert!(!capture_token_usage);
     }

@@ -149,6 +149,7 @@ fn terminal_status_tag(status: GuardianReviewTerminalStatus) -> &'static str {
         GuardianReviewTerminalStatus::Aborted => "aborted",
         GuardianReviewTerminalStatus::TimedOut => "timed_out",
         GuardianReviewTerminalStatus::FailedClosed => "failed_closed",
+        GuardianReviewTerminalStatus::FailedOpen => "failed_open",
     }
 }
 
@@ -413,6 +414,32 @@ mod tests {
         assert_eq!(
             histogram_sums(&snapshot, GUARDIAN_REVIEW_TTFT_DURATION_METRIC),
             BTreeMap::from([("sample".to_string(), 123)])
+        );
+    }
+
+    #[test]
+    fn guardian_review_metrics_tag_failed_open_outcomes() {
+        let tags = guardian_review_metric_tags(
+            &GuardianReviewAnalyticsResult {
+                decision: GuardianReviewDecision::Approved,
+                terminal_status: GuardianReviewTerminalStatus::FailedOpen,
+                failure_reason: Some(GuardianReviewFailureReason::SessionError),
+                ..GuardianReviewAnalyticsResult::without_session()
+            },
+            GuardianApprovalRequestSource::MainTurn,
+            &GuardianReviewedAction::ApplyPatch {},
+        )
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(tags.get("decision").map(String::as_str), Some("approved"));
+        assert_eq!(
+            tags.get("terminal_status").map(String::as_str),
+            Some("failed_open")
+        );
+        assert_eq!(
+            tags.get("failure_reason").map(String::as_str),
+            Some("session_error")
         );
     }
 }

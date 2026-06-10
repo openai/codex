@@ -1031,7 +1031,8 @@
     "AutoReviewDecisionSource": {
       "description": "[UNSTABLE] Source that produced a terminal approval auto-review decision.",
       "enum": [
-        "agent"
+        "agent",
+        "organizationPolicy"
       ],
       "type": "string"
     },
@@ -4372,6 +4373,12 @@
     "ConfigRequirements": {
       "properties": {
         "allowAppshots": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allowGuardianFailOpen": {
           "type": [
             "boolean",
             "null"

@@ -59,6 +59,7 @@ use core_test_support::responses::mount_response_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
@@ -192,6 +193,37 @@ async fn guardian_test_session_and_turn_with_base_url(
     turn.user_instructions = None;
 
     (Arc::new(session), Arc::new(turn))
+}
+
+async fn guardian_test_session_turn_and_rx(
+    server: &wiremock::MockServer,
+) -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+) {
+    let (mut session, mut turn, rx) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let mut config = (*turn.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.user_instructions = None;
+    let config = Arc::new(config);
+    let models_manager = test_support::models_manager_with_provider(
+        config.codex_home.to_path_buf(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    );
+    Arc::get_mut(&mut session)
+        .expect("session should be uniquely owned")
+        .services
+        .models_manager = models_manager;
+    let turn_mut = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
+    turn_mut.config = Arc::clone(&config);
+    turn_mut.provider =
+        create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone());
+    turn_mut.user_instructions = None;
+
+    (session, turn, rx)
 }
 
 async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnContext>) {
@@ -1031,32 +1063,66 @@ fn guardian_request_target_item_id_omits_network_access_trigger_call_id() {
     assert_eq!(guardian_request_target_item_id(&network_access), None);
 }
 
-#[tokio::test]
-async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
-    let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
-    let cancel_token = CancellationToken::new();
-    cancel_token.cancel();
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_flight_guardian_cancellation_emits_abort_without_warning() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
 
-    let decision = review_approval_request_with_cancel(
-        &session,
-        &turn,
-        "review-cancelled-guardian".to_string(),
-        GuardianApprovalRequest::ApplyPatch {
-            id: "patch-1".to_string(),
-            cwd: test_path_buf("/tmp").abs(),
-            files: vec![test_path_buf("/tmp/guardian.txt").abs()],
-            patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
-                .to_string(),
-        },
-        /*retry_reason*/ None,
-        GuardianApprovalRequestSource::MainTurn,
-        cancel_token,
+    let server = start_mock_server().await;
+    let request_log = mount_response_once(
+        &server,
+        sse_response(sse(vec![ev_response_created("resp-cancelled-guardian")]))
+            .set_delay(Duration::from_secs(60)),
     )
     .await;
+    let (session, mut turn, rx) = guardian_test_session_turn_and_rx(&server).await;
+    let mut config = (*turn.config).clone();
+    config.allow_guardian_fail_open = true;
+    Arc::get_mut(&mut turn)
+        .expect("turn should be uniquely owned")
+        .config = Arc::new(config);
+    seed_guardian_parent_history(&session, &turn).await;
+    let cancel_token = CancellationToken::new();
+    let cancel_for_review = cancel_token.clone();
+    let review_task = tokio::spawn(async move {
+        review_approval_request_with_cancel(
+            &session,
+            &turn,
+            "review-cancelled-guardian".to_string(),
+            GuardianApprovalRequest::ApplyPatch {
+                id: "patch-1".to_string(),
+                cwd: test_path_buf("/tmp").abs(),
+                files: vec![test_path_buf("/tmp/guardian.txt").abs()],
+                patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
+                    .to_string(),
+            },
+            /*retry_reason*/ None,
+            GuardianApprovalRequestSource::MainTurn,
+            cancel_for_review,
+        )
+        .await
+    });
+
+    let started_status = loop {
+        let event = rx.recv().await.expect("Guardian review event");
+        if let EventMsg::GuardianAssessment(assessment) = event.msg
+            && assessment.status == GuardianAssessmentStatus::InProgress
+        {
+            break assessment.status;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while request_log.requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Guardian request should reach the Responses API");
+    cancel_token.cancel();
+    let decision = review_task.await.expect("Guardian review task");
 
     assert_eq!(decision, ReviewDecision::Abort);
 
-    let mut guardian_statuses = Vec::new();
+    let mut guardian_statuses = vec![started_status];
     let mut warnings = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event.msg {
@@ -1074,6 +1140,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
         ]
     );
     assert!(warnings.is_empty());
+    Ok(())
 }
 
 #[test]
@@ -1972,7 +2039,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> anyhow::Result<()> {
+async fn guardian_review_applies_failure_policy_to_responses_api_errors() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1990,27 +2057,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     )
     .await;
 
-    let (mut session, mut turn, rx) =
-        crate::session::tests::make_session_and_context_with_rx().await;
-    let mut config = (*turn.config).clone();
-    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    config.user_instructions = None;
-    let config = Arc::new(config);
-    let models_manager = test_support::models_manager_with_provider(
-        config.codex_home.to_path_buf(),
-        Arc::clone(&session.services.auth_manager),
-        config.model_provider.clone(),
-    );
-    Arc::get_mut(&mut session)
-        .expect("session should be uniquely owned")
-        .services
-        .models_manager = models_manager;
-    let turn_mut = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
-    turn_mut.config = Arc::clone(&config);
-    turn_mut.provider =
-        create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone());
-    turn_mut.user_instructions = None;
-
+    let (session, turn, rx) = guardian_test_session_turn_and_rx(&server).await;
     seed_guardian_parent_history(&session, &turn).await;
 
     let decision = review_approval_request(
@@ -2077,6 +2124,56 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         "rejection message should include guardian rationale: {rejection_message}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_explicit_denial_still_blocks_when_fail_open_is_allowed() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let assessment = serde_json::json!({
+        "risk_level": "high",
+        "user_authorization": "low",
+        "outcome": "deny",
+        "rationale": "The command would publish unreviewed changes.",
+    })
+    .to_string();
+    let _request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian-deny"),
+            ev_assistant_message("msg-guardian-deny", &assessment),
+            ev_completed("resp-guardian-deny"),
+        ]),
+    )
+    .await;
+
+    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let mut config = (*turn.config).clone();
+    config.allow_guardian_fail_open = true;
+    Arc::get_mut(&mut turn)
+        .expect("turn should be uniquely owned")
+        .config = Arc::new(config);
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-shell-guardian-deny".to_string(),
+        GuardianApprovalRequest::Shell {
+            id: "shell-guardian-deny".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Publish the current branch.".to_string()),
+        },
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Denied);
     Ok(())
 }
 

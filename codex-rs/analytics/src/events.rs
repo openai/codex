@@ -192,6 +192,7 @@ pub enum GuardianReviewTerminalStatus {
     Aborted,
     TimedOut,
     FailedClosed,
+    FailedOpen,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -444,6 +445,7 @@ pub(crate) enum FinalApprovalOutcome {
     GuardianApproved,
     GuardianDenied,
     GuardianAborted,
+    GuardianFailedOpen,
     UserApproved,
     UserApprovedForSession,
     UserDenied,
@@ -537,6 +539,7 @@ pub(crate) enum ReviewStatus {
     Denied,
     Aborted,
     TimedOut,
+    FailedOpen,
 }
 
 #[allow(dead_code)]

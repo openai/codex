@@ -79,6 +79,12 @@
             "null"
           ]
         },
+        "allowGuardianFailOpen": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowManagedHooksOnly": {
           "type": [
             "boolean",

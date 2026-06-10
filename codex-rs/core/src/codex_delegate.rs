@@ -33,6 +33,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Config;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
+use crate::guardian::resolve_spawned_approval_review;
 use crate::guardian::routes_approval_to_guardian;
 use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::guardian::spawn_approval_request_review;
@@ -483,7 +484,7 @@ async fn handle_exec_approval(
             review_cancel.clone(),
         );
         await_approval_with_cancel(
-            async move { review_rx.await.unwrap_or_default() },
+            resolve_spawned_approval_review(review_rx),
             parent_session,
             &approval_id_for_op,
             cancel_token,
@@ -591,7 +592,7 @@ async fn handle_patch_approval(
         );
         Some(
             await_approval_with_cancel(
-                async move { review_rx.await.unwrap_or_default() },
+                resolve_spawned_approval_review(review_rx),
                 parent_session,
                 &approval_id,
                 cancel_token,
@@ -711,7 +712,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         review_cancel.clone(),
     );
     let decision = await_approval_with_cancel(
-        async move { review_rx.await.unwrap_or_default() },
+        resolve_spawned_approval_review(review_rx),
         parent_session,
         &event.call_id,
         cancel_token,
