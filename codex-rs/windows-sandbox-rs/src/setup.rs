@@ -96,6 +96,27 @@ pub struct SandboxSetupRequest<'a> {
     pub proxy_enforced: bool,
 }
 
+fn resolve_real_user() -> String {
+    resolve_real_user_from_env(
+        std::env::var("USERNAME").ok().as_deref(),
+        std::env::var("USERDOMAIN").ok().as_deref(),
+    )
+}
+
+fn resolve_real_user_from_env(username: Option<&str>, userdomain: Option<&str>) -> String {
+    let username = username
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Administrators");
+    if username.contains(['\\', '@']) {
+        return username.to_string();
+    }
+    let Some(userdomain) = userdomain.map(str::trim).filter(|value| !value.is_empty()) else {
+        return username.to_string();
+    };
+    format!(r"{userdomain}\{username}")
+}
+
 #[derive(Default)]
 pub struct SetupRootOverrides {
     pub read_roots: Option<Vec<PathBuf>>,
@@ -206,7 +227,7 @@ fn run_setup_refresh_inner(
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         otel: None,
-        real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        real_user: resolve_real_user(),
         mode: SetupMode::Full,
         refresh_only: true,
     };
@@ -889,7 +910,7 @@ fn run_elevated_setup_inner(
         deny_write_paths,
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
-        real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        real_user: resolve_real_user(),
         otel: codex_otel::global_statsig_metrics_settings(),
         mode: SetupMode::Full,
         refresh_only: false,
@@ -1177,6 +1198,38 @@ mod tests {
         assert_eq!(
             extract_failure(&err).map(|failure| failure.code),
             Some(SetupErrorCode::OrchestratorHelperIncomplete)
+        );
+    }
+
+    #[test]
+    fn resolve_real_user_qualifies_unqualified_username() {
+        assert_eq!(
+            super::resolve_real_user_from_env(Some("User.Name"), Some("DOMAIN")),
+            r"DOMAIN\User.Name"
+        );
+    }
+
+    #[test]
+    fn resolve_real_user_preserves_qualified_username() {
+        assert_eq!(
+            super::resolve_real_user_from_env(Some(r"DOMAIN\User.Name"), Some("IGNORED")),
+            r"DOMAIN\User.Name"
+        );
+        assert_eq!(
+            super::resolve_real_user_from_env(Some("user@example.com"), Some("IGNORED")),
+            "user@example.com"
+        );
+    }
+
+    #[test]
+    fn resolve_real_user_falls_back_when_domain_missing() {
+        assert_eq!(
+            super::resolve_real_user_from_env(Some("User.Name"), None),
+            "User.Name"
+        );
+        assert_eq!(
+            super::resolve_real_user_from_env(None, Some("DOMAIN")),
+            "Administrators"
         );
     }
 
