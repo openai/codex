@@ -660,24 +660,25 @@ async fn goal_slash_command_uses_plain_text_for_mentions() {
 }
 
 #[tokio::test]
-async fn goal_slash_command_drops_attached_images() {
+async fn goal_slash_command_materializes_attached_images() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
     let remote_url = "https://example.com/goal.png".to_string();
-    let local_image = PathBuf::from("/tmp/goal-local.png");
+    let local_image = chat.config.codex_home.join("goal-local.png");
+    std::fs::write(&local_image, b"png bytes").expect("write local image");
     let placeholder = "[Image #2]";
     let command = format!("/goal describe {placeholder}");
     let placeholder_start = command.find(placeholder).expect("placeholder in command");
-    chat.set_remote_image_urls(vec![remote_url]);
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
     chat.bottom_pane.set_composer_text(
         command,
         vec![TextElement::new(
             (placeholder_start..placeholder_start + placeholder.len()).into(),
             Some(placeholder.to_string()),
         )],
-        vec![local_image],
+        vec![local_image.to_path_buf()],
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -692,7 +693,20 @@ async fn goal_slash_command_drops_attached_images() {
         panic!("expected SetThreadGoalObjective, got {event:?}");
     };
     assert_eq!(actual_thread_id, thread_id);
-    assert_eq!(objective, "describe [Image #2]");
+    assert!(objective.contains("describe image file: "));
+    assert!(objective.contains("Referenced image URLs:"));
+    assert!(objective.contains(&remote_url));
+    let copied_image = objective
+        .split_once("image file: ")
+        .expect("image file reference")
+        .1
+        .lines()
+        .next()
+        .expect("image path");
+    assert_eq!(
+        std::fs::read(copied_image).expect("read copied image"),
+        b"png bytes"
+    );
     assert!(chat.remote_image_urls().is_empty());
     assert!(chat.bottom_pane.composer_local_image_paths().is_empty());
     assert_no_submit_op(&mut op_rx);

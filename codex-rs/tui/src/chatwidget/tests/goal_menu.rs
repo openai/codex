@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 
 #[tokio::test]
 async fn goal_menu_active_snapshot() {
@@ -68,6 +69,25 @@ async fn goal_menu_budget_limited_snapshot() {
     ));
 
     assert_chatwidget_snapshot!("goal_menu_budget_limited", rendered_goal_summary(&mut rx));
+}
+
+#[tokio::test]
+async fn goal_menu_managed_file_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    let mut goal = test_goal(
+        thread_id,
+        AppThreadGoalStatus::Active,
+        /*token_budget*/ Some(80_000),
+    );
+    goal.objective = format!(
+        "Goal objective file: {}\nRead that file before continuing.",
+        test_path_display("/tmp/project/goal.md")
+    );
+
+    chat.show_goal_summary(goal);
+
+    assert_chatwidget_snapshot!("goal_menu_managed_file", rendered_goal_summary(&mut rx));
 }
 
 #[tokio::test]
@@ -143,6 +163,44 @@ async fn goal_edit_prompt_submits_preserved_status_and_budget() {
         other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
     }
     assert!(chat.no_modal_or_popup_active());
+}
+
+#[tokio::test]
+async fn goal_edit_prompt_hydrates_and_materializes_oversized_objective_file() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
+    let path = chat.config.codex_home.join("managed-goal.md");
+    std::fs::write(&path, &objective).expect("write goal file");
+    let mut goal = test_goal(
+        thread_id,
+        AppThreadGoalStatus::Paused,
+        /*token_budget*/ Some(80_000),
+    );
+    goal.objective = format!(
+        "Goal objective file: {}\nRead that file before continuing.",
+        path.display()
+    );
+
+    chat.show_goal_edit_prompt(thread_id, goal);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::SetThreadGoalObjective {
+            objective: actual_objective,
+            ..
+        }) => {
+            let path =
+                crate::goal_files::objective_file_path(&actual_objective).unwrap_or_else(|| {
+                    panic!("expected goal file objective, got {actual_objective:?}")
+                });
+            assert_eq!(
+                std::fs::read_to_string(path).expect("read goal file"),
+                objective
+            );
+        }
+        other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+    }
 }
 
 #[tokio::test]

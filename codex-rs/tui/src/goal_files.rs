@@ -1,0 +1,171 @@
+//! File materialization helpers for TUI goal objectives.
+//!
+//! Long objectives, pasted text, and local images are written under the Codex
+//! home directory. The persisted goal objective keeps references to those files
+//! so later continuations can read them by path.
+
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+
+use crate::bottom_pane::LocalImageAttachment;
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::bail;
+use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
+use uuid::Uuid;
+
+const GOAL_ATTACHMENT_DIR: &str = "attachments";
+const GOAL_FILE_PREFIX: &str = "Goal objective file: ";
+const GOAL_FILE_NAME: &str = "goal-objective.md";
+
+#[derive(Debug, Default)]
+pub(crate) struct GoalDraft {
+    pub(crate) objective: String,
+    pub(crate) pending_pastes: Vec<(String, String)>,
+    pub(crate) local_images: Vec<LocalImageAttachment>,
+    pub(crate) remote_image_urls: Vec<String>,
+}
+
+pub(crate) fn materialize_goal_draft(codex_home: &Path, draft: GoalDraft) -> Result<String> {
+    let mut objective = draft.objective.trim().to_string();
+    if objective.is_empty() {
+        bail!("Goal objective must not be empty.");
+    }
+
+    let mut output_dir = None;
+    for (idx, (placeholder, text)) in draft.pending_pastes.iter().enumerate() {
+        let path = ensure_output_dir(codex_home, &mut output_dir)?
+            .join(format!("pasted-text-{}.txt", idx + 1));
+        write_file(&path, text)?;
+
+        if !placeholder.is_empty() {
+            let replacement = format!("pasted text file: {}", path.display());
+            objective = objective.replace(placeholder, &replacement);
+        }
+    }
+
+    let mut image_lines = Vec::new();
+    for (idx, image) in draft.local_images.iter().enumerate() {
+        let extension = image_extension(&image.path);
+        let path = ensure_output_dir(codex_home, &mut output_dir)?.join(format!(
+            "image-{}.{}",
+            idx + 1,
+            extension
+        ));
+        fs::copy(&image.path, &path).with_context(|| {
+            format!(
+                "Could not copy goal image from {} to {}",
+                image.path.display(),
+                path.display()
+            )
+        })?;
+        if image.placeholder.is_empty() {
+            image_lines.push(format!("- [Image #{}]: {}", idx + 1, path.display()));
+        } else {
+            objective = objective.replace(
+                &image.placeholder,
+                &format!("image file: {}", path.display()),
+            );
+        }
+    }
+    append_section(&mut objective, "Referenced image files:", image_lines);
+
+    append_section(
+        &mut objective,
+        "Referenced image URLs:",
+        draft
+            .remote_image_urls
+            .into_iter()
+            .map(|url| format!("- {url}"))
+            .collect(),
+    );
+
+    if objective.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
+        let path = ensure_output_dir(codex_home, &mut output_dir)?.join(GOAL_FILE_NAME);
+        write_file(&path, &objective)?;
+        objective = objective_file_reference(&path)?;
+    }
+
+    Ok(objective)
+}
+
+pub(crate) fn objective_text_for_edit(objective: &str) -> Result<String> {
+    let Some(path) = objective_file_path(objective) else {
+        return Ok(objective.to_string());
+    };
+    fs::read_to_string(&path)
+        .with_context(|| format!("Could not read goal objective file {}", path.display()))
+}
+
+pub(crate) fn objective_file_path(objective: &str) -> Option<PathBuf> {
+    objective
+        .lines()
+        .next()?
+        .strip_prefix(GOAL_FILE_PREFIX)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
+
+fn ensure_output_dir(codex_home: &Path, output_dir: &mut Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(output_dir) = output_dir {
+        return Ok(output_dir.clone());
+    }
+    let path = codex_home
+        .join(GOAL_ATTACHMENT_DIR)
+        .join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&path).with_context(|| {
+        format!(
+            "Could not create goal attachment directory {}",
+            path.display()
+        )
+    })?;
+    *output_dir = Some(path.clone());
+    Ok(path)
+}
+
+fn write_file(path: &Path, content: &str) -> Result<()> {
+    fs::write(path, content)
+        .with_context(|| format!("Could not write goal file {}", path.display()))
+}
+
+fn objective_file_reference(path: &Path) -> Result<String> {
+    let reference = format!(
+        "{GOAL_FILE_PREFIX}{}\nRead that file before continuing.",
+        path.display()
+    );
+    let actual_chars = reference.chars().count();
+    if actual_chars > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
+        bail!(
+            "Goal objective file reference is too long: {actual_chars} characters. Limit: {MAX_THREAD_GOAL_OBJECTIVE_CHARS} characters."
+        );
+    }
+    Ok(reference)
+}
+
+fn append_section(objective: &mut String, heading: &str, lines: Vec<String>) {
+    if lines.is_empty() {
+        return;
+    }
+    if !objective.ends_with('\n') {
+        objective.push_str("\n\n");
+    }
+    objective.push_str(heading);
+    objective.push('\n');
+    objective.push_str(&lines.join("\n"));
+}
+
+fn image_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            extension
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .take(8)
+                .collect::<String>()
+        })
+        .filter(|extension| !extension.is_empty())
+        .unwrap_or_else(|| "png".to_string())
+}

@@ -9,6 +9,7 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_display::goal_status_label;
 use crate::goal_display::goal_usage_summary;
+use crate::goal_files;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_protocol::ThreadId;
@@ -246,6 +247,11 @@ impl App {
 
     fn show_replace_thread_goal_confirmation(&mut self, thread_id: ThreadId, objective: String) {
         let replace_objective = objective.clone();
+        let subtitle = if let Some(path) = goal_files::objective_file_path(&objective) {
+            format!("New objective file: {}", path.display())
+        } else {
+            format!("New objective: {objective}")
+        };
         let replace_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::SetThreadGoalObjective {
                 thread_id,
@@ -270,7 +276,7 @@ impl App {
         ];
         self.chat_widget.show_selection_view(SelectionViewParams {
             title: Some("Replace goal?".to_string()),
-            subtitle: Some(format!("New objective: {objective}")),
+            subtitle: Some(subtitle),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()

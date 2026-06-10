@@ -42,7 +42,12 @@ pub(crate) fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
 }
 
 pub(crate) fn goal_usage_summary(goal: &ThreadGoal) -> String {
-    let mut parts = vec![format!("Objective: {}", goal.objective)];
+    let objective = if let Some(path) = crate::goal_files::objective_file_path(&goal.objective) {
+        format!("Objective file: {}", path.display())
+    } else {
+        format!("Objective: {}", goal.objective)
+    };
+    let mut parts = vec![objective];
     if goal.time_used_seconds > 0 {
         parts.push(format!(
             "Time: {}.",
@@ -106,6 +111,19 @@ mod tests {
                 /*tokens_used*/ 63_876,
             )),
             "Objective: Complete the task described in ../gameboy-long-running-prompt5.txt Time: 2m. Tokens: 63.9K/50K."
+        );
+    }
+
+    #[test]
+    fn goal_usage_summary_formats_managed_file_objective() {
+        let mut goal = test_thread_goal(/*token_budget*/ None, /*tokens_used*/ 0);
+        goal.objective =
+            "Goal objective file: /tmp/project/goal.md\nRead that file before continuing."
+                .to_string();
+
+        assert_eq!(
+            goal_usage_summary(&goal),
+            "Objective file: /tmp/project/goal.md Time: 2m."
         );
     }
 }

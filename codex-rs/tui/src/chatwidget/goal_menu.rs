@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::goal_display::format_goal_elapsed_seconds;
+use crate::goal_files;
 use crate::status::format_tokens_compact;
 
 impl ChatWidget {
@@ -13,12 +14,35 @@ impl ChatWidget {
         let tx = self.app_event_tx.clone();
         let status = edited_goal_status(goal.status);
         let token_budget = goal.token_budget;
+        let objective = match goal_files::objective_text_for_edit(&goal.objective) {
+            Ok(objective) => objective,
+            Err(err) => {
+                self.add_error_message(err.to_string());
+                goal.objective
+            }
+        };
+        let codex_home = self.config.codex_home.clone();
         let view = CustomPromptView::new(
             "Edit goal".to_string(),
             "Type a goal objective and press Enter".to_string(),
-            goal.objective,
+            objective,
             /*context_label*/ None,
             Box::new(move |objective: String| {
+                let objective = match goal_files::materialize_goal_draft(
+                    codex_home.as_path(),
+                    goal_files::GoalDraft {
+                        objective,
+                        ..Default::default()
+                    },
+                ) {
+                    Ok(objective) => objective,
+                    Err(err) => {
+                        tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            crate::history_cell::new_error_event(err.to_string()),
+                        )));
+                        return;
+                    }
+                };
                 tx.send(AppEvent::SetThreadGoalObjective {
                     thread_id,
                     objective,
@@ -37,6 +61,11 @@ impl ChatWidget {
         thread_id: ThreadId,
         objective: String,
     ) {
+        let subtitle = if let Some(path) = goal_files::objective_file_path(&objective) {
+            format!("Goal file: {}", path.display())
+        } else {
+            format!("Goal: {objective}")
+        };
         let resume_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::SetThreadGoalStatus {
                 thread_id,
@@ -45,7 +74,7 @@ impl ChatWidget {
         })];
         self.show_selection_view(SelectionViewParams {
             title: Some("Resume paused goal?".to_string()),
-            subtitle: Some(format!("Goal: {objective}")),
+            subtitle: Some(subtitle),
             footer_hint: Some(standard_popup_hint_line()),
             initial_selected_idx: Some(0),
             items: vec![
@@ -85,7 +114,7 @@ fn goal_summary_lines(goal: &AppThreadGoal) -> Vec<Line<'static>> {
             "Status: ".dim(),
             goal_status_label(goal.status).to_string().into(),
         ]),
-        Line::from(vec!["Objective: ".dim(), goal.objective.clone().into()]),
+        goal_objective_line(&goal.objective),
         Line::from(vec![
             "Time used: ".dim(),
             format_goal_elapsed_seconds(goal.time_used_seconds).into(),
@@ -113,6 +142,17 @@ fn goal_summary_lines(goal: &AppThreadGoal) -> Vec<Line<'static>> {
     lines.push(Line::default());
     lines.push(Line::from(command_hint.dim()));
     lines
+}
+
+fn goal_objective_line(objective: &str) -> Line<'static> {
+    if let Some(path) = goal_files::objective_file_path(objective) {
+        Line::from(vec![
+            "Objective file: ".dim(),
+            path.display().to_string().into(),
+        ])
+    } else {
+        Line::from(vec!["Objective: ".dim(), objective.to_string().into()])
+    }
 }
 
 fn goal_status_label(status: AppThreadGoalStatus) -> &'static str {
