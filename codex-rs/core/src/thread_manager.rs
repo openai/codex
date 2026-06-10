@@ -174,22 +174,12 @@ pub struct ThreadManager {
     _test_codex_home_guard: Option<TempCodexHomeGuard>,
 }
 
-/// Controls whether a new thread inherits its multi-agent runtime or disables it.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum MultiAgentRuntimeOverride {
-    /// Resolve the runtime from copied history, parent state, and configuration.
-    #[default]
-    Inherit,
-    /// Force the thread to run without multi-agent collaboration.
-    Disabled,
-}
-
 pub struct StartThreadOptions {
     pub config: Config,
     pub initial_history: InitialHistory,
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
-    pub multi_agent_runtime: MultiAgentRuntimeOverride,
+    pub multi_agent_version: Option<MultiAgentVersion>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
@@ -588,7 +578,7 @@ impl ThreadManager {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
-            multi_agent_runtime: MultiAgentRuntimeOverride::Inherit,
+            multi_agent_version: None,
             dynamic_tools,
             metrics_service_name: None,
             parent_trace: None,
@@ -617,10 +607,6 @@ impl ThreadManager {
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
         let session_source = options.session_source.unwrap_or(resumed_session_source);
         let thread_source = options.thread_source.or(resumed_thread_source);
-        let multi_agent_version = match options.multi_agent_runtime {
-            MultiAgentRuntimeOverride::Inherit => None,
-            MultiAgentRuntimeOverride::Disabled => Some(MultiAgentVersion::Disabled),
-        };
         Box::pin(self.state.spawn_thread_with_source(
             options.config,
             options.initial_history,
@@ -630,7 +616,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
-            multi_agent_version,
+            options.multi_agent_version,
             options.dynamic_tools,
             options.metrics_service_name,
             /*inherited_shell_snapshot*/ None,
@@ -877,7 +863,7 @@ impl ThreadManager {
             snapshot,
             config,
             history,
-            MultiAgentRuntimeOverride::Inherit,
+            /*multi_agent_version*/ None,
             thread_source,
             parent_trace,
         )
@@ -908,7 +894,7 @@ impl ThreadManager {
         snapshot: S,
         config: Config,
         history: InitialHistory,
-        multi_agent_runtime: MultiAgentRuntimeOverride,
+        multi_agent_version: Option<MultiAgentVersion>,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread>
@@ -919,7 +905,7 @@ impl ThreadManager {
             snapshot.into(),
             config,
             history,
-            multi_agent_runtime,
+            multi_agent_version,
             thread_source,
             parent_trace,
         )
@@ -931,7 +917,7 @@ impl ThreadManager {
         snapshot: ForkSnapshot,
         config: Config,
         history: InitialHistory,
-        multi_agent_runtime: MultiAgentRuntimeOverride,
+        multi_agent_version: Option<MultiAgentVersion>,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
@@ -942,9 +928,9 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let multi_agent_version = match multi_agent_runtime {
-            MultiAgentRuntimeOverride::Disabled => MultiAgentVersion::Disabled,
-            MultiAgentRuntimeOverride::Inherit => {
+        let multi_agent_version = match multi_agent_version {
+            Some(multi_agent_version) => multi_agent_version,
+            None => {
                 self.state
                     .effective_multi_agent_version_for_spawn(
                         &history,

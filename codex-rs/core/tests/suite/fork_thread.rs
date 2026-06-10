@@ -1,5 +1,4 @@
 use codex_core::ForkSnapshot;
-use codex_core::MultiAgentRuntimeOverride;
 use codex_core::NewThread;
 use codex_core::parse_turn_item;
 use codex_protocol::items::TurnItem;
@@ -200,7 +199,7 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
                 history: source_items.clone(),
                 rollout_path: None,
             }),
-            MultiAgentRuntimeOverride::Inherit,
+            /*multi_agent_version*/ None,
             /*thread_source*/ None,
             /*parent_trace*/ None,
         )

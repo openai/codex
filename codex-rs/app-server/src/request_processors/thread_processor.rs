@@ -17,12 +17,8 @@ struct ThreadListFilters {
     use_state_db_only: bool,
 }
 
-fn multi_agent_runtime_override(disable_multi_agent_tools: bool) -> MultiAgentRuntimeOverride {
-    if disable_multi_agent_tools {
-        MultiAgentRuntimeOverride::Disabled
-    } else {
-        MultiAgentRuntimeOverride::Inherit
-    }
+fn multi_agent_version_override(disable_multi_agent_tools: bool) -> Option<MultiAgentVersion> {
+    disable_multi_agent_tools.then_some(MultiAgentVersion::Disabled)
 }
 
 fn collect_resume_override_mismatches(
@@ -1099,7 +1095,7 @@ impl ThreadRequestProcessor {
                 },
                 session_source: None,
                 thread_source,
-                multi_agent_runtime: multi_agent_runtime_override(disable_multi_agent_tools),
+                multi_agent_version: multi_agent_version_override(disable_multi_agent_tools),
                 dynamic_tools: core_dynamic_tools,
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
@@ -3279,7 +3275,7 @@ impl ThreadRequestProcessor {
                     history: history_items.clone(),
                     rollout_path: source_thread.rollout_path.clone(),
                 }),
-                multi_agent_runtime_override(disable_multi_agent_tools),
+                multi_agent_version_override(disable_multi_agent_tools),
                 thread_source.map(Into::into),
                 self.request_trace_context(&request_id).await,
             )

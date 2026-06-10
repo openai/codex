@@ -7,7 +7,6 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_core::MultiAgentRuntimeOverride;
 use codex_core::StartThreadOptions;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
@@ -62,7 +61,7 @@ fn tool_names(body: &Value) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_agent_runtime_override_omits_multi_agent_tools_from_requests() -> Result<()> {
+async fn multi_agent_version_override_omits_multi_agent_tools_from_requests() -> Result<()> {
     const ROOT_USAGE_HINT: &str = "disabled threads must not receive root multi-agent guidance";
 
     skip_if_no_network!(Ok(()));
@@ -96,7 +95,7 @@ async fn multi_agent_runtime_override_omits_multi_agent_tools_from_requests() ->
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: Some(ThreadSource::User),
-            multi_agent_runtime: MultiAgentRuntimeOverride::Disabled,
+            multi_agent_version: Some(MultiAgentVersion::Disabled),
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,

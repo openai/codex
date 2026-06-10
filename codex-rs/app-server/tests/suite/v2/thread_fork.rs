@@ -112,7 +112,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         original_path.display()
     );
     let mut session_meta = read_session_meta_line(&original_path).await?;
-    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V1);
+    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);
     append_rollout_item_to_path(&original_path, &RolloutItem::SessionMeta(session_meta)).await?;
     let original_contents = std::fs::read_to_string(&original_path)?;
 
@@ -123,6 +123,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id.clone(),
             thread_source: Some(ThreadSource::User),
+            disable_multi_agent_tools: true,
             ..Default::default()
         })
         .await?;
@@ -132,7 +133,12 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     )
     .await??;
     let fork_result = fork_resp.result.clone();
-    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+    let ThreadForkResponse {
+        thread,
+        multi_agent_tools_disabled,
+        ..
+    } = to_response::<ThreadForkResponse>(fork_resp)?;
+    assert!(multi_agent_tools_disabled);
 
     // Wire contract: thread title field is `name`, serialized as null when unset.
     let thread_json = fork_result
