@@ -1318,10 +1318,10 @@ impl UnifiedExecProcessManager {
             if !entry.initial_exec_command_returned {
                 return true;
             }
-            store.remove(process_id)
-        };
-        let Some(entry) = entry else {
-            return false;
+            let Some(entry) = store.remove(process_id) else {
+                return false;
+            };
+            entry
         };
 
         unregister_network_approval_for_entry(&entry).await;

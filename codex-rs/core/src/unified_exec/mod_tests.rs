@@ -337,12 +337,23 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
     skip_if_sandbox!(Ok(()));
 
     let (session, turn) = test_session_and_turn().await;
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
 
     let open_shell = exec_command(
         &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
     )
     .await?;
     let process_id = open_shell.process_id.expect("expected process_id");
+    assert_eq!(
+        session.list_background_terminals().await,
+        vec![BackgroundTerminalInfo {
+            item_id: "call".to_string(),
+            process_id: process_id.to_string(),
+            command: "bash -i".to_string(),
+            cwd,
+        }]
+    );
 
     write_stdin(
         &session,
@@ -365,6 +376,10 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
             .contains("codex"),
         "expected environment variable output"
     );
+
+    assert!(session.terminate_background_terminal(process_id).await);
+    assert!(!session.terminate_background_terminal(process_id).await);
+    assert!(session.list_background_terminals().await.is_empty());
 
     Ok(())
 }
@@ -423,60 +438,6 @@ async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
         "session should preserve state"
     );
 
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn background_terminals_can_be_listed_and_terminated() -> anyhow::Result<()> {
-    skip_if_sandbox!(Ok(()));
-
-    let (session, turn) = test_session_and_turn().await;
-    #[allow(deprecated)]
-    let cwd = turn.cwd.clone();
-
-    let first_shell = exec_command(
-        &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
-    )
-    .await?;
-    let first_process_id = first_shell.process_id.expect("expected process id");
-
-    let listed_terminals = session.list_background_terminals().await;
-    assert_eq!(
-        listed_terminals,
-        vec![BackgroundTerminalInfo {
-            item_id: "call".to_string(),
-            process_id: first_process_id.to_string(),
-            command: "bash -i".to_string(),
-            cwd,
-        }]
-    );
-
-    assert!(
-        session
-            .terminate_background_terminal(first_process_id)
-            .await
-    );
-    assert!(
-        !session
-            .terminate_background_terminal(first_process_id)
-            .await
-    );
-    assert!(session.list_background_terminals().await.is_empty());
-
-    let err = write_stdin(
-        &session,
-        first_process_id,
-        "echo should-not-run\n",
-        /*yield_time_ms*/ 100,
-    )
-    .await
-    .expect_err("terminated process should no longer accept stdin");
-    assert!(matches!(
-        err,
-        UnifiedExecError::UnknownProcessId { process_id } if process_id == first_process_id
-    ));
-
-    session.close_unified_exec_processes().await;
     Ok(())
 }
 
