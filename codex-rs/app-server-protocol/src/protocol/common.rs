@@ -735,7 +735,7 @@ client_request_definitions! {
     },
     FsReadFileClose => "fs/readFile/close" {
         params: v2::FsReadFileCloseParams,
-        serialization: None,
+        serialization: file_handle_id(params.handle_id),
         response: v2::FsReadFileCloseResponse,
     },
     FsWriteFileOpen => "fs/writeFile/open" {
@@ -750,7 +750,7 @@ client_request_definitions! {
     },
     FsWriteFileClose => "fs/writeFile/close" {
         params: v2::FsWriteFileCloseParams,
-        serialization: None,
+        serialization: file_handle_id(params.handle_id),
         response: v2::FsWriteFileCloseResponse,
     },
     FsCreateDirectory => "fs/createDirectory" {
@@ -1786,6 +1786,32 @@ mod tests {
             fs_watch.serialization_scope(),
             Some(ClientRequestSerializationScope::FsWatch {
                 watch_id: "watch-1".to_string()
+            })
+        );
+
+        let read_file_close = ClientRequest::FsReadFileClose {
+            request_id: request_id(),
+            params: v2::FsReadFileCloseParams {
+                handle_id: "file-1".to_string(),
+            },
+        };
+        assert_eq!(
+            read_file_close.serialization_scope(),
+            Some(ClientRequestSerializationScope::FileHandle {
+                handle_id: "file-1".to_string()
+            })
+        );
+
+        let write_file_close = ClientRequest::FsWriteFileClose {
+            request_id: request_id(),
+            params: v2::FsWriteFileCloseParams {
+                handle_id: "file-1".to_string(),
+            },
+        };
+        assert_eq!(
+            write_file_close.serialization_scope(),
+            Some(ClientRequestSerializationScope::FileHandle {
+                handle_id: "file-1".to_string()
             })
         );
 

@@ -193,7 +193,10 @@ impl FsRequestProcessor {
         params: FsReadFileCloseParams,
     ) -> Result<FsReadFileCloseResponse, JSONRPCErrorError> {
         if let Some(handles) = self.existing_handles(connection_id).await {
-            handles.close(&params.handle_id).await;
+            handles
+                .close(&params.handle_id)
+                .await
+                .map_err(map_file_handle_error)?;
         }
         Ok(FsReadFileCloseResponse {})
     }
@@ -244,7 +247,10 @@ impl FsRequestProcessor {
         params: FsWriteFileCloseParams,
     ) -> Result<FsWriteFileCloseResponse, JSONRPCErrorError> {
         if let Some(handles) = self.existing_handles(connection_id).await {
-            handles.close(&params.handle_id).await;
+            handles
+                .close(&params.handle_id)
+                .await
+                .map_err(map_file_handle_error)?;
         }
         Ok(FsWriteFileCloseResponse {})
     }

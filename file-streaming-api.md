@@ -163,6 +163,7 @@ Response:
 
 - Handle IDs are client-supplied strings scoped to one connection.
 - Opening a duplicate active handle ID returns `INVALID_REQUEST`.
+- Each connection may have at most 64 opening or open file handles.
 - Operations for one handle are serialized. Different handles may run
   concurrently.
 - Reads are positional and do not maintain a server-side cursor.
@@ -173,11 +174,9 @@ Response:
 - Backpressure comes from awaiting bounded read and write responses. Clients
   should use a bounded pipeline of up to two read requests to hide transport
   round-trip latency without accumulating unbounded response data.
-- Close operations are idempotent. App-server close requests bypass queued
-  operations and cancel an active open or chunk operation. A close received
-  while open is pending prevents that handle from becoming live. Exec-server
-  handles bounded file RPCs in request order, so close takes effect before the
-  next file operation.
+- Close operations are idempotent and serialized with other operations for the
+  same handle. Close waits for an active operation to finish, rejects queued
+  operations, and prevents a pending open from becoming live.
 - Closing a connection closes all of its handles.
 - Any filesystem or I/O error closes the affected handle. Protocol errors such
   as an unknown handle do not affect other handles.

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use codex_file_system::FileReadChunk;
 use codex_file_system::FileReadHandle;
 use codex_file_system::FileWriteHandle;
 use codex_file_system::OpenFileMetadata;
@@ -306,8 +307,9 @@ impl FileReadHandle for RemoteFileReadHandle {
         &self,
         offset: u64,
         max_bytes: usize,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = FileSystemResult<Vec<u8>>> + Send + '_>>
-    {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = FileSystemResult<FileReadChunk>> + Send + '_>,
+    > {
         Box::pin(async move {
             let response = self
                 .client
@@ -318,11 +320,15 @@ impl FileReadHandle for RemoteFileReadHandle {
                 })
                 .await
                 .map_err(map_remote_error)?;
-            STANDARD.decode(response.data_base64).map_err(|err| {
+            let data = STANDARD.decode(response.data_base64).map_err(|err| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("remote fs/readFile/read returned invalid base64 dataBase64: {err}"),
                 )
+            })?;
+            Ok(FileReadChunk {
+                data,
+                eof: response.eof,
             })
         })
     }
@@ -347,19 +353,20 @@ impl FileReadHandle for RemoteFileReadHandle {
             })
         })
     }
-}
 
-impl Drop for RemoteFileReadHandle {
-    fn drop(&mut self) {
-        let client = self.client.clone();
-        let handle_id = self.handle_id.clone();
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                let _ = client
-                    .fs_read_file_close(FsReadFileCloseParams { handle_id })
-                    .await;
-            });
-        }
+    fn close(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = FileSystemResult<()>> + Send + '_>>
+    {
+        Box::pin(async move {
+            self.client
+                .fs_read_file_close(FsReadFileCloseParams {
+                    handle_id: self.handle_id.clone(),
+                })
+                .await
+                .map_err(map_remote_error)?;
+            Ok(())
+        })
     }
 }
 
@@ -390,19 +397,20 @@ impl FileWriteHandle for RemoteFileWriteHandle {
             Ok(())
         })
     }
-}
 
-impl Drop for RemoteFileWriteHandle {
-    fn drop(&mut self) {
-        let client = self.client.clone();
-        let handle_id = self.handle_id.clone();
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                let _ = client
-                    .fs_write_file_close(FsWriteFileCloseParams { handle_id })
-                    .await;
-            });
-        }
+    fn close(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = FileSystemResult<()>> + Send + '_>>
+    {
+        Box::pin(async move {
+            self.client
+                .fs_write_file_close(FsWriteFileCloseParams {
+                    handle_id: self.handle_id.clone(),
+                })
+                .await
+                .map_err(map_remote_error)?;
+            Ok(())
+        })
     }
 }
 

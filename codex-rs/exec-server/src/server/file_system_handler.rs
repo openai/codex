@@ -151,7 +151,10 @@ impl FileSystemHandler {
         &self,
         params: FsReadFileCloseParams,
     ) -> Result<FsReadFileCloseResponse, JSONRPCErrorError> {
-        self.handles.close(&params.handle_id).await;
+        self.handles
+            .close(&params.handle_id)
+            .await
+            .map_err(map_fs_error)?;
         Ok(FsReadFileCloseResponse {})
     }
 
@@ -192,7 +195,10 @@ impl FileSystemHandler {
         &self,
         params: FsWriteFileCloseParams,
     ) -> Result<FsWriteFileCloseResponse, JSONRPCErrorError> {
-        self.handles.close(&params.handle_id).await;
+        self.handles
+            .close(&params.handle_id)
+            .await
+            .map_err(map_fs_error)?;
         Ok(FsWriteFileCloseResponse {})
     }
 

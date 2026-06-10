@@ -49,6 +49,12 @@ pub struct OpenFileMetadata {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileReadChunk {
+    pub data: Vec<u8>,
+    pub eof: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReadDirectoryEntry {
     pub file_name: String,
     pub is_directory: bool,
@@ -151,11 +157,13 @@ pub trait FileReadHandle: Send + Sync {
         &self,
         offset: u64,
         max_bytes: usize,
-    ) -> Pin<Box<dyn Future<Output = FileSystemResult<Vec<u8>>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = FileSystemResult<FileReadChunk>> + Send + '_>>;
 
     fn metadata(
         &self,
     ) -> Pin<Box<dyn Future<Output = FileSystemResult<OpenFileMetadata>> + Send + '_>>;
+
+    fn close(&self) -> Pin<Box<dyn Future<Output = FileSystemResult<()>> + Send + '_>>;
 }
 
 /// An open file used for bounded sequential writes.
@@ -170,6 +178,8 @@ pub trait FileWriteHandle: Send + Sync {
         &'a self,
         data: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = FileSystemResult<()>> + Send + 'a>>;
+
+    fn close(&self) -> Pin<Box<dyn Future<Output = FileSystemResult<()>> + Send + '_>>;
 }
 
 /// Abstract filesystem access used by components that may operate locally or via

@@ -5,6 +5,7 @@ use codex_file_system::CreateDirectoryOptions;
 use codex_file_system::FileMetadata;
 use codex_file_system::ReadDirectoryEntry;
 use codex_file_system::RemoveOptions;
+use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -161,9 +162,15 @@ impl FileReadHandle for TestReadHandle {
     fn read(
         &self,
         _offset: u64,
-        _max_bytes: usize,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<Vec<u8>>> + Send + '_>> {
-        unreachable!("read is not used by these tests")
+        max_bytes: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<FileReadChunk>> + Send + '_>>
+    {
+        Box::pin(async move {
+            Ok(FileReadChunk {
+                data: vec![b'x'; max_bytes],
+                eof: true,
+            })
+        })
     }
 
     fn metadata(
@@ -172,6 +179,12 @@ impl FileReadHandle for TestReadHandle {
         Box<dyn std::future::Future<Output = io::Result<OpenFileMetadata>> + Send + '_>,
     > {
         unreachable!("metadata is not used by these tests")
+    }
+
+    fn close(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -195,6 +208,12 @@ impl FileWriteHandle for TestWriteHandle {
         _data: &'a [u8],
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'a>> {
         unreachable!("write is not used by these tests")
+    }
+
+    fn close(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -220,7 +239,12 @@ async fn close_during_read_open_prevents_handle_from_becoming_live() {
     };
 
     file_system.read_started.notified().await;
-    manager.close("read-1").await;
+    let close = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.close("read-1").await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!close.is_finished());
     file_system.read_release.add_permits(1);
 
     let err = open
@@ -228,6 +252,7 @@ async fn close_during_read_open_prevents_handle_from_becoming_live() {
         .expect("join read open")
         .expect_err("closed read open should fail");
     assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+    close.await.expect("join read close").expect("close read");
     assert!(file_system.read_handle_dropped.load(Ordering::SeqCst));
     assert_eq!(
         manager
@@ -255,7 +280,12 @@ async fn close_during_write_open_prevents_handle_from_becoming_live() {
     };
 
     file_system.write_started.notified().await;
-    manager.close("write-1").await;
+    let close = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.close("write-1").await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!close.is_finished());
     file_system.write_release.add_permits(1);
 
     let err = open
@@ -263,6 +293,7 @@ async fn close_during_write_open_prevents_handle_from_becoming_live() {
         .expect("join write open")
         .expect_err("closed write open should fail");
     assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+    close.await.expect("join write close").expect("close write");
     assert!(file_system.write_handle_dropped.load(Ordering::SeqCst));
     assert_eq!(
         manager
@@ -275,7 +306,7 @@ async fn close_during_write_open_prevents_handle_from_becoming_live() {
 }
 
 #[tokio::test]
-async fn delayed_open_cannot_overwrite_reused_handle_id() {
+async fn closing_open_reserves_handle_id_until_cleanup_finishes() {
     let manager = FileHandleManager::default();
     let first_file_system = Arc::new(BlockingFileSystem::default());
     let path = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).expect("absolute path");
@@ -291,9 +322,36 @@ async fn delayed_open_cannot_overwrite_reused_handle_id() {
     };
 
     first_file_system.read_started.notified().await;
-    manager.close("read-1").await;
+    let close = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.close("read-1").await })
+    };
+    tokio::task::yield_now().await;
 
     let second_file_system = Arc::new(BlockingFileSystem::default());
+    assert_eq!(
+        manager
+            .open_read(
+                second_file_system.clone(),
+                "read-1".to_string(),
+                &path,
+                None,
+            )
+            .await
+            .expect_err("closing handle id should remain reserved")
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+
+    first_file_system.read_release.add_permits(1);
+    let err = first_open
+        .await
+        .expect("join first read open")
+        .expect_err("closed first read open should fail");
+    assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+    close.await.expect("join read close").expect("close read");
+    assert!(first_file_system.read_handle_dropped.load(Ordering::SeqCst));
+
     let second_open = {
         let manager = manager.clone();
         let file_system = Arc::clone(&second_file_system);
@@ -313,19 +371,73 @@ async fn delayed_open_cannot_overwrite_reused_handle_id() {
         16
     );
 
-    first_file_system.read_release.add_permits(1);
-    let err = first_open
-        .await
-        .expect("join first read open")
-        .expect_err("closed first read open should fail");
-    assert_eq!(err.kind(), io::ErrorKind::Interrupted);
-    assert!(first_file_system.read_handle_dropped.load(Ordering::SeqCst));
-    assert!(manager.read_entry("read-1").await.is_ok());
-
-    manager.close("read-1").await;
+    manager.close("read-1").await.expect("close second read");
     assert!(
         second_file_system
             .read_handle_dropped
             .load(Ordering::SeqCst)
     );
+}
+
+#[tokio::test]
+async fn read_uses_handle_authoritative_eof() {
+    let manager = FileHandleManager::default();
+    let file_system = Arc::new(BlockingFileSystem::default());
+    let path = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).expect("absolute path");
+    let open = {
+        let manager = manager.clone();
+        let file_system = Arc::clone(&file_system);
+        tokio::spawn(async move {
+            manager
+                .open_read(file_system, "read-1".to_string(), &path, None)
+                .await
+        })
+    };
+
+    file_system.read_started.notified().await;
+    file_system.read_release.add_permits(1);
+    open.await
+        .expect("join read open")
+        .expect("open read handle");
+
+    assert_eq!(
+        manager.read("read-1", 0, Some(16)).await.expect("read"),
+        FileReadChunk {
+            data: vec![b'x'; 16],
+            eof: true,
+        }
+    );
+}
+
+#[tokio::test]
+async fn open_handle_count_is_bounded() {
+    let manager = FileHandleManager::with_max_handles(1);
+    let file_system = Arc::new(BlockingFileSystem::default());
+    let path = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).expect("absolute path");
+    let open = {
+        let manager = manager.clone();
+        let file_system = Arc::clone(&file_system);
+        let path = path.clone();
+        tokio::spawn(async move {
+            manager
+                .open_read(file_system, "read-1".to_string(), &path, None)
+                .await
+        })
+    };
+
+    file_system.read_started.notified().await;
+    assert_eq!(
+        manager
+            .open_read(file_system.clone(), "read-2".to_string(), &path, None)
+            .await
+            .expect_err("second handle should exceed limit")
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+
+    file_system.read_release.add_permits(1);
+    open.await
+        .expect("join read open")
+        .expect("open read handle");
+    manager.close("read-1").await.expect("close read");
 }
