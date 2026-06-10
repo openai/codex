@@ -32,6 +32,7 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::StoredThread;
@@ -59,7 +60,7 @@ pub struct ThreadConfigSnapshot {
     pub approvals_reviewer: ApprovalsReviewer,
     pub permission_profile: PermissionProfile,
     pub active_permission_profile: Option<ActivePermissionProfile>,
-    pub cwd: AbsolutePathBuf,
+    pub environments: TurnEnvironmentSelections,
     pub workspace_roots: Vec<AbsolutePathBuf>,
     pub profile_workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
@@ -114,10 +115,18 @@ impl TryStartTurnIfIdleError {
 }
 
 impl ThreadConfigSnapshot {
+    pub fn cwd(&self) -> &AbsolutePathBuf {
+        &self.environments.legacy_fallback_cwd
+    }
+
+    pub fn environment_selections(&self) -> &[TurnEnvironmentSelection] {
+        &self.environments.environments
+    }
+
     pub fn sandbox_policy(&self) -> SandboxPolicy {
         codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
             &self.permission_profile,
-            self.cwd.as_path(),
+            self.cwd().as_path(),
         )
     }
 }
@@ -125,7 +134,7 @@ impl ThreadConfigSnapshot {
 /// Thread settings overrides that app-server validates before starting a turn.
 #[derive(Clone, Default)]
 pub struct CodexThreadSettingsOverrides {
-    pub cwd: Option<AbsolutePathBuf>,
+    pub environments: Option<TurnEnvironmentSelections>,
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub approval_policy: Option<AskForApproval>,
@@ -148,6 +157,14 @@ pub struct CodexThread {
     session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitation_count: Mutex<u64>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct BackgroundTerminalInfo {
+    pub item_id: String,
+    pub process_id: String,
+    pub command: String,
+    pub cwd: AbsolutePathBuf,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
@@ -330,7 +347,7 @@ impl CodexThread {
         overrides: CodexThreadSettingsOverrides,
     ) -> SessionSettingsUpdate {
         let CodexThreadSettingsOverrides {
-            cwd,
+            environments,
             workspace_roots,
             profile_workspace_roots,
             approval_policy,
@@ -357,7 +374,7 @@ impl CodexThread {
         };
 
         SessionSettingsUpdate {
-            cwd,
+            environments,
             workspace_roots,
             profile_workspace_roots,
             approval_policy,
@@ -385,6 +402,17 @@ impl CodexThread {
 
     pub async fn agent_status(&self) -> AgentStatus {
         self.codex.agent_status().await
+    }
+
+    pub async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
+        self.codex.session.list_background_terminals().await
+    }
+
+    pub async fn terminate_background_terminal(&self, process_id: i32) -> bool {
+        self.codex
+            .session
+            .terminate_background_terminal(process_id)
+            .await
     }
 
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {

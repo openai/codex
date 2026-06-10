@@ -289,6 +289,59 @@ async fn plugin_install_writes_remote_plugin_to_cloud_and_cache() -> Result<()> 
 }
 
 #[tokio::test]
+async fn plugin_install_uses_remote_apps_needing_auth_response() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 200,
+        remote_plugin_bundle_tar_gz_bytes("linear")?,
+    )
+    .await;
+    configure_remote_plugin_with_apps_test(codex_home.path(), &server)?;
+    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_empty_remote_installed_plugins(&server).await;
+    mount_remote_plugin_install_with_apps_needing_auth(&server, REMOTE_PLUGIN_ID, &["alpha"]).await;
+
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstallResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        PluginInstallResponse {
+            auth_policy: PluginAuthPolicy::OnUse,
+            apps_needing_auth: vec![AppSummary {
+                id: "alpha".to_string(),
+                name: "alpha".to_string(),
+                description: None,
+                install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+                needs_auth: true,
+            }],
+        }
+    );
+    wait_for_remote_plugin_request_count(
+        &server,
+        "GET",
+        "/backend-api/connectors/directory/list",
+        /*expected_count*/ 0,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_install_rejects_missing_remote_bundle_url() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -1236,7 +1289,7 @@ async fn start_apps_server(
             get(list_directory_connectors),
         )
         .with_state(state)
-        .nest_service("/api/codex/apps", mcp_service);
+        .nest_service("/api/codex/ps/mcp", mcp_service);
 
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
@@ -1398,6 +1451,34 @@ fn configure_remote_plugin_test(codex_home: &std::path::Path, server: &MockServe
     )
 }
 
+fn configure_remote_plugin_with_apps_test(
+    codex_home: &std::path::Path,
+    server: &MockServer,
+) -> Result<()> {
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = true
+remote_plugin = true
+connectors = true
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home,
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )
+}
+
 async fn mount_remote_plugin_bundle(
     server: &MockServer,
     status_code: u16,
@@ -1548,6 +1629,27 @@ async fn mount_remote_plugin_install(server: &MockServer, remote_plugin_id: &str
             ResponseTemplate::new(200)
                 .set_body_string(format!(r#"{{"id":"{remote_plugin_id}","enabled":true}}"#)),
         )
+        .mount(server)
+        .await;
+}
+
+async fn mount_remote_plugin_install_with_apps_needing_auth(
+    server: &MockServer,
+    remote_plugin_id: &str,
+    app_ids_needing_auth: &[&str],
+) {
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/backend-api/ps/plugins/{remote_plugin_id}/install"
+        )))
+        .and(query_param("includeAppsNeedingAuth", "true"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": remote_plugin_id,
+            "enabled": true,
+            "app_ids_needing_auth": app_ids_needing_auth,
+        })))
         .mount(server)
         .await;
 }

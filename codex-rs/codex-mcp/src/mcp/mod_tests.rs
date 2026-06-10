@@ -16,7 +16,6 @@ use std::path::PathBuf;
 fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
         chatgpt_base_url: "https://chatgpt.com".to_string(),
-        apps_mcp_path_override: None,
         apps_mcp_product_sku: None,
         codex_home,
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::default(),
@@ -177,62 +176,27 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
 #[test]
 fn codex_apps_mcp_url_for_base_url_keeps_existing_paths() {
     assert_eq!(
-        codex_apps_mcp_url_for_base_url(
-            "https://chatgpt.com/backend-api",
-            /*apps_mcp_path_override*/ None,
-        ),
+        codex_apps_mcp_url_for_base_url("https://chatgpt.com/backend-api"),
         "https://chatgpt.com/backend-api/wham/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_base_url(
-            "https://chat.openai.com",
-            /*apps_mcp_path_override*/ None,
-        ),
+        codex_apps_mcp_url_for_base_url("https://chat.openai.com"),
         "https://chat.openai.com/backend-api/wham/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_base_url(
-            "http://localhost:8080/api/codex",
-            /*apps_mcp_path_override*/ None,
-        ),
+        codex_apps_mcp_url_for_base_url("http://localhost:8080/api/codex"),
         "http://localhost:8080/api/codex/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_base_url(
-            "http://localhost:8080",
-            /*apps_mcp_path_override*/ None,
-        ),
+        codex_apps_mcp_url_for_base_url("http://localhost:8080"),
         "http://localhost:8080/api/codex/apps"
-    );
-}
-
-#[test]
-fn codex_apps_mcp_url_uses_legacy_codex_apps_path() {
-    let config = test_mcp_config(PathBuf::from("/tmp"));
-
-    assert_eq!(
-        codex_apps_mcp_url(&config),
-        "https://chatgpt.com/backend-api/wham/apps"
     );
 }
 
 #[test]
 fn codex_apps_server_config_uses_legacy_codex_apps_path() {
-    let mut config = test_mcp_config(PathBuf::from("/tmp"));
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-
-    let mut servers = with_codex_apps_mcp(HashMap::new(), /*auth*/ None, &config);
-    assert!(!servers.contains_key(CODEX_APPS_MCP_SERVER_NAME));
-
-    config.apps_enabled = true;
-
-    servers = with_codex_apps_mcp(servers, Some(&auth), &config);
-    let server = servers
-        .get(CODEX_APPS_MCP_SERVER_NAME)
-        .expect("codex apps should be present when apps is enabled");
-    let config = server
-        .configured_config()
-        .expect("codex apps should use configured transport");
+    let config =
+        codex_apps_mcp_server_config("https://chatgpt.com", /*apps_mcp_product_sku*/ None);
     let url = match &config.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => url,
         _ => panic!("expected streamable http transport for codex apps"),
@@ -242,41 +206,8 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
 }
 
 #[test]
-fn codex_apps_server_config_uses_configured_apps_mcp_path_override() {
-    let mut config = test_mcp_config(PathBuf::from("/tmp"));
-    config.apps_mcp_path_override = Some("/custom/mcp".to_string());
-    config.apps_enabled = true;
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-
-    let servers = with_codex_apps_mcp(HashMap::new(), Some(&auth), &config);
-    let server = servers
-        .get(CODEX_APPS_MCP_SERVER_NAME)
-        .expect("codex apps should be present when apps is enabled");
-    let config = server
-        .configured_config()
-        .expect("codex apps should use configured transport");
-    let url = match &config.transport {
-        McpServerTransportConfig::StreamableHttp { url, .. } => url,
-        _ => panic!("expected streamable http transport for codex apps"),
-    };
-
-    assert_eq!(url, "https://chatgpt.com/backend-api/custom/mcp");
-}
-
-#[test]
 fn codex_apps_server_config_forwards_configured_product_sku_header() {
-    let mut config = test_mcp_config(PathBuf::from("/tmp"));
-    config.apps_mcp_product_sku = Some("tpp".to_string());
-    config.apps_enabled = true;
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-
-    let servers = with_codex_apps_mcp(HashMap::new(), Some(&auth), &config);
-    let server = servers
-        .get(CODEX_APPS_MCP_SERVER_NAME)
-        .expect("codex apps should be present when apps is enabled");
-    let config = server
-        .configured_config()
-        .expect("codex apps should use configured transport");
+    let config = codex_apps_mcp_server_config("https://chatgpt.com", Some("tpp"));
 
     match &config.transport {
         McpServerTransportConfig::StreamableHttp {
@@ -298,7 +229,7 @@ fn codex_apps_server_config_forwards_configured_product_sku_header() {
 }
 
 #[tokio::test]
-async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
+async fn effective_mcp_servers_preserve_runtime_servers() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let mut config = test_mcp_config(codex_home.path().to_path_buf());
     config.apps_enabled = true;
@@ -353,6 +284,13 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
             oauth_resource: None,
             tools: HashMap::new(),
         },
+    );
+    config.configured_mcp_servers.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        codex_apps_mcp_server_config(
+            &config.chatgpt_base_url,
+            config.apps_mcp_product_sku.as_deref(),
+        ),
     );
 
     let effective = effective_mcp_servers(&config, Some(&auth));

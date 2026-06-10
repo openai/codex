@@ -196,7 +196,7 @@ impl ThreadMetadataBuilder {
             created_at,
             updated_at,
             source,
-            thread_source: self.thread_source,
+            thread_source: self.thread_source.clone(),
             agent_nickname: self.agent_nickname.clone(),
             agent_role: self.agent_role.clone(),
             agent_path: self

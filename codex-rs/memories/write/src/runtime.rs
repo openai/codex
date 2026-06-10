@@ -13,6 +13,9 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
+use codex_model_provider::ModelProvider;
+use codex_model_provider::SharedModelProvider;
+use codex_model_provider::create_model_provider;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::SessionId;
@@ -68,6 +71,7 @@ pub(crate) struct MemoryStartupContext {
     thread: Arc<CodexThread>,
     thread_manager: Arc<ThreadManager>,
     auth_manager: Arc<AuthManager>,
+    provider: SharedModelProvider,
     session_telemetry: SessionTelemetry,
 }
 
@@ -79,6 +83,51 @@ impl MemoryStartupContext {
         thread: Arc<CodexThread>,
         config: &Config,
         source: SessionSource,
+    ) -> Self {
+        let provider = create_model_provider(
+            config.model_provider.clone(),
+            Some(Arc::clone(&auth_manager)),
+        );
+        Self::new_with_provider(
+            thread_manager,
+            auth_manager,
+            thread_id,
+            thread,
+            config,
+            source,
+            provider,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_testing(
+        thread_manager: Arc<ThreadManager>,
+        auth_manager: Arc<AuthManager>,
+        thread_id: ThreadId,
+        thread: Arc<CodexThread>,
+        config: &Config,
+        source: SessionSource,
+        provider: SharedModelProvider,
+    ) -> Self {
+        Self::new_with_provider(
+            thread_manager,
+            auth_manager,
+            thread_id,
+            thread,
+            config,
+            source,
+            provider,
+        )
+    }
+
+    fn new_with_provider(
+        thread_manager: Arc<ThreadManager>,
+        auth_manager: Arc<AuthManager>,
+        thread_id: ThreadId,
+        thread: Arc<CodexThread>,
+        config: &Config,
+        source: SessionSource,
+        provider: SharedModelProvider,
     ) -> Self {
         let auth = auth_manager.auth_cached();
         let auth = auth.as_ref();
@@ -109,6 +158,7 @@ impl MemoryStartupContext {
             thread,
             thread_manager,
             auth_manager,
+            provider,
             session_telemetry,
         }
     }
@@ -119,6 +169,10 @@ impl MemoryStartupContext {
 
     pub(crate) fn state_db(&self) -> Option<Arc<StateRuntime>> {
         self.thread.state_db()
+    }
+
+    pub(crate) fn provider(&self) -> &dyn ModelProvider {
+        self.provider.as_ref()
     }
 
     pub(crate) fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
@@ -189,8 +243,10 @@ impl MemoryStartupContext {
         );
 
         let mut client_session = model_client.new_session();
+        let window_id = format!("{}:0", self.thread_id);
         let mut stream = client_session
             .stream(
+                &window_id,
                 prompt,
                 &context.model_info,
                 &context.session_telemetry,
@@ -251,6 +307,7 @@ impl MemoryStartupContext {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
+                thread_extension_init: Default::default(),
             })
             .await?;
 
@@ -259,7 +316,6 @@ impl MemoryStartupContext {
             .thread
             .submit(Op::UserInput {
                 items: prompt,
-                environments: None,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
                 additional_context: Default::default(),

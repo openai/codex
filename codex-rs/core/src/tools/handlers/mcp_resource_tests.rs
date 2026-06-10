@@ -1,6 +1,7 @@
 use super::*;
 use pretty_assertions::assert_eq;
 use rmcp::model::AnnotateAble;
+use rmcp::model::ResourceContents;
 use serde_json::json;
 
 fn resource(uri: &str, name: &str) -> Resource {
@@ -122,4 +123,40 @@ fn template_with_server_serializes_server_field() {
             "name": "memo"
         })
     );
+}
+
+#[test]
+fn serialize_function_output_preserves_small_payload() {
+    let payload = json!({"server": "hosted", "resources": []});
+    let expected = serde_json::to_string(&payload).expect("serialize payload");
+
+    let output = serialize_function_output(payload, TruncationPolicy::Bytes(1_024))
+        .expect("serialize function output")
+        .into_text();
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn serialize_function_output_caps_read_resource_payload() {
+    let truncation_policy = TruncationPolicy::Bytes(8_000);
+    let payload = ReadResourcePayload {
+        server: "hosted".to_string(),
+        uri: "skill://large/SKILL.md".to_string(),
+        result: ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
+            uri: "skill://large/SKILL.md".to_string(),
+            mime_type: Some("text/markdown".to_string()),
+            text: "x".repeat(16_000),
+            meta: None,
+        }]),
+    };
+    let serialized = serde_json::to_string(&payload).expect("serialize payload");
+    let expected = truncate_text(&serialized, truncation_policy * 1.2);
+
+    let output = serialize_function_output(payload, truncation_policy)
+        .expect("serialize bounded function output")
+        .into_text();
+
+    assert_ne!(output, serialized);
+    assert_eq!(output, expected);
 }

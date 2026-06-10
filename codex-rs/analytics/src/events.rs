@@ -4,12 +4,14 @@ use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CodexErrKind;
+use crate::facts::CodexGoalEvent;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
 use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
+use crate::facts::GoalEventKind;
 use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
@@ -63,6 +65,7 @@ pub(crate) enum TrackEventRequest {
     AppUsed(CodexAppUsedEventRequest),
     HookRun(CodexHookRunEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
+    Goal(Box<CodexGoalEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
     CommandExecution(CodexCommandExecutionEventRequest),
@@ -772,6 +775,30 @@ pub(crate) struct CodexCompactionEventRequest {
 }
 
 #[derive(Serialize)]
+pub(crate) struct CodexGoalEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) session_id: String,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) goal_id: String,
+    pub(crate) event_kind: GoalEventKind,
+    pub(crate) goal_status: codex_state::ThreadGoalStatus,
+    pub(crate) has_token_budget: bool,
+    pub(crate) cumulative_tokens_accounted: Option<i64>,
+    pub(crate) cumulative_time_accounted_seconds: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexGoalEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexGoalEventParams,
+}
+
+#[derive(Serialize)]
 pub(crate) struct CodexTurnEventParams {
     pub(crate) thread_id: String,
     pub(crate) session_id: String,
@@ -803,7 +830,6 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) status: Option<TurnStatus>,
     pub(crate) turn_error: Option<CodexErrorInfo>,
     pub(crate) codex_error_kind: Option<CodexErrKind>,
-    pub(crate) codex_error_subreason: Option<String>,
     pub(crate) codex_error_http_status_code: Option<u16>,
     pub(crate) steer_count: Option<usize>,
     pub(crate) total_tool_call_count: Option<usize>,
@@ -977,6 +1003,33 @@ pub(crate) fn codex_compaction_event_params(
         started_at: input.started_at,
         completed_at: input.completed_at,
         duration_ms: input.duration_ms,
+    }
+}
+
+pub(crate) fn codex_goal_event_params(
+    input: CodexGoalEvent,
+    session_id: String,
+    app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
+    thread_source: Option<ThreadSource>,
+    subagent_source: Option<String>,
+    parent_thread_id: Option<String>,
+) -> CodexGoalEventParams {
+    CodexGoalEventParams {
+        thread_id: input.thread_id,
+        session_id,
+        turn_id: input.turn_id,
+        app_server_client,
+        runtime,
+        thread_source,
+        subagent_source,
+        parent_thread_id,
+        goal_id: input.goal_id,
+        event_kind: input.event_kind,
+        goal_status: input.goal_status,
+        has_token_budget: input.has_token_budget,
+        cumulative_tokens_accounted: input.cumulative_tokens_accounted,
+        cumulative_time_accounted_seconds: input.cumulative_time_accounted_seconds,
     }
 }
 

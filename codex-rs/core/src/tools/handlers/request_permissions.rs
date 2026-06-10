@@ -25,7 +25,6 @@ struct RequestPermissionsEnvironmentArgs {
     environment_id: Option<String>,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("request_permissions")
@@ -35,7 +34,13 @@ impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
         create_request_permissions_tool(request_permissions_tool_description())
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl RequestPermissionsHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {

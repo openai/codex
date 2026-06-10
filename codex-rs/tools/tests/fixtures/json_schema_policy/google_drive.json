@@ -53,13 +53,18 @@
         {
           "pointer": "/properties/title/description",
           "value": "Copied file title."
+        },
+        {
+          "pointer": "/properties/file/oneOf/0/type",
+          "value": "string"
+        },
+        {
+          "pointer": "/properties/metadata/allOf/0/properties/source/type",
+          "value": "string"
         }
       ],
       "expected_pruned": [],
-      "expected_dropped_fields": [
-        "/properties/file/oneOf",
-        "/properties/metadata/allOf"
-      ]
+      "expected_dropped_fields": []
     }
   ]
 }

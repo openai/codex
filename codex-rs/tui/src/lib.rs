@@ -130,8 +130,8 @@ mod diff_model;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
+#[allow(dead_code)]
 mod external_agent_config_migration;
-mod external_agent_config_migration_startup;
 mod external_editor;
 mod file_search;
 mod frames;
@@ -153,6 +153,7 @@ mod local_chatgpt_auth;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod markdown_text_merge;
 mod mention_codec;
 mod model_catalog;
 mod model_migration;
@@ -191,6 +192,7 @@ mod terminal_title;
 mod terminal_visualization_instructions;
 mod text_formatting;
 mod theme_picker;
+mod thread_transcript;
 mod token_usage;
 mod tooltips;
 mod transcript_reflow;
@@ -350,9 +352,11 @@ async fn init_state_db_for_app_server_target(
 ) -> std::io::Result<Option<StateDbHandle>> {
     match app_server_target {
         AppServerTarget::Embedded => state_db::try_init(config).await.map(Some).map_err(|err| {
+            let database_path = codex_state::runtime_db_path_for_corruption_error(&err)
+                .unwrap_or_else(|| codex_state::state_db_path(config.sqlite_home.as_path()));
             std::io::Error::other(LocalStateDbStartupError::new(
-                codex_state::state_db_path(config.sqlite_home.as_path()),
-                err.to_string(),
+                database_path,
+                format!("{err:#}"),
             ))
         }),
         AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => {
@@ -1810,23 +1814,11 @@ async fn run_ratatui_app(
     let hooks_request_handle = app_server.request_handle();
     let hooks_cwd = config.cwd.to_path_buf();
     let startup_prefetch_started_at = Instant::now();
-    let should_defer_bootstrap =
-        external_agent_config_migration_startup::should_show_external_agent_config_migration_prompt(
-            &config,
-            should_show_trust_screen_flag,
-        );
-    let (startup_bootstrap, startup_hooks_entry) = if should_defer_bootstrap {
-        (
-            None,
-            load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd).await,
-        )
-    } else {
-        let (bootstrap, entry) = tokio::join!(
-            app_server.bootstrap(&config),
-            load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd),
-        );
-        (Some(bootstrap?), entry)
-    };
+    let (startup_bootstrap, startup_hooks_entry) = tokio::join!(
+        app_server.bootstrap(&config),
+        load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd),
+    );
+    let startup_bootstrap = Some(startup_bootstrap?);
     let startup_elapsed_before_app = startup_prefetch_started_at.elapsed();
     let startup_hooks_browser = match maybe_run_startup_hooks_review(
         &mut app_server,
@@ -1848,12 +1840,12 @@ async fn run_ratatui_app(
         cli_kv_overrides.clone(),
         overrides.clone(),
         loader_overrides.clone(),
+        cloud_config_bundle,
         prompt,
         images,
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
-        should_show_trust_screen_flag, // Preserve the startup-time trust NUX signal before onboarding
         should_prompt_windows_sandbox_nux_at_startup,
         app_server_target,
         state_db,
@@ -2987,6 +2979,37 @@ mod tests {
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn embedded_state_db_corruption_preserves_failed_database_for_cli_recovery()
+    -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        let sqlite_home = temp_dir.path().join("sqlite-home");
+        std::fs::create_dir_all(&sqlite_home)?;
+        let logs_db_path = codex_state::logs_db_path(&sqlite_home);
+        std::fs::write(&logs_db_path, "not a sqlite database")?;
+        config.sqlite_home = sqlite_home;
+
+        let err =
+            match init_state_db_for_app_server_target(&config, &AppServerTarget::Embedded).await {
+                Ok(_) => panic!("embedded startup should surface state db init failures"),
+                Err(err) => err,
+            };
+        let startup_error = err
+            .get_ref()
+            .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
+            .expect("state db startup failure should retain its typed context");
+
+        assert_eq!(startup_error.database_path(), logs_db_path.as_path());
+        assert!(
+            codex_state::sqlite_error_detail_is_corruption(startup_error.detail()),
+            "startup error should preserve the SQLite corruption cause, got: {}",
+            startup_error.detail()
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     #[serial]
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {

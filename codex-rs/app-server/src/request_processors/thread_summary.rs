@@ -190,12 +190,12 @@ pub(crate) fn thread_settings_from_config_snapshot(
     config_snapshot: &ThreadConfigSnapshot,
 ) -> ThreadSettings {
     ThreadSettings {
-        cwd: config_snapshot.cwd.clone(),
+        cwd: config_snapshot.cwd().clone(),
         approval_policy: config_snapshot.approval_policy.into(),
         approvals_reviewer: config_snapshot.approvals_reviewer.into(),
         sandbox_policy: thread_response_sandbox_policy(
             &config_snapshot.permission_profile,
-            config_snapshot.cwd.as_path(),
+            config_snapshot.cwd().as_path(),
         ),
         active_permission_profile: thread_response_active_permission_profile(
             config_snapshot.active_permission_profile.clone(),
@@ -213,24 +213,36 @@ pub(crate) fn thread_settings_from_config_snapshot(
 pub(crate) fn thread_settings_from_core_snapshot(
     snapshot: codex_protocol::protocol::ThreadSettingsSnapshot,
 ) -> ThreadSettings {
+    let codex_protocol::protocol::ThreadSettingsSnapshot {
+        model,
+        model_provider_id,
+        service_tier,
+        approval_policy,
+        approvals_reviewer,
+        permission_profile,
+        active_permission_profile,
+        cwd,
+        reasoning_effort,
+        reasoning_summary,
+        personality,
+        collaboration_mode,
+    } = snapshot;
+    let sandbox_policy = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     ThreadSettings {
-        sandbox_policy: thread_response_sandbox_policy(
-            &snapshot.permission_profile,
-            snapshot.cwd.as_path(),
-        ),
-        cwd: snapshot.cwd,
-        approval_policy: snapshot.approval_policy.into(),
-        approvals_reviewer: snapshot.approvals_reviewer.into(),
+        sandbox_policy,
+        cwd,
+        approval_policy: approval_policy.into(),
+        approvals_reviewer: approvals_reviewer.into(),
         active_permission_profile: thread_response_active_permission_profile(
-            snapshot.active_permission_profile,
+            active_permission_profile,
         ),
-        model: snapshot.model,
-        model_provider: snapshot.model_provider_id,
-        service_tier: snapshot.service_tier,
-        effort: snapshot.reasoning_effort,
-        summary: snapshot.reasoning_summary,
-        collaboration_mode: snapshot.collaboration_mode,
-        personality: snapshot.personality,
+        model,
+        model_provider: model_provider_id,
+        service_tier,
+        effort: reasoning_effort,
+        summary: reasoning_summary,
+        collaboration_mode,
+        personality,
     }
 }
 
