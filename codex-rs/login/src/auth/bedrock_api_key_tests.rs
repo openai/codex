@@ -22,14 +22,20 @@ fn api_key_auth() -> AuthDotJson {
 }
 
 fn bedrock_only_auth() -> AuthDotJson {
-    let mut auth = empty_auth_dot_json();
-    auth.bedrock_api_key = Some(bedrock_record());
-    auth
+    AuthDotJson {
+        auth_mode: None,
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: None,
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: Some(bedrock_auth()),
+    }
 }
 
-fn bedrock_record() -> BedrockApiKeyAuthRecord {
-    BedrockApiKeyAuthRecord::try_new(" bedrock-api-key-test ")
-        .expect("record should normalize non-empty key")
+fn bedrock_auth() -> BedrockApiKeyAuth {
+    BedrockApiKeyAuth::try_new(" bedrock-api-key-test ")
+        .expect("auth should normalize non-empty key")
 }
 
 #[tokio::test]
@@ -45,10 +51,10 @@ async fn save_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()> {
     )
     .await;
 
-    auth_manager.save_bedrock_api_key(bedrock_record()).await?;
+    auth_manager.save_bedrock_api_key(bedrock_auth()).await?;
 
     let loaded = storage.load()?.expect("auth should be stored");
-    let expected = bedrock_auth_dot_json(BedrockApiKeyAuthRecord::try_new("bedrock-api-key-test")?);
+    let expected = bedrock_auth_dot_json(BedrockApiKeyAuth::try_new("bedrock-api-key-test")?);
     assert_eq!(loaded, expected);
     assert_eq!(auth_manager.auth_mode(), Some(AuthMode::BedrockApiKey));
     assert_eq!(
@@ -65,14 +71,6 @@ async fn save_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()> {
             .as_deref(),
         Some("bedrock-api-key-test")
     );
-    assert_eq!(
-        auth_manager
-            .bedrock_api_key_cached()
-            .as_ref()
-            .map(BedrockApiKeyAuthRecord::api_key),
-        Some("bedrock-api-key-test")
-    );
-    assert!(auth_manager.has_bedrock_api_key());
     Ok(())
 }
 
@@ -80,7 +78,7 @@ async fn save_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()> {
 async fn clear_bedrock_api_key_removes_bedrock_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
-    storage.save(&bedrock_auth_dot_json(bedrock_record()))?;
+    storage.save(&bedrock_auth_dot_json(bedrock_auth()))?;
     let auth_manager = AuthManager::new(
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
@@ -93,7 +91,6 @@ async fn clear_bedrock_api_key_removes_bedrock_auth() -> anyhow::Result<()> {
 
     assert_eq!(storage.load()?, None);
     assert_eq!(auth_manager.auth_cached(), None);
-    assert!(!auth_manager.has_bedrock_api_key());
     Ok(())
 }
 
@@ -145,7 +142,6 @@ async fn bedrock_only_auth_storage_creates_primary_auth() -> anyhow::Result<()> 
             .as_deref(),
         Some("bedrock-api-key-test")
     );
-    assert!(auth_manager.has_bedrock_api_key());
     Ok(())
 }
 
@@ -173,7 +169,7 @@ async fn clear_bedrock_only_auth_storage_removes_auth_file() -> anyhow::Result<(
 async fn login_with_api_key_clears_bedrock_api_key() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
-    storage.save(&bedrock_auth_dot_json(bedrock_record()))?;
+    storage.save(&bedrock_auth_dot_json(bedrock_auth()))?;
 
     crate::auth::login_with_api_key(
         codex_home.path(),

@@ -134,7 +134,6 @@ pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
 #[cfg(test)]
 mod tests {
     use codex_login::auth::BedrockApiKeyAuth;
-    use codex_login::auth::BedrockApiKeyAuthRecord;
     use codex_model_provider_info::WireApi;
     use codex_model_provider_info::create_oss_provider_with_base_url;
     use pretty_assertions::assert_eq;
@@ -153,10 +152,10 @@ mod tests {
     #[test]
     fn openai_provider_rejects_bedrock_api_key_auth() {
         let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
-        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth::load(
-            BedrockApiKeyAuthRecord::try_new("bedrock-api-key-test")
+        let auth = CodexAuth::BedrockApiKey(
+            BedrockApiKeyAuth::try_new("bedrock-api-key-test")
                 .expect("Bedrock API key should be valid"),
-        ));
+        );
 
         match resolve_provider_auth(Some(&auth), &provider) {
             Err(CodexErr::UnsupportedOperation(message)) => {

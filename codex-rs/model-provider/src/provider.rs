@@ -298,7 +298,6 @@ mod tests {
     use std::num::NonZeroU64;
 
     use codex_login::auth::BedrockApiKeyAuth;
-    use codex_login::auth::BedrockApiKeyAuthRecord;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_model_provider_info::WireApi;
     use codex_models_manager::manager::RefreshStrategy;
@@ -387,10 +386,10 @@ mod tests {
     }
 
     fn bedrock_api_key_auth() -> CodexAuth {
-        CodexAuth::BedrockApiKey(BedrockApiKeyAuth::load(
-            BedrockApiKeyAuthRecord::try_new("bedrock-api-key-test")
+        CodexAuth::BedrockApiKey(
+            BedrockApiKeyAuth::try_new("bedrock-api-key-test")
                 .expect("Bedrock API key should be valid"),
-        ))
+        )
     }
 
     #[test]

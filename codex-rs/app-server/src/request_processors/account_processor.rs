@@ -778,9 +778,7 @@ impl AccountRequestProcessor {
                     let auth_mode = auth.api_auth_mode();
                     let (reported_auth_method, token_opt) = if matches!(
                         auth,
-                        CodexAuth::AgentIdentity(_)
-                            | CodexAuth::PersonalAccessToken(_)
-                            | CodexAuth::BedrockApiKey(_)
+                        CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_)
                     ) || include_token
                         && permanent_refresh_failure
                     {

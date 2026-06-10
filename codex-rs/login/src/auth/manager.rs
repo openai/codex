@@ -239,12 +239,12 @@ impl CodexAuth {
             return Self::from_personal_access_token(personal_access_token).await;
         }
         if auth_mode == ApiAuthMode::BedrockApiKey {
-            let Some(record) = auth_dot_json.bedrock_api_key else {
+            let Some(auth) = auth_dot_json.bedrock_api_key else {
                 return Err(std::io::Error::other(
                     "Bedrock API key auth is missing a Bedrock API key.",
                 ));
             };
-            return Ok(Self::BedrockApiKey(BedrockApiKeyAuth::load(record)));
+            return Ok(Self::BedrockApiKey(auth));
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
@@ -1819,11 +1819,10 @@ impl AuthManager {
             ))
         })?;
         let auth_before_reload = self.auth_cached();
-        if auth_before_reload.as_ref().is_some_and(|auth| {
-            auth.is_api_key_auth()
-                || auth.is_personal_access_token_auth()
-                || matches!(auth, CodexAuth::BedrockApiKey(_))
-        }) {
+        if auth_before_reload
+            .as_ref()
+            .is_some_and(|auth| auth.is_api_key_auth() || auth.is_personal_access_token_auth())
+        {
             return Ok(());
         }
         let expected_account_id = auth_before_reload
