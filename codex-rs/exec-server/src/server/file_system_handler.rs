@@ -3,6 +3,7 @@ use std::io;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_utils_path_uri::PathUri;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
@@ -116,11 +117,13 @@ impl FileSystemHandler {
         &self,
         params: FsCanonicalizeParams,
     ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+        let requested_path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         let path = self
             .file_system
-            .canonicalize(&params.path, params.sandbox.as_ref())
+            .canonicalize(&requested_path, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?;
+        let path = path.to_abs_path().map_err(map_fs_error)?;
         Ok(FsCanonicalizeResponse { path })
     }
 
@@ -255,6 +258,24 @@ mod tests {
                 })
                 .await
                 .expect("write file");
+
+            let canonicalized = handler
+                .canonicalize(FsCanonicalizeParams {
+                    path: path.clone(),
+                    sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
+                        sandbox_policy.clone(),
+                        sandbox_cwd.clone(),
+                    )),
+                })
+                .await
+                .expect("canonicalize file");
+            assert_eq!(
+                canonicalized.path,
+                AbsolutePathBuf::from_absolute_path(
+                    std::fs::canonicalize(path.as_path()).expect("canonical path"),
+                )
+                .expect("absolute canonical path"),
+            );
 
             let response = handler
                 .read_file(FsReadFileParams {

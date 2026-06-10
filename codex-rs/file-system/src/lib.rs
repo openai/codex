@@ -9,6 +9,7 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::io;
 use std::path::Path;
 
@@ -136,9 +137,9 @@ pub trait ExecutorFileSystem: Send + Sync {
     /// Resolves a path within this filesystem.
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf>;
+    ) -> FileSystemResult<PathUri>;
 
     async fn read_file(
         &self,

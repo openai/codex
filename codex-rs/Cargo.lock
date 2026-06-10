@@ -2515,6 +2515,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path",
+ "codex-utils-path-uri",
  "core-foundation 0.9.4",
  "dns-lookup",
  "dunce",
@@ -2768,6 +2769,7 @@ dependencies = [
  "codex-skills",
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
+ "codex-utils-path-uri",
  "codex-utils-plugins",
  "dirs",
  "dunce",
@@ -3005,6 +3007,7 @@ dependencies = [
  "async-trait",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-path-uri",
  "serde",
 ]
 
@@ -3821,6 +3824,7 @@ dependencies = [
  "codex-extension-api",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-path-uri",
  "codex-utils-string",
  "pretty_assertions",
  "tokio",

@@ -434,8 +434,8 @@ pub(crate) async fn assert_canonicalize_resolves_directory_alias(
     std::fs::write(&file_path, "canonical hello")?;
     create_directory_alias(&source_dir, &alias_dir)?;
 
-    let requested_path = absolute_path(alias_dir.join("nested").join("note.txt"));
-    let expected_path = absolute_path(std::fs::canonicalize(&file_path)?);
+    let requested_path = PathUri::from_path(alias_dir.join("nested").join("note.txt"))?;
+    let expected_path = PathUri::from_path(std::fs::canonicalize(&file_path)?)?;
     assert_ne!(requested_path, expected_path);
 
     let canonical_path = file_system
@@ -464,8 +464,8 @@ pub(crate) async fn assert_sandboxed_canonicalize_resolves_directory_alias(
     create_directory_alias(&source_dir, &alias_dir)?;
     let sandbox = read_only_sandbox(tmp.path().to_path_buf());
 
-    let requested_path = absolute_path(alias_dir.join("nested").join("note.txt"));
-    let expected_path = absolute_path(std::fs::canonicalize(&file_path)?);
+    let requested_path = PathUri::from_path(alias_dir.join("nested").join("note.txt"))?;
+    let expected_path = PathUri::from_path(std::fs::canonicalize(&file_path)?)?;
     assert_ne!(requested_path, expected_path);
 
     let canonical_path = file_system

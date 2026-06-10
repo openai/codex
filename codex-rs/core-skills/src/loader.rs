@@ -19,6 +19,7 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::plugin_namespace_for_skill_path;
 use dirs::home_dir;
@@ -475,8 +476,12 @@ async fn canonicalize_for_skill_identity(
     fs: &dyn ExecutorFileSystem,
     path: &AbsolutePathBuf,
 ) -> AbsolutePathBuf {
-    fs.canonicalize(path, /*sandbox*/ None)
+    let Ok(path_uri) = PathUri::from_abs_path(path) else {
+        return path.clone();
+    };
+    fs.canonicalize(&path_uri, /*sandbox*/ None)
         .await
+        .and_then(|path| path.to_abs_path())
         .unwrap_or_else(|_| path.clone())
 }
 

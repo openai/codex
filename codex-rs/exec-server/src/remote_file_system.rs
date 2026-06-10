@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use tokio::io;
 use tracing::trace;
 
@@ -42,19 +43,20 @@ impl RemoteFileSystem {
 impl ExecutorFileSystem for RemoteFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
+    ) -> FileSystemResult<PathUri> {
         trace!("remote fs canonicalize");
+        let path = path.to_abs_path()?;
         let client = self.client.get().await.map_err(map_remote_error)?;
         let response = client
             .fs_canonicalize(FsCanonicalizeParams {
-                path: path.clone(),
+                path,
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await
             .map_err(map_remote_error)?;
-        Ok(response.path)
+        PathUri::from_abs_path(&response.path)
     }
 
     async fn read_file(

@@ -3,6 +3,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use tokio::io;
 
 use crate::CopyOptions;
@@ -54,22 +55,22 @@ impl SandboxedFileSystem {
 impl ExecutorFileSystem for SandboxedFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
+    ) -> FileSystemResult<PathUri> {
         let sandbox = require_platform_sandbox(sandbox)?;
         let response = self
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::Canonicalize(FsCanonicalizeParams {
-                    path: path.clone(),
+                    path: path.to_abs_path()?,
                     sandbox: None,
                 }),
             )
             .await?
             .expect_canonicalize()
             .map_err(map_sandbox_error)?;
-        Ok(response.path)
+        PathUri::from_abs_path(&response.path)
     }
 
     async fn read_file(

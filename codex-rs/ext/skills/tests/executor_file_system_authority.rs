@@ -23,6 +23,7 @@ use codex_skills_extension::ExecutorSkillProvider;
 use codex_skills_extension::provider::SkillListQuery;
 use codex_skills_extension::provider::SkillProvider;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
 const SKILL_CONTENTS: &str =
@@ -59,14 +60,15 @@ impl SyntheticFileSystem {
 impl ExecutorFileSystem for SyntheticFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        if path == &self.alias_root {
-            return Ok(self.canonical_root.clone());
+    ) -> FileSystemResult<PathUri> {
+        let path = path.to_abs_path()?;
+        if path == self.alias_root {
+            return PathUri::from_abs_path(&self.canonical_root);
         }
-        self.metadata(path)?;
-        Ok(path.clone())
+        self.metadata(&path)?;
+        PathUri::from_abs_path(&path)
     }
 
     async fn read_file(

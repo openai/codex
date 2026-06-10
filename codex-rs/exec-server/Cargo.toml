@@ -24,6 +24,7 @@ codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 futures = { workspace = true }
@@ -52,7 +53,6 @@ uuid = { workspace = true, features = ["v4"] }
 [dev-dependencies]
 anyhow = { workspace = true }
 codex-test-binary-support = { workspace = true }
-codex-utils-path-uri = { workspace = true }
 ctor = { workspace = true }
 http = { workspace = true }
 pretty_assertions = { workspace = true }

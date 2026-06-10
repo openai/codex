@@ -7,6 +7,7 @@ use codex_file_system::FileSystemResult;
 use codex_file_system::FileSystemSandboxContext;
 use codex_file_system::ReadDirectoryEntry;
 use codex_file_system::RemoveOptions;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
@@ -16,10 +17,12 @@ struct TestFileSystem;
 impl ExecutorFileSystem for TestFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        path.canonicalize()
+    ) -> FileSystemResult<PathUri> {
+        let path = path.to_abs_path()?;
+        let canonicalized = path.canonicalize()?;
+        PathUri::from_abs_path(&canonicalized)
     }
 
     async fn read_file(

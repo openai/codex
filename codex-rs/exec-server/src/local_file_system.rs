@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,9 +82,9 @@ impl LocalFileSystem {
 impl ExecutorFileSystem for LocalFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
+    ) -> FileSystemResult<PathUri> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
         file_system.canonicalize(path, sandbox).await
     }
@@ -163,9 +164,9 @@ impl ExecutorFileSystem for LocalFileSystem {
 impl ExecutorFileSystem for UnsandboxedFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
+    ) -> FileSystemResult<PathUri> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system.canonicalize(path, /*sandbox*/ None).await
     }
@@ -258,11 +259,14 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 impl ExecutorFileSystem for DirectFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
+    ) -> FileSystemResult<PathUri> {
         reject_sandbox_context(sandbox)?;
-        AbsolutePathBuf::from_absolute_path(tokio::fs::canonicalize(path.as_path()).await?)
+        let path = path.to_abs_path()?;
+        let canonicalized =
+            AbsolutePathBuf::from_absolute_path(tokio::fs::canonicalize(path.as_path()).await?)?;
+        PathUri::from_abs_path(&canonicalized)
     }
 
     async fn read_file(
