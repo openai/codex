@@ -144,8 +144,12 @@ impl App {
             }
         };
 
-        self.set_thread_goal_objective(app_server, thread_id, objective, mode)
-            .await;
+        if self
+            .set_thread_goal_objective(app_server, thread_id, objective, mode)
+            .await
+        {
+            self.chat_widget.maybe_send_next_queued_input();
+        }
     }
 
     pub(super) async fn set_thread_goal_objective(
@@ -154,18 +158,18 @@ impl App {
         thread_id: ThreadId,
         objective: String,
         mode: ThreadGoalSetMode,
-    ) {
+    ) -> bool {
         let mode = if matches!(mode, ThreadGoalSetMode::ConfirmIfExists) {
             let result = app_server.thread_goal_get(thread_id).await;
             if self.current_displayed_thread_id() != Some(thread_id) {
-                return;
+                return false;
             }
 
             match result {
                 Ok(response) => match response.goal.as_ref() {
                     Some(goal) if should_confirm_before_replacing_goal(goal) => {
                         self.show_replace_thread_goal_confirmation(thread_id, objective);
-                        return;
+                        return false;
                     }
                     Some(_) => ThreadGoalSetMode::ReplaceExisting,
                     None => mode,
@@ -173,7 +177,7 @@ impl App {
                 Err(err) => {
                     self.chat_widget
                         .add_error_message(thread_goal_error_message("read", &err));
-                    return;
+                    return true;
                 }
             }
         } else {
@@ -186,11 +190,11 @@ impl App {
 
             if let Err(err) = result {
                 if self.current_displayed_thread_id() != Some(thread_id) {
-                    return;
+                    return false;
                 }
                 self.chat_widget
                     .add_error_message(thread_goal_error_message("replace", &err));
-                return;
+                return true;
             }
         }
 
@@ -208,7 +212,7 @@ impl App {
             .thread_goal_set(thread_id, Some(objective), Some(status), token_budget)
             .await;
         if self.current_displayed_thread_id() != Some(thread_id) {
-            return;
+            return false;
         }
 
         match result {
@@ -222,6 +226,7 @@ impl App {
                     .add_error_message(thread_goal_error_message(action, &err));
             }
         }
+        true
     }
 
     pub(super) async fn set_thread_goal_status(
