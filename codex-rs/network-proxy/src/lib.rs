@@ -3,6 +3,7 @@
 mod certs;
 mod config;
 mod connect_policy;
+mod credentialed_routes;
 mod http_proxy;
 mod mitm;
 mod mitm_hook;
@@ -26,6 +27,10 @@ pub use config::NetworkProxyConfig;
 pub use config::NetworkUnixSocketPermission;
 pub use config::NetworkUnixSocketPermissions;
 pub use config::host_and_port_from_network_addr;
+pub use credentialed_routes::CredentialedRoute;
+pub use credentialed_routes::CredentialedRoutesConfig;
+pub use credentialed_routes::CredentialedRoutesReloader;
+pub use credentialed_routes::CredentialedRoutesSource;
 pub use mitm_hook::CredentialedRouteProxyActionConfig;
 pub use mitm_hook::CredentialedRouteProxyHeader;
 pub use mitm_hook::InjectedHeaderConfig;
