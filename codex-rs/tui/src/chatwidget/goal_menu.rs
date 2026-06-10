@@ -10,42 +10,27 @@ impl ChatWidget {
         self.add_plain_history_lines(goal_summary_lines(&goal));
     }
 
-    pub(crate) fn show_goal_edit_prompt(&mut self, thread_id: ThreadId, goal: AppThreadGoal) {
+    pub(crate) fn show_goal_edit_prompt(
+        &mut self,
+        thread_id: ThreadId,
+        goal: AppThreadGoal,
+        objective: String,
+    ) {
         let tx = self.app_event_tx.clone();
         let status = edited_goal_status(goal.status);
         let token_budget = goal.token_budget;
-        let objective = match goal_files::objective_text_for_edit(&goal.objective) {
-            Ok(objective) => objective,
-            Err(err) => {
-                self.add_error_message(err.to_string());
-                goal.objective
-            }
-        };
-        let codex_home = self.config.codex_home.clone();
         let view = CustomPromptView::new(
             "Edit goal".to_string(),
             "Type a goal objective and press Enter".to_string(),
             objective,
             /*context_label*/ None,
             Box::new(move |objective: String| {
-                let objective = match goal_files::materialize_goal_draft(
-                    codex_home.as_path(),
-                    goal_files::GoalDraft {
+                tx.send(AppEvent::SetThreadGoalDraft {
+                    thread_id,
+                    draft: goal_files::GoalDraft {
                         objective,
                         ..Default::default()
                     },
-                ) {
-                    Ok(objective) => objective,
-                    Err(err) => {
-                        tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            crate::history_cell::new_error_event(err.to_string()),
-                        )));
-                        return;
-                    }
-                };
-                tx.send(AppEvent::SetThreadGoalObjective {
-                    thread_id,
-                    objective,
                     mode: crate::app_event::ThreadGoalSetMode::UpdateExisting {
                         status,
                         token_budget,

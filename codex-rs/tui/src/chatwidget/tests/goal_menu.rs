@@ -1,6 +1,4 @@
 use super::*;
-use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
-
 #[tokio::test]
 async fn goal_menu_active_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -80,15 +78,14 @@ async fn goal_menu_managed_file_snapshot() {
         AppThreadGoalStatus::Active,
         /*token_budget*/ Some(80_000),
     );
-    goal.objective = crate::goal_files::materialize_goal_draft(
-        chat.config.codex_home.as_path(),
-        crate::goal_files::GoalDraft {
-            objective: "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1),
-            ..Default::default()
-        },
-    )
-    .expect("materialize goal objective");
-    let path = crate::goal_files::objective_file_path(&goal.objective).expect("goal file path");
+    let path = chat
+        .config
+        .codex_home
+        .join("attachments")
+        .join("00000000-0000-4000-8000-000000000000")
+        .join("goal-objective.md");
+    goal.objective =
+        crate::goal_files::objective_file_reference(&path).expect("goal objective file reference");
 
     chat.show_goal_summary(goal);
 
@@ -127,6 +124,7 @@ async fn goal_edit_prompt_snapshot() {
             AppThreadGoalStatus::Active,
             /*token_budget*/ Some(80_000),
         ),
+        "Keep improving the bare goal command until it feels calm and useful.".to_string(),
     );
 
     assert_chatwidget_snapshot!(
@@ -147,14 +145,15 @@ async fn goal_edit_prompt_submits_preserved_status_and_budget() {
             AppThreadGoalStatus::Paused,
             /*token_budget*/ Some(80_000),
         ),
+        "Keep improving the bare goal command until it feels calm and useful.".to_string(),
     );
     chat.handle_paste(" with clearer wording".to_string());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     match rx.try_recv() {
-        Ok(AppEvent::SetThreadGoalObjective {
+        Ok(AppEvent::SetThreadGoalDraft {
             thread_id: event_thread_id,
-            objective,
+            draft,
             mode:
                 crate::app_event::ThreadGoalSetMode::UpdateExisting {
                     status,
@@ -163,55 +162,15 @@ async fn goal_edit_prompt_submits_preserved_status_and_budget() {
         }) => {
             assert_eq!(event_thread_id, thread_id);
             assert_eq!(
-                objective,
+                draft.objective,
                 "Keep improving the bare goal command until it feels calm and useful. with clearer wording"
             );
             assert_eq!(status, AppThreadGoalStatus::Paused);
             assert_eq!(token_budget, Some(80_000));
         }
-        other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+        other => panic!("expected SetThreadGoalDraft event, got {other:?}"),
     }
     assert!(chat.no_modal_or_popup_active());
-}
-
-#[tokio::test]
-async fn goal_edit_prompt_hydrates_and_materializes_oversized_objective_file() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
-    let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
-    let mut goal = test_goal(
-        thread_id,
-        AppThreadGoalStatus::Paused,
-        /*token_budget*/ Some(80_000),
-    );
-    goal.objective = crate::goal_files::materialize_goal_draft(
-        chat.config.codex_home.as_path(),
-        crate::goal_files::GoalDraft {
-            objective: objective.clone(),
-            ..Default::default()
-        },
-    )
-    .expect("materialize goal objective");
-
-    chat.show_goal_edit_prompt(thread_id, goal);
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    match rx.try_recv() {
-        Ok(AppEvent::SetThreadGoalObjective {
-            objective: actual_objective,
-            ..
-        }) => {
-            let path =
-                crate::goal_files::objective_file_path(&actual_objective).unwrap_or_else(|| {
-                    panic!("expected goal file objective, got {actual_objective:?}")
-                });
-            assert_eq!(
-                std::fs::read_to_string(path).expect("read goal file"),
-                objective
-            );
-        }
-        other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
-    }
 }
 
 #[tokio::test]
@@ -230,11 +189,12 @@ async fn goal_edit_prompt_preserves_resumable_stopped_statuses() {
                 stopped_status,
                 /*token_budget*/ Some(80_000),
             ),
+            "Keep improving the bare goal command until it feels calm and useful.".to_string(),
         );
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         match rx.try_recv() {
-            Ok(AppEvent::SetThreadGoalObjective {
+            Ok(AppEvent::SetThreadGoalDraft {
                 mode:
                     crate::app_event::ThreadGoalSetMode::UpdateExisting {
                         status,
@@ -245,7 +205,7 @@ async fn goal_edit_prompt_preserves_resumable_stopped_statuses() {
                 assert_eq!(status, stopped_status);
                 assert_eq!(token_budget, Some(80_000));
             }
-            other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+            other => panic!("expected SetThreadGoalDraft event, got {other:?}"),
         }
     }
 }
@@ -268,11 +228,12 @@ async fn goal_edit_prompt_resets_terminal_status_to_active() {
                 terminal_status,
                 /*token_budget*/ Some(80_000),
             ),
+            "Keep improving the bare goal command until it feels calm and useful.".to_string(),
         );
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         match rx.try_recv() {
-            Ok(AppEvent::SetThreadGoalObjective {
+            Ok(AppEvent::SetThreadGoalDraft {
                 mode:
                     crate::app_event::ThreadGoalSetMode::UpdateExisting {
                         status,
@@ -283,7 +244,7 @@ async fn goal_edit_prompt_resets_terminal_status_to_active() {
                 assert_eq!(status, AppThreadGoalStatus::Active);
                 assert_eq!(token_budget, Some(80_000));
             }
-            other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+            other => panic!("expected SetThreadGoalDraft event, got {other:?}"),
         }
     }
 }

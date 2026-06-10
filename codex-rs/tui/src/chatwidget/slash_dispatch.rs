@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::app_event::ThreadGoalSetMode;
+use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
@@ -756,34 +757,36 @@ impl ChatWidget {
                 } else {
                     Vec::new()
                 };
-                let objective = match crate::goal_files::materialize_goal_draft(
-                    self.config.codex_home.as_path(),
-                    GoalDraft {
-                        objective: args,
-                        text_elements,
-                        pending_pastes,
-                        local_images,
-                        remote_image_urls,
-                    },
-                ) {
-                    Ok(objective) => objective,
-                    Err(err) => {
-                        self.add_error_message(err.to_string());
-                        return if source == SlashCommandDispatchSource::Queued {
-                            QueueDrain::Continue
-                        } else {
-                            self.queued_command_drain_result(cmd)
-                        };
-                    }
+                let draft = GoalDraft {
+                    objective: args,
+                    text_elements,
+                    pending_pastes,
+                    local_images,
+                    remote_image_urls,
                 };
                 let Some(thread_id) = self.thread_id else {
                     if source == SlashCommandDispatchSource::Live {
+                        const GOAL_PREFIX: &str = "/goal ";
+                        let (objective, text_elements) = ChatComposer::expand_pending_pastes(
+                            &draft.objective,
+                            draft.text_elements,
+                            &draft.pending_pastes,
+                        );
+                        let text_elements = text_elements
+                            .into_iter()
+                            .map(|element| {
+                                element.map_range(|range| ByteRange {
+                                    start: range.start + GOAL_PREFIX.len(),
+                                    end: range.end + GOAL_PREFIX.len(),
+                                })
+                            })
+                            .collect();
                         self.queue_user_message_with_options(
                             UserMessage {
-                                text: format!("/goal {objective}"),
-                                local_images: Vec::new(),
-                                remote_image_urls: Vec::new(),
-                                text_elements: Vec::new(),
+                                text: format!("{GOAL_PREFIX}{objective}"),
+                                local_images: draft.local_images,
+                                remote_image_urls: draft.remote_image_urls,
+                                text_elements,
                                 mention_bindings: Vec::new(),
                             },
                             QueuedInputAction::ParseSlash,
@@ -797,12 +800,13 @@ impl ChatWidget {
                     }
                     return self.queued_command_drain_result(cmd);
                 };
-                self.app_event_tx.send(AppEvent::SetThreadGoalObjective {
+                let history_objective = draft.objective.clone();
+                self.app_event_tx.send(AppEvent::SetThreadGoalDraft {
                     thread_id,
-                    objective: objective.clone(),
+                    draft,
                     mode: ThreadGoalSetMode::ConfirmIfExists,
                 });
-                self.append_message_history_entry(format!("/goal {objective}"));
+                self.append_message_history_entry(format!("/goal {history_objective}"));
                 if source == SlashCommandDispatchSource::Live {
                     self.clear_live_goal_submission();
                 }

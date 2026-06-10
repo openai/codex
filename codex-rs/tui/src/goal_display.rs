@@ -117,16 +117,16 @@ mod tests {
     #[test]
     fn goal_usage_summary_formats_managed_file_objective() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
-        let objective = crate::goal_files::materialize_goal_draft(
-            temp_dir.path(),
-            crate::goal_files::GoalDraft {
-                objective: "x"
-                    .repeat(codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1),
-                ..Default::default()
-            },
+        let path = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path_checked(
+            temp_dir
+                .path()
+                .join("attachments")
+                .join("00000000-0000-4000-8000-000000000000")
+                .join("goal-objective.md"),
         )
-        .expect("materialize goal objective");
-        let path = crate::goal_files::objective_file_path(&objective).expect("goal file path");
+        .expect("absolute path");
+        let objective =
+            crate::goal_files::objective_file_reference(&path).expect("goal file reference");
         let mut goal = test_thread_goal(/*token_budget*/ None, /*tokens_used*/ 0);
         goal.objective = objective;
 

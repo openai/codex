@@ -109,7 +109,42 @@ impl App {
             return;
         };
 
-        self.chat_widget.show_goal_edit_prompt(thread_id, goal);
+        let objective = match goal_files::objective_text_for_edit(app_server, &goal.objective).await
+        {
+            Ok(objective) => objective,
+            Err(err) => {
+                self.chat_widget.add_error_message(err.to_string());
+                goal.objective.clone()
+            }
+        };
+        if self.current_displayed_thread_id() != Some(thread_id) {
+            return;
+        }
+        self.chat_widget
+            .show_goal_edit_prompt(thread_id, goal, objective);
+    }
+
+    pub(super) async fn set_thread_goal_draft(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+        draft: goal_files::GoalDraft,
+        mode: ThreadGoalSetMode,
+    ) {
+        let result =
+            goal_files::materialize_goal_draft(app_server, &self.config.codex_home, draft).await;
+        let objective = match result {
+            Ok(objective) => objective,
+            Err(err) => {
+                if self.current_displayed_thread_id() == Some(thread_id) {
+                    self.chat_widget.add_error_message(err.to_string());
+                }
+                return;
+            }
+        };
+
+        self.set_thread_goal_objective(app_server, thread_id, objective, mode)
+            .await;
     }
 
     pub(super) async fn set_thread_goal_objective(
@@ -253,9 +288,12 @@ impl App {
             format!("New objective: {objective}")
         };
         let replace_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::SetThreadGoalObjective {
+            tx.send(AppEvent::SetThreadGoalDraft {
                 thread_id,
-                objective: replace_objective.clone(),
+                draft: goal_files::GoalDraft {
+                    objective: replace_objective.clone(),
+                    ..Default::default()
+                },
                 mode: ThreadGoalSetMode::ReplaceExisting,
             });
         })];

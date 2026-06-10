@@ -12,6 +12,8 @@ use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
@@ -27,6 +29,12 @@ use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
+use codex_app_server_protocol::FsCreateDirectoryParams;
+use codex_app_server_protocol::FsCreateDirectoryResponse;
+use codex_app_server_protocol::FsReadFileParams;
+use codex_app_server_protocol::FsReadFileResponse;
+use codex_app_server_protocol::FsWriteFileParams;
+use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
@@ -885,6 +893,57 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/goal/clear failed in TUI")
+    }
+
+    pub(crate) async fn fs_read_file(&mut self, path: AbsolutePathBuf) -> Result<Vec<u8>> {
+        let request_id = self.next_request_id();
+        let response: FsReadFileResponse = self
+            .client
+            .request_typed(ClientRequest::FsReadFile {
+                request_id,
+                params: FsReadFileParams { path },
+            })
+            .await
+            .wrap_err("fs/readFile failed in TUI")?;
+        STANDARD
+            .decode(response.data_base64)
+            .wrap_err("fs/readFile returned invalid base64 data")
+    }
+
+    pub(crate) async fn fs_write_file(
+        &mut self,
+        path: AbsolutePathBuf,
+        bytes: Vec<u8>,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: FsWriteFileResponse = self
+            .client
+            .request_typed(ClientRequest::FsWriteFile {
+                request_id,
+                params: FsWriteFileParams {
+                    path,
+                    data_base64: STANDARD.encode(bytes),
+                },
+            })
+            .await
+            .wrap_err("fs/writeFile failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn fs_create_directory(&mut self, path: AbsolutePathBuf) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: FsCreateDirectoryResponse = self
+            .client
+            .request_typed(ClientRequest::FsCreateDirectory {
+                request_id,
+                params: FsCreateDirectoryParams {
+                    path,
+                    recursive: Some(true),
+                },
+            })
+            .await
+            .wrap_err("fs/createDirectory failed in TUI")?;
+        Ok(())
     }
 
     pub(crate) async fn logout_account(&mut self) -> Result<()> {
