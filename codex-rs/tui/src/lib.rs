@@ -130,8 +130,9 @@ mod diff_model;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
-#[allow(dead_code)]
 mod external_agent_config_migration;
+mod external_agent_config_migration_flow;
+mod external_agent_config_migration_model;
 mod external_editor;
 mod file_search;
 mod frames;

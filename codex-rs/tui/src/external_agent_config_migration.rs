@@ -1,6 +1,8 @@
 use crate::diff_render::display_path_for;
-use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
-use crate::style::accent_style;
+use crate::external_agent_config_migration_model::ExternalAgentConfigMigrationGroupModel;
+use crate::external_agent_config_migration_model::external_agent_config_migration_groups;
+use crate::external_agent_config_migration_model::external_agent_config_migration_item_detail;
+use crate::external_agent_config_migration_model::external_agent_config_migration_item_label;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
@@ -10,11 +12,8 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 use ratatui::prelude::Stylize as _;
 use ratatui::text::Line;
-use ratatui::widgets::Widget;
 use tokio_stream::StreamExt;
 
 mod render;
@@ -23,8 +22,6 @@ mod render;
 pub(crate) enum ExternalAgentConfigMigrationOutcome {
     Proceed(Vec<ExternalAgentConfigMigrationItem>),
     Skip,
-    SkipForever,
-    Exit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,34 +33,26 @@ enum FocusArea {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ActionMenuOption {
     Proceed,
+    Customize,
     Skip,
-    SkipForever,
+    Back,
 }
 
 impl ActionMenuOption {
     fn label(self) -> &'static str {
         match self {
-            Self::Proceed => "Proceed with selected",
-            Self::Skip => "Skip for now",
-            Self::SkipForever => "Don't ask again",
+            Self::Proceed => "Import selected",
+            Self::Customize => "Customize selection",
+            Self::Skip => "Cancel",
+            Self::Back => "Review selection",
         }
     }
+}
 
-    fn previous(self) -> Option<Self> {
-        match self {
-            Self::Proceed => None,
-            Self::Skip => Some(Self::Proceed),
-            Self::SkipForever => Some(Self::Skip),
-        }
-    }
-
-    fn next(self) -> Option<Self> {
-        match self {
-            Self::Proceed => Some(Self::Skip),
-            Self::Skip => Some(Self::SkipForever),
-            Self::SkipForever => None,
-        }
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MigrationView {
+    Summary,
+    Customize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,6 +117,8 @@ pub(crate) async fn run_external_agent_config_migration_prompt(
 struct ExternalAgentConfigMigrationScreen {
     request_frame: FrameRequester,
     items: Vec<MigrationSelection>,
+    groups: Vec<ExternalAgentConfigMigrationGroupModel>,
+    view: MigrationView,
     selected_item_idx: Option<usize>,
     scroll_top: usize,
     focus: FocusArea,
@@ -143,44 +134,67 @@ impl ExternalAgentConfigMigrationScreen {
     }
 
     fn first_available_action(&self) -> ActionMenuOption {
-        if self.proceed_enabled() {
-            ActionMenuOption::Proceed
-        } else {
-            ActionMenuOption::Skip
+        match self.available_actions().first() {
+            Some(action) => *action,
+            None => ActionMenuOption::Back,
+        }
+    }
+
+    fn last_available_action(&self) -> ActionMenuOption {
+        match self.available_actions().last() {
+            Some(action) => *action,
+            None => ActionMenuOption::Back,
         }
     }
 
     fn previous_available_action(&self, action: ActionMenuOption) -> Option<ActionMenuOption> {
-        let mut candidate = action.previous();
-        while let Some(option) = candidate {
-            if option != ActionMenuOption::Proceed || self.proceed_enabled() {
-                return Some(option);
-            }
-            candidate = option.previous();
-        }
-        None
+        let actions = self.available_actions();
+        actions
+            .iter()
+            .position(|candidate| *candidate == action)
+            .and_then(|idx| idx.checked_sub(1))
+            .and_then(|idx| actions.get(idx))
+            .copied()
     }
 
     fn next_available_action(&self, action: ActionMenuOption) -> Option<ActionMenuOption> {
-        let mut candidate = action.next();
-        while let Some(option) = candidate {
-            if option != ActionMenuOption::Proceed || self.proceed_enabled() {
-                return Some(option);
+        let actions = self.available_actions();
+        actions
+            .iter()
+            .position(|candidate| *candidate == action)
+            .and_then(|idx| actions.get(idx + 1))
+            .copied()
+    }
+
+    fn available_actions(&self) -> Vec<ActionMenuOption> {
+        match self.view {
+            MigrationView::Summary => {
+                let mut actions = Vec::new();
+                if self.proceed_enabled() {
+                    actions.push(ActionMenuOption::Proceed);
+                }
+                actions.extend([ActionMenuOption::Customize, ActionMenuOption::Skip]);
+                actions
             }
-            candidate = option.next();
+            MigrationView::Customize => vec![ActionMenuOption::Back],
         }
-        None
     }
 
     fn normalize_highlighted_action(&mut self) {
-        if self.highlighted_action == ActionMenuOption::Proceed && !self.proceed_enabled() {
+        if !self.available_actions().contains(&self.highlighted_action) {
             self.highlighted_action = self.first_available_action();
         }
     }
 
     fn display_description(item: &ExternalAgentConfigMigrationItem) -> String {
+        // App-server descriptions use migration vocabulary. Normalize that prefix so the TUI
+        // consistently uses the user-facing import vocabulary.
+        let description = item
+            .description
+            .strip_prefix("Migrate ")
+            .map_or_else(|| item.description.clone(), |rest| format!("Import {rest}"));
         let Some(cwd) = item.cwd.as_deref() else {
-            return item.description.clone();
+            return description;
         };
 
         fn reformat_description(
@@ -199,33 +213,23 @@ impl ExternalAgentConfigMigrationScreen {
             ))
         }
 
-        if let Some(reformatted) =
-            reformat_description(&item.description, "Migrate ", " into ", cwd)
-        {
+        if let Some(reformatted) = reformat_description(&description, "Import ", " into ", cwd) {
             return reformatted;
         }
 
         if let Some(reformatted) =
-            reformat_description(&item.description, "Migrate skills from ", " to ", cwd)
+            reformat_description(&description, "Import skills from ", " to ", cwd)
         {
             return reformatted;
         }
 
-        if let Some(reformatted) = reformat_description(&item.description, "Migrate ", " to ", cwd)
-        {
+        if let Some(reformatted) = reformat_description(&description, "Import ", " to ", cwd) {
             return reformatted;
         }
 
-        if let Some(reformatted) = reformat_description(&item.description, "Import ", " to ", cwd) {
-            return reformatted;
-        }
-
-        if let Some(source) = item
-            .description
-            .strip_prefix("Migrate enabled plugins from ")
-        {
+        if let Some(source) = description.strip_prefix("Import enabled plugins from ") {
             let description = format!(
-                "Migrate enabled plugins from {}",
+                "Import enabled plugins from {}",
                 display_path_for(std::path::Path::new(source), cwd)
             );
             if let Some(details) = &item.details {
@@ -252,7 +256,7 @@ impl ExternalAgentConfigMigrationScreen {
             return description;
         }
 
-        item.description.clone()
+        description
     }
 
     fn new(
@@ -261,6 +265,7 @@ impl ExternalAgentConfigMigrationScreen {
         selected_items: &[ExternalAgentConfigMigrationItem],
         error: Option<String>,
     ) -> Self {
+        let groups = external_agent_config_migration_groups(items);
         let items = items
             .iter()
             .cloned()
@@ -269,18 +274,22 @@ impl ExternalAgentConfigMigrationScreen {
                 item,
             })
             .collect::<Vec<_>>();
-        let selected_item_idx = (!items.is_empty()).then_some(0);
-        Self {
+        let selected_item_idx = (!groups.is_empty()).then_some(0);
+        let mut screen = Self {
             request_frame,
             items,
+            groups,
+            view: MigrationView::Summary,
             selected_item_idx,
             scroll_top: 0,
-            focus: FocusArea::Items,
+            focus: FocusArea::Actions,
             highlighted_action: ActionMenuOption::Proceed,
             done: false,
             outcome: ExternalAgentConfigMigrationOutcome::Skip,
             error,
-        }
+        };
+        screen.normalize_highlighted_action();
+        screen
     }
 
     fn plugin_detail_lines(plugin_groups: &[PluginsMigration]) -> Vec<Line<'static>> {
@@ -333,25 +342,11 @@ impl ExternalAgentConfigMigrationScreen {
 
     fn proceed(&mut self) {
         let selected = self.selected_items();
-        if selected.is_empty() {
-            self.error = Some("Select at least one item or choose a skip option.".to_string());
-            self.request_frame.schedule_frame();
-            return;
-        }
-
         self.finish_with(ExternalAgentConfigMigrationOutcome::Proceed(selected));
     }
 
     fn skip(&mut self) {
         self.finish_with(ExternalAgentConfigMigrationOutcome::Skip);
-    }
-
-    fn skip_forever(&mut self) {
-        self.finish_with(ExternalAgentConfigMigrationOutcome::SkipForever);
-    }
-
-    fn exit(&mut self) {
-        self.finish_with(ExternalAgentConfigMigrationOutcome::Exit);
     }
 
     fn selected_items(&self) -> Vec<ExternalAgentConfigMigrationItem> {
@@ -366,6 +361,22 @@ impl ExternalAgentConfigMigrationScreen {
         self.items.iter().filter(|item| item.enabled).count()
     }
 
+    fn group_selection_marker(
+        &self,
+        group: &ExternalAgentConfigMigrationGroupModel,
+    ) -> &'static str {
+        let enabled_count = group
+            .item_indices
+            .iter()
+            .filter(|idx| self.items[**idx].enabled)
+            .count();
+        match enabled_count {
+            0 => " ",
+            count if count == group.item_indices.len() => "x",
+            _ => "-",
+        }
+    }
+
     fn set_all_enabled(&mut self, enabled: bool) {
         for item in &mut self.items {
             item.enabled = enabled;
@@ -376,7 +387,7 @@ impl ExternalAgentConfigMigrationScreen {
     }
 
     fn toggle_selected_item(&mut self) {
-        if self.focus != FocusArea::Items {
+        if self.view != MigrationView::Customize || self.focus != FocusArea::Items {
             return;
         }
         let Some(selected_idx) = self.selected_item_idx else {
@@ -385,26 +396,51 @@ impl ExternalAgentConfigMigrationScreen {
         let Some(item) = self.items.get_mut(selected_idx) else {
             return;
         };
-
         item.enabled = !item.enabled;
         self.error = None;
         self.normalize_highlighted_action();
         self.request_frame.schedule_frame();
     }
 
+    fn customize(&mut self) {
+        self.view = MigrationView::Customize;
+        self.selected_item_idx = (!self.items.is_empty()).then_some(0);
+        self.scroll_top = 0;
+        self.focus = FocusArea::Items;
+        self.highlighted_action = ActionMenuOption::Back;
+        self.request_frame.schedule_frame();
+    }
+
+    fn back_to_summary(&mut self) {
+        self.view = MigrationView::Summary;
+        self.selected_item_idx = (!self.groups.is_empty()).then_some(0);
+        self.scroll_top = 0;
+        self.focus = FocusArea::Actions;
+        self.highlighted_action = self.first_available_action();
+        self.request_frame.schedule_frame();
+    }
+
     fn move_up(&mut self) {
+        if self.view == MigrationView::Summary {
+            self.focus = FocusArea::Actions;
+            self.highlighted_action = self
+                .previous_available_action(self.highlighted_action)
+                .unwrap_or_else(|| self.last_available_action());
+            self.request_frame.schedule_frame();
+            return;
+        }
         match self.focus {
             FocusArea::Items => match self.selected_item_idx {
                 Some(0) => {
                     self.focus = FocusArea::Actions;
-                    self.highlighted_action = ActionMenuOption::SkipForever;
+                    self.highlighted_action = self.last_available_action();
                 }
                 Some(idx) => {
                     self.selected_item_idx = Some(idx.saturating_sub(1));
                 }
                 None => {
                     self.focus = FocusArea::Actions;
-                    self.highlighted_action = ActionMenuOption::SkipForever;
+                    self.highlighted_action = self.last_available_action();
                 }
             },
             FocusArea::Actions => {
@@ -423,6 +459,14 @@ impl ExternalAgentConfigMigrationScreen {
     }
 
     fn move_down(&mut self) {
+        if self.view == MigrationView::Summary {
+            self.focus = FocusArea::Actions;
+            self.highlighted_action = self
+                .next_available_action(self.highlighted_action)
+                .unwrap_or_else(|| self.first_available_action());
+            self.request_frame.schedule_frame();
+            return;
+        }
         match self.focus {
             FocusArea::Items => match self.selected_item_idx {
                 Some(idx) if idx + 1 < self.items.len() => {
@@ -453,8 +497,9 @@ impl ExternalAgentConfigMigrationScreen {
             FocusArea::Items => self.toggle_selected_item(),
             FocusArea::Actions => match self.highlighted_action {
                 ActionMenuOption::Proceed => self.proceed(),
+                ActionMenuOption::Customize => self.customize(),
                 ActionMenuOption::Skip => self.skip(),
-                ActionMenuOption::SkipForever => self.skip_forever(),
+                ActionMenuOption::Back => self.back_to_summary(),
             },
         }
     }
@@ -463,37 +508,45 @@ impl ExternalAgentConfigMigrationScreen {
         if key_event.kind == KeyEventKind::Release {
             return;
         }
-
         if is_ctrl_exit_combo(key_event) {
-            self.exit();
+            self.skip();
             return;
         }
 
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => self.move_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_down(),
-            KeyCode::Char('1') => {
-                self.focus = FocusArea::Actions;
-                self.highlighted_action = ActionMenuOption::Proceed;
-                self.proceed();
+            KeyCode::Char(number @ '1'..='9') => self.select_numbered_action(number),
+            KeyCode::Char('c') if self.view == MigrationView::Summary => self.customize(),
+            KeyCode::Char('b') if self.view == MigrationView::Customize => self.back_to_summary(),
+            KeyCode::Char(' ') if self.view == MigrationView::Customize => {
+                self.toggle_selected_item();
             }
-            KeyCode::Char('2') => {
-                self.focus = FocusArea::Actions;
-                self.highlighted_action = ActionMenuOption::Skip;
-                self.skip();
+            KeyCode::Char('a') if self.view == MigrationView::Customize => {
+                self.set_all_enabled(/*enabled*/ true);
             }
-            KeyCode::Char('3') => {
-                self.focus = FocusArea::Actions;
-                self.highlighted_action = ActionMenuOption::SkipForever;
-                self.skip_forever();
+            KeyCode::Char('n') if self.view == MigrationView::Customize => {
+                self.set_all_enabled(/*enabled*/ false);
             }
-            KeyCode::Char(' ') => self.toggle_selected_item(),
-            KeyCode::Char('a') => self.set_all_enabled(/*enabled*/ true),
-            KeyCode::Char('n') => self.set_all_enabled(/*enabled*/ false),
             KeyCode::Enter => self.confirm_selection(),
-            KeyCode::Esc => self.skip(),
+            KeyCode::Esc => match self.view {
+                MigrationView::Summary => self.skip(),
+                MigrationView::Customize => self.back_to_summary(),
+            },
             _ => {}
         }
+    }
+
+    fn select_numbered_action(&mut self, number: char) {
+        let Some(index) = number.to_digit(10).and_then(|number| number.checked_sub(1)) else {
+            return;
+        };
+        let Some(action) = self.available_actions().get(index as usize).copied() else {
+            return;
+        };
+        self.focus = FocusArea::Actions;
+        self.highlighted_action = action;
+        self.confirm_selection();
     }
 
     fn ensure_selected_item_visible(&mut self) {
@@ -526,12 +579,47 @@ impl ExternalAgentConfigMigrationScreen {
 
     fn section_title(cwd: Option<&std::path::Path>) -> Line<'static> {
         match cwd {
-            Some(cwd) => Line::from(vec!["Project: ".bold(), cwd.display().to_string().dim()]),
+            Some(cwd) => Line::from(vec![
+                "Current project: ".bold(),
+                cwd.display().to_string().dim(),
+            ]),
             None => Line::from("Home".bold()),
         }
     }
 
     fn build_render_lines(&self) -> Vec<RenderLineEntry> {
+        match self.view {
+            MigrationView::Summary => self.build_summary_render_lines(),
+            MigrationView::Customize => self.build_customize_render_lines(),
+        }
+    }
+
+    fn build_summary_render_lines(&self) -> Vec<RenderLineEntry> {
+        self.groups
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, group)| {
+                [
+                    RenderLineEntry {
+                        item_idx: Some(idx),
+                        kind: RenderLineKind::Item,
+                        line: Line::from(format!(
+                            "  [{}] {}",
+                            self.group_selection_marker(group),
+                            group.label
+                        )),
+                    },
+                    RenderLineEntry {
+                        item_idx: None,
+                        kind: RenderLineKind::ItemDetail,
+                        line: Line::from(format!("      {}", group.description)),
+                    },
+                ]
+            })
+            .collect()
+    }
+
+    fn build_customize_render_lines(&self) -> Vec<RenderLineEntry> {
         let mut lines = Vec::new();
         let mut current_scope: Option<Option<&std::path::Path>> = None;
         for (idx, item) in self.items.iter().enumerate() {
@@ -554,12 +642,28 @@ impl ExternalAgentConfigMigrationScreen {
             lines.push(RenderLineEntry {
                 item_idx: Some(idx),
                 kind: RenderLineKind::Item,
-                line: Line::from(format!(
-                    "  [{}] {}",
-                    if item.enabled { "x" } else { " " },
-                    Self::display_description(&item.item)
-                )),
+                line: Line::from(vec![
+                    "  ".into(),
+                    format!(
+                        "[{}] {}",
+                        if item.enabled { "x" } else { " " },
+                        external_agent_config_migration_item_label(&item.item)
+                    )
+                    .into(),
+                ]),
             });
+            lines.push(RenderLineEntry {
+                item_idx: None,
+                kind: RenderLineKind::ItemDetail,
+                line: Line::from(format!("      {}", Self::display_description(&item.item))),
+            });
+            if let Some(details) = external_agent_config_migration_item_detail(&item.item) {
+                lines.push(RenderLineEntry {
+                    item_idx: None,
+                    kind: RenderLineKind::ItemDetail,
+                    line: Line::from(format!("      {details}")),
+                });
+            }
             if let Some(details) = &item.item.details {
                 for line in Self::plugin_detail_lines(&details.plugins) {
                     lines.push(RenderLineEntry {
@@ -572,76 +676,25 @@ impl ExternalAgentConfigMigrationScreen {
         }
         lines
     }
-
-    fn render_items(&self, area: Rect, buf: &mut Buffer) {
-        if area.height == 0 || area.width == 0 {
-            return;
-        }
-        let rows = self.build_render_lines();
-        let visible_rows = area.height as usize;
-        let mut start_idx = self.scroll_top.min(rows.len().saturating_sub(1));
-        if let Some(selected_item_idx) = self.selected_item_idx {
-            let selected_render_idx = self.selected_render_line_index(selected_item_idx);
-            if selected_render_idx < start_idx {
-                start_idx = selected_render_idx;
-            } else if visible_rows > 0 {
-                let bottom = start_idx + visible_rows - 1;
-                if selected_render_idx > bottom {
-                    start_idx = selected_render_idx + 1 - visible_rows;
-                }
-            }
-        }
-
-        let mut y = area.y;
-        for entry in rows.iter().skip(start_idx).take(visible_rows) {
-            if y >= area.y + area.height {
-                break;
-            }
-
-            let selected =
-                self.focus == FocusArea::Items && self.selected_item_idx == entry.item_idx;
-            let mut line = entry.line.clone();
-            if selected {
-                line.spans.iter_mut().for_each(|span| {
-                    span.style = span.style.patch(accent_style());
-                });
-            } else if entry.kind != RenderLineKind::Item && !line.spans.is_empty() {
-                line.spans.iter_mut().for_each(|span| {
-                    span.style = span.style.dim();
-                });
-            }
-            let line = truncate_line_with_ellipsis_if_overflow(line, area.width as usize);
-            line.render(
-                Rect {
-                    x: area.x,
-                    y,
-                    width: area.width,
-                    height: 1,
-                },
-                buf,
-            );
-            y = y.saturating_add(1);
-        }
-    }
 }
 
 fn is_ctrl_exit_combo(key_event: KeyEvent) -> bool {
-    key_event.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))
+    matches!(key_event.code, KeyCode::Char('c' | 'd'))
+        && key_event.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ActionMenuOption;
     use super::ExternalAgentConfigMigrationOutcome;
     use super::ExternalAgentConfigMigrationScreen;
-    use super::FocusArea;
+    use super::MigrationView;
     use crate::custom_terminal::Terminal;
     use crate::test_backend::VT100Backend;
     use crate::tui::FrameRequester;
     use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
     use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
     use codex_app_server_protocol::PluginsMigration;
+    use codex_app_server_protocol::SessionMigration;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
@@ -704,6 +757,19 @@ mod tests {
                 details: None,
             },
             ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Sessions,
+                description: "Migrate recent chat sessions".to_string(),
+                cwd: None,
+                details: Some(codex_app_server_protocol::MigrationDetails {
+                    sessions: vec![SessionMigration {
+                        path: PathBuf::from("/Users/alex/.claude/projects/project/session.jsonl"),
+                        cwd: project_root.clone(),
+                        title: Some("Investigate migration UX".to_string()),
+                    }],
+                    ..Default::default()
+                }),
+            },
+            ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Plugins,
                 description: format!(
                     "Migrate enabled plugins from {}",
@@ -738,7 +804,13 @@ mod tests {
             frame.render_widget_ref(screen, frame.area());
         }
         terminal.flush().expect("flush");
-        terminal.backend().to_string()
+        terminal
+            .backend()
+            .to_string()
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
@@ -751,11 +823,54 @@ mod tests {
             /*error*/ None,
         );
 
-        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 21);
+        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 24);
         #[cfg(windows)]
         assert_snapshot!("external_agent_config_migration_prompt_windows", rendered);
         #[cfg(not(windows))]
         assert_snapshot!("external_agent_config_migration_prompt", rendered);
+    }
+
+    #[test]
+    fn customize_snapshot() {
+        let items = sample_items();
+        let mut screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &items,
+            /*error*/ None,
+        );
+        screen.customize();
+
+        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 30);
+        #[cfg(windows)]
+        assert_snapshot!(
+            "external_agent_config_migration_customize_windows",
+            rendered
+        );
+        #[cfg(not(windows))]
+        assert_snapshot!("external_agent_config_migration_customize", rendered);
+    }
+
+    #[test]
+    fn customize_action_snapshot() {
+        let items = sample_items();
+        let mut screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &items,
+            /*error*/ None,
+        );
+        screen.customize();
+        screen.move_up();
+
+        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 30);
+        #[cfg(windows)]
+        assert_snapshot!(
+            "external_agent_config_migration_customize_action_windows",
+            rendered
+        );
+        #[cfg(not(windows))]
+        assert_snapshot!("external_agent_config_migration_customize_action", rendered);
     }
 
     #[test]
@@ -768,9 +883,6 @@ mod tests {
             /*error*/ None,
         );
 
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert!(screen.is_done());
@@ -790,16 +902,19 @@ mod tests {
             /*error*/ None,
         );
 
+        screen.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
 
         assert!(screen.is_done());
         assert_eq!(
             screen.outcome(),
-            ExternalAgentConfigMigrationOutcome::Proceed(vec![items[1].clone(), items[2].clone(),])
+            ExternalAgentConfigMigrationOutcome::Proceed(vec![
+                items[1].clone(),
+                items[2].clone(),
+                items[3].clone(),
+            ])
         );
     }
 
@@ -820,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn skip_forever_returns_skip_forever_outcome() {
+    fn numeric_shortcuts_follow_visible_actions_when_proceed_is_disabled() {
         let items = sample_items();
         let mut screen = ExternalAgentConfigMigrationScreen::new(
             FrameRequester::test_dummy(),
@@ -829,58 +944,46 @@ mod tests {
             /*error*/ None,
         );
 
-        screen.move_down();
-        screen.move_down();
-        screen.move_down();
-        screen.move_down();
-        screen.move_down();
-        screen.confirm_selection();
-
-        assert_eq!(
-            screen.outcome(),
-            ExternalAgentConfigMigrationOutcome::SkipForever
-        );
-    }
-
-    #[test]
-    fn proceed_requires_at_least_one_selected_item() {
-        let items = sample_items();
-        let mut screen = ExternalAgentConfigMigrationScreen::new(
-            FrameRequester::test_dummy(),
-            &items,
-            &items,
-            /*error*/ None,
-        );
-
+        screen.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
 
-        assert!(!screen.is_done());
-        assert_eq!(screen.highlighted_action, ActionMenuOption::Proceed);
-        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 20);
-        assert!(
-            rendered.contains("Select at least one item or choose a skip option."),
-            "expected inline validation error, got:\n{rendered}"
-        );
+        assert_eq!(screen.view, MigrationView::Customize);
     }
 
     #[test]
-    fn proceed_action_is_skipped_when_no_items_are_selected() {
+    fn empty_selection_enter_opens_customize_instead_of_proceeding() {
         let items = sample_items();
         let mut screen = ExternalAgentConfigMigrationScreen::new(
             FrameRequester::test_dummy(),
             &items,
-            &items,
+            &[],
             /*error*/ None,
         );
 
-        screen.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert_eq!(screen.focus, FocusArea::Actions);
-        assert_eq!(screen.highlighted_action, ActionMenuOption::Skip);
+        assert!(!screen.is_done());
+        assert_eq!(screen.view, MigrationView::Customize);
+    }
+
+    #[test]
+    fn control_exit_shortcuts_cancel_prompt() {
+        let items = sample_items();
+        for key_code in [KeyCode::Char('c'), KeyCode::Char('d')] {
+            let mut screen = ExternalAgentConfigMigrationScreen::new(
+                FrameRequester::test_dummy(),
+                &items,
+                &items,
+                /*error*/ None,
+            );
+
+            screen.handle_key(KeyEvent::new(key_code, KeyModifiers::CONTROL));
+
+            assert!(screen.is_done());
+            assert_eq!(screen.outcome(), ExternalAgentConfigMigrationOutcome::Skip);
+        }
     }
 
     #[test]
@@ -899,28 +1002,42 @@ mod tests {
             ExternalAgentConfigMigrationOutcome::Proceed(items.clone())
         );
 
+        let mut customize_screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &items,
+            /*error*/ None,
+        );
+        customize_screen.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+        assert_eq!(customize_screen.view, MigrationView::Customize);
+        customize_screen.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert_eq!(customize_screen.view, MigrationView::Summary);
+
         let mut skip_screen = ExternalAgentConfigMigrationScreen::new(
             FrameRequester::test_dummy(),
             &items,
             &items,
             /*error*/ None,
         );
-        skip_screen.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+        skip_screen.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
         assert_eq!(
             skip_screen.outcome(),
             ExternalAgentConfigMigrationOutcome::Skip
         );
+    }
 
-        let mut skip_forever_screen = ExternalAgentConfigMigrationScreen::new(
+    #[test]
+    fn summary_does_not_toggle_selection() {
+        let items = sample_items();
+        let mut screen = ExternalAgentConfigMigrationScreen::new(
             FrameRequester::test_dummy(),
             &items,
             &items,
             /*error*/ None,
         );
-        skip_forever_screen.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
-        assert_eq!(
-            skip_forever_screen.outcome(),
-            ExternalAgentConfigMigrationOutcome::SkipForever
-        );
+
+        screen.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+        assert_eq!(screen.selected_items(), items);
     }
 }
