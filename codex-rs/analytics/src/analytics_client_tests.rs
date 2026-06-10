@@ -3757,6 +3757,32 @@ async fn turn_event_counts_completed_tool_items() {
     )
     .await;
 
+    let mcp_tool_call_item = |status, duration_ms| ThreadItem::McpToolCall {
+        id: "mcp-1".to_string(),
+        server: "server".to_string(),
+        tool: "search".to_string(),
+        status,
+        arguments: json!({}),
+        mcp_app_resource_uri: None,
+        plugin_id: Some("sample@test".to_string()),
+        result: None,
+        error: None,
+        duration_ms,
+    };
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
+                ItemStartedNotification {
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    started_at_ms: 998,
+                    item: mcp_tool_call_item(McpToolCallStatus::InProgress, None),
+                },
+            ))),
+            &mut out,
+        )
+        .await;
+
     let completed_tool_items = vec![
         sample_command_execution_item(CommandExecutionStatus::Completed, Some(0), Some(1)),
         ThreadItem::FileChange {
@@ -3764,18 +3790,7 @@ async fn turn_event_counts_completed_tool_items() {
             changes: Vec::new(),
             status: PatchApplyStatus::Completed,
         },
-        ThreadItem::McpToolCall {
-            id: "mcp-1".to_string(),
-            server: "server".to_string(),
-            tool: "search".to_string(),
-            status: McpToolCallStatus::Completed,
-            arguments: json!({}),
-            mcp_app_resource_uri: None,
-            plugin_id: None,
-            result: None,
-            error: None,
-            duration_ms: Some(2),
-        },
+        mcp_tool_call_item(McpToolCallStatus::Completed, Some(2)),
         ThreadItem::DynamicToolCall {
             id: "dynamic-1".to_string(),
             namespace: None,
@@ -3832,6 +3847,13 @@ async fn turn_event_counts_completed_tool_items() {
             )
             .await;
     }
+
+    let mcp_tool_call_event = out
+        .iter()
+        .find(|event| matches!(event, TrackEventRequest::McpToolCall(_)))
+        .expect("MCP tool call event should be emitted");
+    let payload = serde_json::to_value(mcp_tool_call_event).expect("serialize MCP tool call event");
+    assert_eq!(payload["event_params"]["plugin_id"], json!("sample@test"));
 
     reducer
         .ingest(
