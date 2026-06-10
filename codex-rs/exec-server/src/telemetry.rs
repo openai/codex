@@ -10,6 +10,13 @@ const CONNECTIONS_ACTIVE_METRIC: &str = "exec_server_connections_active";
 const CONNECTIONS_ACTIVE_DESCRIPTION: &str = "Number of active exec-server connections.";
 const CONNECTIONS_TOTAL_METRIC: &str = "exec_server_connections_total";
 const CONNECTIONS_TOTAL_DESCRIPTION: &str = "Total number of accepted exec-server connections.";
+const REMOTE_REGISTRATION_TOTAL_METRIC: &str = "exec_server_remote_registration_total";
+const REMOTE_REGISTRATION_TOTAL_DESCRIPTION: &str =
+    "Total number of remote exec-server registration attempts.";
+const REMOTE_REGISTRATION_DURATION_METRIC: &str =
+    "exec_server_remote_registration_duration_seconds";
+const REMOTE_REGISTRATION_DURATION_DESCRIPTION: &str =
+    "Duration of remote exec-server registration attempts in seconds.";
 const REQUESTS_TOTAL_METRIC: &str = "exec_server_requests_total";
 const REQUESTS_TOTAL_DESCRIPTION: &str = "Total number of exec-server requests.";
 const REQUEST_DURATION_METRIC: &str = "exec_server_request_duration_seconds";
@@ -118,6 +125,23 @@ impl ExecServerTelemetry {
             inner.duration(
                 REQUEST_DURATION_METRIC,
                 REQUEST_DURATION_DESCRIPTION,
+                duration,
+                &tags,
+            );
+        });
+    }
+
+    pub(crate) fn remote_registration_completed(&self, result: &'static str, duration: Duration) {
+        self.with_inner(|inner| {
+            let tags = [("result", result)];
+            inner.counter(
+                REMOTE_REGISTRATION_TOTAL_METRIC,
+                REMOTE_REGISTRATION_TOTAL_DESCRIPTION,
+                &tags,
+            );
+            inner.duration(
+                REMOTE_REGISTRATION_DURATION_METRIC,
+                REMOTE_REGISTRATION_DURATION_DESCRIPTION,
                 duration,
                 &tags,
             );

@@ -1,10 +1,12 @@
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_api::SharedAuthProvider;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
+use tracing::Instrument;
 use tracing::warn;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
@@ -13,6 +15,7 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecServerTelemetry;
 use crate::relay::run_multiplexed_environment;
+use crate::remote_observability;
 use crate::server::ConnectionProcessor;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
@@ -140,14 +143,33 @@ pub async fn run_remote_environment(
     ensure_rustls_crypto_provider();
     let client =
         EnvironmentRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
-    let processor = ConnectionProcessor::new(runtime_paths, config.telemetry);
+    let processor = ConnectionProcessor::new(runtime_paths, config.telemetry.clone());
     let mut backoff = Duration::from_secs(1);
 
     loop {
-        let response = client.register_environment(&config.environment_id).await?;
-        eprintln!(
-            "codex exec-server remote environment registered with environment_id {}",
-            response.environment_id
+        let registration_started_at = Instant::now();
+        let registration_span = remote_observability::registration_span();
+        let response = match client
+            .register_environment(&config.environment_id)
+            .instrument(registration_span.clone())
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                remote_observability::registration_failed(
+                    &config.telemetry,
+                    registration_span,
+                    registration_started_at,
+                    &err,
+                );
+                return Err(err);
+            }
+        };
+        remote_observability::registration_succeeded(
+            &config.telemetry,
+            registration_span,
+            registration_started_at,
+            &response.environment_id,
         );
 
         match connect_async(response.url.as_str()).await {
@@ -256,7 +278,12 @@ mod tests {
     use codex_api::AuthProvider;
     use http::HeaderMap;
     use http::HeaderValue;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::InMemorySpanExporter;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
+    use tracing_subscriber::filter::filter_fn;
+    use tracing_subscriber::prelude::*;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -265,6 +292,7 @@ mod tests {
     use wiremock::matchers::path;
 
     use super::*;
+    use crate::remote_observability;
 
     #[derive(Debug)]
     struct StaticRegistryAuthProvider;
@@ -370,5 +398,52 @@ mod tests {
 
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("workspace-123"));
+    }
+
+    #[test]
+    fn remote_registration_event_finishes_span_without_exporting_environment_id() {
+        let span_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(span_exporter.clone())
+            .build();
+        let tracer = tracer_provider.tracer("exec-server-test");
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            remote_observability::registration_succeeded(
+                &ExecServerTelemetry::default(),
+                remote_observability::registration_span(),
+                Instant::now(),
+                "env-raw-local-only",
+            );
+        });
+
+        tracer_provider.force_flush().expect("flush traces");
+        let spans = span_exporter.get_finished_spans().expect("span export");
+        assert!(
+            spans.iter().any(|span| {
+                span.name.as_ref() == "codex.exec_server.remote_environment_registered"
+            }),
+            "expected finished remote OTEL lifecycle span, got {spans:?}"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.name.as_ref() == "codex.exec_server.remote.register"),
+            "expected finished remote registration span, got {spans:?}"
+        );
+        assert!(
+            spans.iter().all(|span| {
+                span.attributes
+                    .iter()
+                    .all(|attribute| attribute.value.to_string() != "env-raw-local-only")
+            }),
+            "raw environment id leaked into exported spans: {spans:?}"
+        );
     }
 }

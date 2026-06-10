@@ -18,6 +18,7 @@ mod relay;
 mod relay_proto;
 mod remote;
 mod remote_file_system;
+mod remote_observability;
 mod remote_process;
 mod rpc;
 mod runtime_paths;
