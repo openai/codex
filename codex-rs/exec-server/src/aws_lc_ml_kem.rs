@@ -36,8 +36,7 @@ impl Kem for AwsLcMlKem768 {
     type Ss = SensitiveByteArray<[u8; SHARED_SECRET_LEN]>;
 
     fn genkey_rng<R: Rng>(_rng: &mut R) -> KemResult<KeyPair<Self::PubKey, Self::SecretKey>> {
-        // AWS-LC owns ML-KEM key-generation randomness internally, so
-        // Clatter's injectable RNG cannot be plumbed through this provider.
+        // AWS-LC generates ML-KEM keys with its own RNG. Clatter's RNG is unused.
         let decapsulation_key =
             DecapsulationKey::generate(&ML_KEM_768).map_err(|_| KemError::KeyGeneration)?;
         let encapsulation_key = decapsulation_key
@@ -70,9 +69,7 @@ impl Kem for AwsLcMlKem768 {
     }
 
     fn decapsulate(ct: &[u8], sk: &[u8]) -> KemResult<Self::Ss> {
-        // Reject the length before constructing AWS-LC's ciphertext wrapper.
-        // This keeps malformed wire input classified as an input error rather
-        // than relying on provider-specific decapsulation behavior.
+        // Check the wire length before constructing AWS-LC's ciphertext wrapper.
         if ct.len() != CIPHERTEXT_LEN {
             return Err(KemError::Input);
         }

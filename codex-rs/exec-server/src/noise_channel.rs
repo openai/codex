@@ -1,5 +1,4 @@
-//! Narrow, misuse-resistant wrapper around the Clatter primitives used by the
-//! remote exec-server relay.
+//! Noise channel used by the remote exec-server relay.
 //!
 //! The harness initiates hybrid IK and pins the exec-server static key returned
 //! by the registry. The first handshake message lets the exec-server authenticate
@@ -28,11 +27,9 @@ pub const NOISE_CHANNEL_SUITE: &str = "Noise_hybridIK_X25519+MLKEM768_AESGCM_SHA
 type DhKeyPair = KeyPair<<X25519 as Dh>::PubKey, <X25519 as Dh>::PrivateKey>;
 type KemKeyPair = KeyPair<<AwsLcMlKem768 as Kem>::PubKey, <AwsLcMlKem768 as Kem>::SecretKey>;
 
-/// Public key material for the exec-server Noise-over-relay suite.
-///
-/// The suite field is part of the serialized contract. A key from a different
-/// suite must not be interpreted as compatible merely because one component has
-/// a familiar byte length.
+/// Public key material for the exec-server Noise suite.
+/// The suite tag prevents keys for another protocol from being accepted just
+/// because their components have the expected lengths.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NoiseChannelPublicKey {
@@ -52,7 +49,6 @@ impl std::fmt::Debug for NoiseChannelPublicKey {
 }
 
 impl NoiseChannelPublicKey {
-    /// Serialize both public components as one suite-tagged value.
     fn from_keypairs(dh: &DhKeyPair, kem: &KemKeyPair) -> Self {
         Self {
             suite: NOISE_CHANNEL_SUITE.to_string(),
@@ -62,10 +58,7 @@ impl NoiseChannelPublicKey {
     }
 }
 
-/// Endpoint-local static identity for the exec-server Noise-over-relay suite.
-///
-/// Private components never cross the process boundary. Cloning is used only to
-/// construct Clatter handshake state for reconnects within the same process.
+/// Static Noise identity kept for the lifetime of an executor or harness process.
 #[derive(Clone)]
 pub struct NoiseChannelIdentity {
     dh: DhKeyPair,
@@ -81,7 +74,6 @@ impl std::fmt::Debug for NoiseChannelIdentity {
 }
 
 impl NoiseChannelIdentity {
-    /// Generate independent classical and post-quantum static keypairs.
     pub fn generate() -> Result<Self, NoiseChannelError> {
         let dh = X25519::genkey()
             .map_err(|error| NoiseChannelError::KeyGeneration(error.to_string()))?;
@@ -90,7 +82,6 @@ impl NoiseChannelIdentity {
         Ok(Self { dh, kem })
     }
 
-    /// Return the distributable public half of this endpoint identity.
     pub fn public_key(&self) -> NoiseChannelPublicKey {
         NoiseChannelPublicKey::from_keypairs(&self.dh, &self.kem)
     }
