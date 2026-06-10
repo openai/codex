@@ -175,6 +175,7 @@ struct PreparedProcessHandles {
     pause_state: Option<watch::Receiver<bool>>,
     session: Option<Arc<crate::session::session::Session>>,
     network_approval: Option<DeferredNetworkApproval>,
+    call_id: String,
     hook_command: String,
     process_id: i32,
     tty: bool,
@@ -609,6 +610,7 @@ impl UnifiedExecProcessManager {
             pause_state,
             session,
             network_approval,
+            call_id,
             hook_command,
             process_id,
             tty,
@@ -716,9 +718,13 @@ impl UnifiedExecProcessManager {
                 (None, exit_code, call_id)
             }
             ProcessStatus::Unknown => {
-                return Err(UnifiedExecError::UnknownProcessId {
-                    process_id: request.process_id,
-                });
+                if process.has_exited() {
+                    (None, process.exit_code(), call_id)
+                } else {
+                    return Err(UnifiedExecError::UnknownProcessId {
+                        process_id: request.process_id,
+                    });
+                }
             }
         };
 
@@ -798,6 +804,7 @@ impl UnifiedExecProcessManager {
             pause_state,
             session,
             network_approval: entry.network_approval.clone(),
+            call_id: entry.call_id.clone(),
             hook_command: entry.hook_command.clone(),
             process_id: entry.process_id,
             tty: entry.tty,

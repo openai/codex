@@ -67,7 +67,8 @@ mod background_terminal_pagination_tests {
         ];
 
         let (data, next_cursor) =
-            paginate_background_terminals(&terminals, None, Some(2)).expect("valid page");
+            paginate_background_terminals(&terminals, /*cursor*/ None, Some(2))
+                .expect("valid page");
 
         assert_eq!(data, vec![terminal("1"), terminal("2")]);
         assert_eq!(next_cursor, Some("2".to_string()));

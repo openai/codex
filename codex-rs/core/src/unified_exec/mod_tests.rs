@@ -210,7 +210,7 @@ impl SpawnLifecycle for TestSpawnLifecycle {
 
 struct BlockingTerminateExecProcess {
     process_id: ProcessId,
-    terminate_started: Arc<Notify>,
+    terminate_started: watch::Sender<bool>,
     allow_terminate: Arc<Notify>,
     wake_tx: watch::Sender<u64>,
 }
@@ -252,10 +252,32 @@ impl ExecProcess for BlockingTerminateExecProcess {
     }
 
     async fn terminate(&self) -> Result<(), ExecServerError> {
-        self.terminate_started.notify_waiters();
+        let _ = self.terminate_started.send(true);
         self.allow_terminate.notified().await;
         Ok(())
     }
+}
+
+async fn blocking_terminate_unified_process(
+    process_id: i32,
+    terminate_started: watch::Sender<bool>,
+    allow_terminate: Arc<Notify>,
+) -> anyhow::Result<Arc<UnifiedExecProcess>> {
+    let (wake_tx, _wake_rx) = watch::channel(0);
+    Ok(Arc::new(
+        UnifiedExecProcess::from_exec_server_started(
+            StartedExecProcess {
+                process: Arc::new(BlockingTerminateExecProcess {
+                    process_id: process_id.to_string().into(),
+                    terminate_started,
+                    allow_terminate,
+                    wake_tx,
+                }),
+            },
+            SandboxType::None,
+        )
+        .await?,
+    ))
 }
 
 async fn write_stdin(
@@ -656,23 +678,14 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
     let (session, turn) = test_session_and_turn().await;
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
-    let terminate_started = Arc::new(Notify::new());
+    let (terminate_started_tx, mut terminate_started_rx) = watch::channel(false);
     let allow_terminate = Arc::new(Notify::new());
-    let (wake_tx, _wake_rx) = watch::channel(0);
-    let process = Arc::new(
-        UnifiedExecProcess::from_exec_server_started(
-            StartedExecProcess {
-                process: Arc::new(BlockingTerminateExecProcess {
-                    process_id: process_id.to_string().into(),
-                    terminate_started: Arc::clone(&terminate_started),
-                    allow_terminate: Arc::clone(&allow_terminate),
-                    wake_tx,
-                }),
-            },
-            SandboxType::None,
-        )
-        .await?,
-    );
+    let process = blocking_terminate_unified_process(
+        process_id,
+        terminate_started_tx,
+        Arc::clone(&allow_terminate),
+    )
+    .await?;
     #[allow(deprecated)]
     let cwd = turn.cwd.clone();
     manager.process_store.lock().await.processes.insert(
@@ -695,9 +708,13 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
         let session = Arc::clone(&session);
         async move { session.terminate_background_terminal(process_id).await }
     });
-    tokio::time::timeout(Duration::from_secs(2), terminate_started.notified())
-        .await
-        .expect("terminate should start");
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        terminate_started_rx.wait_for(|started| *started),
+    )
+    .await
+    .expect("terminate should start")
+    .expect("terminate signal sender should stay open");
 
     {
         let mut store = manager.process_store.lock().await;
@@ -722,6 +739,76 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             .processes
             .contains_key(&process_id)
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Result<()> {
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let process_id = manager.allocate_process_id().await;
+    let (terminate_started_tx, _terminate_started_rx) = watch::channel(false);
+    let allow_terminate = Arc::new(Notify::new());
+    let process = blocking_terminate_unified_process(
+        process_id,
+        terminate_started_tx,
+        Arc::clone(&allow_terminate),
+    )
+    .await?;
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
+    let last_used = Instant::now() - Duration::from_secs(1);
+    manager.process_store.lock().await.processes.insert(
+        process_id,
+        ProcessEntry {
+            process: Arc::clone(&process),
+            call_id: "call".to_string(),
+            process_id,
+            cwd,
+            initial_exec_command_returned: true,
+            hook_command: "sleep 60".to_string(),
+            tty: true,
+            network_approval: None,
+            session: Arc::downgrade(&session),
+            last_used,
+        },
+    );
+
+    let poll_task = tokio::spawn({
+        let session = Arc::clone(&session);
+        async move {
+            write_stdin(&session, process_id, "", /*yield_time_ms*/ 60_000).await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let poll_started = manager
+                .process_store
+                .lock()
+                .await
+                .processes
+                .get(&process_id)
+                .is_some_and(|entry| entry.last_used != last_used);
+            if poll_started {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("poll should clone process handles");
+
+    manager.release_process_id(process_id).await;
+    allow_terminate.notify_one();
+    process.terminate_confirmed().await?;
+
+    let output = tokio::time::timeout(Duration::from_secs(2), poll_task)
+        .await
+        .expect("poll should finish")
+        .expect("poll task should not panic")?;
+    assert_eq!(output.process_id, None);
+    assert!(manager.process_store.lock().await.processes.is_empty());
 
     Ok(())
 }
