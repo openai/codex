@@ -138,20 +138,22 @@ impl App {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         let plugin_sharing_enabled = self.config.features.enabled(Feature::PluginSharing);
+        let remote_plugin_enabled = self.config.features.enabled(Feature::RemotePlugin);
         tokio::spawn(async move {
             let result = fetch_plugins_list(request_handle.clone(), cwd.clone())
                 .await
                 .map_err(|err| err.to_string());
-            let should_fetch_remote_sections = result.is_ok();
+            let should_fetch_additional_remote_sections = result.is_ok();
             app_event_tx.send(AppEvent::PluginsLoaded {
                 cwd: cwd.clone(),
                 result,
             });
-            if should_fetch_remote_sections {
-                let (marketplaces, section_errors) = fetch_plugin_remote_sections(
+            if should_fetch_additional_remote_sections {
+                let (marketplaces, section_errors) = fetch_additional_plugin_remote_sections(
                     request_handle,
                     cwd.clone(),
                     plugin_sharing_enabled,
+                    remote_plugin_enabled,
                 )
                 .await;
                 app_event_tx.send(AppEvent::PluginRemoteSectionsLoaded {
@@ -740,25 +742,27 @@ pub(super) async fn fetch_plugins_list(
     Ok(response)
 }
 
-pub(super) async fn fetch_plugin_remote_sections(
+pub(super) async fn fetch_additional_plugin_remote_sections(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
     plugin_sharing_enabled: bool,
+    remote_plugin_enabled: bool,
 ) -> (Vec<PluginMarketplaceEntry>, Vec<PluginRemoteSectionError>) {
     let mut marketplaces = Vec::new();
     let mut section_errors = Vec::new();
-    let mut sections = vec![
-        (
+    let mut sections = Vec::new();
+    if !remote_plugin_enabled {
+        sections.push((
             "vertical",
             "OpenAI Curated",
             vec![PluginListMarketplaceKind::Vertical],
-        ),
-        (
-            "workspace",
-            "Workspace",
-            vec![PluginListMarketplaceKind::WorkspaceDirectory],
-        ),
-    ];
+        ));
+    }
+    sections.push((
+        "workspace",
+        "Workspace",
+        vec![PluginListMarketplaceKind::WorkspaceDirectory],
+    ));
     if plugin_sharing_enabled {
         sections.push((
             "shared-with-me",
