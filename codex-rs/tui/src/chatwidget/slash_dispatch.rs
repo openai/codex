@@ -193,6 +193,34 @@ impl ChatWidget {
                 });
                 self.request_redraw();
             }
+            SlashCommand::Delete => {
+                self.bottom_pane.show_selection_view(SelectionViewParams {
+                    title: Some("Delete this session?".to_string()),
+                    subtitle: Some(
+                        "Cannot be undone. Spawned sessions will also be deleted.".to_string(),
+                    ),
+                    footer_hint: Some(standard_popup_hint_line()),
+                    items: vec![
+                        SelectionItem {
+                            name: "No, keep this session".to_string(),
+                            description: Some("Return to the current session".to_string()),
+                            dismiss_on_select: true,
+                            ..Default::default()
+                        },
+                        SelectionItem {
+                            name: "Yes, delete and exit".to_string(),
+                            description: Some("Permanently delete this session now".to_string()),
+                            actions: vec![Box::new(|tx| {
+                                tx.send(AppEvent::DeleteCurrentThread);
+                            })],
+                            dismiss_on_select: true,
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                });
+                self.request_redraw();
+            }
             SlashCommand::Clear => {
                 self.app_event_tx.send(AppEvent::ClearUi);
             }
@@ -986,6 +1014,7 @@ impl ChatWidget {
             SlashCommand::Feedback
             | SlashCommand::New
             | SlashCommand::Archive
+            | SlashCommand::Delete
             | SlashCommand::Clear
             | SlashCommand::Resume
             | SlashCommand::Fork

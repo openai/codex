@@ -1,8 +1,10 @@
-//! Shared implementation for `codex archive` and `codex unarchive`.
+//! Shared implementation for `codex archive`, `codex delete`, and `codex unarchive`.
 //!
 //! The CLI commands are thin app-server clients: resolve a user-provided UUID or exact session
-//! name, then call the existing `thread/archive` or `thread/unarchive` RPC.
+//! name, then call the corresponding app-server RPC.
 
+use std::io::IsTerminal;
+use std::io::Write;
 use std::sync::Arc;
 
 use crate::Cli;
@@ -34,8 +36,15 @@ use color_eyre::eyre::eyre;
 use super::RemoteAppServerEndpoint;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteConfirmation {
+    Prompt,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionArchiveAction {
     Archive,
+    Delete(DeleteConfirmation),
     Unarchive,
 }
 
@@ -52,6 +61,7 @@ fn success_message(
 ) -> String {
     let action = match action {
         SessionArchiveAction::Archive => "Archived",
+        SessionArchiveAction::Delete(_) => "Deleted",
         SessionArchiveAction::Unarchive => "Unarchived",
     };
     match session_name {
@@ -89,6 +99,19 @@ async fn run_session_archive_action_with_app_server(
                 resolved.session_name.as_deref(),
             ))
         }
+        SessionArchiveAction::Delete(confirmation) => {
+            if matches!(confirmation, DeleteConfirmation::Prompt)
+                && !confirm_session_delete(&resolved)?
+            {
+                return Ok("Delete cancelled.".to_string());
+            }
+            app_server.thread_delete(resolved.session_id).await?;
+            Ok(success_message(
+                action,
+                resolved.session_id,
+                resolved.session_name.as_deref(),
+            ))
+        }
         SessionArchiveAction::Unarchive => {
             let thread = app_server.thread_unarchive(resolved.session_id).await?;
             let session_name = thread.name.or(resolved.session_name);
@@ -115,20 +138,33 @@ async fn resolve_session_target(
 
     let search_scope = match action {
         SessionArchiveAction::Archive => "active",
+        SessionArchiveAction::Delete(_) => "active or archived",
         SessionArchiveAction::Unarchive => "archived",
     };
-    let resolved = lookup_session_by_exact_name(app_server, action, target)
-        .await?
-        .map(session_target_from_app_server_thread)
-        .transpose()?;
+    let resolved = match action {
+        SessionArchiveAction::Archive => {
+            lookup_session_by_exact_name(app_server, target, false).await?
+        }
+        SessionArchiveAction::Delete(_) => {
+            match lookup_session_by_exact_name(app_server, target, false).await? {
+                Some(thread) => Some(thread),
+                None => lookup_session_by_exact_name(app_server, target, true).await?,
+            }
+        }
+        SessionArchiveAction::Unarchive => {
+            lookup_session_by_exact_name(app_server, target, true).await?
+        }
+    }
+    .map(session_target_from_app_server_thread)
+    .transpose()?;
 
     resolved.with_context(|| format!("No {search_scope} session found matching '{target}'."))
 }
 
 async fn lookup_session_by_exact_name(
     app_server: &mut AppServerSession,
-    action: SessionArchiveAction,
     name: &str,
+    archived: bool,
 ) -> Result<Option<AppServerThread>> {
     let mut cursor = None;
     loop {
@@ -142,7 +178,7 @@ async fn lookup_session_by_exact_name(
                 source_kinds: Some(super::resume_source_kinds(
                     /*include_non_interactive*/ false,
                 )),
-                archived: Some(matches!(action, SessionArchiveAction::Unarchive)),
+                archived: Some(archived),
                 cwd: None,
                 use_state_db_only: false,
                 search_term: Some(name.to_string()),
@@ -171,6 +207,35 @@ fn session_target_from_app_server_thread(thread: AppServerThread) -> Result<Reso
         session_id,
         session_name: thread.name,
     })
+}
+
+fn confirm_session_delete(target: &ResolvedSessionTarget) -> Result<bool> {
+    if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+        return Err(eyre!(
+            "cannot confirm session deletion without an interactive terminal; rerun with --force and a session UUID"
+        ));
+    }
+
+    let mut stderr = std::io::stderr().lock();
+    match target.session_name.as_deref() {
+        Some(name) => writeln!(
+            stderr,
+            "Permanently delete session '{name}' ({})?",
+            target.session_id
+        ),
+        None => writeln!(stderr, "Permanently delete session {}?", target.session_id),
+    }?;
+    writeln!(
+        stderr,
+        "This cannot be undone. Spawned sessions will also be deleted."
+    )?;
+    write!(stderr, "Continue? [y/N]: ")?;
+    stderr.flush()?;
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let answer = input.trim();
+    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 async fn start_app_server_for_archive_command(

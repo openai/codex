@@ -32,6 +32,7 @@ pub enum SlashCommand {
     Rename,
     New,
     Archive,
+    Delete,
     Resume,
     Fork,
     App,
@@ -90,6 +91,7 @@ impl SlashCommand {
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Archive => "archive this session and exit",
+            SlashCommand::Delete => "permanently delete this session and exit",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             SlashCommand::App => "continue this session in Codex Desktop",
@@ -189,6 +191,7 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Archive
+            | SlashCommand::Delete
             | SlashCommand::Resume
             | SlashCommand::Fork
             | SlashCommand::Init
