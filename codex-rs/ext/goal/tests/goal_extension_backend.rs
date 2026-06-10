@@ -9,6 +9,7 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::NoopTurnItemEmitter;
+use codex_extension_api::RequestUserInputSuppression;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
@@ -716,6 +717,83 @@ async fn usage_limit_plan_turn_does_not_stop_goal() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn request_user_input_is_suppressed_for_active_default_goal_turn() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    runtime
+        .thread_goals()
+        .replace_thread_goal(
+            thread_id,
+            "ship goal extension backend",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ None,
+        )
+        .await?;
+    let harness = GoalExtensionHarness::new(runtime, thread_id).await?;
+
+    let default_turn_store = harness
+        .start_turn_with_mode("turn-default", ModeKind::Default, &TokenUsage::default())
+        .await;
+    assert_eq!(
+        Some(RequestUserInputSuppression::ActiveDefaultModeGoal),
+        default_turn_store
+            .get::<RequestUserInputSuppression>()
+            .map(|suppression| *suppression)
+    );
+
+    let plan_turn_store = harness
+        .start_turn_with_mode("turn-plan", ModeKind::Plan, &TokenUsage::default())
+        .await;
+    assert_eq!(
+        None,
+        plan_turn_store
+            .get::<RequestUserInputSuppression>()
+            .map(|suppression| *suppression)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_user_input_is_not_suppressed_for_inactive_default_goal_turns() -> anyhow::Result<()>
+{
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+
+    for status in [
+        codex_state::ThreadGoalStatus::Paused,
+        codex_state::ThreadGoalStatus::Blocked,
+        codex_state::ThreadGoalStatus::UsageLimited,
+        codex_state::ThreadGoalStatus::BudgetLimited,
+        codex_state::ThreadGoalStatus::Complete,
+    ] {
+        runtime
+            .thread_goals()
+            .replace_thread_goal(
+                thread_id,
+                "ship goal extension backend",
+                status,
+                /*token_budget*/ None,
+            )
+            .await?;
+        let turn_id = format!("turn-{status:?}");
+        let turn_store = harness
+            .start_turn_with_mode(&turn_id, ModeKind::Default, &TokenUsage::default())
+            .await;
+        assert_eq!(
+            None,
+            turn_store
+                .get::<RequestUserInputSuppression>()
+                .map(|suppression| *suppression),
+            "status {status:?} should not suppress request_user_input"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn usage_limit_stale_turn_does_not_stop_current_goal() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
@@ -1201,12 +1279,17 @@ impl GoalExtensionHarness {
             .collect()
     }
 
-    async fn start_turn(&self, turn_id: &str, usage: &TokenUsage) {
+    async fn start_turn(&self, turn_id: &str, usage: &TokenUsage) -> ExtensionData {
         self.start_turn_with_mode(turn_id, ModeKind::Default, usage)
-            .await;
+            .await
     }
 
-    async fn start_turn_with_mode(&self, turn_id: &str, mode: ModeKind, usage: &TokenUsage) {
+    async fn start_turn_with_mode(
+        &self,
+        turn_id: &str,
+        mode: ModeKind,
+        usage: &TokenUsage,
+    ) -> ExtensionData {
         let turn_store = ExtensionData::new(turn_id);
         let mut collaboration_mode = default_collaboration_mode();
         collaboration_mode.mode = mode;
@@ -1222,6 +1305,7 @@ impl GoalExtensionHarness {
                 })
                 .await;
         }
+        turn_store
     }
 
     async fn stop_turn(&self, turn_id: &str) {

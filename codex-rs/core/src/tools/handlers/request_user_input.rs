@@ -11,6 +11,7 @@ use crate::tools::handlers::request_user_input_spec::request_user_input_tool_des
 use crate::tools::handlers::request_user_input_spec::request_user_input_unavailable_message;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_extension_api::RequestUserInputSuppression;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_tools::ToolName;
@@ -54,6 +55,12 @@ impl ToolExecutor<ToolInvocation> for RequestUserInputHandler {
         if turn.session_source.is_non_root_agent() {
             return Err(FunctionCallError::RespondToModel(
                 "request_user_input can only be used by the root thread".to_string(),
+            ));
+        }
+
+        if let Some(suppression) = turn.extension_data.get::<RequestUserInputSuppression>() {
+            return Err(FunctionCallError::RespondToModel(
+                suppression.unavailable_message().to_string(),
             ));
         }
 

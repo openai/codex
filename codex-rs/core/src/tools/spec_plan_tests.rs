@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use codex_extension_api::RequestUserInputSuppression;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -445,6 +446,17 @@ async fn request_user_input_tool_respects_experimental_config_gate() {
     .await;
     disabled.assert_visible_lacks(&["request_user_input"]);
     disabled.assert_registered_lacks(&["request_user_input"]);
+}
+
+#[tokio::test]
+async fn request_user_input_tool_respects_turn_suppression() {
+    let suppressed = probe(|turn| {
+        turn.extension_data
+            .insert(RequestUserInputSuppression::ActiveDefaultModeGoal);
+    })
+    .await;
+    suppressed.assert_visible_lacks(&["request_user_input"]);
+    suppressed.assert_registered_lacks(&["request_user_input"]);
 }
 
 #[tokio::test]

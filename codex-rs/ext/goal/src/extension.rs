@@ -7,6 +7,7 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::RequestUserInputSuppression;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
@@ -25,6 +26,7 @@ use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -200,10 +202,7 @@ where
             input.collaboration_mode.mode,
             input.token_usage_at_turn_start,
         );
-        if matches!(
-            input.collaboration_mode.mode,
-            codex_protocol::config_types::ModeKind::Plan
-        ) {
+        if matches!(input.collaboration_mode.mode, ModeKind::Plan) {
             accounting.clear_current_turn_goal();
             return;
         }
@@ -215,14 +214,22 @@ where
         else {
             return;
         };
-        if let Some(goal) = goal
-            && matches!(
+        if let Some(goal) = goal {
+            if goal.status == codex_state::ThreadGoalStatus::Active
+                && input.collaboration_mode.mode == ModeKind::Default
+            {
+                input
+                    .turn_store
+                    .insert(RequestUserInputSuppression::ActiveDefaultModeGoal);
+            }
+
+            if matches!(
                 goal.status,
                 codex_state::ThreadGoalStatus::Active
                     | codex_state::ThreadGoalStatus::BudgetLimited
-            )
-        {
-            accounting.mark_turn_goal_active(input.turn_id, goal.goal_id);
+            ) {
+                accounting.mark_turn_goal_active(input.turn_id, goal.goal_id);
+            }
         }
     }
 
