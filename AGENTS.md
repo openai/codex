@@ -78,7 +78,9 @@ Particularly when introducing a new concept/feature/API, before adding to `codex
 
 Likewise, when reviewing code, do not hesitate to push back on PRs that would unnecessarily add code to `codex-core`.
 
-## Code Review Rules
+## Review Rules
+
+See the $code-review skill for specific process guidance.
 
 ### Model visible context
 
