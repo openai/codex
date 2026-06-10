@@ -1,5 +1,6 @@
 mod accepted_lines;
 mod client;
+mod event_sink;
 mod events;
 mod facts;
 mod local_sink;

@@ -49,8 +49,8 @@ pub enum AppServerRpcTransport {
 }
 
 #[derive(Serialize)]
-pub(crate) struct TrackEventsRequest {
-    pub(crate) events: Vec<TrackEventRequest>,
+pub(crate) struct TrackEventsRequest<'a> {
+    pub(crate) events: &'a [&'a TrackEventRequest],
 }
 
 #[derive(Serialize)]

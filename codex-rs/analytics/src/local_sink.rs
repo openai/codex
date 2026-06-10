@@ -50,16 +50,14 @@ pub(crate) fn local_analytics_sink_from_env() -> Option<SharedLocalAnalyticsSink
     local_analytics_sink_for_path(PathBuf::from(path))
 }
 
-pub(crate) fn append_codex_analytics_events_best_effort(
+pub(crate) fn append_codex_analytics_event_best_effort(
     sink: &SharedLocalAnalyticsSink,
-    events: &[TrackEventRequest],
+    event: &TrackEventRequest,
 ) {
-    for event in events {
-        let Some(record) = LocalAnalyticsRecord::from_codex_analytics_event(event) else {
-            continue;
-        };
-        append_local_analytics_record_best_effort(sink, &record);
-    }
+    let Some(record) = LocalAnalyticsRecord::from_codex_analytics_event(event) else {
+        return;
+    };
+    append_local_analytics_record_best_effort(sink, &record);
 }
 
 pub(crate) fn append_local_analytics_record_best_effort(

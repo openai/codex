@@ -1,8 +1,8 @@
+use crate::event_sink::AnalyticsEvent;
+use crate::event_sink::AnalyticsEventSink;
 use crate::events::AppServerRpcTransport;
 use crate::events::GuardianReviewAnalyticsResult;
 use crate::events::GuardianReviewTrackContext;
-use crate::events::TrackEventRequest;
-use crate::events::TrackEventsRequest;
 use crate::events::current_runtime_metadata;
 use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
@@ -23,7 +23,6 @@ use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::local_sink::SharedLocalAnalyticsSink;
-use crate::local_sink::append_codex_analytics_events_best_effort;
 use crate::local_sink::local_analytics_sink_from_env;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
@@ -35,14 +34,11 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
 use codex_login::AuthManager;
-use codex_login::CodexAuth;
-use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[cfg(test)]
@@ -51,7 +47,6 @@ use crate::local_sink::local_analytics_sink_for_path;
 use std::path::PathBuf;
 
 const ANALYTICS_EVENTS_QUEUE_SIZE: usize = 256;
-const ANALYTICS_EVENTS_TIMEOUT: Duration = Duration::from_secs(10);
 const ANALYTICS_EVENT_DEDUPE_MAX_KEYS: usize = 4096;
 
 #[derive(Clone)]
@@ -67,24 +62,19 @@ pub struct AnalyticsEventsClient {
 }
 
 impl AnalyticsEventsQueue {
-    pub(crate) fn new(
-        auth_manager: Arc<AuthManager>,
-        base_url: String,
-        backend_analytics_enabled: bool,
-        local_sink: Option<SharedLocalAnalyticsSink>,
-    ) -> Self {
+    pub(crate) fn new(sinks: Vec<AnalyticsEventSink>) -> Self {
         let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
-        let worker_local_sink = local_sink.clone();
         tokio::spawn(async move {
             let mut reducer = AnalyticsReducer::default();
             while let Some(input) = receiver.recv().await {
-                let mut events = Vec::new();
-                reducer.ingest(input, &mut events).await;
-                if let Some(local_sink) = worker_local_sink.as_ref() {
-                    append_codex_analytics_events_best_effort(local_sink, &events);
-                }
-                if backend_analytics_enabled {
-                    send_track_events(&auth_manager, &base_url, events).await;
+                let mut codex_analytics_events = Vec::new();
+                reducer.ingest(input, &mut codex_analytics_events).await;
+                let events = codex_analytics_events
+                    .into_iter()
+                    .map(AnalyticsEvent::from)
+                    .collect::<Vec<_>>();
+                for sink in &sinks {
+                    sink.write(&events).await;
                 }
             }
         });
@@ -175,16 +165,18 @@ impl AnalyticsEventsClient {
         analytics_enabled: Option<bool>,
         local_sink: Option<SharedLocalAnalyticsSink>,
     ) -> Self {
-        let backend_analytics_enabled = analytics_enabled != Some(false);
+        let mut sinks = Vec::new();
+        if let Some(local_sink) = local_sink {
+            sinks.push(AnalyticsEventSink::Local(local_sink));
+        }
+        if analytics_enabled != Some(false) {
+            sinks.push(AnalyticsEventSink::CodexBackend {
+                auth_manager,
+                base_url,
+            });
+        }
         Self {
-            queue: (backend_analytics_enabled || local_sink.is_some()).then(|| {
-                AnalyticsEventsQueue::new(
-                    auth_manager,
-                    base_url,
-                    backend_analytics_enabled,
-                    local_sink,
-                )
-            }),
+            queue: (!sinks.is_empty()).then(|| AnalyticsEventsQueue::new(sinks)),
         }
     }
 
@@ -453,81 +445,6 @@ impl AnalyticsEventsClient {
             return;
         }
         self.record_fact(AnalyticsFact::Notification(Box::new(notification)));
-    }
-}
-
-async fn send_track_events(
-    auth_manager: &AuthManager,
-    base_url: &str,
-    events: Vec<TrackEventRequest>,
-) {
-    if events.is_empty() {
-        return;
-    }
-
-    let Some(auth) = auth_manager.auth().await else {
-        return;
-    };
-    if !auth.uses_codex_backend() {
-        return;
-    }
-
-    let base_url = base_url.trim_end_matches('/');
-    let url = format!("{base_url}/codex/analytics-events/events");
-    for events in track_event_request_batches(events) {
-        send_track_events_request(&auth, &url, events).await;
-    }
-}
-
-fn track_event_request_batches(events: Vec<TrackEventRequest>) -> Vec<Vec<TrackEventRequest>> {
-    let mut batches = Vec::new();
-    let mut current_batch = Vec::new();
-
-    for event in events {
-        if event.should_send_in_isolated_request() {
-            if !current_batch.is_empty() {
-                batches.push(current_batch);
-                current_batch = Vec::new();
-            }
-            batches.push(vec![event]);
-        } else {
-            current_batch.push(event);
-        }
-    }
-
-    if !current_batch.is_empty() {
-        batches.push(current_batch);
-    }
-
-    batches
-}
-
-async fn send_track_events_request(auth: &CodexAuth, url: &str, events: Vec<TrackEventRequest>) {
-    if events.is_empty() {
-        return;
-    }
-
-    let payload = TrackEventsRequest { events };
-
-    let response = create_client()
-        .post(url)
-        .timeout(ANALYTICS_EVENTS_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await;
-
-    match response {
-        Ok(response) if response.status().is_success() => {}
-        Ok(response) => {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            tracing::warn!("events failed with status {status}: {body}");
-        }
-        Err(err) => {
-            tracing::warn!("failed to send events request: {err}");
-        }
     }
 }
 
