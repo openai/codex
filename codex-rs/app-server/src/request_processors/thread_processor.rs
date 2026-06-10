@@ -325,6 +325,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) thread_list_state_permit: Arc<Semaphore>,
     pub(super) thread_goal_processor: ThreadGoalRequestProcessor,
     pub(super) state_db: Option<StateDbHandle>,
+    pub(super) log_db: Option<LogDbLayer>,
     pub(super) background_tasks: TaskTracker,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
 }
@@ -356,6 +357,7 @@ impl ThreadRequestProcessor {
         thread_list_state_permit: Arc<Semaphore>,
         thread_goal_processor: ThreadGoalRequestProcessor,
         state_db: Option<StateDbHandle>,
+        log_db: Option<LogDbLayer>,
         skills_watcher: Arc<SkillsWatcher>,
     ) -> Self {
         Self {
@@ -372,6 +374,7 @@ impl ThreadRequestProcessor {
             thread_list_state_permit,
             thread_goal_processor,
             state_db,
+            log_db,
             background_tasks: TaskTracker::new(),
             skills_watcher,
         }
@@ -696,7 +699,7 @@ impl ThreadRequestProcessor {
 
         Ok((thread_id, thread))
     }
-    async fn acquire_thread_list_state_permit(
+    pub(super) async fn acquire_thread_list_state_permit(
         &self,
     ) -> Result<SemaphorePermit<'_>, JSONRPCErrorError> {
         self.thread_list_state_permit
@@ -768,6 +771,10 @@ impl ThreadRequestProcessor {
     }
 
     async fn prepare_thread_for_archive(&self, thread_id: ThreadId) {
+        self.prepare_thread_for_removal(thread_id, "archive").await;
+    }
+
+    pub(super) async fn prepare_thread_for_removal(&self, thread_id: ThreadId, operation: &str) {
         let removed_conversation = self.thread_manager.remove_thread(&thread_id).await;
         if let Some(conversation) = removed_conversation {
             info!("thread {thread_id} was active; shutting down");
@@ -775,11 +782,11 @@ impl ThreadRequestProcessor {
                 ThreadShutdownResult::Complete => {}
                 ThreadShutdownResult::SubmitFailed => {
                     error!(
-                        "failed to submit Shutdown to thread {thread_id}; proceeding with archive"
+                        "failed to submit Shutdown to thread {thread_id}; proceeding with {operation}"
                     );
                 }
                 ThreadShutdownResult::TimedOut => {
-                    warn!("thread {thread_id} shutdown timed out; proceeding with archive");
+                    warn!("thread {thread_id} shutdown timed out; proceeding with {operation}");
                 }
             }
         }
@@ -1312,23 +1319,7 @@ impl ThreadRequestProcessor {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid session id: {err}")))?;
 
-        let mut thread_ids = vec![thread_id];
-        if let Some(state_db_ctx) = self.state_db.as_ref() {
-            let descendants = state_db_ctx
-                .list_thread_spawn_descendants(thread_id)
-                .await
-                .map_err(|err| {
-                    internal_error(format!(
-                        "failed to list spawned descendants for session {thread_id}: {err}"
-                    ))
-                })?;
-            let mut seen = HashSet::from([thread_id]);
-            for descendant_id in descendants {
-                if seen.insert(descendant_id) {
-                    thread_ids.push(descendant_id);
-                }
-            }
-        }
+        let thread_ids = self.state_db_spawn_subtree_thread_ids(thread_id).await?;
 
         let mut archive_thread_ids = Vec::new();
         match self
@@ -1411,6 +1402,31 @@ impl ThreadRequestProcessor {
         }
 
         Ok((ThreadArchiveResponse {}, archived_thread_ids))
+    }
+
+    pub(super) async fn state_db_spawn_subtree_thread_ids(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<Vec<ThreadId>, JSONRPCErrorError> {
+        let mut thread_ids = vec![thread_id];
+        let Some(state_db_ctx) = self.state_db.as_ref() else {
+            return Ok(thread_ids);
+        };
+        let mut seen = HashSet::from([thread_id]);
+        let descendants = state_db_ctx
+            .list_thread_spawn_descendants(thread_id)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to list spawned descendants for thread id {thread_id}: {err}"
+                ))
+            })?;
+        for descendant_id in descendants {
+            if seen.insert(descendant_id) {
+                thread_ids.push(descendant_id);
+            }
+        }
+        Ok(thread_ids)
     }
 
     async fn thread_increment_elicitation_inner(
@@ -3909,7 +3925,7 @@ fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {
     }
 }
 
-fn unsupported_thread_store_operation(operation: &'static str) -> JSONRPCErrorError {
+pub(super) fn unsupported_thread_store_operation(operation: &'static str) -> JSONRPCErrorError {
     method_not_found(format!("{operation} is not supported yet"))
 }
 
@@ -4030,7 +4046,7 @@ fn conversation_summary_rollout_path_read_error(
     }
 }
 
-fn core_thread_write_error(operation: &str, err: CodexErr) -> JSONRPCErrorError {
+pub(super) fn core_thread_write_error(operation: &str, err: CodexErr) -> JSONRPCErrorError {
     match err {
         CodexErr::ThreadNotFound(thread_id) => {
             invalid_request(format!("thread not found: {thread_id}"))

@@ -2491,7 +2491,7 @@ async fn list_agent_subtree_thread_ids_includes_anonymous_and_closed_descendants
 }
 
 #[tokio::test]
-async fn list_agent_subtree_thread_ids_includes_live_descendants_without_state_db() {
+async fn list_agent_subtree_thread_ids_finds_live_descendants_of_unloaded_root() {
     let (_home, config) = test_config().await;
     let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
         CodexAuth::from_api_key("dummy"),
@@ -2535,6 +2535,8 @@ async fn list_agent_subtree_thread_ids_includes_live_descendants_without_state_d
         )
         .await
         .expect("grandchild spawn should succeed");
+
+    manager.remove_thread(&parent_thread_id).await;
 
     let mut subtree_thread_ids = manager
         .list_agent_subtree_thread_ids(parent_thread_id)

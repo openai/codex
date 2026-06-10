@@ -1,21 +1,25 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::File;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionMetaLine;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
 
 const SESSION_INDEX_FILE: &str = "session_index.jsonl";
 const READ_CHUNK_SIZE: usize = 8192;
+static SESSION_INDEX_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionIndexEntry {
@@ -25,7 +29,7 @@ pub struct SessionIndexEntry {
 }
 
 /// Append a thread name update to the session index.
-/// The index is append-only; the most recent entry wins when resolving names or ids.
+/// Name updates are append-only; the most recent entry wins when resolving names or ids.
 pub async fn append_thread_name(
     codex_home: &Path,
     thread_id: ThreadId,
@@ -46,22 +50,58 @@ pub async fn append_thread_name(
 }
 
 /// Append a raw session index entry to `session_index.jsonl`.
-/// The file is append-only; consumers scan from the end to find the newest match.
+/// Consumers scan from the end to find the newest match.
 pub async fn append_session_index_entry(
     codex_home: &Path,
     entry: &SessionIndexEntry,
 ) -> std::io::Result<()> {
+    let _guard = SESSION_INDEX_LOCK
+        .lock()
+        .map_err(|err| std::io::Error::other(err.to_string()))?;
     let path = session_index_path(codex_home);
-    let mut file = tokio::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
-        .await?;
+        .open(&path)?;
     let mut line = serde_json::to_string(entry).map_err(std::io::Error::other)?;
     line.push('\n');
-    file.write_all(line.as_bytes()).await?;
-    file.flush().await?;
+    file.write_all(line.as_bytes())?;
+    file.flush()?;
     Ok(())
+}
+
+/// Remove all recorded names for a thread from the session index.
+pub async fn remove_thread_name_entries(
+    codex_home: &Path,
+    thread_id: ThreadId,
+) -> std::io::Result<()> {
+    let _guard = SESSION_INDEX_LOCK
+        .lock()
+        .map_err(|err| std::io::Error::other(err.to_string()))?;
+    let path = session_index_path(codex_home);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let mut removed = false;
+    let mut remaining = String::with_capacity(contents.len());
+    for line in contents.lines() {
+        let should_remove = serde_json::from_str::<SessionIndexEntry>(line.trim())
+            .is_ok_and(|entry| entry.id == thread_id);
+        if should_remove {
+            removed = true;
+        } else {
+            remaining.push_str(line);
+            remaining.push('\n');
+        }
+    }
+    if !removed {
+        return Ok(());
+    }
+    let temp_path = path.with_extension("jsonl.tmp");
+    std::fs::write(&temp_path, remaining)?;
+    std::fs::rename(temp_path, path)
 }
 
 /// Find the latest thread name for a thread id, if any.
