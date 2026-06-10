@@ -3222,6 +3222,7 @@ name = "codex-mcp"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-channel",
  "codex-api",
  "codex-async-utils",

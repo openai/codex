@@ -221,7 +221,7 @@ pub(crate) async fn run_turn(
         .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
         .await;
 
-        let window_id = sess.services.model_client.current_window_id();
+        let window_id = sess.current_window_id().await;
         let turn_metadata_header = turn_context
             .turn_metadata_state
             .current_header_value_for_model_request(&window_id);
@@ -231,6 +231,7 @@ pub(crate) async fn run_turn(
             Arc::clone(&turn_extension_data),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
+            &window_id,
             turn_metadata_header.as_deref(),
             sampling_request_input.clone(),
             cancellation_token.child_token(),
@@ -264,7 +265,6 @@ pub(crate) async fn run_turn(
                     estimated_token_count = ?estimated_token_count,
                     auto_compact_scope_limit = token_status.auto_compact_scope_limit,
                     auto_compact_limit_scope = ?turn_context.config.model_auto_compact_token_limit_scope,
-                    auto_compact_window_ordinal = ?token_status.auto_compact_window_ordinal,
                     auto_compact_window_prefill_tokens = ?token_status.auto_compact_window_prefill_tokens,
                     full_context_window_limit = ?token_status.full_context_window_limit,
                     full_context_window_limit_reached = token_status.full_context_window_limit_reached,
@@ -432,10 +432,6 @@ async fn run_hooks_and_record_inputs(
     blocked_input && !accepted_user_input
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP tool listing borrows the read guard across cancellation-aware await"
-)]
 #[instrument(level = "trace", skip_all)]
 async fn build_skills_and_plugins(
     sess: &Arc<Session>,
@@ -473,8 +469,7 @@ async fn build_skills_and_plugins(
         match sess
             .services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .list_all_tools()
             .or_cancel(cancellation_token)
             .await
@@ -707,7 +702,6 @@ struct AutoCompactTokenStatus {
     auto_compact_scope_tokens: i64,
     auto_compact_scope_limit: i64,
     full_context_window_limit: Option<i64>,
-    auto_compact_window_ordinal: Option<u64>,
     auto_compact_window_prefill_tokens: Option<i64>,
     full_context_window_limit_reached: bool,
     token_limit_reached: bool,
@@ -718,7 +712,6 @@ async fn auto_compact_token_status(
     turn_context: &TurnContext,
 ) -> AutoCompactTokenStatus {
     let active_context_tokens = sess.get_total_token_usage().await;
-    let mut auto_compact_window_ordinal = None;
     let mut auto_compact_window_prefill_tokens = None;
     let (auto_compact_scope_tokens, auto_compact_scope_limit, full_context_window_limit) =
         match turn_context.config.model_auto_compact_token_limit_scope {
@@ -732,7 +725,6 @@ async fn auto_compact_token_status(
             ),
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
                 let window = sess.auto_compact_window_snapshot().await;
-                auto_compact_window_ordinal = Some(window.ordinal);
                 auto_compact_window_prefill_tokens = window.prefill_input_tokens;
                 let baseline = window.prefill_input_tokens.unwrap_or(active_context_tokens);
                 (
@@ -758,7 +750,6 @@ async fn auto_compact_token_status(
         auto_compact_scope_tokens,
         auto_compact_scope_limit,
         full_context_window_limit,
-        auto_compact_window_ordinal,
         auto_compact_window_prefill_tokens,
         full_context_window_limit_reached,
         token_limit_reached,
@@ -993,6 +984,7 @@ async fn run_sampling_request(
     turn_store: Arc<codex_extension_api::ExtensionData>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
+    window_id: &str,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
@@ -1036,6 +1028,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_context),
             Arc::clone(&turn_store),
             client_session,
+            window_id,
             turn_metadata_header,
             Arc::clone(&turn_diff_tracker),
             &prompt,
@@ -1078,10 +1071,6 @@ async fn run_sampling_request(
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "tool router construction reads through the session-owned manager guard"
-)]
 #[instrument(level = "trace",
     skip_all,
     fields(
@@ -1095,18 +1084,12 @@ pub(crate) async fn built_tools(
     turn_context: &TurnContext,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
-    let mcp_connection_manager = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .instrument(trace_span!("read_mcp_connection_manager"))
-        .await;
+    let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
-    drop(mcp_connection_manager);
     let loaded_plugins = sess
         .services
         .plugins_manager
@@ -1775,6 +1758,7 @@ async fn try_run_sampling_request(
     turn_context: Arc<TurnContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     client_session: &mut ModelClientSession,
+    window_id: &str,
     turn_metadata_header: Option<&str>,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
@@ -1796,6 +1780,7 @@ async fn try_run_sampling_request(
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let mut stream = client_session
         .stream(
+            window_id,
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,

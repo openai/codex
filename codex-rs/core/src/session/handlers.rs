@@ -580,6 +580,9 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
 }
 
 async fn shutdown_session_runtime(sess: &Arc<Session>) {
+    if let Some(startup_prewarm) = sess.take_session_startup_prewarm().await {
+        startup_prewarm.abort().await;
+    }
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     let _ = sess.conversation.shutdown().await;
     sess.services
@@ -589,11 +592,11 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
-    let mcp_shutdown = {
-        let mut manager = sess.services.mcp_connection_manager.write().await;
-        manager.begin_shutdown()
-    };
-    mcp_shutdown.await;
+    sess.services
+        .mcp_connection_manager
+        .load_full()
+        .shutdown()
+        .await;
     sess.guardian_review_session.shutdown().await;
 }
 

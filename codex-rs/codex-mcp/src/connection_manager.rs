@@ -352,22 +352,12 @@ impl McpConnectionManager {
         self.clients.contains_key(server_name)
     }
 
-    /// Drain all MCP clients from this manager and return a future that stops
-    /// them and terminates their stdio server processes.
-    pub fn begin_shutdown(&mut self) -> impl std::future::Future<Output = ()> + Send + 'static {
-        self.startup_cancellation_token.cancel();
-        let clients = std::mem::take(&mut self.clients);
-        self.server_metadata.clear();
-        async move {
-            for client in clients.into_values() {
-                client.shutdown().await;
-            }
-        }
-    }
-
     /// Stop all MCP clients owned by this manager and terminate stdio server processes.
-    pub async fn shutdown(&mut self) {
-        self.begin_shutdown().await;
+    pub async fn shutdown(&self) {
+        self.startup_cancellation_token.cancel();
+        for client in self.clients.values() {
+            client.shutdown().await;
+        }
     }
 
     pub fn server_origin(&self, server_name: &str) -> Option<&str> {

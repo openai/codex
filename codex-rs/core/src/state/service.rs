@@ -35,12 +35,12 @@ use codex_thread_store::ThreadStore;
 use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
-use tokio::sync::RwLock;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
-    pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
+    /// The latest manager; callers retain an owned handle while performing MCP I/O.
+    pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -87,18 +87,13 @@ pub(crate) struct SessionServices {
 impl SessionServices {
     /// Installs the manager before validating required servers so startup-time elicitation can
     /// resolve through the session's manager while validation waits.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "required MCP validation keeps the installed manager reachable for startup-time elicitation"
-    )]
     pub(crate) async fn install_mcp_connection_manager(
         &self,
         manager: McpConnectionManager,
     ) -> Result<()> {
-        *self.mcp_connection_manager.write().await = manager;
+        self.mcp_connection_manager.store(Arc::new(manager));
         self.mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .validate_required_servers()
             .await
     }

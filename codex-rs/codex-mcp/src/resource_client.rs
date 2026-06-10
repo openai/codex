@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceContent;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
-use tokio::sync::RwLock;
 
 use crate::McpConnectionManager;
 
@@ -28,11 +28,11 @@ pub struct McpResourceReadResult {
 
 /// Session-scoped access to MCP resources through the currently installed manager.
 ///
-/// The client retains the manager's shared lock rather than a manager snapshot, so
-/// calls automatically use replacements installed during MCP startup and refresh.
+/// The client retains the manager's shared publication handle rather than a manager
+/// snapshot, so calls automatically use replacements installed during startup and refresh.
 #[derive(Clone)]
 pub struct McpResourceClient {
-    manager: Arc<RwLock<McpConnectionManager>>,
+    manager: Arc<ArcSwap<McpConnectionManager>>,
 }
 
 impl std::fmt::Debug for McpResourceClient {
@@ -45,7 +45,7 @@ impl std::fmt::Debug for McpResourceClient {
 
 impl McpResourceClient {
     /// Creates a resource client backed by the session's replaceable MCP manager.
-    pub fn new(manager: Arc<RwLock<McpConnectionManager>>) -> Self {
+    pub fn new(manager: Arc<ArcSwap<McpConnectionManager>>) -> Self {
         Self { manager }
     }
 
@@ -53,13 +53,9 @@ impl McpResourceClient {
     ///
     /// This does not wait for server startup or imply that startup succeeded.
     pub async fn has_server(&self, server: &str) -> bool {
-        self.manager.read().await.contains_server(server)
+        self.manager.load_full().contains_server(server)
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource calls are serialized through the session-owned manager guard"
-    )]
     /// Lists one resource page from the named server.
     pub async fn list_resources(
         &self,
@@ -70,8 +66,7 @@ impl McpResourceClient {
             cursor.map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
         let result = self
             .manager
-            .read()
-            .await
+            .load_full()
             .list_resources(server, params)
             .await?;
         let resources = result
@@ -85,16 +80,11 @@ impl McpResourceClient {
         })
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource calls are serialized through the session-owned manager guard"
-    )]
     /// Reads one resource from the named server.
     pub async fn read_resource(&self, server: &str, uri: &str) -> Result<McpResourceReadResult> {
         let result = self
             .manager
-            .read()
-            .await
+            .load_full()
             .read_resource(server, ReadResourceRequestParams::new(uri.to_string()))
             .await?;
         let contents = result
