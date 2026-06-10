@@ -26,6 +26,7 @@ use crate::relay_proto::RelayMessageFrame;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
 use crate::server::ConnectionProcessor;
+use crate::telemetry::ConnectionTransport;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
 
@@ -449,7 +450,9 @@ fn spawn_virtual_stream(
         transport: JsonRpcTransport::Plain,
     };
     tokio::spawn(async move {
-        processor.run_connection(connection).await;
+        processor
+            .run_connection(connection, ConnectionTransport::Relay)
+            .await;
     });
 
     VirtualStream {

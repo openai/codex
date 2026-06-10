@@ -1,0 +1,130 @@
+use std::collections::BTreeMap;
+
+use codex_otel::MetricsConfig;
+use opentelemetry::KeyValue;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::Metric;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use pretty_assertions::assert_eq;
+
+use super::*;
+
+#[test]
+fn emits_connection_metrics() {
+    let (telemetry, metrics, exporter) = test_telemetry();
+
+    let connection = telemetry.connection_started(ConnectionTransport::WebSocket);
+    drop(connection);
+    metrics.shutdown().expect("shutdown metrics");
+
+    let metrics = latest_metrics(&exporter);
+    assert_eq!(
+        metric_points(&metrics, CONNECTIONS_TOTAL_METRIC),
+        vec![(
+            1.0,
+            BTreeMap::from([
+                ("result".to_string(), "accepted".to_string()),
+                ("transport".to_string(), "websocket".to_string()),
+            ]),
+        )]
+    );
+    assert_eq!(
+        metric_points(&metrics, CONNECTIONS_ACTIVE_METRIC),
+        vec![(
+            0.0,
+            BTreeMap::from([("transport".to_string(), "websocket".to_string())]),
+        )]
+    );
+    assert_metric_metadata(
+        &metrics,
+        CONNECTIONS_ACTIVE_METRIC,
+        CONNECTIONS_ACTIVE_DESCRIPTION,
+        "",
+    );
+    assert_metric_metadata(
+        &metrics,
+        CONNECTIONS_TOTAL_METRIC,
+        CONNECTIONS_TOTAL_DESCRIPTION,
+        "",
+    );
+}
+
+fn test_telemetry() -> (
+    ExecServerTelemetry,
+    codex_otel::MetricsClient,
+    InMemoryMetricExporter,
+) {
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = codex_otel::MetricsClient::new(MetricsConfig::in_memory(
+        "test",
+        "codex-exec-server",
+        env!("CARGO_PKG_VERSION"),
+        exporter.clone(),
+    ))
+    .expect("metrics");
+    (
+        ExecServerTelemetry::new(Some(metrics.clone())),
+        metrics,
+        exporter,
+    )
+}
+
+fn latest_metrics(exporter: &InMemoryMetricExporter) -> ResourceMetrics {
+    exporter
+        .get_finished_metrics()
+        .expect("finished metrics")
+        .into_iter()
+        .last()
+        .expect("metrics export")
+}
+
+fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
+    resource_metrics
+        .scope_metrics()
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .find(|metric| metric.name() == name)
+        .unwrap_or_else(|| panic!("metric {name} missing"))
+}
+
+fn metric_points(
+    resource_metrics: &ResourceMetrics,
+    name: &str,
+) -> Vec<(f64, BTreeMap<String, String>)> {
+    match find_metric(resource_metrics, name).data() {
+        AggregatedMetrics::I64(MetricData::Gauge(gauge)) => gauge
+            .data_points()
+            .map(|point| (point.value() as f64, attributes_to_map(point.attributes())))
+            .collect(),
+        AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
+            .data_points()
+            .map(|point| (point.value() as f64, attributes_to_map(point.attributes())))
+            .collect(),
+        _ => panic!("unexpected metric data for {name}"),
+    }
+}
+
+fn assert_metric_metadata(
+    resource_metrics: &ResourceMetrics,
+    name: &str,
+    description: &str,
+    unit: &str,
+) {
+    let metric = find_metric(resource_metrics, name);
+    assert_eq!(metric.description(), description);
+    assert_eq!(metric.unit(), unit);
+}
+
+fn attributes_to_map<'a>(
+    attributes: impl Iterator<Item = &'a KeyValue>,
+) -> BTreeMap<String, String> {
+    attributes
+        .map(|attribute| {
+            (
+                attribute.key.as_str().to_string(),
+                attribute.value.as_str().to_string(),
+            )
+        })
+        .collect()
+}

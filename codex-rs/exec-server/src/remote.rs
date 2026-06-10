@@ -11,6 +11,7 @@ use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
+use crate::ExecServerTelemetry;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 
@@ -94,6 +95,7 @@ pub struct RemoteEnvironmentConfig {
     pub environment_id: String,
     pub name: String,
     auth_provider: SharedAuthProvider,
+    telemetry: ExecServerTelemetry,
 }
 
 impl std::fmt::Debug for RemoteEnvironmentConfig {
@@ -119,7 +121,13 @@ impl RemoteEnvironmentConfig {
             environment_id,
             name: "codex-exec-server".to_string(),
             auth_provider,
+            telemetry: ExecServerTelemetry::default(),
         })
+    }
+
+    pub fn with_telemetry(mut self, telemetry: ExecServerTelemetry) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 }
 
@@ -132,7 +140,7 @@ pub async fn run_remote_environment(
     ensure_rustls_crypto_provider();
     let client =
         EnvironmentRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
-    let processor = ConnectionProcessor::new(runtime_paths);
+    let processor = ConnectionProcessor::new(runtime_paths, config.telemetry);
     let mut backoff = Duration::from_secs(1);
 
     loop {
