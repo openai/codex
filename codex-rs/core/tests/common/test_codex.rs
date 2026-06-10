@@ -917,9 +917,14 @@ impl TestCodexHarness {
                 )
                 .await?;
         }
+        let abs_path_uri = PathUri::from_path(&abs_path)?;
         self.test
             .fs()
-            .write_file(&abs_path, contents.as_ref().to_vec(), /*sandbox*/ None)
+            .write_file(
+                &abs_path_uri,
+                contents.as_ref().to_vec(),
+                /*sandbox*/ None,
+            )
             .await?;
         Ok(())
     }

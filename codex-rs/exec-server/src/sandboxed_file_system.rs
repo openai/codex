@@ -100,7 +100,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn write_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         contents: Vec<u8>,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -108,7 +108,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::WriteFile(FsWriteFileParams {
-                path: path.clone(),
+                path: path.to_abs_path()?,
                 data_base64: STANDARD.encode(contents),
                 sandbox: None,
             }),

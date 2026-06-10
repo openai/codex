@@ -120,7 +120,7 @@ async fn file_system_write_file_writes_bytes(
     let file_path = tmp.path().join("note.txt");
     file_system
         .write_file(
-            &absolute_path(&file_path),
+            &PathUri::from_path(&file_path)?,
             b"hello from trait".to_vec(),
             /*sandbox*/ None,
         )
@@ -339,7 +339,7 @@ async fn file_system_write_file_reports_missing_parent(
 
     let error = match file_system
         .write_file(
-            &absolute_path(&missing_parent_path),
+            &PathUri::from_path(&missing_parent_path)?,
             b"hello from trait".to_vec(),
             /*sandbox*/ None,
         )
@@ -517,7 +517,7 @@ async fn file_system_sandboxed_write_allows_additional_write_root(
 
     file_system
         .write_file(
-            &absolute_path(&file_path),
+            &PathUri::from_path(&file_path)?,
             b"created".to_vec(),
             Some(&sandbox),
         )

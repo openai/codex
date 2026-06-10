@@ -160,7 +160,7 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
     let payload = b"remote-test-env-ok".to_vec();
 
     file_system
-        .write_file(&file_path_abs, payload.clone(), /*sandbox*/ None)
+        .write_file(&file_path_uri, payload.clone(), /*sandbox*/ None)
         .await?;
     let actual = file_system
         .read_file(&file_path_uri, /*sandbox*/ None)
@@ -297,6 +297,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     ))
     .abs();
     let remote_marker_name = "marker.txt";
+    let remote_marker_uri = PathUri::from_path(remote_cwd.join(remote_marker_name))?;
     test.fs()
         .create_directory(
             &remote_cwd,
@@ -306,7 +307,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
         .await?;
     test.fs()
         .write_file(
-            &remote_cwd.join(remote_marker_name),
+            &remote_marker_uri,
             b"remote-routing".to_vec(),
             /*sandbox*/ None,
         )
@@ -931,6 +932,7 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
     let allowed_dir = PathBuf::from(format!("/tmp/codex-remote-readable-{}", std::process::id()));
     let file_path = allowed_dir.join("note.txt");
+    let file_path_uri = PathUri::from_path(&file_path)?;
     file_system
         .create_directory(
             &absolute_path(allowed_dir.clone()),
@@ -940,7 +942,7 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
         .await?;
     file_system
         .write_file(
-            &absolute_path(file_path.clone()),
+            &file_path_uri,
             b"sandboxed hello".to_vec(),
             /*sandbox*/ None,
         )
@@ -948,7 +950,7 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
     let sandbox = read_only_sandbox(allowed_dir.clone());
     let contents = file_system
-        .read_file(&PathUri::from_path(&file_path)?, Some(&sandbox))
+        .read_file(&file_path_uri, Some(&sandbox))
         .await?;
     assert_eq!(contents, b"sandboxed hello");
 

@@ -36,7 +36,7 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn write_file(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _contents: Vec<u8>,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {

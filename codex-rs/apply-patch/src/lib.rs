@@ -523,7 +523,7 @@ async fn apply_hunks_to_files(
                     modified.push(affected_path);
                 } else {
                     try_write!(
-                        fs.write_file(&path_abs, new_contents.clone().into_bytes(), sandbox)
+                        fs.write_file(&path_uri, new_contents.clone().into_bytes(), sandbox)
                             .await
                             .with_context(|| format!(
                                 "Failed to write file {}",
@@ -628,7 +628,8 @@ async fn write_file_with_missing_parent_retry(
     contents: Vec<u8>,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> anyhow::Result<()> {
-    match fs.write_file(path_abs, contents.clone(), sandbox).await {
+    let path_uri = PathUri::from_abs_path(path_abs)?;
+    match fs.write_file(&path_uri, contents.clone(), sandbox).await {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             if let Some(parent_abs) = path_abs.parent() {
@@ -645,7 +646,7 @@ async fn write_file_with_missing_parent_retry(
                     )
                 })?;
             }
-            fs.write_file(path_abs, contents, sandbox)
+            fs.write_file(&path_uri, contents, sandbox)
                 .await
                 .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
             Ok(())

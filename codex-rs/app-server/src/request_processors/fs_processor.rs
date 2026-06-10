@@ -85,8 +85,9 @@ impl FsRequestProcessor {
                 "fs/writeFile requires valid base64 dataBase64: {err}"
             ))
         })?;
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         self.file_system()?
-            .write_file(&params.path, bytes, /*sandbox*/ None)
+            .write_file(&path, bytes, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})

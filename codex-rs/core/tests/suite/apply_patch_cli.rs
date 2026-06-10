@@ -1337,18 +1337,16 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
                 )
                 .await?;
                 let repo_root = cwd.parent().expect("nested cwd should have parent");
+                let git_uri = PathUri::from_path(repo_root.join(".git"))?;
+                let repo_file_uri = PathUri::from_path(repo_root.join("repo.txt"))?;
                 fs.write_file(
-                    &repo_root.join(".git"),
+                    &git_uri,
                     b"gitdir: /tmp/fake-worktree\n".to_vec(),
                     /*sandbox*/ None,
                 )
                 .await?;
-                fs.write_file(
-                    &repo_root.join("repo.txt"),
-                    b"before\n".to_vec(),
-                    /*sandbox*/ None,
-                )
-                .await?;
+                fs.write_file(&repo_file_uri, b"before\n".to_vec(), /*sandbox*/ None)
+                    .await?;
                 Ok(())
             })
     })
@@ -1855,8 +1853,9 @@ async fn apply_patch_clears_aggregated_diff_after_inexact_delta() -> Result<()> 
 
     let harness = apply_patch_harness_with(|builder| {
         builder.with_workspace_setup(|cwd, fs| async move {
+            let binary_path_uri = PathUri::from_path(cwd.join("binary.dat"))?;
             fs.write_file(
-                &cwd.join("binary.dat"),
+                &binary_path_uri,
                 vec![0xff, 0xfe, 0xfd],
                 /*sandbox*/ None,
             )

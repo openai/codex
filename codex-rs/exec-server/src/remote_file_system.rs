@@ -84,15 +84,16 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn write_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         contents: Vec<u8>,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs write_file");
+        let path = path.to_abs_path()?;
         let client = self.client.get().await.map_err(map_remote_error)?;
         client
             .fs_write_file(FsWriteFileParams {
-                path: path.clone(),
+                path,
                 data_base64: STANDARD.encode(contents),
                 sandbox: remote_sandbox_context(sandbox),
             })

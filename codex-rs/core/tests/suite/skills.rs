@@ -9,6 +9,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -37,7 +38,8 @@ async fn write_repo_skill(
     .await?;
     let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
     let path = skill_dir.join("SKILL.md");
-    fs.write_file(&path, contents.into_bytes(), /*sandbox*/ None)
+    let path_uri = PathUri::from_path(&path)?;
+    fs.write_file(&path_uri, contents.into_bytes(), /*sandbox*/ None)
         .await?;
     Ok(())
 }

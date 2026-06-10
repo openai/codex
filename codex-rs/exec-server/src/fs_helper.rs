@@ -200,13 +200,15 @@ pub(crate) async fn run_direct_request(
             }))
         }
         FsHelperRequest::WriteFile(params) => {
+            let path =
+                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
                 invalid_request(format!(
                     "{FS_WRITE_FILE_METHOD} requires valid base64 dataBase64: {err}"
                 ))
             })?;
             file_system
-                .write_file(&params.path, bytes, /*sandbox*/ None)
+                .write_file(&path, bytes, /*sandbox*/ None)
                 .await
                 .map_err(map_fs_error)?;
             Ok(FsHelperPayload::WriteFile(FsWriteFileResponse {}))

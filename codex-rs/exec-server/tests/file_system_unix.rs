@@ -186,7 +186,7 @@ async fn sandboxed_file_system_helper_finds_bwrap_on_preserved_path() -> Result<
 
     file_system
         .write_file(
-            &absolute_path(&file_path),
+            &PathUri::from_path(&file_path)?,
             b"written through fs helper".to_vec(),
             Some(&sandbox),
         )
@@ -258,7 +258,7 @@ async fn file_system_sandboxed_write_rejects_unwritable_path(
     let sandbox = read_only_sandbox(tmp.path().to_path_buf());
     let error = match file_system
         .write_file(
-            &absolute_path(&blocked_path),
+            &PathUri::from_path(&blocked_path)?,
             b"nope".to_vec(),
             Some(&sandbox),
         )
@@ -294,7 +294,7 @@ async fn file_system_sandboxed_write_allows_explicit_alias_roots(
 
     file_system
         .write_file(
-            &absolute_path(&file_path),
+            &PathUri::from_path(&file_path)?,
             b"created".to_vec(),
             Some(&sandbox),
         )
@@ -391,7 +391,7 @@ async fn file_system_sandboxed_write_rejects_symlink_escape(
     let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
         .write_file(
-            &absolute_path(&requested_path),
+            &PathUri::from_path(&requested_path)?,
             b"nope".to_vec(),
             Some(&sandbox),
         )
@@ -429,7 +429,7 @@ async fn file_system_sandboxed_write_preserves_existing_hard_link(
     let sandbox = workspace_write_sandbox(allowed_dir);
     file_system
         .write_file(
-            &absolute_path(&hard_link),
+            &PathUri::from_path(&hard_link)?,
             b"updated through existing hard link\n".to_vec(),
             Some(&sandbox),
         )
