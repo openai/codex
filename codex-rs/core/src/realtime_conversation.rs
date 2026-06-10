@@ -1,5 +1,6 @@
 use crate::client::ModelClient;
 use crate::realtime_context::build_realtime_startup_context;
+use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_prompt::prepare_realtime_backend_prompt;
 use crate::session::session::Session;
 use anyhow::Context;
@@ -64,6 +65,8 @@ const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_300;
+const REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET: usize = 1_000;
+const STANDALONE_HANDOFF_ID: &str = "codex";
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
 pub(crate) const REALTIME_USER_TEXT_PREFIX: &str = "[USER] ";
 pub(crate) const REALTIME_BACKEND_TEXT_PREFIX: &str = "[BACKEND] ";
@@ -106,6 +109,9 @@ struct RealtimeHandoffState {
 
 #[derive(Debug, PartialEq, Eq)]
 enum HandoffOutput {
+    StandaloneAssistantOutput {
+        output_text: String,
+    },
     ProgressUpdate {
         handoff_id: String,
         output_text: String,
@@ -460,22 +466,38 @@ impl RealtimeConversationManager {
             state.handoff.clone()
         };
 
-        let Some(handoff_id) = handoff.active_handoff.lock().await.clone() else {
-            return Ok(());
+        let active_handoff = handoff.active_handoff.lock().await.clone();
+        let output = match active_handoff {
+            Some(handoff_id) => {
+                let output_text = prefix_realtime_text(
+                    output_text,
+                    REALTIME_BACKEND_TEXT_PREFIX,
+                    handoff.session_kind,
+                );
+                *handoff.last_output_text.lock().await = Some(output_text.clone());
+                HandoffOutput::ProgressUpdate {
+                    handoff_id,
+                    output_text,
+                }
+            }
+            None if output_text.trim().is_empty() => return Ok(()),
+            None => {
+                let output_text = prefix_realtime_text(
+                    output_text,
+                    REALTIME_BACKEND_TEXT_PREFIX,
+                    handoff.session_kind,
+                );
+                HandoffOutput::StandaloneAssistantOutput {
+                    output_text: truncate_realtime_text_to_token_budget(
+                        &output_text,
+                        REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET,
+                    ),
+                }
+            }
         };
-
-        let output_text = prefix_realtime_text(
-            output_text,
-            REALTIME_BACKEND_TEXT_PREFIX,
-            handoff.session_kind,
-        );
-        *handoff.last_output_text.lock().await = Some(output_text.clone());
         handoff
             .output_tx
-            .send(HandoffOutput::ProgressUpdate {
-                handoff_id,
-                output_text,
-            })
+            .send(output)
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         Ok(())
@@ -509,14 +531,6 @@ impl RealtimeConversationManager {
             })
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))
-    }
-
-    pub(crate) async fn active_handoff_id(&self) -> Option<String> {
-        let handoff = {
-            let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.handoff.clone())
-        }?;
-        handoff.active_handoff.lock().await.clone()
     }
 
     pub(crate) async fn clear_active_handoff(&self) {
@@ -1188,6 +1202,14 @@ async fn handle_handoff_output(
 
     let result = match event_parser {
         RealtimeEventParser::V1 => match handoff_output {
+            HandoffOutput::StandaloneAssistantOutput { output_text } => {
+                writer
+                    .send_conversation_handoff_append(
+                        STANDALONE_HANDOFF_ID.to_string(),
+                        output_text,
+                    )
+                    .await
+            }
             HandoffOutput::ProgressUpdate {
                 handoff_id,
                 output_text,
@@ -1202,6 +1224,15 @@ async fn handle_handoff_output(
             }
         },
         RealtimeEventParser::RealtimeV2 => match handoff_output {
+            HandoffOutput::StandaloneAssistantOutput { output_text } => {
+                if let Err(err) = writer.send_conversation_item_create(output_text).await {
+                    Err(err)
+                } else {
+                    return response_create_queue
+                        .request_create(writer, events_tx, "standalone assistant output")
+                        .await;
+                }
+            }
             HandoffOutput::ProgressUpdate {
                 handoff_id,
                 output_text,
