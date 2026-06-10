@@ -137,7 +137,7 @@ use uuid::Uuid;
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str =
-    "A previous Claude Code import is still running. Wait for it to finish before importing again.";
+    "A previous agent import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
@@ -367,7 +367,7 @@ impl AppServerSession {
         self.client
             .request_typed(ClientRequest::ExternalAgentConfigDetect { request_id, params })
             .await
-            .wrap_err("externalAgentConfig/detect failed during Claude Code import")
+            .wrap_err("externalAgentConfig/detect failed during agent import")
     }
 
     pub(crate) async fn external_agent_config_import(
@@ -390,7 +390,7 @@ impl AppServerSession {
                 params: ExternalAgentConfigImportParams { migration_items },
             })
             .await
-            .wrap_err("externalAgentConfig/import failed during Claude Code import");
+            .wrap_err("externalAgentConfig/import failed during agent import");
         match response {
             Ok(_) => Ok(()),
             Err(err) => {

@@ -3,11 +3,11 @@ source: tui/src/external_agent_config_migration.rs
 expression: rendered
 ---
 
-  > Import from Claude Code
+  > Import from another coding agent
   Bring over your setup, current project, and recent chats.
   Codex may add files to your current project folder.
-  Your existing Claude Code setup will not be changed.
-  Standard Claude Chat data cannot be imported.
+  Your existing agent setup will not be changed.
+  Cloud-hosted chat data cannot be imported.
     [x] Tools & setup
         Settings, instructions, integrations, agents, commands, and skills
     [x] Current project
