@@ -426,7 +426,7 @@ async fn apply_hunks_to_files(
                     .with_context(|| format!("Failed to delete file {}", path_abs.display()))?;
                 if let Err(error) = fs
                     .remove(
-                        &path_abs,
+                        &path_uri,
                         RemoveOptions {
                             recursive: false,
                             force: false,
@@ -490,7 +490,7 @@ async fn apply_hunks_to_files(
                         })?;
                     if let Err(error) = fs
                         .remove(
-                            &path_abs,
+                            &path_uri,
                             RemoveOptions {
                                 recursive: false,
                                 force: false,

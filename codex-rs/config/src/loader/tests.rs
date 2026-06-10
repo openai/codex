@@ -70,7 +70,7 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn remove(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _remove_options: RemoveOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {

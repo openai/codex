@@ -138,7 +138,7 @@ impl ExecutorFileSystem for LocalFileSystem {
 
     async fn remove(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -226,7 +226,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 
     async fn remove(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -355,11 +355,12 @@ impl ExecutorFileSystem for DirectFileSystem {
 
     async fn remove(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
+        let path = path.to_abs_path()?;
         match tokio::fs::symlink_metadata(path.as_path()).await {
             Ok(metadata) => {
                 let file_type = metadata.file_type();

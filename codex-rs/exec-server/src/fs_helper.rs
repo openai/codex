@@ -276,9 +276,11 @@ pub(crate) async fn run_direct_request(
             }))
         }
         FsHelperRequest::Remove(params) => {
+            let path =
+                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             file_system
                 .remove(
-                    &params.path,
+                    &path,
                     RemoveOptions {
                         recursive: params.recursive.unwrap_or(true),
                         force: params.force.unwrap_or(true),

@@ -185,7 +185,7 @@ pub trait ExecutorFileSystem: Send + Sync {
 
     async fn remove(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         remove_options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()>;

@@ -156,9 +156,10 @@ impl FsRequestProcessor {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         self.file_system()?
             .remove(
-                &params.path,
+                &path,
                 RemoveOptions {
                     recursive: params.recursive.unwrap_or(true),
                     force: params.force.unwrap_or(true),

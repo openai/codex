@@ -134,7 +134,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn remove(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _options: RemoveOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {

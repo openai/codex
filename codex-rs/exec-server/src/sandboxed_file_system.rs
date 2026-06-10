@@ -196,7 +196,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn remove(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         remove_options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -204,7 +204,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Remove(FsRemoveParams {
-                path: path.clone(),
+                path: path.to_abs_path()?,
                 recursive: Some(remove_options.recursive),
                 force: Some(remove_options.force),
                 sandbox: None,

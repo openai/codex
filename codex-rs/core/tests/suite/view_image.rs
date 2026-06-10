@@ -651,7 +651,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
 
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,

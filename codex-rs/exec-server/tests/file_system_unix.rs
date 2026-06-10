@@ -583,7 +583,7 @@ async fn file_system_remove_removes_symlink_not_target(
     let sandbox = workspace_write_sandbox(allowed_dir);
     file_system
         .remove(
-            &absolute_path(&symlink_path),
+            &PathUri::from_path(&symlink_path)?,
             RemoveOptions {
                 recursive: false,
                 force: false,
@@ -660,7 +660,7 @@ async fn file_system_remove_rejects_symlink_escape(
     let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
         .remove(
-            &absolute_path(&requested_path),
+            &PathUri::from_path(&requested_path)?,
             RemoveOptions {
                 recursive: false,
                 force: false,

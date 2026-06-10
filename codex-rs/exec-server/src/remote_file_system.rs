@@ -174,15 +174,16 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn remove(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs remove");
+        let path = path.to_abs_path()?;
         let client = self.client.get().await.map_err(map_remote_error)?;
         client
             .fs_remove(FsRemoveParams {
-                path: path.clone(),
+                path,
                 recursive: Some(options.recursive),
                 force: Some(options.force),
                 sandbox: remote_sandbox_context(sandbox),

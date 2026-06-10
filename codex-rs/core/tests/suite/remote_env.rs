@@ -169,7 +169,7 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
 
     file_system
         .remove(
-            &file_path_abs,
+            &file_path_uri,
             RemoveOptions {
                 recursive: false,
                 force: true,
@@ -342,7 +342,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
 
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -546,7 +546,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
 
     test.fs()
         .remove(
-            &remote_cwd,
+            &PathUri::from_abs_path(&remote_cwd)?,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -632,7 +632,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
 
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -681,7 +681,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     let _ = fs::remove_file(&target_path);
     test.fs()
         .remove(
-            &target_path,
+            &target_path_uri,
             RemoveOptions {
                 recursive: false,
                 force: true,
@@ -807,7 +807,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     let _ = fs::remove_file(&target_path);
     test.fs()
         .remove(
-            &target_path,
+            &target_path_uri,
             RemoveOptions {
                 recursive: false,
                 force: true,
@@ -817,7 +817,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         .await?;
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -913,7 +913,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
 
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -962,7 +962,7 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
     file_system
         .remove(
-            &absolute_path(allowed_dir),
+            &allowed_dir_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -1044,7 +1044,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
     let sandbox = workspace_write_sandbox(allowed_dir.clone());
     file_system
         .remove(
-            &absolute_path(symlink_path.clone()),
+            &PathUri::from_path(&symlink_path)?,
             RemoveOptions {
                 recursive: false,
                 force: false,
@@ -1068,7 +1068,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
 
     file_system
         .remove(
-            &absolute_path(root),
+            &PathUri::from_path(&root)?,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -1141,7 +1141,7 @@ async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
 
     file_system
         .remove(
-            &absolute_path(root),
+            &PathUri::from_path(&root)?,
             RemoveOptions {
                 recursive: true,
                 force: true,

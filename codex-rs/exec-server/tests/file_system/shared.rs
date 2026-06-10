@@ -311,7 +311,7 @@ async fn file_system_remove_removes_directory(
 
     file_system
         .remove(
-            &absolute_path(&directory_path),
+            &PathUri::from_path(&directory_path)?,
             RemoveOptions {
                 recursive: true,
                 force: true,

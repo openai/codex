@@ -960,10 +960,11 @@ impl TestCodexHarness {
     }
 
     pub async fn remove_abs_path(&self, path: &AbsolutePathBuf) -> Result<()> {
+        let path_uri = PathUri::from_abs_path(path)?;
         self.test
             .fs()
             .remove(
-                path,
+                &path_uri,
                 RemoveOptions {
                     recursive: false,
                     force: true,

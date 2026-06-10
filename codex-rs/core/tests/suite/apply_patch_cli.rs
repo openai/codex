@@ -1586,7 +1586,7 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
     let _ = fs::remove_dir_all(shared_cwd.as_path());
     test.fs()
         .remove(
-            &shared_cwd,
+            &shared_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -1714,7 +1714,7 @@ index 0000000000000000000000000000000000000000..9c998f7b995a7327177b38a90d138517
     let _ = fs::remove_dir_all(shared_cwd.as_path());
     test.fs()
         .remove(
-            &shared_cwd,
+            &shared_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
