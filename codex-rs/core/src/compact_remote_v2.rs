@@ -599,10 +599,12 @@ mod tests {
                 call_id: "call_1".to_string(),
             },
             ResponseItem::Compaction {
+                id: None,
                 encrypted_content: "old".to_string(),
             },
         ];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
         };
 
@@ -630,6 +632,7 @@ mod tests {
             new.clone(),
         ];
         let output = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "new".to_string(),
         };
 
@@ -781,6 +784,7 @@ mod tests {
     #[tokio::test]
     async fn collect_compaction_output_accepts_additional_output_items() {
         let compaction = ResponseItem::Compaction {
+            id: None,
             encrypted_content: "encrypted".to_string(),
         };
         let stream = response_stream(vec![

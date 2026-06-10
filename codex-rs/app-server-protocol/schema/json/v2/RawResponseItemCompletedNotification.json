@@ -361,8 +361,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "phase": {
               "anyOf": [
@@ -404,6 +403,12 @@
               },
               "type": "array"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "recipient": {
               "type": "string"
             },
@@ -441,6 +446,9 @@
                 "string",
                 "null"
               ]
+            },
+            "id": {
+              "type": "string"
             },
             "summary": {
               "items": {
@@ -480,8 +488,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "status": {
               "$ref": "#/definitions/LocalShellStatus"
@@ -514,8 +521,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "name": {
               "type": "string"
@@ -559,8 +565,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "status": {
               "type": [
@@ -588,6 +593,12 @@
           "properties": {
             "call_id": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "output": {
               "$ref": "#/definitions/FunctionCallOutputBody"
@@ -617,8 +628,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "input": {
               "type": "string"
@@ -653,6 +663,12 @@
           "properties": {
             "call_id": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "name": {
               "type": [
@@ -689,6 +705,12 @@
             },
             "execution": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "status": {
               "type": "string"
@@ -730,8 +752,7 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "writeOnly": true
+              ]
             },
             "status": {
               "type": [
@@ -779,7 +800,6 @@
             }
           },
           "required": [
-            "id",
             "result",
             "status",
             "type"
@@ -791,6 +811,12 @@
           "properties": {
             "encrypted_content": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [

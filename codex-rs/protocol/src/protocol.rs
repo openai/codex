@@ -709,15 +709,22 @@ impl InterAgentCommunication {
         }
     }
 
-    pub fn to_model_input_item(&self) -> ResponseItem {
+    pub fn to_model_input_item(&self, source_message_id: Option<&str>) -> ResponseItem {
         match &self.encrypted_content {
-            Some(encrypted_content) => ResponseItem::AgentMessage {
-                author: self.author.to_string(),
-                recipient: self.recipient.to_string(),
-                content: vec![AgentMessageInputContent::EncryptedContent {
-                    encrypted_content: encrypted_content.clone(),
-                }],
-            },
+            Some(encrypted_content) => {
+                let id = source_message_id
+                    .and_then(|id| id.strip_prefix("msg_"))
+                    .filter(|suffix| !suffix.is_empty())
+                    .map(|suffix| format!("amsg_{suffix}"));
+                ResponseItem::AgentMessage {
+                    id,
+                    author: self.author.to_string(),
+                    recipient: self.recipient.to_string(),
+                    content: vec![AgentMessageInputContent::EncryptedContent {
+                        encrypted_content: encrypted_content.clone(),
+                    }],
+                }
+            }
             None => self.to_response_input_item().into(),
         }
     }
@@ -4144,6 +4151,41 @@ mod tests {
                     text: serde_json::to_string(&communication).expect("serialize communication"),
                 }],
                 phase: Some(MessagePhase::Commentary),
+            }
+        );
+    }
+
+    #[test]
+    fn encrypted_inter_agent_communication_model_input_uses_source_message_id() {
+        let communication = InterAgentCommunication::new_encrypted(
+            AgentPath::root(),
+            AgentPath::root().join("reviewer").expect("recipient path"),
+            Vec::new(),
+            "encrypted-payload".to_string(),
+            /*trigger_turn*/ true,
+        );
+        let expected = ResponseItem::AgentMessage {
+            id: Some("amsg_stable".to_string()),
+            author: "/root".to_string(),
+            recipient: "/root/reviewer".to_string(),
+            content: vec![AgentMessageInputContent::EncryptedContent {
+                encrypted_content: "encrypted-payload".to_string(),
+            }],
+        };
+
+        assert_eq!(
+            communication.to_model_input_item(Some("msg_stable")),
+            expected
+        );
+        assert_eq!(
+            communication.to_model_input_item(/*source_message_id*/ None),
+            ResponseItem::AgentMessage {
+                id: None,
+                author: "/root".to_string(),
+                recipient: "/root/reviewer".to_string(),
+                content: vec![AgentMessageInputContent::EncryptedContent {
+                    encrypted_content: "encrypted-payload".to_string(),
+                }],
             }
         );
     }

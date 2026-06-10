@@ -36,8 +36,13 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
     )
     .await?;
 
+    let user_message_id = input
+        .last()
+        .and_then(ResponseItem::id)
+        .expect("debug prompt user message should have an id");
+    assert!(user_message_id.starts_with("msg_"));
     let expected_user_message = ResponseItem::Message {
-        id: None,
+        id: Some(user_message_id.to_string()),
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: "hello from debug prompt".to_string(),

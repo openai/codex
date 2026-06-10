@@ -216,6 +216,21 @@ fn build_token_limited_compacted_history_appends_summary_message() {
 }
 
 #[test]
+fn build_compacted_history_marks_new_compacted_messages() {
+    let history = build_compacted_history(
+        Vec::new(),
+        &["first user message".to_string()],
+        "summary text",
+    );
+
+    assert!(
+        history
+            .iter()
+            .all(|item| { item.id().is_some_and(|id| id.starts_with("msg_")) })
+    );
+}
+
+#[test]
 fn should_use_remote_compact_task_for_azure_provider() {
     let provider = ModelProviderInfo {
         name: "Azure".into(),
@@ -280,7 +295,7 @@ async fn process_compacted_history_replaces_developer_messages() {
         }],
         phase: None,
     });
-    assert_eq!(refreshed, expected);
+    crate::session::tests::assert_response_items_eq_ignoring_ids(&refreshed, &expected);
 }
 
 #[tokio::test]
@@ -306,7 +321,17 @@ async fn process_compacted_history_reinjects_full_initial_context() {
         }],
         phase: None,
     });
-    assert_eq!(refreshed, expected);
+    crate::session::tests::assert_response_items_eq_ignoring_ids(&refreshed, &expected);
+    let reinjected_initial_context = &refreshed[..expected.len() - 1];
+    crate::session::tests::assert_response_items_eq_ignoring_ids(
+        reinjected_initial_context,
+        &expected[..expected.len() - 1],
+    );
+    assert!(
+        reinjected_initial_context
+            .iter()
+            .all(|item| { item.id().is_some_and(|id| id.starts_with("msg_")) })
+    );
 }
 
 #[tokio::test]
@@ -379,7 +404,7 @@ keep me updated
         }],
         phase: None,
     });
-    assert_eq!(refreshed, expected);
+    crate::session::tests::assert_response_items_eq_ignoring_ids(&refreshed, &expected);
 }
 
 #[tokio::test]
@@ -404,7 +429,7 @@ async fn process_compacted_history_drops_legacy_warnings() {
     .await;
     let mut expected = initial_context;
     expected.push(latest_user);
-    assert_eq!(refreshed, expected);
+    crate::session::tests::assert_response_items_eq_ignoring_ids(&refreshed, &expected);
 }
 
 #[tokio::test]
@@ -468,7 +493,7 @@ async fn process_compacted_history_inserts_context_before_last_real_user_message
         }],
         phase: None,
     });
-    assert_eq!(refreshed, expected);
+    crate::session::tests::assert_response_items_eq_ignoring_ids(&refreshed, &expected);
 }
 
 #[tokio::test]
@@ -510,7 +535,7 @@ async fn process_compacted_history_reinjects_model_switch_message() {
         }],
         phase: None,
     });
-    assert_eq!(refreshed, expected);
+    crate::session::tests::assert_response_items_eq_ignoring_ids(&refreshed, &expected);
 }
 
 #[test]
@@ -592,6 +617,7 @@ fn insert_initial_context_before_last_real_user_or_summary_keeps_summary_last() 
 #[test]
 fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last() {
     let compacted_history = vec![ResponseItem::Compaction {
+        id: None,
         encrypted_content: "encrypted".to_string(),
     }];
     let initial_context = vec![ResponseItem::Message {
@@ -615,6 +641,7 @@ fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last
             phase: None,
         },
         ResponseItem::Compaction {
+            id: None,
             encrypted_content: "encrypted".to_string(),
         },
     ];

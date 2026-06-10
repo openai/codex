@@ -549,14 +549,7 @@ fn build_compacted_history_with_limit(
     }
 
     for message in &selected_messages {
-        history.push(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: message.clone(),
-            }],
-            phase: None,
-        });
+        history.push(compacted_user_message(message.clone()));
     }
 
     let summary_text = if summary_text.is_empty() {
@@ -565,14 +558,14 @@ fn build_compacted_history_with_limit(
         summary_text.to_string()
     };
 
-    history.push(ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText { text: summary_text }],
-        phase: None,
-    });
+    history.push(compacted_user_message(summary_text));
 
     history
+}
+
+fn compacted_user_message(text: String) -> ResponseItem {
+    let content = vec![ContentItem::InputText { text }];
+    ResponseItem::new_message("user", content)
 }
 
 async fn drain_to_completed(

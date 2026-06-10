@@ -1086,9 +1086,16 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
         .await?
         .pop()
         .expect("child request");
+    let agent_messages = child_request.inputs_of_type("agent_message");
+    let [agent_message] = agent_messages.as_slice() else {
+        panic!("expected one agent message input");
+    };
+    let agent_message_id = agent_message["id"].as_str().expect("agent message id");
+    assert!(agent_message_id.starts_with("amsg_"));
     assert_eq!(
-        child_request.inputs_of_type("agent_message"),
-        vec![json!({
+        agent_message,
+        &json!({
+            "id": agent_message_id,
             "type": "agent_message",
             "author": "/root",
             "recipient": "/root/worker",
@@ -1096,7 +1103,7 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
                 "type": "encrypted_content",
                 "encrypted_content": encrypted_message,
             }],
-        })]
+        })
     );
 
     Ok(())

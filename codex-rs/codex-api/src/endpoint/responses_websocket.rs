@@ -5,6 +5,8 @@ use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
+use crate::requests::ResponseItemIdPolicy;
+use crate::requests::apply_response_item_id_policy;
 use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
@@ -215,6 +217,7 @@ impl ResponsesWebsocketConnection {
         &self,
         request: ResponsesWsRequest,
         connection_reused: bool,
+        include_item_ids_for_stateless_mode: bool,
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -224,9 +227,16 @@ impl ResponsesWebsocketConnection {
         let models_etag = self.models_etag.clone();
         let server_model = self.server_model.clone();
         let telemetry = self.telemetry.clone();
-        let request_body = serde_json::to_value(&request).map_err(|err| {
+        let mut request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
+        let ResponsesWsRequest::ResponseCreate(request) = &request;
+        let item_id_policy = if include_item_ids_for_stateless_mode {
+            ResponseItemIdPolicy::KeepAll
+        } else {
+            ResponseItemIdPolicy::OmitAll
+        };
+        apply_response_item_id_policy(&mut request_body, &request.input, item_id_policy);
 
         let current_span = Span::current();
         tokio::spawn(

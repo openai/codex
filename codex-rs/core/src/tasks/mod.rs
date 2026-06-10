@@ -100,14 +100,12 @@ pub(crate) fn interrupted_turn_history_marker(
             let marker = crate::context::TurnAborted::new(
                 crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE,
             );
-            Some(ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
+            Some(ResponseItem::new_message(
+                "developer",
+                vec![ContentItem::InputText {
                     text: marker.render(),
                 }],
-                phase: None,
-            })
+            ))
         }
     }
 }

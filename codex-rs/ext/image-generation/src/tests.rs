@@ -83,6 +83,7 @@ fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             call_id: "mcp-call".to_string(),
         },
         ResponseItem::FunctionCallOutput {
+            id: None,
             call_id: "mcp-call".to_string(),
             output: image_output("mcp"),
         },
@@ -94,6 +95,7 @@ fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             input: String::new(),
         },
         ResponseItem::CustomToolCallOutput {
+            id: None,
             call_id: "code-mode-call".to_string(),
             name: Some("exec".to_string()),
             output: image_output("code-mode"),
@@ -105,6 +107,7 @@ fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             result: "generated".to_string(),
         },
         ResponseItem::FunctionCallOutput {
+            id: None,
             call_id: "orphan-call".to_string(),
             output: image_output("orphan"),
         },

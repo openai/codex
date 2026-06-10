@@ -3,6 +3,8 @@ use crate::common::CompactionInput;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use crate::requests::ResponseItemIdPolicy;
+use crate::requests::apply_response_item_id_policy;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::models::ResponseItem;
@@ -62,9 +64,16 @@ impl<T: HttpTransport> CompactClient<T> {
         input: &CompactionInput<'_>,
         extra_headers: HeaderMap,
         request_timeout: Duration,
+        include_item_ids_for_stateless_mode: bool,
     ) -> Result<Vec<ResponseItem>, ApiError> {
-        let body = to_value(input)
+        let mut body = to_value(input)
             .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
+        let item_id_policy = if include_item_ids_for_stateless_mode {
+            ResponseItemIdPolicy::KeepAll
+        } else {
+            ResponseItemIdPolicy::OmitAll
+        };
+        apply_response_item_id_policy(&mut body, input.input, item_id_policy);
         self.compact(body, extra_headers, request_timeout).await
     }
 }

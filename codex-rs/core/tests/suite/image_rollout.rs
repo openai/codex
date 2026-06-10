@@ -157,8 +157,13 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         .expect("expected user message with input image in rollout");
 
     let image_url = extract_image_url(&actual).expect("expected image url in rollout");
+    let actual_id = actual
+        .id()
+        .expect("expected user message id in rollout")
+        .to_string();
+    assert!(actual_id.starts_with("msg_"));
     let expected = ResponseItem::Message {
-        id: None,
+        id: Some(actual_id),
         role: "user".to_string(),
         content: vec![
             ContentItem::InputText {
@@ -255,8 +260,13 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         .expect("expected user message with input image in rollout");
 
     let image_url = extract_image_url(&actual).expect("expected image url in rollout");
+    let actual_id = actual
+        .id()
+        .expect("expected user message id in rollout")
+        .to_string();
+    assert!(actual_id.starts_with("msg_"));
     let expected = ResponseItem::Message {
-        id: None,
+        id: Some(actual_id),
         role: "user".to_string(),
         content: vec![
             ContentItem::InputImage {

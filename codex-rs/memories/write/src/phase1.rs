@@ -421,13 +421,14 @@ mod job {
 
     fn sanitize_response_item_for_memories(item: &ResponseItem) -> Option<ResponseItem> {
         let ResponseItem::Message {
-            id,
+            id: _,
             role,
             content,
             phase,
         } = item
         else {
-            return should_persist_response_item_for_memories(item).then(|| item.clone());
+            return should_persist_response_item_for_memories(item)
+                .then(|| item.clone().without_id());
         };
 
         if role == "developer" {
@@ -435,7 +436,7 @@ mod job {
         }
 
         if role != "user" {
-            return Some(item.clone());
+            return Some(item.clone().without_id());
         }
 
         let content = content
@@ -448,7 +449,7 @@ mod job {
         }
 
         Some(ResponseItem::Message {
-            id: id.clone(),
+            id: None,
             role: role.clone(),
             content,
             phase: phase.clone(),
@@ -722,6 +723,7 @@ mod tests {
         let serialized =
             job::serialize_filtered_rollout_response_items(&[RolloutItem::ResponseItem(
                 ResponseItem::FunctionCallOutput {
+                    id: None,
                     call_id: "call_123".to_string(),
                     output: codex_protocol::models::FunctionCallOutputPayload {
                         body: codex_protocol::models::FunctionCallOutputBody::Text(

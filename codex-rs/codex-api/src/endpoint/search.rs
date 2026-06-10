@@ -2,6 +2,9 @@ use crate::auth::SharedAuthProvider;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use crate::requests::ResponseItemIdPolicy;
+use crate::requests::apply_response_item_id_policy;
+use crate::search::SearchInput;
 use crate::search::SearchRequest;
 use crate::search::SearchResponse;
 use codex_client::HttpTransport;
@@ -37,8 +40,11 @@ impl<T: HttpTransport> SearchClient<T> {
         request: &SearchRequest,
         extra_headers: HeaderMap,
     ) -> Result<SearchResponse, ApiError> {
-        let body = to_value(request)
+        let mut body = to_value(request)
             .map_err(|e| ApiError::Stream(format!("failed to encode search request: {e}")))?;
+        if let Some(SearchInput::Items(input)) = &request.input {
+            apply_response_item_id_policy(&mut body, input, ResponseItemIdPolicy::OmitAll);
+        }
         let resp = self
             .session
             .execute(Method::POST, Self::path(), extra_headers, Some(body))

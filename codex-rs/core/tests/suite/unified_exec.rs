@@ -173,6 +173,7 @@ async fn wait_for_raw_unified_exec_output(
             ResponseItem::FunctionCallOutput {
                 call_id: output_call_id,
                 output,
+                ..
             } if output_call_id == call_id => output.text_content().map(str::to_string),
             _ => None,
         },

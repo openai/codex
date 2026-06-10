@@ -871,7 +871,14 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     phase: None,
                 },
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
-                assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
+                ResponseItem::Message {
+                    id: Some("msg_parent_final_answer".to_string()),
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "parent final answer".to_string(),
+                    }],
+                    phase: Some(MessagePhase::FinalAnswer),
+                },
                 assistant_message("parent unknown phase", /*phase*/ None),
                 ResponseItem::Reasoning {
                     id: "parent-reasoning".to_string(),
@@ -933,18 +940,31 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("child thread should be registered");
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
+    let history_ids = history
+        .raw_items()
+        .iter()
+        .map(|item| item.id().expect("forked messages should have ids"))
+        .collect::<Vec<_>>();
+    assert!(history_ids.iter().all(|id| id.starts_with("msg_")));
     let expected_history = [
         ResponseItem::Message {
-            id: None,
+            id: Some(history_ids[0].to_string()),
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "parent seed context".to_string(),
             }],
             phase: None,
         },
-        assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
         ResponseItem::Message {
-            id: None,
+            id: Some(history_ids[1].to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "parent final answer".to_string(),
+            }],
+            phase: Some(MessagePhase::FinalAnswer),
+        },
+        ResponseItem::Message {
+            id: Some(history_ids[2].to_string()),
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
                 text: "Child subagent guidance.".to_string(),

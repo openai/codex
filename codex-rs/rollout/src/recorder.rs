@@ -1678,7 +1678,6 @@ impl JsonlWriter {
         let timestamp = OffsetDateTime::now_utc()
             .format(timestamp_format)
             .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
-
         let line = RolloutLineRef {
             timestamp,
             item: rollout_item,
