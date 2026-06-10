@@ -928,8 +928,8 @@ fn push_list_threads_query(
     builder.push(" FROM threads");
     push_thread_filters(builder, filters);
     let order_by_index = match filters.cwd_filters {
-        // Multi-cwd listing is supported but has no current in-repo production caller. Preserve
-        // its query plan so the global timestamp index does not turn cwd filtering into a scan.
+        // Multi-cwd listing is supported but at the time of writing has no current use in production.
+        // Preserve its query plan so the global timestamp index does not regress cwd filtering into a scan.
         Some(cwd_filters) if cwd_filters.len() > 1 => OrderByIndex::Disabled,
         Some(_) | None => OrderByIndex::Enabled,
     };
