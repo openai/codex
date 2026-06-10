@@ -226,18 +226,6 @@
       },
       "type": "object"
     },
-    "AppsMcpPathOverrideConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "path": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -408,7 +396,23 @@
               "type": "boolean"
             },
             "apps_mcp_path_override": {
-              "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              ]
             },
             "auth_elicitation": {
               "type": "boolean"
@@ -835,16 +839,6 @@
         }
       },
       "type": "object"
-    },
-    "FeatureToml_for_AppsMcpPathOverrideConfigToml": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/definitions/AppsMcpPathOverrideConfigToml"
-        }
-      ]
     },
     "FeatureToml_for_CodeModeConfigToml": {
       "anyOf": [
@@ -4534,7 +4528,23 @@
           "type": "boolean"
         },
         "apps_mcp_path_override": {
-          "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          ]
         },
         "auth_elicitation": {
           "type": "boolean"

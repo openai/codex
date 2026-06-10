@@ -256,7 +256,7 @@ async fn start_resource_apps_mcp_server() -> Result<(String, JoinHandle<()>)> {
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
-    let router = Router::new().nest_service("/api/codex/apps", mcp_service);
+    let router = Router::new().nest_service("/api/codex/ps/mcp", mcp_service);
     let apps_server_handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });

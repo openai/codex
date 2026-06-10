@@ -11,12 +11,3 @@ pub enum McpServerContribution {
     /// Removes a named MCP server.
     Remove { name: String },
 }
-
-impl McpServerContribution {
-    /// Returns the stable server name owned by this contribution.
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Set { name, .. } | Self::Remove { name } => name,
-        }
-    }
-}

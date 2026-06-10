@@ -406,7 +406,7 @@ async fn start_apps_server() -> Result<(String, JoinHandle<()>)> {
             get(list_directory_connectors),
         )
         .with_state(state)
-        .nest_service("/api/codex/apps", mcp_service);
+        .nest_service("/api/codex/ps/mcp", mcp_service);
 
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
