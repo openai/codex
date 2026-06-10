@@ -50,6 +50,16 @@ pub(crate) struct OrchestratorRunResult<Out> {
     pub deferred_network_approval: Option<DeferredNetworkApproval>,
 }
 
+struct ApprovalDecision {
+    decision: ReviewDecision,
+    guardian_review_id: Option<String>,
+}
+
+struct ApprovalRequestOptions {
+    evaluate_permission_request_hooks: bool,
+    manual_fallback_for_guardian_timeout: bool,
+}
+
 impl ToolOrchestrator {
     pub fn new() -> Self {
         Self {
@@ -144,6 +154,7 @@ impl ToolOrchestrator {
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
         let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
+        let manual_fallback_for_guardian_timeout = turn_ctx.manual_approval_fallback_enabled;
 
         // 1) Approval
         let mut already_approved = false;
@@ -165,18 +176,25 @@ impl ToolOrchestrator {
                         retry_reason: None,
                         network_approval_context: None,
                     };
-                    let decision = Self::request_approval(
+                    let approval_decision = Self::request_approval_with_manual_fallback(
                         tool,
                         req,
                         tool_ctx.call_id.as_str(),
                         approval_ctx,
                         tool_ctx,
-                        /*evaluate_permission_request_hooks*/ false,
+                        ApprovalRequestOptions {
+                            evaluate_permission_request_hooks: false,
+                            manual_fallback_for_guardian_timeout,
+                        },
                         &otel,
                     )
                     .await?;
-                    Self::reject_if_not_approved(tool_ctx, guardian_review_id.as_deref(), decision)
-                        .await?;
+                    Self::reject_if_not_approved(
+                        tool_ctx,
+                        approval_decision.guardian_review_id.as_deref(),
+                        approval_decision.decision,
+                    )
+                    .await?;
                     already_approved = true;
                 } else {
                     otel.tool_decision(
@@ -200,19 +218,26 @@ impl ToolOrchestrator {
                     retry_reason: reason.clone(),
                     network_approval_context: None,
                 };
-                let decision = Self::request_approval(
+                let approval_decision = Self::request_approval_with_manual_fallback(
                     tool,
                     req,
                     tool_ctx.call_id.as_str(),
                     approval_ctx,
                     tool_ctx,
-                    /*evaluate_permission_request_hooks*/ !strict_auto_review,
+                    ApprovalRequestOptions {
+                        evaluate_permission_request_hooks: !strict_auto_review,
+                        manual_fallback_for_guardian_timeout,
+                    },
                     &otel,
                 )
                 .await?;
 
-                Self::reject_if_not_approved(tool_ctx, guardian_review_id.as_deref(), decision)
-                    .await?;
+                Self::reject_if_not_approved(
+                    tool_ctx,
+                    approval_decision.guardian_review_id.as_deref(),
+                    approval_decision.decision,
+                )
+                .await?;
                 already_approved = true;
             }
         }
@@ -382,19 +407,26 @@ impl ToolOrchestrator {
                     };
 
                     let permission_request_run_id = format!("{}:retry", tool_ctx.call_id);
-                    let decision = Self::request_approval(
+                    let approval_decision = Self::request_approval_with_manual_fallback(
                         tool,
                         req,
                         &permission_request_run_id,
                         approval_ctx,
                         tool_ctx,
-                        /*evaluate_permission_request_hooks*/ !strict_auto_review,
+                        ApprovalRequestOptions {
+                            evaluate_permission_request_hooks: !strict_auto_review,
+                            manual_fallback_for_guardian_timeout,
+                        },
                         &otel,
                     )
                     .await?;
 
-                    Self::reject_if_not_approved(tool_ctx, guardian_review_id.as_deref(), decision)
-                        .await?;
+                    Self::reject_if_not_approved(
+                        tool_ctx,
+                        approval_decision.guardian_review_id.as_deref(),
+                        approval_decision.decision,
+                    )
+                    .await?;
                 }
 
                 let retry_sandbox = if unsandboxed_allowed {
@@ -546,6 +578,68 @@ impl ToolOrchestrator {
         Ok(decision)
     }
 
+    async fn request_approval_with_manual_fallback<Rq, Out, T>(
+        tool: &mut T,
+        req: &Rq,
+        permission_request_run_id: &str,
+        approval_ctx: ApprovalCtx<'_>,
+        tool_ctx: &ToolCtx,
+        options: ApprovalRequestOptions,
+        otel: &codex_otel::SessionTelemetry,
+    ) -> Result<ApprovalDecision, ToolError>
+    where
+        T: ToolRuntime<Rq, Out>,
+    {
+        let guardian_review_id = approval_ctx.guardian_review_id.clone();
+        let session = approval_ctx.session;
+        let turn = approval_ctx.turn;
+        let call_id = approval_ctx.call_id;
+        let network_approval_context = approval_ctx.network_approval_context.clone();
+        let decision = Self::request_approval(
+            tool,
+            req,
+            permission_request_run_id,
+            approval_ctx,
+            tool_ctx,
+            options.evaluate_permission_request_hooks,
+            otel,
+        )
+        .await?;
+
+        if !options.manual_fallback_for_guardian_timeout
+            || !matches!(decision, ReviewDecision::TimedOut)
+            || guardian_review_id.is_none()
+        {
+            return Ok(ApprovalDecision {
+                decision,
+                guardian_review_id,
+            });
+        }
+
+        let fallback_ctx = ApprovalCtx {
+            session,
+            turn,
+            call_id,
+            guardian_review_id: None,
+            retry_reason: Some(guardian_timeout_message()),
+            network_approval_context,
+        };
+        let decision = Self::request_approval(
+            tool,
+            req,
+            permission_request_run_id,
+            fallback_ctx,
+            tool_ctx,
+            /*evaluate_permission_request_hooks*/ false,
+            otel,
+        )
+        .await?;
+        Ok(ApprovalDecision {
+            decision,
+            guardian_review_id: None,
+        })
+    }
+
     async fn reject_if_not_approved(
         tool_ctx: &ToolCtx,
         guardian_review_id: Option<&str>,
@@ -590,3 +684,7 @@ fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
     // output so we can evolve heuristics later without touching call sites.
     "command failed; retry without sandbox?".to_string()
 }
+
+#[cfg(test)]
+#[path = "orchestrator_tests.rs"]
+mod tests;

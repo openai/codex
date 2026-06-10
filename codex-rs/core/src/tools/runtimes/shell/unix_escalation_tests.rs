@@ -8,6 +8,7 @@ use super::extract_shell_script;
 use super::join_program_and_argv;
 use super::map_exec_result;
 use crate::config::Constrained;
+use crate::guardian::can_fallback_to_manual_after_guardian_timeout;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::tests::make_session_and_context;
 use anyhow::Context;
@@ -32,6 +33,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianCommandSource;
+use codex_protocol::protocol::SessionSource;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_shell_escalation::EscalationExecution;
@@ -126,6 +128,19 @@ fn execve_prompt_rejection_keeps_unmatched_commands_on_sandbox_flag() {
         ),
         Some("approval required by policy, but AskForApproval::Granular.sandbox_approval is false"),
     );
+}
+
+#[test]
+fn execve_guardian_timeout_manual_fallback_is_limited_to_interactive_sources() {
+    assert!(can_fallback_to_manual_after_guardian_timeout(
+        &SessionSource::Cli
+    ));
+    assert!(can_fallback_to_manual_after_guardian_timeout(
+        &SessionSource::VSCode
+    ));
+    assert!(!can_fallback_to_manual_after_guardian_timeout(
+        &SessionSource::Exec
+    ));
 }
 
 #[test]

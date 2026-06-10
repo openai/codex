@@ -120,6 +120,7 @@ pub(super) async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
+        manual_approval_fallback_enabled: parent_turn_context.manual_approval_fallback_enabled,
         parent_thread_id: parent_turn_context.parent_thread_id,
         thread_source: parent_turn_context.thread_source.clone(),
         environments: parent_turn_context.environments.clone(),

@@ -457,7 +457,7 @@ impl CoreShellActionProvider {
                 }
 
                 // 2) Route to Guardian if configured
-                if let Some(review_id) = guardian_review_id.clone() {
+                let manual_prompt_reason = if let Some(review_id) = guardian_review_id.clone() {
                     let decision = review_approval_request(
                         &session,
                         &turn,
@@ -468,17 +468,24 @@ impl CoreShellActionProvider {
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),
                             cwd: workdir.clone(),
-                            additional_permissions,
+                            additional_permissions: additional_permissions.clone(),
                         },
                         /*retry_reason*/ None,
                     )
                     .await;
-                    return PromptDecision {
-                        decision,
-                        guardian_review_id,
-                        rejection_message: None,
-                    };
-                }
+                    if !matches!(decision, ReviewDecision::TimedOut)
+                        || !turn.manual_approval_fallback_enabled
+                    {
+                        return PromptDecision {
+                            decision,
+                            guardian_review_id,
+                            rejection_message: None,
+                        };
+                    }
+                    Some(guardian_timeout_message())
+                } else {
+                    None
+                };
 
                 // 3) Fall back to regular user prompt
                 let decision = session
@@ -488,7 +495,7 @@ impl CoreShellActionProvider {
                         approval_id,
                         command,
                         workdir.clone(),
-                        /*reason*/ None,
+                        manual_prompt_reason,
                         /*network_approval_context*/ None,
                         /*proposed_execpolicy_amendment*/ None,
                         additional_permissions,

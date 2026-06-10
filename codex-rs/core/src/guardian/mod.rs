@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
+use codex_protocol::protocol::SessionSource;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -58,6 +59,12 @@ const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
 const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 16_000;
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 const TRUNCATION_TAG: &str = "truncated";
+
+pub(crate) fn can_fallback_to_manual_after_guardian_timeout(
+    session_source: &SessionSource,
+) -> bool {
+    matches!(session_source, SessionSource::Cli | SessionSource::VSCode)
+}
 
 /// Structured output contract that the guardian reviewer must satisfy.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

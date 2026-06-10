@@ -402,6 +402,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
+    pub(crate) client_session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
@@ -487,6 +488,7 @@ impl Codex {
             extensions,
             conversation_history,
             session_source,
+            client_session_source,
             forked_from_thread_id,
             parent_thread_id,
             thread_source,
@@ -616,6 +618,10 @@ impl Codex {
             metrics_service_name,
             app_server_client_name: None,
             app_server_client_version: None,
+            manual_approval_fallback_enabled:
+                crate::guardian::can_fallback_to_manual_after_guardian_timeout(
+                    &client_session_source,
+                ),
             session_source,
             forked_from_thread_id,
             parent_thread_id,
