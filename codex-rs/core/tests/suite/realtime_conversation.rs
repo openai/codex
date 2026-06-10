@@ -2657,10 +2657,12 @@ async fn conversation_clears_handoff_after_turn_abort() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            model: None,
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,
+            version: None,
             voice: None,
         }))
         .await?;
