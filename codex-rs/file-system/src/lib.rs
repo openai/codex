@@ -179,7 +179,7 @@ pub trait ExecutorFileSystem: Send + Sync {
 
     async fn read_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>>;
 

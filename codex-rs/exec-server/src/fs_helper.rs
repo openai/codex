@@ -258,8 +258,10 @@ pub(crate) async fn run_direct_request(
             }))
         }
         FsHelperRequest::ReadDirectory(params) => {
+            let path =
+                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             let entries = file_system
-                .read_directory(&params.path, /*sandbox*/ None)
+                .read_directory(&path, /*sandbox*/ None)
                 .await
                 .map_err(map_fs_error)?
                 .into_iter()

@@ -273,7 +273,7 @@ async fn file_system_read_directory_lists_entries(
     std::fs::write(source_dir.join("root.txt"), "hello")?;
 
     let mut entries = file_system
-        .read_directory(&absolute_path(&source_dir), /*sandbox*/ None)
+        .read_directory(&PathUri::from_path(&source_dir)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));

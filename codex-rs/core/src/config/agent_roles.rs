@@ -525,7 +525,8 @@ async fn collect_agent_role_files(
     let mut files = Vec::new();
     let mut dirs = vec![dir.clone()];
     while let Some(dir) = dirs.pop() {
-        let entries = match fs.read_directory(&dir, /*sandbox*/ None).await {
+        let dir_uri = PathUri::from_abs_path(&dir)?;
+        let entries = match fs.read_directory(&dir_uri, /*sandbox*/ None).await {
             Ok(entries) => entries,
             Err(err) if err.kind() == ErrorKind::NotFound => continue,
             Err(err) => return Err(err),

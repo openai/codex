@@ -111,16 +111,17 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn read_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
-        if path == &self.canonical_root {
+        let path = path.to_abs_path()?;
+        if path == self.canonical_root {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "skill".to_string(),
                 is_directory: true,
                 is_file: false,
             }])
-        } else if path == &self.canonical_root.join("skill") {
+        } else if path == self.canonical_root.join("skill") {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,

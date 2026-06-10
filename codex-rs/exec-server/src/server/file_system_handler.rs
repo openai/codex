@@ -153,9 +153,10 @@ impl FileSystemHandler {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         let entries = self
             .file_system
-            .read_directory(&params.path, params.sandbox.as_ref())
+            .read_directory(&path, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?
             .into_iter()

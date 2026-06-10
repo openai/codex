@@ -571,7 +571,17 @@ async fn discover_skills_under_root(
     let mut truncated_by_dir_limit = false;
 
     while let Some((dir, depth)) = queue.pop_front() {
-        let entries = match fs.read_directory(&dir, /*sandbox*/ None).await {
+        let dir_uri = match PathUri::from_abs_path(&dir) {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!(
+                    "failed to convert skills dir {} to URI: {e:#}",
+                    dir.display()
+                );
+                continue;
+            }
+        };
+        let entries = match fs.read_directory(&dir_uri, /*sandbox*/ None).await {
             Ok(entries) => entries,
             Err(e) => {
                 error!("failed to read skills dir {}: {e:#}", dir.display());
@@ -608,7 +618,7 @@ async fn discover_skills_under_root(
                 if !follow_symlinks {
                     continue;
                 }
-                match fs.read_directory(&path, /*sandbox*/ None).await {
+                match fs.read_directory(&path_uri, /*sandbox*/ None).await {
                     Ok(_) => {
                         let resolved_dir = canonicalize_for_skill_identity(fs, &path).await;
                         enqueue_dir(

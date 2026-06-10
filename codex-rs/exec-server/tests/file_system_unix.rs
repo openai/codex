@@ -513,7 +513,7 @@ async fn file_system_read_directory_rejects_symlink_escape(
     let requested_path = allowed_dir.join("link");
     let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .read_directory(&absolute_path(&requested_path), Some(&sandbox))
+        .read_directory(&PathUri::from_path(&requested_path)?, Some(&sandbox))
         .await
     {
         Ok(_) => anyhow::bail!("read_directory should be blocked"),

@@ -129,7 +129,7 @@ impl ExecutorFileSystem for LocalFileSystem {
 
     async fn read_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
@@ -215,7 +215,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 
     async fn read_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         reject_platform_sandbox_context(sandbox)?;
@@ -333,10 +333,11 @@ impl ExecutorFileSystem for DirectFileSystem {
 
     async fn read_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         reject_sandbox_context(sandbox)?;
+        let path = path.to_abs_path()?;
         let mut entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(path.as_path()).await?;
         while let Some(entry) = read_dir.next_entry().await? {

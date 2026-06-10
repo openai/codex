@@ -134,9 +134,10 @@ impl FsRequestProcessor {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         let entries = self
             .file_system()?
-            .read_directory(&params.path, /*sandbox*/ None)
+            .read_directory(&path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadDirectoryResponse {

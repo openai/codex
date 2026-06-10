@@ -62,7 +62,7 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn read_directory(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         unimplemented!("test filesystem only supports reads")

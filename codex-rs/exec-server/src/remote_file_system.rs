@@ -148,14 +148,15 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn read_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         trace!("remote fs read_directory");
+        let path = path.to_abs_path()?;
         let client = self.client.get().await.map_err(map_remote_error)?;
         let response = client
             .fs_read_directory(FsReadDirectoryParams {
-                path: path.clone(),
+                path,
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await
