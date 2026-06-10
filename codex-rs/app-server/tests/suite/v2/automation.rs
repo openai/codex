@@ -18,8 +18,12 @@ use codex_app_server_protocol::AutomationUpdateResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_features::Feature;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -161,10 +165,102 @@ async fn automation_run_now_dispatches_loaded_heartbeat() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn automation_run_now_dispatches_cron_to_new_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    write_config(
+        codex_home.path(),
+        &server.uri(),
+        /*automations_enabled*/ true,
+    )?;
+    let cwd = codex_home.path().join("workspace");
+    std::fs::create_dir(&cwd)?;
+
+    let mut app_server = init_app_server(codex_home.path()).await?;
+    let owner_thread = start_thread(&mut app_server, &cwd).await?.thread;
+    let owner_started = read_thread_started(&mut app_server).await?;
+    assert_eq!(owner_started.thread.id, owner_thread.id);
+
+    let automation = create_cron_automation(&mut app_server, &cwd).await?;
+    let run_now = run_now_automation(
+        &mut app_server,
+        automation.id.as_str(),
+        Some(&owner_thread.id),
+    )
+    .await?;
+    assert_eq!(
+        run_now,
+        AutomationRunNowResponse {
+            found: true,
+            started_count: 1,
+        }
+    );
+
+    let started = read_thread_started(&mut app_server).await?;
+    assert_ne!(started.thread.id, owner_thread.id);
+    assert_eq!(started.thread.thread_source, Some(ThreadSource::User));
+    read_thread_status(&mut app_server, started.thread.id.as_str(), |status| {
+        matches!(status, ThreadStatus::Active { .. })
+    })
+    .await?;
+    read_thread_status(&mut app_server, started.thread.id.as_str(), |status| {
+        matches!(status, ThreadStatus::Idle)
+    })
+    .await?;
+
+    Ok(())
+}
+
 async fn init_app_server(codex_home: &Path) -> Result<TestAppServer> {
     let mut app_server = TestAppServer::new(codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
     Ok(app_server)
+}
+
+async fn read_thread_started(app_server: &mut TestAppServer) -> Result<ThreadStartedNotification> {
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("thread/started"),
+    )
+    .await??;
+    serde_json::from_value(
+        notification
+            .params
+            .ok_or_else(|| anyhow::anyhow!("thread/started params missing"))?,
+    )
+    .map_err(Into::into)
+}
+
+async fn read_thread_status(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+    status_matches: impl Fn(&ThreadStatus) -> bool,
+) -> Result<ThreadStatusChangedNotification> {
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_matching_notification(
+            "matching thread status",
+            |notification| {
+                let Some(params) = notification.params.as_ref() else {
+                    return false;
+                };
+                notification.method == "thread/status/changed"
+                    && serde_json::from_value::<ThreadStatusChangedNotification>(params.clone())
+                        .is_ok_and(|notification| {
+                            notification.thread_id == thread_id
+                                && status_matches(&notification.status)
+                        })
+            },
+        ),
+    )
+    .await??;
+    serde_json::from_value(
+        notification
+            .params
+            .ok_or_else(|| anyhow::anyhow!("thread/status/changed params missing"))?,
+    )
+    .map_err(Into::into)
 }
 
 fn write_config(codex_home: &Path, server_uri: &str, automations_enabled: bool) -> Result<()> {
