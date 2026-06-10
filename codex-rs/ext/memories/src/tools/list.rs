@@ -39,7 +39,6 @@ pub(super) struct ListTool<B> {
     pub(super) metrics_client: Option<MetricsClient>,
 }
 
-#[async_trait::async_trait]
 impl<B> ToolExecutor<ToolCall> for ListTool<B>
 where
     B: MemoriesBackend,
@@ -55,12 +54,8 @@ where
         )
     }
 
-    async fn handle(
-        &self,
-        call: ToolCall,
-    ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
-    {
-        self.handle_call(call).await
+    fn handle(&self, call: ToolCall) -> codex_extension_api::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(call))
     }
 }
 

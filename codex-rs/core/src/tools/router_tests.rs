@@ -44,7 +44,6 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
 
 struct ExtensionEchoExecutor;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced("extension/", "echo")
@@ -73,11 +72,8 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
         })
     }
 
-    async fn handle(
-        &self,
-        call: ExtensionToolCall,
-    ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
-        self.handle_call(call).await
+    fn handle(&self, call: ExtensionToolCall) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(call))
     }
 }
 
@@ -93,7 +89,7 @@ impl ExtensionEchoExecutor {
             "callId": call.call_id,
             "conversationHistory": call.conversation_history.items(),
             "ok": true,
-        }))))
+        }))) as Box<dyn codex_tools::ToolOutput>)
     }
 }
 
