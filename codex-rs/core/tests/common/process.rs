@@ -55,12 +55,13 @@ pub async fn wait_for_process_exit(pid: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 pub fn configure_std_command_for_process_tree_cleanup(command: &mut std::process::Command) {
-    #[cfg(unix)]
-    {
-        command.process_group(0);
-    }
+    command.process_group(0);
 }
+
+#[cfg(not(unix))]
+pub fn configure_std_command_for_process_tree_cleanup(_: &mut std::process::Command) {}
 
 pub struct ChildProcessCleanupGuard(u32);
 
