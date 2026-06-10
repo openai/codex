@@ -44,7 +44,7 @@ impl ActionMenuOption {
             Self::Proceed => "Import selected",
             Self::Customize => "Customize selection",
             Self::Skip => "Cancel",
-            Self::Back => "Done customizing",
+            Self::Back => "Review selection",
         }
     }
 }
@@ -640,11 +640,15 @@ impl ExternalAgentConfigMigrationScreen {
             lines.push(RenderLineEntry {
                 item_idx: Some(idx),
                 kind: RenderLineKind::Item,
-                line: Line::from(format!(
-                    "  [{}] {}",
-                    if item.enabled { "x" } else { " " },
-                    external_agent_config_migration_item_label(&item.item)
-                )),
+                line: Line::from(vec![
+                    "  ".into(),
+                    format!(
+                        "[{}] {}",
+                        if item.enabled { "x" } else { " " },
+                        external_agent_config_migration_item_label(&item.item)
+                    )
+                    .into(),
+                ]),
             });
             lines.push(RenderLineEntry {
                 item_idx: None,
@@ -843,6 +847,28 @@ mod tests {
         );
         #[cfg(not(windows))]
         assert_snapshot!("external_agent_config_migration_customize", rendered);
+    }
+
+    #[test]
+    fn customize_action_snapshot() {
+        let items = sample_items();
+        let mut screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &items,
+            /*error*/ None,
+        );
+        screen.customize();
+        screen.move_up();
+
+        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 30);
+        #[cfg(windows)]
+        assert_snapshot!(
+            "external_agent_config_migration_customize_action_windows",
+            rendered
+        );
+        #[cfg(not(windows))]
+        assert_snapshot!("external_agent_config_migration_customize_action", rendered);
     }
 
     #[test]
