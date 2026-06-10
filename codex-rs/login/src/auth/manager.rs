@@ -925,8 +925,8 @@ async fn request_chatgpt_token_refresh(
         let body = response.text().await.unwrap_or_default();
         tracing::error!("Failed to refresh token: {status}: {body}");
         let failed = classify_refresh_token_failure(&body);
-        if status == StatusCode::UNAUTHORIZED || failed.reason != RefreshTokenFailedReason::Other {
-            Err(RefreshTokenError::Permanent(failed))
+        if status == StatusCode::UNAUTHORIZED || failed.is_terminal {
+            Err(RefreshTokenError::Permanent(failed.error))
         } else {
             let message = try_parse_error_message(&body);
             Err(RefreshTokenError::Transient(std::io::Error::other(
@@ -936,18 +936,28 @@ async fn request_chatgpt_token_refresh(
     }
 }
 
-fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailedError {
+struct RefreshTokenFailureClassification {
+    error: RefreshTokenFailedError,
+    is_terminal: bool,
+}
+
+fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailureClassification {
     let code = extract_refresh_token_error_code(body);
 
     let normalized_code = code.as_deref().map(str::to_ascii_lowercase);
-    let reason = match normalized_code.as_deref() {
-        Some("refresh_token_expired") => RefreshTokenFailedReason::Expired,
-        Some("refresh_token_reused") => RefreshTokenFailedReason::Exhausted,
-        Some("refresh_token_invalidated") => RefreshTokenFailedReason::Revoked,
-        _ => RefreshTokenFailedReason::Other,
+    let (reason, is_terminal) = match normalized_code.as_deref() {
+        Some("app_session_expired" | "refresh_token_expired") => {
+            (RefreshTokenFailedReason::Expired, true)
+        }
+        Some("refresh_token_reused") => (RefreshTokenFailedReason::Exhausted, true),
+        Some("app_session_terminated" | "refresh_token_invalidated") => {
+            (RefreshTokenFailedReason::Revoked, true)
+        }
+        Some("invalid_refresh_token") => (RefreshTokenFailedReason::Other, true),
+        _ => (RefreshTokenFailedReason::Other, false),
     };
 
-    if reason == RefreshTokenFailedReason::Other {
+    if !is_terminal {
         tracing::warn!(
             backend_code = normalized_code.as_deref(),
             backend_body = body,
@@ -962,7 +972,10 @@ fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailedError {
         RefreshTokenFailedReason::Other => REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
     };
 
-    RefreshTokenFailedError::new(reason, message)
+    RefreshTokenFailureClassification {
+        error: RefreshTokenFailedError::new(reason, message),
+        is_terminal,
+    }
 }
 
 fn extract_refresh_token_error_code(body: &str) -> Option<String> {

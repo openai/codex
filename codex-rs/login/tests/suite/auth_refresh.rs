@@ -739,69 +739,75 @@ async fn refresh_token_does_not_retry_after_permanent_failure() -> Result<()> {
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
-async fn refresh_token_does_not_retry_after_bad_request_reused_failure() -> Result<()> {
+async fn refresh_token_does_not_retry_after_terminal_bad_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
-            "error": {
-                "code": "refresh_token_reused"
-            }
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
+    for (code, expected_reason) in [
+        ("app_session_expired", RefreshTokenFailedReason::Expired),
+        ("app_session_terminated", RefreshTokenFailedReason::Revoked),
+        ("invalid_refresh_token", RefreshTokenFailedReason::Other),
+        ("refresh_token_expired", RefreshTokenFailedReason::Expired),
+        (
+            "refresh_token_invalidated",
+            RefreshTokenFailedReason::Revoked,
+        ),
+        ("refresh_token_reused", RefreshTokenFailedReason::Exhausted),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": {
+                    "code": code
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
 
-    let ctx = RefreshTokenTestContext::new(&server).await?;
-    let initial_last_refresh = Utc::now() - Duration::days(1);
-    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
-    let initial_auth = AuthDotJson {
-        auth_mode: Some(AuthMode::Chatgpt),
-        openai_api_key: None,
-        tokens: Some(initial_tokens.clone()),
-        last_refresh: Some(initial_last_refresh),
-        agent_identity: None,
-        personal_access_token: None,
-    };
-    ctx.write_auth(&initial_auth).await?;
+        let ctx = RefreshTokenTestContext::new(&server).await?;
+        let initial_last_refresh = Utc::now() - Duration::days(1);
+        let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+        let initial_auth = AuthDotJson {
+            auth_mode: Some(AuthMode::Chatgpt),
+            openai_api_key: None,
+            tokens: Some(initial_tokens.clone()),
+            last_refresh: Some(initial_last_refresh),
+            agent_identity: None,
+            personal_access_token: None,
+        };
+        ctx.write_auth(&initial_auth).await?;
 
-    let first_err = ctx
-        .auth_manager
-        .refresh_token()
-        .await
-        .err()
-        .context("first refresh should fail")?;
-    assert_eq!(
-        first_err.failed_reason(),
-        Some(RefreshTokenFailedReason::Exhausted)
-    );
+        let first_err = ctx
+            .auth_manager
+            .refresh_token()
+            .await
+            .err()
+            .context("first refresh should fail")?;
+        assert_eq!(first_err.failed_reason(), Some(expected_reason));
 
-    let second_err = ctx
-        .auth_manager
-        .refresh_token()
-        .await
-        .err()
-        .context("second refresh should fail without retrying")?;
-    assert_eq!(
-        second_err.failed_reason(),
-        Some(RefreshTokenFailedReason::Exhausted)
-    );
+        let second_err = ctx
+            .auth_manager
+            .refresh_token()
+            .await
+            .err()
+            .context("second refresh should fail without retrying")?;
+        assert_eq!(second_err.failed_reason(), Some(expected_reason));
 
-    let stored = ctx.load_auth()?;
-    assert_eq!(stored, initial_auth);
-    let cached_auth = ctx
-        .auth_manager
-        .auth()
-        .await
-        .context("auth should remain cached")?;
-    let cached = cached_auth
-        .get_token_data()
-        .context("token data should remain cached")?;
-    assert_eq!(cached, initial_tokens);
+        let stored = ctx.load_auth()?;
+        assert_eq!(stored, initial_auth);
+        let cached_auth = ctx
+            .auth_manager
+            .auth()
+            .await
+            .context("auth should remain cached")?;
+        let cached = cached_auth
+            .get_token_data()
+            .context("token data should remain cached")?;
+        assert_eq!(cached, initial_tokens);
 
-    server.verify().await;
+        server.verify().await;
+    }
     Ok(())
 }
 
