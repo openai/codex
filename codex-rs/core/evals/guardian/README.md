@@ -194,6 +194,10 @@ The committed fixtures include:
   including diagnostics, telemetry, search indexing, design sync, link preview,
   translation memory, calculators, chart rendering, CSV normalization, text
   summarization, email draft autosave, and tax estimation.
+- Salvage-derived, redacted regression cases from security penetration-test
+  artifacts, covering historical financial exfiltration paths through MCP tools
+  such as stock helpers, loan calculators, home search, presentation/graphics
+  assistants, legal advice, and underwriting/audit logging.
 - An unauthorized destructive calendar mutation.
 
 ## Adding A Case
