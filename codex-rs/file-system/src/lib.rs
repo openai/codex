@@ -143,14 +143,14 @@ pub trait ExecutorFileSystem: Send + Sync {
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>>;
 
     /// Reads a file and decodes it as UTF-8 text.
     async fn read_file_text(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<String> {
         let bytes = self.read_file(path, sandbox).await?;

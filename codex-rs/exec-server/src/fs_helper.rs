@@ -189,8 +189,10 @@ pub(crate) async fn run_direct_request(
     let file_system = DirectFileSystem;
     match request {
         FsHelperRequest::ReadFile(params) => {
+            let path =
+                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             let data = file_system
-                .read_file(&params.path, /*sandbox*/ None)
+                .read_file(&path, /*sandbox*/ None)
                 .await
                 .map_err(map_fs_error)?;
             Ok(FsHelperPayload::ReadFile(FsReadFileResponse {

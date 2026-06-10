@@ -91,7 +91,7 @@ impl ExecutorFileSystem for LocalFileSystem {
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
@@ -173,7 +173,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         reject_platform_sandbox_context(sandbox)?;
@@ -271,10 +271,11 @@ impl ExecutorFileSystem for DirectFileSystem {
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         reject_sandbox_context(sandbox)?;
+        let path = path.to_abs_path()?;
         let metadata = tokio::fs::metadata(path.as_path()).await?;
         if metadata.len() > MAX_READ_FILE_BYTES {
             return Err(io::Error::new(
@@ -599,3 +600,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, any(unix, windows)))]
+#[path = "local_file_system_path_uri_tests.rs"]
+mod path_uri_tests;

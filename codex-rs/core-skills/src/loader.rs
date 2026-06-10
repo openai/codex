@@ -640,8 +640,9 @@ async fn parse_skill_file(
     plugin_id: Option<&str>,
     plugin_root: Option<&AbsolutePathBuf>,
 ) -> Result<SkillMetadata, SkillParseError> {
+    let path_uri = PathUri::from_abs_path(path).map_err(SkillParseError::Read)?;
     let contents = fs
-        .read_file_text(path, /*sandbox*/ None)
+        .read_file_text(&path_uri, /*sandbox*/ None)
         .await
         .map_err(SkillParseError::Read)?;
 
@@ -735,6 +736,17 @@ async fn load_skill_metadata(
     let metadata_path = skill_dir
         .join(SKILLS_METADATA_DIR)
         .join(SKILLS_METADATA_FILENAME);
+    let metadata_path_uri = match PathUri::from_abs_path(&metadata_path) {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(
+                "ignoring {path}: failed to convert {label} path to URI: {error}",
+                path = metadata_path.display(),
+                label = SKILLS_METADATA_FILENAME
+            );
+            return LoadedSkillMetadata::default();
+        }
+    };
     match fs.get_metadata(&metadata_path, /*sandbox*/ None).await {
         Ok(metadata) if metadata.is_file => {}
         Ok(_) => return LoadedSkillMetadata::default(),
@@ -751,7 +763,10 @@ async fn load_skill_metadata(
         }
     }
 
-    let contents = match fs.read_file_text(&metadata_path, /*sandbox*/ None).await {
+    let contents = match fs
+        .read_file_text(&metadata_path_uri, /*sandbox*/ None)
+        .await
+    {
         Ok(contents) => contents,
         Err(error) => {
             tracing::warn!(

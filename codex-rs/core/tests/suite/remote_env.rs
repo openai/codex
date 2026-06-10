@@ -28,6 +28,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::get_remote_test_env;
@@ -155,13 +156,14 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
     let file_system = test_env.environment().get_filesystem();
 
     let file_path_abs = remote_test_file_path().abs();
+    let file_path_uri = PathUri::from_path(&file_path_abs)?;
     let payload = b"remote-test-env-ok".to_vec();
 
     file_system
         .write_file(&file_path_abs, payload.clone(), /*sandbox*/ None)
         .await?;
     let actual = file_system
-        .read_file(&file_path_abs, /*sandbox*/ None)
+        .read_file(&file_path_uri, /*sandbox*/ None)
         .await?;
     assert_eq!(actual, payload);
 
@@ -527,7 +529,10 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
     );
     assert_eq!(
         test.fs()
-            .read_file_text(&remote_target_path, /*sandbox*/ None)
+            .read_file_text(
+                &PathUri::from_path(&remote_target_path)?,
+                /*sandbox*/ None,
+            )
             .await?,
         "remote-request-permissions-ok"
     );
@@ -610,7 +615,10 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
 
     let remote_contents = test
         .fs()
-        .read_file_text(&remote_cwd.join(file_name), /*sandbox*/ None)
+        .read_file_text(
+            &PathUri::from_path(remote_cwd.join(file_name))?,
+            /*sandbox*/ None,
+        )
         .await?;
     assert_eq!(remote_contents, "patched remote freeform\n");
     assert!(
@@ -664,6 +672,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
+    let target_path_uri = PathUri::from_path(&target_path)?;
     let _ = fs::remove_file(&target_path);
     test.fs()
         .remove(
@@ -771,7 +780,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     .await;
     assert_eq!(
         test.fs()
-            .read_file_text(&target_path, /*sandbox*/ None)
+            .read_file_text(&target_path_uri, /*sandbox*/ None)
             .await?,
         "remote\n"
     );
@@ -785,7 +794,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     wait_for_completion_without_patch_approval(&test).await;
     assert_eq!(
         test.fs()
-            .read_file_text(&target_path, /*sandbox*/ None)
+            .read_file_text(&target_path_uri, /*sandbox*/ None)
             .await?,
         "remote updated\n"
     );
@@ -885,7 +894,10 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
 
     let remote_contents = test
         .fs()
-        .read_file_text(&remote_cwd.join(file_name), /*sandbox*/ None)
+        .read_file_text(
+            &PathUri::from_path(remote_cwd.join(file_name))?,
+            /*sandbox*/ None,
+        )
         .await?;
     assert_eq!(remote_contents, "patched remote exec\n");
     assert!(
@@ -936,7 +948,7 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
     let sandbox = read_only_sandbox(allowed_dir.clone());
     let contents = file_system
-        .read_file(&absolute_path(file_path.clone()), Some(&sandbox))
+        .read_file(&PathUri::from_path(&file_path)?, Some(&sandbox))
         .await?;
     assert_eq!(contents, b"sandboxed hello");
 
@@ -976,7 +988,8 @@ async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -
         secret = secret_path.display(),
     ))?;
 
-    let requested_path = absolute_path(allowed_dir.join("link").join("..").join("secret.txt"));
+    let requested_path =
+        PathUri::from_path(allowed_dir.join("link").join("..").join("secret.txt"))?;
     let sandbox = read_only_sandbox(allowed_dir.clone());
     let error = match file_system.read_file(&requested_path, Some(&sandbox)).await {
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
@@ -1038,7 +1051,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
         .is_ok();
     assert!(!symlink_exists);
     let outside = file_system
-        .read_file_text(&absolute_path(outside_file.clone()), /*sandbox*/ None)
+        .read_file_text(&PathUri::from_path(&outside_file)?, /*sandbox*/ None)
         .await?;
     assert_eq!(outside, "outside");
 

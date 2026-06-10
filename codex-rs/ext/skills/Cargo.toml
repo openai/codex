@@ -20,10 +20,10 @@ codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 codex-utils-string = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-codex-utils-path-uri = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

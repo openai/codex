@@ -61,14 +61,15 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         trace!("remote fs read_file");
+        let path = path.to_abs_path()?;
         let client = self.client.get().await.map_err(map_remote_error)?;
         let response = client
             .fs_read_file(FsReadFileParams {
-                path: path.clone(),
+                path,
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await
@@ -322,3 +323,7 @@ mod tests {
         AbsolutePathBuf::from_absolute_path(&path).expect("absolute path")
     }
 }
+
+#[cfg(all(test, any(unix, windows)))]
+#[path = "remote_file_system_path_uri_tests.rs"]
+mod path_uri_tests;

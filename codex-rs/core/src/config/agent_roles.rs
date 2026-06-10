@@ -7,6 +7,7 @@ use codex_config::config_toml::ConfigToml;
 use codex_exec_server::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -319,7 +320,8 @@ async fn read_resolved_agent_role_file(
     path: &AbsolutePathBuf,
     role_name_hint: Option<&str>,
 ) -> std::io::Result<ResolvedAgentRoleFile> {
-    let contents = fs.read_file_text(path, /*sandbox*/ None).await?;
+    let path_uri = PathUri::from_abs_path(path)?;
+    let contents = fs.read_file_text(&path_uri, /*sandbox*/ None).await?;
     let config_base_dir = path.parent().unwrap_or_else(|| path.clone());
     parse_agent_role_file_contents(
         &contents,

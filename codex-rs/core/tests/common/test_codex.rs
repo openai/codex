@@ -43,6 +43,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -924,10 +925,12 @@ impl TestCodexHarness {
     }
 
     pub async fn read_file_text(&self, rel: impl AsRef<Path>) -> Result<String> {
+        let path = self.path_abs(rel);
+        let path_uri = PathUri::from_path(&path)?;
         Ok(self
             .test
             .fs()
-            .read_file_text(&self.path_abs(rel), /*sandbox*/ None)
+            .read_file_text(&path_uri, /*sandbox*/ None)
             .await?)
     }
 

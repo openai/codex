@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use codex_file_system::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -803,6 +804,7 @@ pub async fn resolve_root_git_project_for_trust(
 ) -> Option<AbsolutePathBuf> {
     let repo_root = get_git_repo_root_with_fs(fs, cwd).await?;
     let dot_git = repo_root.join(".git");
+    let dot_git_uri = PathUri::from_abs_path(&dot_git).ok()?;
     if fs
         .get_metadata(&dot_git, /*sandbox*/ None)
         .await
@@ -812,7 +814,10 @@ pub async fn resolve_root_git_project_for_trust(
         return Some(repo_root);
     }
 
-    let git_dir_s = fs.read_file_text(&dot_git, /*sandbox*/ None).await.ok()?;
+    let git_dir_s = fs
+        .read_file_text(&dot_git_uri, /*sandbox*/ None)
+        .await
+        .ok()?;
     let git_dir_rel = git_dir_s.trim().strip_prefix("gitdir:")?.trim();
     if git_dir_rel.is_empty() {
         return None;

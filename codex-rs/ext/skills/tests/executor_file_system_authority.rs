@@ -73,10 +73,10 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        if path == &self.canonical_root.join("skill/SKILL.md") {
+        if path.to_abs_path()? == self.canonical_root.join("skill/SKILL.md") {
             Ok(SKILL_CONTENTS.as_bytes().to_vec())
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not found"))

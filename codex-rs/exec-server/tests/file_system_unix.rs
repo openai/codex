@@ -22,6 +22,7 @@ use codex_exec_server::CreateDirectoryOptions;
 #[cfg(target_os = "linux")]
 use codex_exec_server::Environment;
 use codex_exec_server::RemoveOptions;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use test_case::test_case;
@@ -324,7 +325,7 @@ async fn file_system_sandboxed_read_rejects_symlink_escape(
     let requested_path = allowed_dir.join("link").join("secret.txt");
     let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .read_file(&absolute_path(&requested_path), Some(&sandbox))
+        .read_file(&PathUri::from_path(&requested_path)?, Some(&sandbox))
         .await
     {
         Ok(_) => anyhow::bail!("read should be blocked"),
@@ -353,13 +354,14 @@ async fn file_system_sandboxed_read_rejects_symlink_parent_dotdot_escape(
     std::fs::write(&secret_path, "nope")?;
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
-    let requested_path = absolute_path(allowed_dir.join("link").join("..").join("secret.txt"));
+    let requested_path =
+        PathUri::from_path(allowed_dir.join("link").join("..").join("secret.txt"))?;
     let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system.read_file(&requested_path, Some(&sandbox)).await {
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
         Err(error) => error,
     };
-    // AbsolutePathBuf normalizes `link/../secret.txt` to
+    // PathUri's native path constructor normalizes `link/../secret.txt` to
     // `allowed/secret.txt` before the request reaches the filesystem layer.
     // Depending on whether the platform/runtime resolves that normalized path
     // through a top-level symlink alias, the request can surface as either

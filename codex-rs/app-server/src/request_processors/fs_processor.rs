@@ -29,6 +29,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
+use codex_utils_path_uri::PathUri;
 use std::io;
 use std::sync::Arc;
 
@@ -64,9 +65,10 @@ impl FsRequestProcessor {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         let bytes = self
             .file_system()?
-            .read_file(&params.path, /*sandbox*/ None)
+            .read_file(&path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {

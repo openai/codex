@@ -38,6 +38,7 @@ use codex_protocol::user_input::UserInput;
 #[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
 use core_test_support::get_remote_test_env;
@@ -1683,7 +1684,10 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
     assert_eq!(fs::read_to_string(shared_cwd.join(file_name))?, "local\n");
     assert_eq!(
         test.fs()
-            .read_file_text(&shared_cwd.join(file_name), /*sandbox*/ None)
+            .read_file_text(
+                &PathUri::from_path(shared_cwd.join(file_name))?,
+                /*sandbox*/ None,
+            )
             .await?,
         "remote\n"
     );

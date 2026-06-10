@@ -75,7 +75,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         let sandbox = require_platform_sandbox(sandbox)?;
@@ -83,7 +83,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::ReadFile(FsReadFileParams {
-                    path: path.clone(),
+                    path: path.to_abs_path()?,
                     sandbox: None,
                 }),
             )
@@ -260,3 +260,7 @@ fn map_sandbox_error(error: JSONRPCErrorError) -> io::Error {
         _ => io::Error::other(error.message),
     }
 }
+
+#[cfg(all(test, any(unix, windows)))]
+#[path = "sandboxed_file_system_path_uri_tests.rs"]
+mod path_uri_tests;

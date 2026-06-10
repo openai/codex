@@ -151,7 +151,6 @@ fn path_uri_join_and_parent_preserve_lexical_paths() -> Result<()> {
         joined_parent_traversal,
         PathUri::from_path(source_dir.join("../outside"))?
     );
-
     Ok(())
 }
 
@@ -169,7 +168,7 @@ async fn file_system_read_file_returns_bytes(
     std::fs::write(&file_path, "hello from trait")?;
 
     let contents = file_system
-        .read_file(&absolute_path(&file_path), /*sandbox*/ None)
+        .read_file(&PathUri::from_path(&file_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, b"hello from trait");
@@ -191,7 +190,7 @@ async fn file_system_read_file_text_returns_string(
     std::fs::write(&file_path, "hello from trait")?;
 
     let contents = file_system
-        .read_file_text(&absolute_path(&file_path), /*sandbox*/ None)
+        .read_file_text(&PathUri::from_path(&file_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, "hello from trait");
@@ -410,7 +409,7 @@ async fn file_system_sandboxed_read_allows_readable_root(
     let sandbox = read_only_sandbox(allowed_dir);
 
     let contents = file_system
-        .read_file(&absolute_path(&file_path), Some(&sandbox))
+        .read_file(&PathUri::from_path(&file_path)?, Some(&sandbox))
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, b"sandboxed hello");

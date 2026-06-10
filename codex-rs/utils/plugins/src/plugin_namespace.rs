@@ -2,6 +2,7 @@
 
 use codex_exec_server::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -38,8 +39,9 @@ async fn plugin_manifest_name(
         }
     }
     let manifest_path = manifest_path?;
+    let manifest_path_uri = PathUri::from_abs_path(&manifest_path).ok()?;
     let contents = fs
-        .read_file_text(&manifest_path, /*sandbox*/ None)
+        .read_file_text(&manifest_path_uri, /*sandbox*/ None)
         .await
         .ok()?;
     let RawPluginManifestName { name: raw_name } = serde_json::from_str(&contents).ok()?;

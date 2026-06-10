@@ -27,9 +27,10 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
+        let path = path.to_abs_path()?;
         tokio::fs::read(path.as_path()).await
     }
 
