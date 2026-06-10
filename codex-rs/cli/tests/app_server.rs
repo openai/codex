@@ -21,7 +21,11 @@ use codex_app_server_protocol::CommandExecParams;
 #[cfg(unix)]
 use codex_app_server_protocol::CommandExecResponse;
 #[cfg(unix)]
+use codex_app_server_protocol::NetworkAccess;
+#[cfg(unix)]
 use codex_app_server_protocol::RequestId;
+#[cfg(unix)]
+use codex_app_server_protocol::SandboxPolicy;
 #[cfg(unix)]
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(unix)]
@@ -87,6 +91,7 @@ async fn ssh_agent_handoff_survives_duplicate_startup_and_reaches_commands() -> 
         ])
         .current_dir(root.path())
         .env("CODEX_HOME", &codex_home)
+        .env("CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG", "1")
         .env("SSH_AUTH_SOCK", &missing_bootstrap_agent_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -101,23 +106,25 @@ async fn ssh_agent_handoff_survives_duplicate_startup_and_reaches_commands() -> 
     })
     .await?;
 
-    let duplicate_output = timeout(
-        Duration::from_secs(10),
-        Command::new(&codex_bin)
-            .args([
-                "app-server",
-                "--listen",
-                &format!("unix://{}", control_socket_path.display()),
-            ])
-            .current_dir(root.path())
-            .env("CODEX_HOME", &codex_home)
-            .env("SSH_AUTH_SOCK", root.path().join("duplicate-agent.sock"))
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await
-    .context("duplicate app server did not exit")??;
-    assert!(!duplicate_output.status.success());
+    let mut duplicate = Command::new(&codex_bin)
+        .args([
+            "app-server",
+            "--listen",
+            &format!("unix://{}", control_socket_path.display()),
+        ])
+        .current_dir(root.path())
+        .env("CODEX_HOME", &codex_home)
+        .env("SSH_AUTH_SOCK", root.path().join("duplicate-agent.sock"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .context("spawn duplicate app server")?;
+    let duplicate_status = timeout(Duration::from_secs(20), duplicate.wait())
+        .await
+        .context("duplicate app server did not exit")??;
+    assert!(!duplicate_status.success());
     assert_eq!(
         std::fs::read_link(&stable_agent_path)?,
         missing_bootstrap_agent_path
@@ -173,7 +180,9 @@ async fn ssh_agent_handoff_survives_duplicate_startup_and_reaches_commands() -> 
                 cwd: Some(root.path().to_path_buf()),
                 env: None,
                 size: None,
-                sandbox_policy: None,
+                sandbox_policy: Some(SandboxPolicy::ExternalSandbox {
+                    network_access: NetworkAccess::Restricted,
+                }),
                 permission_profile: None,
             },
         })

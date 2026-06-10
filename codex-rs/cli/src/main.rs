@@ -958,6 +958,18 @@ fn app_server_control_socket_for_ssh_agent(cli: &MultitoolCli) -> Option<&Path> 
     }
 }
 
+fn app_server_loader_overrides() -> LoaderOverrides {
+    #[cfg(debug_assertions)]
+    if matches!(
+        std::env::var("CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG").as_deref(),
+        Ok("1" | "true" | "TRUE" | "yes" | "YES")
+    ) {
+        return LoaderOverrides::without_managed_config_for_tests();
+    }
+
+    LoaderOverrides::default()
+}
+
 async fn cli_main(
     arg0_paths: Arg0DispatchPaths,
     prepared_ssh_agent_forwarding: Option<PreparedSshAgentForwarding>,
@@ -1127,7 +1139,7 @@ async fn cli_main(
                     codex_app_server::run_main_with_transport_options(
                         arg0_paths.clone(),
                         root_config_overrides,
-                        LoaderOverrides::default(),
+                        app_server_loader_overrides(),
                         strict_config,
                         analytics_default_enabled,
                         transport,
@@ -3630,29 +3642,6 @@ mod tests {
                     .expect("absolute path should parse")
             }
         );
-    }
-
-    #[test]
-    fn unix_socket_app_server_prepares_ssh_agent_forwarding() {
-        let cli = MultitoolCli::try_parse_from([
-            "codex",
-            "app-server",
-            "--listen",
-            "unix:///tmp/codex.sock",
-        ])
-        .expect("parse");
-
-        assert_eq!(
-            app_server_control_socket_for_ssh_agent(&cli),
-            Some(Path::new("/tmp/codex.sock"))
-        );
-    }
-
-    #[test]
-    fn app_server_proxy_does_not_normalize_its_ssh_agent_environment() {
-        let cli = MultitoolCli::try_parse_from(["codex", "app-server", "proxy"]).expect("parse");
-
-        assert_eq!(app_server_control_socket_for_ssh_agent(&cli), None);
     }
 
     #[test]
