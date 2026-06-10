@@ -1,20 +1,9 @@
-//! Executor-side state machine for multiplexed Noise relay connections.
+//! Executor side of the multiplexed Noise relay.
 //!
-//! One physical websocket carries frames for many harness-selected `stream_id`
-//! values. Each stream advances independently through these states:
-//!
-//! 1. **Unknown**: no cryptographic or application state exists.
-//! 2. **Pending**: the first hybrid-IK message authenticated a harness key, but
-//!    the registry has not yet authorized that key for this executor.
-//! 3. **Active**: registry authorization succeeded, the responder sent the
-//!    second handshake message, and a JSON-RPC connection owns the transport.
-//! 4. **Closed**: reset, protocol failure, backpressure, or websocket closure
-//!    removes the stream and its keys.
-//!
-//! Registry checks run concurrently so one slow check cannot block unrelated
-//! streams. A monotonically increasing validation ID ties each result to the
-//! exact pending instance, which is important because untrusted peers choose and
-//! may reuse `stream_id` values.
+//! A stream is pending after its first IK message is parsed, and becomes active
+//! only after the registry authorizes the authenticated harness key. Registry
+//! checks run outside the websocket loop. `validation_id` distinguishes reused
+//! stream IDs so a late validation cannot activate a newer stream.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -65,18 +54,10 @@ pub(crate) trait HarnessKeyValidator: Send + Sync {
     ) -> impl std::future::Future<Output = Result<(), ExecServerError>> + Send;
 }
 
-/// Serve many authenticated virtual JSON-RPC streams over one executor websocket.
+/// Serve authenticated virtual JSON-RPC streams over one executor websocket.
 ///
-/// Each stream has an independent Noise handshake and transport state. The
-/// outer websocket and rendezvous route are treated as untrusted delivery:
-/// malformed, unauthorized, or cryptographically invalid streams fail closed
-/// without creating a `JsonRpcConnection`.
-///
-/// The trust transition is deliberately visible in this function: parsing the
-/// first Noise message proves possession of the harness private keys, registry
-/// validation grants product authorization to those authenticated public keys,
-/// and only the successful combination is converted into an active virtual
-/// stream.
+/// Parsing the first Noise message authenticates the harness key. Only a
+/// successful registry check turns that pending handshake into a virtual stream.
 pub(crate) async fn run_noise_multiplexed_environment<S, V>(
     stream: WebSocketStream<S>,
     processor: ConnectionProcessor,
@@ -93,10 +74,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
         mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
     let (closed_stream_tx, mut closed_stream_rx) =
         mpsc::channel::<ClosedNoiseVirtualStream>(MAX_ACTIVE_NOISE_RELAY_STREAMS);
-    // A separate writer task is required because this state machine also
-    // produces resets and handshake responses. If the same task both sent into
-    // and drained the bounded outgoing channel, backpressure could make it wait
-    // on itself and stop servicing the physical websocket.
+    // Use a separate writer so this loop never waits on the channel it drains.
     let mut physical_writer_task = tokio::spawn(async move {
         while let Some(encoded) = physical_outgoing_rx.recv().await {
             if let Err(error) = websocket_sink.send(Message::Binary(encoded.into())).await {
@@ -111,9 +89,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
     let mut next_validation_id = 0u64;
 
     loop {
-        // Keep registry validation out of the main relay loop. A slow or
-        // malicious authorization request must not block existing streams or
-        // prevent other handshakes from being received and bounded.
+        // Registry calls run separately so a slow check does not block the relay.
         let frame = tokio::select! {
             writer_result = &mut physical_writer_task => {
                 if let Err(error) = writer_result {
@@ -122,9 +98,8 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                 break;
             }
             Some(closed_stream) = closed_stream_rx.recv() => {
-                // A writer can finish after its peer resets and reuses the same
-                // routing ID. Remove only the exact authenticated stream
-                // instance that produced this close notification.
+                // A stream ID may have been reused before this writer exits.
+                // Remove only the instance that sent the notification.
                 let is_current = streams
                     .get(&closed_stream.stream_id)
                     .is_some_and(|stream| stream.is_instance(closed_stream.instance_id));
@@ -136,9 +111,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
             validation_result = validation_tasks.join_next(), if !validation_tasks.is_empty() => {
                 match validation_result {
                     Some(Ok(validation_result)) => {
-                        // Stream IDs may be reset and reused while validation
-                        // is in flight. The monotonic validation ID ensures a
-                        // stale task can never complete a newer handshake.
+                        // The stream ID may have been reused while validation ran.
                         let is_current = pending_handshakes
                             .get(&validation_result.stream_id)
                             .is_some_and(|pending| {
@@ -153,10 +126,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                             continue;
                         };
                         if validation_result.result.is_err() {
-                            // Validators receive the short-lived authorization.
-                            // Keep their error text out of logs even though the
-                            // registry implementation below also sanitizes
-                            // response bodies.
+                            // Validator errors may contain authorization details.
                             warn!("Noise relay harness key validation failed");
                             send_reset(&physical_outgoing_tx, validation_result.stream_id);
                             continue;
@@ -182,11 +152,8 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                             validation_result.stream_id.clone(),
                             response,
                         );
-                        // The shared state machine must never wait behind an
-                        // overloaded writer queue. If a successful handshake
-                        // response cannot be queued immediately, close this
-                        // physical connection rather than expose a half-open
-                        // virtual stream.
+                        // Do not leave a half-open stream if the handshake reply
+                        // cannot be queued immediately.
                         if physical_outgoing_tx
                             .try_send(encode_relay_message_frame(&response))
                             .is_err()
@@ -294,9 +261,8 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                         }
                     };
 
-                // The authorization is encrypted inside the first IK message.
-                // It is meaningful only alongside the initiator static key
-                // that Clatter authenticated from that same message.
+                // The authorization and authenticated harness key come from the
+                // same encrypted IK message and are validated together.
                 let authorization = match String::from_utf8(pending.take_payload()) {
                     Ok(authorization)
                         if authorization.len() <= MAX_HARNESS_KEY_AUTHORIZATION_BYTES =>
@@ -331,9 +297,8 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                 );
                 let validator = validator.clone();
 
-                // Validation is time-bounded and concurrency-bounded above.
-                // Failure leaves no transport state and returns a generic
-                // protocol reset to avoid exposing authorization details.
+                // Failed validation leaves no transport state and sends only a
+                // generic reset.
                 validation_tasks.spawn(async move {
                     let result = match timeout(
                         HARNESS_KEY_VALIDATION_TIMEOUT,
@@ -354,9 +319,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                 });
             }
             RelayFrameBodyKind::Data => {
-                // Data before handshake completion is always invalid. Removing
-                // pending state makes the time-bounded validation result stale,
-                // so it can never complete a stream after this protocol error.
+                // Removing pending state also makes any in-flight validation stale.
                 let Some(stream) = streams.get_mut(&stream_id) else {
                     pending_handshakes.remove(&stream_id);
                     send_reset(&physical_outgoing_tx, stream_id);
@@ -380,9 +343,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
             RelayFrameBodyKind::Reset => {
                 pending_handshakes.remove(&stream_id);
                 if let Some(stream) = streams.remove(&stream_id) {
-                    // Reset is cleartext relay control and is not authenticated
-                    // by Noise. Honor its availability effect, but never
-                    // forward attacker-controlled reason text into logs.
+                    // The reset reason is unauthenticated, so do not log it.
                     stream.disconnect(/*reason*/ None);
                 }
             }
@@ -395,40 +356,30 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
     for (_stream_id, stream) in streams {
         stream.disconnect(/*reason*/ None);
     }
-    // Dropping the JoinSet below aborts any still-running registry validations.
-    // Await an abort only when the select loop did not already consume the
-    // writer result.
+    // Dropping the JoinSet aborts any registry checks still running.
     if !physical_writer_task.is_finished() {
         physical_writer_task.abort();
         let _ = physical_writer_task.await;
     }
 }
 
-/// Cryptographic responder state parked while registry authorization is in flight.
+/// Responder state held while registry authorization is pending.
 struct PendingHandshake {
     validation_id: u64,
     handshake: PendingResponderHandshake,
 }
 
-/// Result returned by an asynchronous registry check.
-///
-/// `validation_id` distinguishes this result from an older check for the same
-/// relay-controlled `stream_id`.
+/// `validation_id` prevents an old check from completing a reused `stream_id`.
 struct HarnessKeyValidationResult {
     stream_id: String,
     validation_id: u64,
     result: Result<(), ExecServerError>,
 }
 
-/// Best-effort signal that one virtual stream must be discarded.
-///
-/// Reset affects routing and availability only. It is cleartext relay control,
-/// not authenticated application data, and the receiver never treats its reason
-/// as trusted diagnostic text.
+/// Queue a best-effort reset without blocking the shared websocket loop.
+/// Reset reasons are relay control data and are not treated as trusted text.
 fn send_reset(physical_outgoing_tx: &mpsc::Sender<Vec<u8>>, stream_id: String) {
     let reset = RelayMessageFrame::reset(stream_id, NOISE_RELAY_RESET_REASON.to_string());
-    // Resets are best effort. Untrusted relay input must never block the shared
-    // state machine behind an overloaded physical writer queue.
     let _ = physical_outgoing_tx.try_send(encode_relay_message_frame(&reset));
 }
 

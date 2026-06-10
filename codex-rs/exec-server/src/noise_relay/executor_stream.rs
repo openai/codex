@@ -1,10 +1,8 @@
-//! Owns one authenticated executor-side virtual stream after handshake approval.
+//! One executor-side virtual stream after the Noise handshake.
 //!
-//! The shared environment loop handles websocket reads for every stream, while
-//! a per-stream task handles JSON-RPC writes. Both directions share Clatter's
-//! `NoiseTransport` because it contains the independent send and receive nonce
-//! state. The mutex is held only for synchronous encrypt/decrypt calls and never
-//! across an `.await`.
+//! The environment loop owns reads and a per-stream task owns writes. They share
+//! `NoiseTransport` because its send and receive nonces live in the same value;
+//! the mutex is never held across `.await`.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -55,10 +53,6 @@ pub(super) struct NoiseVirtualStream {
 }
 
 impl NoiseVirtualStream {
-    /// Notify the JSON-RPC processor that this virtual connection has ended.
-    ///
-    /// Delivery is nonblocking because a stalled connection must not stall the
-    /// physical websocket or the other virtual streams that share it.
     pub(super) fn disconnect(self, reason: Option<String>) {
         let _ = self.disconnected_tx.send(true);
         let _ = self
@@ -66,21 +60,13 @@ impl NoiseVirtualStream {
             .try_send(JsonRpcConnectionEvent::Disconnected { reason });
     }
 
-    /// Check whether a delayed close notification refers to this exact stream.
     pub(super) fn is_instance(&self, instance_id: u64) -> bool {
         self.instance_id == instance_id
     }
 
-    /// Process one executor-bound ciphertext record without blocking the shared
-    /// loop.
-    ///
-    /// Records are reordered before decryption because Noise's receive nonce is
-    /// implicit. Authenticated plaintext is then fed into the length-delimited
-    /// JSON-RPC decoder; only complete messages enter the connection queue.
+    /// Reorder and decrypt one inbound record, then queue complete JSON-RPC messages.
+    /// This must stay nonblocking because all virtual streams share the read loop.
     pub(super) fn receive_data(&mut self, data: RelayData) -> Result<(), ExecServerError> {
-        // Relay sequence ordering is enforced before taking the transport lock
-        // and decrypting. Each virtual stream owns one ordered Noise nonce
-        // space shared by its reader and writer transport halves.
         for ciphertext in self.inbound_ciphertexts.push(data.seq, data.payload)? {
             let plaintext = {
                 let mut transport = self
@@ -105,12 +91,10 @@ impl NoiseVirtualStream {
     }
 }
 
-/// Start JSON-RPC processing for a completed Noise handshake.
+/// Start JSON-RPC processing for a completed handshake.
 ///
-/// The returned value is the read half retained by the shared environment loop.
-/// The spawned writer owns outbound JSON-RPC messages, frames and encrypts them,
-/// and reports its exact `instance_id` when it exits so stream-ID reuse cannot
-/// remove a newer connection.
+/// The returned value is the read half; the spawned task owns outbound framing
+/// and reports its instance ID on exit so stream-ID reuse is safe.
 pub(super) fn spawn_noise_virtual_stream(
     stream_id: String,
     instance_id: u64,
@@ -128,9 +112,7 @@ pub(super) fn spawn_noise_virtual_stream(
     let writer_task = tokio::spawn(async move {
         let mut next_seq = 0u32;
         'writer: while let Some(message) = json_outgoing_rx.recv().await {
-            // Frame first, then split into bounded Noise records. Each record
-            // receives one checked relay sequence and is encrypted exactly
-            // once, preserving the implicit Noise sending nonce.
+            // Each chunk becomes one Noise record and consumes one nonce.
             let framed = match frame_jsonrpc_message(&message) {
                 Ok(framed) => framed,
                 Err(error) => {
@@ -170,9 +152,7 @@ pub(super) fn spawn_noise_virtual_stream(
             }
         }
 
-        // Reset is best effort because an overloaded physical writer must not
-        // keep this dead stream alive. The reliable local close notification
-        // below lets the shared state machine reap the exact stream instance.
+        // The reset is best effort; the local close notification is not.
         let closed_stream = ClosedNoiseVirtualStream {
             stream_id: writer_stream_id.clone(),
             instance_id,

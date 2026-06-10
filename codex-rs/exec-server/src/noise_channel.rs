@@ -72,10 +72,7 @@ impl NoiseChannelPublicKey {
         }
     }
 
-    /// Validate the suite tag and decode both public components for Clatter.
-    ///
-    /// Registry JSON is an external boundary, so parsing rejects malformed
-    /// base64 and wrong lengths before either value reaches the handshake.
+    /// Decode registry-provided key material before passing it to Clatter.
     fn decode(&self) -> Result<(<X25519 as Dh>::PubKey, MlKem768PublicKey), NoiseChannelError> {
         if self.suite != NOISE_CHANNEL_SUITE {
             return Err(NoiseChannelError::InvalidPublicKey(
@@ -156,10 +153,8 @@ impl InitiatorHandshake {
             .with_rs(responder_dh)
             .with_rs_kem(responder_kem);
         let mut handshake = Handshake::new(params)?;
-        // Clatter panics, rather than returning an error, when a handshake
-        // message would exceed Noise's 65,535-byte limit. The first-message
-        // payload comes from the environment registry, so enforce the complete
-        // encoded size before crossing that library boundary.
+        // Clatter panics if a handshake message exceeds Noise's 65,535-byte
+        // limit, so check the registry-provided payload before calling it.
         let request_len = payload
             .len()
             .checked_add(handshake.get_next_message_overhead()?)
@@ -189,11 +184,9 @@ impl InitiatorHandshake {
     }
 }
 
-/// Exec-server-side state after authenticating the first hybrid-IK message.
-///
-/// This deliberately is not a usable transport. It retains the authenticated
-/// harness key and encrypted authorization payload while the caller asks the
-/// registry whether that key may access this executor.
+/// Executor-side handshake state while harness authorization is pending.
+/// This is not a usable transport until the registry accepts the authenticated
+/// harness key.
 pub(crate) struct PendingResponderHandshake {
     handshake: Handshake,
     initiator_public_key: NoiseChannelPublicKey,
@@ -201,10 +194,8 @@ pub(crate) struct PendingResponderHandshake {
 }
 
 impl PendingResponderHandshake {
-    /// Authenticate and parse the first IK message without completing it.
-    ///
-    /// This split is intentional: callers must authorize `initiator_public_key`
-    /// with the registry before calling [`Self::complete`].
+    /// Parse the first IK message and recover the authenticated harness key.
+    /// Callers must authorize that key before calling [`Self::complete`].
     pub(crate) fn read_request(
         identity: &NoiseChannelIdentity,
         prologue: &[u8],
@@ -218,8 +209,7 @@ impl PendingResponderHandshake {
         let mut handshake = Handshake::new(params)?;
         let mut payload = [0u8; MAX_MESSAGE_LEN];
         let payload_len = handshake.read_message(request, &mut payload)?;
-        // Clatter exposes the initiator static key only after the first IK
-        // message authenticates and decrypts successfully.
+        // Clatter exposes this key only after the first IK message authenticates.
         let remote = handshake
             .get_remote_static()
             .ok_or(NoiseChannelError::InvalidMessage(
@@ -241,16 +231,12 @@ impl PendingResponderHandshake {
         &self.initiator_public_key
     }
 
-    /// Move the authenticated first-message payload out of pending state.
-    ///
-    /// The v1 payload is a short-lived registry authorization and is not
-    /// needed to complete the handshake. Moving it avoids retaining a second
-    /// copy while external authorization is in flight.
+    /// Take the registry authorization carried in the first handshake message.
     pub(crate) fn take_payload(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.payload)
     }
 
-    /// Finish the responder handshake after external harness authorization.
+    /// Finish the handshake after the registry authorizes the harness key.
     pub(crate) fn complete(mut self) -> Result<(NoiseTransport, Vec<u8>), NoiseChannelError> {
         let mut response = [0u8; MAX_MESSAGE_LEN];
         let response_len = self.handshake.write_message(&[], &mut response)?;
@@ -263,11 +249,9 @@ impl PendingResponderHandshake {
     }
 }
 
-/// Established encrypted channel with independent implicit send/receive nonces.
-///
-/// Noise does not transmit these counters. Callers must therefore present
-/// ciphertext records in order and must never re-encrypt a logical record as a
-/// retry; either mistake would move one endpoint to a different nonce.
+/// Established channel with independent implicit send and receive nonces.
+/// Relay records must be ordered before decryption, and a logical record must
+/// not be encrypted again for retry.
 pub(crate) struct NoiseTransport {
     transport: Transport,
 }
