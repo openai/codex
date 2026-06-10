@@ -217,6 +217,17 @@ pub fn host_owned_codex_apps_enabled(config: &McpConfig, auth: Option<&CodexAuth
     config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend)
 }
 
+fn plugin_owned_mcp_server_routes_to_app_surface(config: &McpConfig, server_name: &str) -> bool {
+    let Some(plugin_id) = config.plugin_ids_by_mcp_server_name.get(server_name) else {
+        return false;
+    };
+
+    config
+        .plugin_capability_summaries
+        .iter()
+        .any(|plugin| plugin.config_name == *plugin_id && !plugin.app_connector_ids.is_empty())
+}
+
 pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {
     config.configured_mcp_servers.clone()
 }
@@ -241,7 +252,9 @@ pub fn effective_mcp_servers_from_configured(
         .into_iter()
         .map(|(name, server)| (name, EffectiveMcpServer::configured(server)))
         .collect::<HashMap<_, _>>();
-    if !host_owned_codex_apps_enabled(config, auth) {
+    if host_owned_codex_apps_enabled(config, auth) {
+        servers.retain(|name, _| !plugin_owned_mcp_server_routes_to_app_surface(config, name));
+    } else {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
     }
     servers
