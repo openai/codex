@@ -287,7 +287,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     drop(rx_event);
 
     let cancel_token = CancellationToken::new();
-    let mut mcp_connection_manager = McpConnectionManager::new(
+    let mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries,

@@ -558,6 +558,52 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_cancels_startup_prewarm_waiting_for_mcp_startup() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_websocket_server(vec![vec![vec![
+        responses::ev_response_created("warm-1"),
+        responses::ev_completed("warm-1"),
+    ]]])
+    .await;
+    let pending_mcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let pending_mcp_url = format!("http://{}/mcp", pending_mcp_listener.local_addr()?);
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                "shutdown_prewarm",
+                McpServerTransportConfig::StreamableHttp {
+                    url: pending_mcp_url,
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                TestMcpServerOptions::default(),
+            );
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+
+    let (_pending_mcp_connection, _) =
+        tokio::time::timeout(Duration::from_secs(5), pending_mcp_listener.accept())
+            .await
+            .context("startup prewarm should start the MCP connection")??;
+    tokio::time::timeout(Duration::from_secs(2), fixture.codex.shutdown_and_wait())
+        .await
+        .context("shutdown should not wait for startup prewarm MCP startup")??;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        server.connections().is_empty(),
+        "startup prewarm should not send a websocket request after shutdown"
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_cwd)]
 async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::Result<()> {

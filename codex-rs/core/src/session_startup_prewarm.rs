@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::info;
 use tracing::warn;
 
@@ -19,7 +20,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 
 pub(crate) struct SessionStartupPrewarmHandle {
-    task: JoinHandle<CodexResult<ModelClientSession>>,
+    task: AbortOnDropHandle<CodexResult<ModelClientSession>>,
     started_at: Instant,
     timeout: Duration,
 }
@@ -40,10 +41,15 @@ impl SessionStartupPrewarmHandle {
         timeout: Duration,
     ) -> Self {
         Self {
-            task,
+            task: AbortOnDropHandle::new(task),
             started_at,
             timeout,
         }
+    }
+
+    pub(crate) async fn abort(self) {
+        self.task.abort();
+        let _ = self.task.await;
     }
 
     async fn resolve(

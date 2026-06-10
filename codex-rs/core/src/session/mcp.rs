@@ -91,8 +91,7 @@ impl Session {
         if self
             .services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .elicitations_auto_deny()
         {
             return McpServerElicitationOutcome {
@@ -226,16 +225,11 @@ impl Session {
 
         self.services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .resolve_elicitation(server_name, id, response)
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource calls are serialized through the session-owned manager guard"
-    )]
     pub async fn list_resources(
         &self,
         server: &str,
@@ -243,16 +237,11 @@ impl Session {
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .list_resources(server, params)
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource calls are serialized through the session-owned manager guard"
-    )]
     pub async fn list_resource_templates(
         &self,
         server: &str,
@@ -260,16 +249,11 @@ impl Session {
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .list_resource_templates(server, params)
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource calls are serialized through the session-owned manager guard"
-    )]
     pub async fn read_resource(
         &self,
         server: &str,
@@ -277,16 +261,11 @@ impl Session {
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .read_resource(server, params)
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP tool calls are serialized through the session-owned manager guard"
-    )]
     pub async fn call_tool(
         &self,
         server: &str,
@@ -296,8 +275,7 @@ impl Session {
     ) -> anyhow::Result<CallToolResult> {
         self.services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .call_tool(server, tool, arguments, meta)
             .await
     }
@@ -366,14 +344,12 @@ impl Session {
         )
         .await;
         {
-            let current_manager = self.services.mcp_connection_manager.read().await;
+            let current_manager = self.services.mcp_connection_manager.load_full();
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
         }
-        let mut old_manager = {
-            let mut manager = self.services.mcp_connection_manager.write().await;
-            std::mem::replace(&mut *manager, refreshed_manager)
-        };
-        old_manager.shutdown().await;
+        self.services
+            .mcp_connection_manager
+            .store(Arc::new(refreshed_manager));
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(
