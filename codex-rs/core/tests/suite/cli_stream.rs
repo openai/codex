@@ -1,12 +1,14 @@
-use assert_cmd::Command as AssertCommand;
 use codex_git_utils::collect_git_info;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
 use codex_protocol::protocol::GitInfo;
 use core_test_support::fs_wait;
+use core_test_support::process::output_with_process_tree_cleanup;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use std::process::Command;
+use std::process::Output;
 use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -22,6 +24,7 @@ const PERSONAL_ACCESS_TOKEN_AUTHORIZATION: &str = "Bearer at-cli-test";
 const PERSONAL_ACCESS_TOKEN_ACCOUNT_ID: &str = "account-pat";
 const WHOAMI_PATH: &str = "/v1/user-auth-credential/whoami";
 const CLOUD_CONFIG_BUNDLE_PATH: &str = "/backend-api/wham/config/bundle";
+const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn repo_root() -> std::path::PathBuf {
     #[expect(clippy::expect_used)]
@@ -60,10 +63,9 @@ async fn mount_personal_access_token_startup(server: &MockServer) {
 }
 
 #[expect(clippy::unwrap_used)]
-fn personal_access_token_exec_command(server: &MockServer, home: &TempDir) -> AssertCommand {
+fn personal_access_token_exec_command(server: &MockServer, home: &TempDir) -> Command {
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
-    let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    let mut cmd = Command::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -81,6 +83,10 @@ fn personal_access_token_exec_command(server: &MockServer, home: &TempDir) -> As
     cmd
 }
 
+fn run_cli_command(command: &mut Command) -> std::io::Result<Output> {
+    output_with_process_tree_cleanup(command, CLI_TIMEOUT)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_mode_stream_cli_supports_personal_access_tokens() {
     skip_if_no_network!();
@@ -90,9 +96,8 @@ async fn responses_mode_stream_cli_supports_personal_access_tokens() {
     let resp_mock = responses::mount_sse_once(&server, cli_sse_response()).await;
     let home = TempDir::new().unwrap();
 
-    let output = personal_access_token_exec_command(&server, &home)
-        .output()
-        .unwrap();
+    let mut cmd = personal_access_token_exec_command(&server, &home);
+    let output = run_cli_command(&mut cmd).unwrap();
 
     assert!(
         output.status.success(),
@@ -140,9 +145,8 @@ async fn responses_mode_stream_cli_does_not_attempt_oauth_refresh_for_personal_a
         .await;
     let home = TempDir::new().unwrap();
 
-    let output = personal_access_token_exec_command(&server, &home)
-        .output()
-        .unwrap();
+    let mut cmd = personal_access_token_exec_command(&server, &home);
+    let output = run_cli_command(&mut cmd).unwrap();
 
     assert!(!output.status.success());
     server.verify().await;
@@ -168,8 +172,7 @@ async fn responses_mode_stream_cli() {
         server.uri()
     );
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
-    let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    let mut cmd = Command::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -182,7 +185,7 @@ async fn responses_mode_stream_cli() {
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
-    let output = cmd.output().unwrap();
+    let output = run_cli_command(&mut cmd).unwrap();
     println!("Status: {}", output.status);
     println!("Stdout:\n{}", String::from_utf8_lossy(&output.stdout));
     println!("Stderr:\n{}", String::from_utf8_lossy(&output.stderr));
@@ -211,8 +214,7 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
 
     let home = TempDir::new().unwrap();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
-    let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    let mut cmd = Command::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -223,7 +225,7 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
-    let output = cmd.output().unwrap();
+    let output = run_cli_command(&mut cmd).unwrap();
     assert!(output.status.success());
 
     let request = resp_mock.single_request();
@@ -264,7 +266,7 @@ async fn exec_cli_applies_model_instructions_file() {
     let home = TempDir::new().unwrap();
     let repo_root = repo_root();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
-    let mut cmd = AssertCommand::new(bin);
+    let mut cmd = Command::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -279,7 +281,7 @@ async fn exec_cli_applies_model_instructions_file() {
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
-    let output = cmd.output().unwrap();
+    let output = run_cli_command(&mut cmd).unwrap();
     println!("Status: {}", output.status);
     println!("Stdout:\n{}", String::from_utf8_lossy(&output.stdout));
     println!("Stderr:\n{}", String::from_utf8_lossy(&output.stderr));
@@ -334,7 +336,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
 
     let repo_root = repo_root();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
-    let mut cmd = AssertCommand::new(bin);
+    let mut cmd = Command::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("--profile")
@@ -349,7 +351,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
-    let output = cmd.output().unwrap();
+    let output = run_cli_command(&mut cmd).unwrap();
     println!("Status: {}", output.status);
     println!("Stdout:\n{}", String::from_utf8_lossy(&output.stdout));
     println!("Stderr:\n{}", String::from_utf8_lossy(&output.stderr));
@@ -379,8 +381,7 @@ async fn responses_api_stream_cli() {
 
     let home = TempDir::new().unwrap();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
-    let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    let mut cmd = Command::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -391,7 +392,7 @@ async fn responses_api_stream_cli() {
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
-    let output = cmd.output().unwrap();
+    let output = run_cli_command(&mut cmd).unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("fixture hello"));
@@ -421,8 +422,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
 
     // 4. Run the codex CLI and invoke `exec`, which is what records a session.
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
-    let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    let mut cmd = Command::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -433,7 +433,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     cmd.env("CODEX_HOME", home.path())
         .env(CODEX_API_KEY_ENV_VAR, "dummy");
 
-    let output = cmd.output().unwrap();
+    let output = run_cli_command(&mut cmd).unwrap();
     assert!(
         output.status.success(),
         "codex-cli exec failed: {}",
@@ -542,8 +542,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
     let bin2 = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
-    let mut cmd2 = AssertCommand::new(bin2);
-    cmd2.timeout(Duration::from_secs(30));
+    let mut cmd2 = Command::new(bin2);
     cmd2.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -556,7 +555,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     cmd2.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
-    let output2 = cmd2.output().unwrap();
+    let output2 = run_cli_command(&mut cmd2).unwrap();
     assert!(output2.status.success(), "resume codex-cli run failed");
     assert_eq!(resp_mock.requests().len(), 2);
 
