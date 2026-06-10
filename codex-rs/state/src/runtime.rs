@@ -1,3 +1,4 @@
+use crate::AUTOMATIONS_DB_FILENAME;
 use crate::AgentJob;
 use crate::AgentJobCreateParams;
 use crate::AgentJobItem;
@@ -17,6 +18,7 @@ use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
+use crate::migrations::runtime_automations_migrator;
 use crate::migrations::runtime_goals_migrator;
 use crate::migrations::runtime_logs_migrator;
 use crate::migrations::runtime_memories_migrator;
@@ -58,6 +60,7 @@ use std::time::Instant;
 use tracing::warn;
 
 mod agent_jobs;
+mod automations;
 mod backfill;
 mod external_agent_config_imports;
 mod goals;
@@ -144,7 +147,15 @@ const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
     migrate_phase: "migrate_memories",
 };
 
-const RUNTIME_DBS: [RuntimeDbSpec; 4] = [STATE_DB, LOGS_DB, GOALS_DB, MEMORIES_DB];
+const AUTOMATIONS_DB: RuntimeDbSpec = RuntimeDbSpec {
+    label: "automations DB",
+    filename: AUTOMATIONS_DB_FILENAME,
+    kind: DbKind::Automations,
+    open_phase: "open_automations",
+    migrate_phase: "migrate_automations",
+};
+
+const RUNTIME_DBS: [RuntimeDbSpec; 5] = [STATE_DB, LOGS_DB, GOALS_DB, MEMORIES_DB, AUTOMATIONS_DB];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeDbPath {
@@ -158,6 +169,7 @@ pub struct StateRuntime {
     default_provider: String,
     pool: Arc<sqlx::SqlitePool>,
     logs_pool: Arc<sqlx::SqlitePool>,
+    automations_pool: Arc<sqlx::SqlitePool>,
     thread_goals: GoalStore,
     memories: MemoryStore,
     thread_updated_at_millis: Arc<AtomicI64>,
@@ -197,10 +209,12 @@ impl StateRuntime {
         let logs_migrator = runtime_logs_migrator();
         let goals_migrator = runtime_goals_migrator();
         let memories_migrator = runtime_memories_migrator();
+        let automations_migrator = runtime_automations_migrator();
         let state_path = STATE_DB.path(codex_home.as_path());
         let logs_path = LOGS_DB.path(codex_home.as_path());
         let goals_path = GOALS_DB.path(codex_home.as_path());
         let memories_path = MEMORIES_DB.path(codex_home.as_path());
+        let automations_path = AUTOMATIONS_DB.path(codex_home.as_path());
         let pool = match open_state_sqlite(&state_path, &state_migrator, telemetry_override).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
@@ -240,6 +254,22 @@ impl StateRuntime {
                     memories_path.display()
                 );
                 close_sqlite_pools(&[pool.as_ref(), logs_pool.as_ref(), goals_pool.as_ref()]).await;
+                return Err(err);
+            }
+        };
+        let automations_pool = match open_automations_sqlite(
+            &automations_path,
+            &automations_migrator,
+            telemetry_override,
+        )
+        .await
+        {
+            Ok(db) => Arc::new(db),
+            Err(err) => {
+                warn!(
+                    "failed to open automations db at {}: {err}",
+                    automations_path.display()
+                );
                 return Err(err);
             }
         };
@@ -294,6 +324,7 @@ impl StateRuntime {
             memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
             pool,
             logs_pool,
+            automations_pool,
             codex_home,
             default_provider,
             thread_updated_at_millis: Arc::new(AtomicI64::new(thread_updated_at_millis)),
@@ -398,6 +429,14 @@ async fn open_memories_sqlite(
     open_sqlite(path, migrator, MEMORIES_DB, telemetry_override).await
 }
 
+async fn open_automations_sqlite(
+    path: &Path,
+    migrator: &Migrator,
+    telemetry_override: Option<&dyn DbTelemetry>,
+) -> anyhow::Result<SqlitePool> {
+    open_sqlite(path, migrator, AUTOMATIONS_DB, telemetry_override).await
+}
+
 async fn open_sqlite(
     path: &Path,
     migrator: &Migrator,
@@ -496,6 +535,14 @@ pub fn memories_db_path(codex_home: &Path) -> PathBuf {
     MEMORIES_DB.path(codex_home)
 }
 
+pub fn automations_db_filename() -> String {
+    AUTOMATIONS_DB.filename.to_string()
+}
+
+pub fn automations_db_path(codex_home: &Path) -> PathBuf {
+    AUTOMATIONS_DB.path(codex_home)
+}
+
 pub fn runtime_db_paths(codex_home: &Path) -> Vec<RuntimeDbPath> {
     RUNTIME_DBS
         .iter()
@@ -527,6 +574,7 @@ pub async fn sqlite_integrity_check(path: &Path) -> anyhow::Result<Vec<String>> 
 #[cfg(test)]
 mod tests {
     use super::StateRuntime;
+    use super::automations_db_path;
     use super::open_state_sqlite;
     use super::runtime_state_migrator;
     use super::sqlite_integrity_check;
@@ -686,6 +734,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automations_table_lives_in_separate_db_file() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex home");
+        let _runtime = StateRuntime::init(codex_home.clone(), "mock_provider".to_string())
+            .await
+            .expect("state runtime");
+        let state_path = state_db_path(codex_home.as_path());
+        let automations_path = automations_db_path(codex_home.as_path());
+        let state_pool = open_db_pool(state_path.as_path()).await;
+        let automations_pool = open_db_pool(automations_path.as_path()).await;
+
+        let state_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'automations'",
+        )
+        .fetch_one(&state_pool)
+        .await
+        .expect("query state sqlite_master");
+        let automations_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'automations'",
+        )
+        .fetch_one(&automations_pool)
+        .await
+        .expect("query automations sqlite_master");
+
+        assert_eq!(state_count, 0);
+        assert_eq!(automations_count, 1);
+        state_pool.close().await;
+        automations_pool.close().await;
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn init_records_successful_sqlite_init_phases_to_explicit_telemetry() {
         let codex_home = unique_temp_dir();
         let telemetry = TestTelemetry::default();
@@ -714,6 +796,8 @@ mod tests {
             "migrate_goals",
             "open_memories",
             "migrate_memories",
+            "open_automations",
+            "migrate_automations",
             "ensure_backfill_state",
             "post_init_query",
         ]
@@ -724,6 +808,7 @@ mod tests {
 
         runtime.pool.close().await;
         runtime.logs_pool.close().await;
+        runtime.automations_pool.close().await;
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 }

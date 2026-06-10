@@ -3,6 +3,7 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "state",
     compile_data = glob([
+        "automations_migrations/**",
         "goals_migrations/**",
         "logs_migrations/**",
         "memory_migrations/**",
