@@ -7,7 +7,6 @@ use prost::Message as ProstMessage;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::debug;
 use tracing::warn;
 use uuid::Uuid;
 
