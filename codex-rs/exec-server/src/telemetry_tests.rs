@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use codex_otel::MetricsConfig;
 use opentelemetry::KeyValue;
@@ -48,6 +49,40 @@ fn emits_connection_metrics() {
         CONNECTIONS_TOTAL_METRIC,
         CONNECTIONS_TOTAL_DESCRIPTION,
         "",
+    );
+}
+
+#[test]
+fn emits_request_metrics() {
+    let (telemetry, metrics, exporter) = test_telemetry();
+
+    telemetry.request_completed("process/start", "success", Duration::from_millis(12));
+    metrics.shutdown().expect("shutdown metrics");
+
+    let metrics = latest_metrics(&exporter);
+    assert_eq!(
+        metric_points(&metrics, REQUESTS_TOTAL_METRIC),
+        vec![(
+            1.0,
+            BTreeMap::from([
+                ("method".to_string(), "process/start".to_string()),
+                ("result".to_string(), "success".to_string()),
+            ]),
+        )]
+    );
+    assert_eq!(histogram_count(&metrics, REQUEST_DURATION_METRIC), 1);
+    assert_eq!(histogram_sum(&metrics, REQUEST_DURATION_METRIC), 0.012);
+    assert_metric_metadata(
+        &metrics,
+        REQUESTS_TOTAL_METRIC,
+        REQUESTS_TOTAL_DESCRIPTION,
+        "",
+    );
+    assert_metric_metadata(
+        &metrics,
+        REQUEST_DURATION_METRIC,
+        REQUEST_DURATION_DESCRIPTION,
+        "s",
     );
 }
 
@@ -102,6 +137,26 @@ fn metric_points(
             .map(|point| (point.value() as f64, attributes_to_map(point.attributes())))
             .collect(),
         _ => panic!("unexpected metric data for {name}"),
+    }
+}
+
+fn histogram_count(resource_metrics: &ResourceMetrics, name: &str) -> u64 {
+    match find_metric(resource_metrics, name).data() {
+        AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
+            .data_points()
+            .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::count)
+            .sum(),
+        _ => panic!("unexpected histogram data for {name}"),
+    }
+}
+
+fn histogram_sum(resource_metrics: &ResourceMetrics, name: &str) -> f64 {
+    match find_metric(resource_metrics, name).data() {
+        AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
+            .data_points()
+            .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::sum)
+            .sum(),
+        _ => panic!("unexpected histogram data for {name}"),
     }
 }
 

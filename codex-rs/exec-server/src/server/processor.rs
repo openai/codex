@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::mpsc;
 use tracing::Instrument;
@@ -117,12 +118,18 @@ async fn run_connection(
             }
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_app_server_protocol::JSONRPCMessage::Request(request) => {
+                    let request_started_at = Instant::now();
                     if let Some((method, route)) = router.request_route(request.method.as_str()) {
                         let request_span = request_span(method, &request);
                         let message = tokio::select! {
                             message = route(Arc::clone(&handler), request).instrument(request_span.clone()) => message,
                             _ = disconnected_rx.changed() => {
                                 request_span.record("result", "disconnected");
+                                telemetry.request_completed(
+                                    method,
+                                    "disconnected",
+                                    request_started_at.elapsed(),
+                                );
                                 drop(request_span);
                                 debug!("exec-server transport disconnected while handling request");
                                 break;
@@ -130,6 +137,7 @@ async fn run_connection(
                         };
                         let result = request_result(&message);
                         request_span.record("result", result);
+                        telemetry.request_completed(method, result, request_started_at.elapsed());
                         drop(request_span);
                         if let Some(message) = message
                             && outgoing_tx.send(message).await.is_err()
@@ -140,6 +148,7 @@ async fn run_connection(
                         let method = "unknown";
                         let request_span = request_span(method, &request);
                         request_span.record("result", "error");
+                        telemetry.request_completed(method, "error", request_started_at.elapsed());
                         drop(request_span);
                         if outgoing_tx
                             .send(RpcServerOutboundMessage::Error {

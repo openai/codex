@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_otel::MetricsClient;
 use tracing::warn;
@@ -9,6 +10,10 @@ const CONNECTIONS_ACTIVE_METRIC: &str = "exec_server_connections_active";
 const CONNECTIONS_ACTIVE_DESCRIPTION: &str = "Number of active exec-server connections.";
 const CONNECTIONS_TOTAL_METRIC: &str = "exec_server_connections_total";
 const CONNECTIONS_TOTAL_DESCRIPTION: &str = "Total number of accepted exec-server connections.";
+const REQUESTS_TOTAL_METRIC: &str = "exec_server_requests_total";
+const REQUESTS_TOTAL_DESCRIPTION: &str = "Total number of exec-server requests.";
+const REQUEST_DURATION_METRIC: &str = "exec_server_request_duration_seconds";
+const REQUEST_DURATION_DESCRIPTION: &str = "Duration of exec-server requests in seconds.";
 
 pub fn runtime_span() -> tracing::Span {
     tracing::info_span!("codex.exec_server", otel.kind = "internal")
@@ -92,6 +97,24 @@ impl ExecServerTelemetry {
         }
     }
 
+    pub(crate) fn request_completed(
+        &self,
+        method: &'static str,
+        result: &'static str,
+        duration: Duration,
+    ) {
+        self.with_inner(|inner| {
+            let tags = [("method", method), ("result", result)];
+            inner.counter(REQUESTS_TOTAL_METRIC, REQUESTS_TOTAL_DESCRIPTION, &tags);
+            inner.duration(
+                REQUEST_DURATION_METRIC,
+                REQUEST_DURATION_DESCRIPTION,
+                duration,
+                &tags,
+            );
+        });
+    }
+
     fn connection_finished(&self, transport: ConnectionTransport) {
         self.with_inner(|inner| {
             let active = inner
@@ -136,6 +159,16 @@ impl ExecServerTelemetryInner {
             .is_err()
         {
             warn!(metric = name, "failed to emit exec-server counter");
+        }
+    }
+
+    fn duration(&self, name: &str, description: &str, duration: Duration, tags: &[(&str, &str)]) {
+        if self
+            .metrics
+            .record_duration_seconds_with_description(name, description, duration, tags)
+            .is_err()
+        {
+            warn!(metric = name, "failed to emit exec-server duration");
         }
     }
 
