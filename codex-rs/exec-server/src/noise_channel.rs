@@ -10,7 +10,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use clatter::KeyPair;
-use clatter::bytearray::ByteArray;
 use clatter::crypto::dh::X25519;
 use clatter::traits::Dh;
 use clatter::traits::Kem;
@@ -18,11 +17,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::aws_lc_ml_kem::AwsLcMlKem768;
-use crate::aws_lc_ml_kem::PUBLIC_KEY_LEN as MLKEM768_PUBLIC_KEY_LEN;
-
 pub const NOISE_CHANNEL_SUITE: &str = "Noise_hybridIK_X25519+MLKEM768_AESGCM_SHA256";
-
-const X25519_PUBLIC_KEY_LEN: usize = 32;
 
 type DhKeyPair = KeyPair<<X25519 as Dh>::PubKey, <X25519 as Dh>::PrivateKey>;
 type KemKeyPair = KeyPair<<AwsLcMlKem768 as Kem>::PubKey, <AwsLcMlKem768 as Kem>::SecretKey>;
@@ -57,35 +52,6 @@ impl NoiseChannelPublicKey {
             x25519_public_key: STANDARD.encode(dh.public),
             mlkem768_public_key: STANDARD.encode(kem.public.as_slice()),
         }
-    }
-
-    fn decode(
-        &self,
-    ) -> Result<(<X25519 as Dh>::PubKey, <AwsLcMlKem768 as Kem>::PubKey), NoiseChannelError> {
-        if self.suite != NOISE_CHANNEL_SUITE {
-            return Err(NoiseChannelError::InvalidPublicKey(
-                "unsupported Noise channel suite",
-            ));
-        }
-        let dh = STANDARD
-            .decode(&self.x25519_public_key)
-            .map_err(|_| NoiseChannelError::InvalidPublicKey("invalid X25519 public key"))?;
-        let dh: [u8; X25519_PUBLIC_KEY_LEN] = dh
-            .try_into()
-            .map_err(|_| NoiseChannelError::InvalidPublicKey("invalid X25519 public key length"))?;
-        let kem = STANDARD
-            .decode(&self.mlkem768_public_key)
-            .map_err(|_| NoiseChannelError::InvalidPublicKey("invalid ML-KEM-768 public key"))?;
-        if kem.len() != MLKEM768_PUBLIC_KEY_LEN {
-            return Err(NoiseChannelError::InvalidPublicKey(
-                "invalid ML-KEM-768 public key length",
-            ));
-        }
-
-        Ok((
-            dh,
-            <AwsLcMlKem768 as Kem>::PubKey::from_slice(kem.as_slice()),
-        ))
     }
 }
 
