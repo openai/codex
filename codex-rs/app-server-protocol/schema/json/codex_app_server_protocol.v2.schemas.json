@@ -16594,6 +16594,20 @@
     "TurnCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "finalModel": {
+          "description": "Final model used after server-side routing or fallback.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelSnapshot": {
+          "description": "Concrete resolved model snapshot used to execute the turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "threadId": {
           "type": "string"
         },

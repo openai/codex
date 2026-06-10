@@ -1172,6 +1172,8 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
 
     chat.handle_server_notification(
         ServerNotification::TurnCompleted(TurnCompletedNotification {
+            final_model: None,
+            model_snapshot: None,
             thread_id: thread_id.to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),

@@ -167,6 +167,8 @@ fn turn_complete_item(turn_id: String, completed_at: Option<i64>) -> RolloutItem
     RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id,
         last_agent_message: None,
+        final_model: None,
+        model_snapshot: None,
         completed_at,
         duration_ms: None,
         time_to_first_token_ms: None,

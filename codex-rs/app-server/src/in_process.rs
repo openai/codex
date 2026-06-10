@@ -894,6 +894,8 @@ mod tests {
                     completed_at: Some(0),
                     duration_ms: None,
                 },
+                final_model: None,
+                model_snapshot: None,
             })
         ));
         assert!(server_notification_requires_delivery(

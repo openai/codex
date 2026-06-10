@@ -1318,6 +1318,8 @@ struct TurnCompletionMetadata {
     started_at: Option<i64>,
     completed_at: Option<i64>,
     duration_ms: Option<i64>,
+    final_model: Option<String>,
+    model_snapshot: Option<String>,
 }
 
 async fn emit_turn_completed_with_status(
@@ -1338,6 +1340,8 @@ async fn emit_turn_completed_with_status(
             completed_at: turn_completion_metadata.completed_at,
             duration_ms: turn_completion_metadata.duration_ms,
         },
+        final_model: turn_completion_metadata.final_model,
+        model_snapshot: turn_completion_metadata.model_snapshot,
     };
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
@@ -1521,6 +1525,8 @@ async fn handle_turn_complete(
             started_at: turn_summary.started_at,
             completed_at: turn_complete_event.completed_at,
             duration_ms: turn_complete_event.duration_ms,
+            final_model: turn_complete_event.final_model,
+            model_snapshot: turn_complete_event.model_snapshot,
         },
         outgoing,
     )
@@ -1545,6 +1551,8 @@ async fn handle_turn_interrupted(
             started_at: turn_summary.started_at,
             completed_at: turn_aborted_event.completed_at,
             duration_ms: turn_aborted_event.duration_ms,
+            final_model: None,
+            model_snapshot: None,
         },
         outgoing,
     )
@@ -2256,6 +2264,8 @@ mod tests {
         TurnCompleteEvent {
             turn_id: turn_id.to_string(),
             last_agent_message: None,
+            final_model: None,
+            model_snapshot: None,
             completed_at: Some(TEST_TURN_COMPLETED_AT),
             duration_ms: Some(TEST_TURN_DURATION_MS),
             time_to_first_token_ms: None,
@@ -3423,6 +3433,11 @@ mod tests {
             ThreadId::new(),
         );
         let thread_state = new_thread_state();
+        let turn_complete = TurnCompleteEvent {
+            final_model: Some("test-final-model".to_string()),
+            model_snapshot: Some("test-model-snapshot".to_string()),
+            ..turn_complete_event(&event_turn_id)
+        };
         {
             let mut state = thread_state.lock().await;
             state.track_current_turn_event(
@@ -3437,14 +3452,14 @@ mod tests {
             );
             state.track_current_turn_event(
                 &event_turn_id,
-                &EventMsg::TurnComplete(turn_complete_event(&event_turn_id)),
+                &EventMsg::TurnComplete(turn_complete.clone()),
             );
         }
 
         handle_turn_complete(
             conversation_id,
             event_turn_id.clone(),
-            turn_complete_event(&event_turn_id),
+            turn_complete,
             &outgoing,
             &thread_state,
         )
@@ -3461,6 +3476,8 @@ mod tests {
                 assert_eq!(n.turn.started_at, Some(42));
                 assert_eq!(n.turn.completed_at, Some(TEST_TURN_COMPLETED_AT));
                 assert_eq!(n.turn.duration_ms, Some(TEST_TURN_DURATION_MS));
+                assert_eq!(n.final_model.as_deref(), Some("test-final-model"));
+                assert_eq!(n.model_snapshot.as_deref(), Some("test-model-snapshot"));
             }
             other => bail!("unexpected message: {other:?}"),
         }
@@ -3511,6 +3528,8 @@ mod tests {
                 assert_eq!(n.turn.error, None);
                 assert_eq!(n.turn.completed_at, Some(TEST_TURN_COMPLETED_AT));
                 assert_eq!(n.turn.duration_ms, Some(TEST_TURN_DURATION_MS));
+                assert_eq!(n.final_model, None);
+                assert_eq!(n.model_snapshot, None);
             }
             other => bail!("unexpected message: {other:?}"),
         }

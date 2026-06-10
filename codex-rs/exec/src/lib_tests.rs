@@ -371,6 +371,8 @@ fn turn_items_for_thread_returns_matching_turn_items() {
 fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
     let notification =
         ServerNotification::TurnCompleted(codex_app_server_protocol::TurnCompletedNotification {
+            final_model: None,
+            model_snapshot: None,
             thread_id: "thread-1".to_string(),
             turn: codex_app_server_protocol::Turn {
                 id: "turn-1".to_string(),

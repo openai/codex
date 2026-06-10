@@ -36,6 +36,8 @@ impl ChatWidget {
             ) {
                 self.handle_turn_completed_notification(
                     TurnCompletedNotification {
+                        final_model: None,
+                        model_snapshot: None,
                         thread_id: self.thread_id.map(|id| id.to_string()).unwrap_or_default(),
                         turn: Turn {
                             id: turn_id,

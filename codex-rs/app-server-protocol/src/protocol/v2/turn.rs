@@ -373,6 +373,10 @@ pub struct Usage {
 pub struct TurnCompletedNotification {
     pub thread_id: String,
     pub turn: Turn,
+    /// Final model used after server-side routing or fallback.
+    pub final_model: Option<String>,
+    /// Concrete resolved model snapshot used to execute the turn.
+    pub model_snapshot: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

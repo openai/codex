@@ -1557,6 +1557,8 @@ async fn multi_agent_v2_list_agents_returns_completed_status_without_encrypted_s
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: child_turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
+                final_model: None,
+                model_snapshot: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
@@ -2008,6 +2010,8 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: first_turn.sub_id.clone(),
                 last_agent_message: Some("first done".to_string()),
+                final_model: None,
+                model_snapshot: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
@@ -2037,6 +2041,8 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: second_turn.sub_id.clone(),
                 last_agent_message: Some("second done".to_string()),
+                final_model: None,
+                model_snapshot: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,

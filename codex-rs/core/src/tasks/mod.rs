@@ -742,6 +742,8 @@ impl Session {
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
+            final_model: None,
+            model_snapshot: None,
             completed_at,
             duration_ms,
             time_to_first_token_ms,

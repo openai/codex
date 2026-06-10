@@ -2595,6 +2595,8 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id,
                 last_agent_message: None,
+                final_model: None,
+                model_snapshot: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
@@ -2793,6 +2795,8 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: first_turn_id,
             last_agent_message: None,
+            final_model: None,
+            model_snapshot: None,
             completed_at: None,
             duration_ms: None,
             time_to_first_token_ms: None,
@@ -2822,6 +2826,8 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: rolled_back_turn_id,
             last_agent_message: None,
+            final_model: None,
+            model_snapshot: None,
             completed_at: None,
             duration_ms: None,
             time_to_first_token_ms: None,
@@ -2906,6 +2912,8 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: first_turn_id,
             last_agent_message: None,
+            final_model: None,
+            model_snapshot: None,
             completed_at: None,
             duration_ms: None,
             time_to_first_token_ms: None,
@@ -2927,6 +2935,8 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: compact_turn_id,
             last_agent_message: None,
+            final_model: None,
+            model_snapshot: None,
             completed_at: None,
             duration_ms: None,
             time_to_first_token_ms: None,
@@ -2958,6 +2968,8 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: rolled_back_turn_id,
             last_agent_message: None,
+            final_model: None,
+            model_snapshot: None,
             completed_at: None,
             duration_ms: None,
             time_to_first_token_ms: None,
@@ -3016,6 +3028,8 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
+            final_model: None,
+            model_snapshot: None,
             completed_at: None,
             duration_ms: None,
             time_to_first_token_ms: None,
@@ -3043,6 +3057,8 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-2".to_string(),
             last_agent_message: None,
+            final_model: None,
+            model_snapshot: None,
             completed_at: None,
             duration_ms: None,
             time_to_first_token_ms: None,
@@ -3070,6 +3086,8 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-3".to_string(),
             last_agent_message: None,
+            final_model: None,
+            model_snapshot: None,
             completed_at: None,
             duration_ms: None,
             time_to_first_token_ms: None,

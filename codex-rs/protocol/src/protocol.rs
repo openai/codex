@@ -1876,6 +1876,16 @@ pub struct ContextCompactedEvent;
 pub struct TurnCompleteEvent {
     pub turn_id: String,
     pub last_agent_message: Option<String>,
+    /// Final model used by the terminal successful sampling request, after routing or fallback.
+    #[serde(default, skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub final_model: Option<String>,
+    /// Concrete model snapshot used by the terminal successful sampling request.
+    #[serde(default, skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub model_snapshot: Option<String>,
     /// Unix timestamp (in seconds) when the turn completed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(type = "number | null", optional)]
@@ -5304,6 +5314,32 @@ mod tests {
             }
         });
         assert_eq!(expected, serde_json::to_value(&event)?);
+        Ok(())
+    }
+
+    #[test]
+    fn turn_complete_execution_identity_is_not_serialized() -> Result<()> {
+        let event = EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("done".to_string()),
+            final_model: Some("test-final-model".to_string()),
+            model_snapshot: Some("test-model-snapshot".to_string()),
+            completed_at: Some(1_717_171_717),
+            duration_ms: Some(1_234),
+            time_to_first_token_ms: Some(321),
+        });
+
+        assert_eq!(
+            serde_json::to_value(event)?,
+            json!({
+                "type": "task_complete",
+                "turn_id": "turn-1",
+                "last_agent_message": "done",
+                "completed_at": 1_717_171_717,
+                "duration_ms": 1_234,
+                "time_to_first_token_ms": 321,
+            })
+        );
         Ok(())
     }
 

@@ -305,6 +305,8 @@ async fn on_event_updates_status_from_task_complete() {
     let status = agent_status_from_event(&EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id: "turn-1".to_string(),
         last_agent_message: Some("done".to_string()),
+        final_model: None,
+        model_snapshot: None,
         completed_at: None,
         duration_ms: None,
         time_to_first_token_ms: None,
@@ -1896,6 +1898,8 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: tester_turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
+                final_model: None,
+                model_snapshot: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
@@ -1983,6 +1987,8 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: tester_turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
+                final_model: None,
+                model_snapshot: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,

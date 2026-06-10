@@ -664,6 +664,8 @@ mod tests {
 
     fn turn_completed(turn_id: &str) -> ServerNotification {
         ServerNotification::TurnCompleted(TurnCompletedNotification {
+            final_model: None,
+            model_snapshot: None,
             thread_id: "thread-1".to_string(),
             turn: Turn {
                 id: turn_id.to_string(),
