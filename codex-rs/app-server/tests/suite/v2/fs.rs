@@ -421,7 +421,7 @@ async fn fs_streaming_read_supports_stat_and_positional_reads() -> Result<()> {
         )
         .await??,
     )?;
-    assert!(open.max_chunk_bytes >= 4);
+    assert_eq!(open, FsReadFileOpenResponse {});
 
     let wrong_type_id = mcp
         .send_raw_request(

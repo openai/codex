@@ -1,17 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "description": "Successful response for `fs/readFile/open`.",
-  "properties": {
-    "maxChunkBytes": {
-      "description": "Maximum decoded bytes returned by one read.",
-      "format": "uint32",
-      "minimum": 0.0,
-      "type": "integer"
-    }
-  },
-  "required": [
-    "maxChunkBytes"
-  ],
   "title": "FsReadFileOpenResponse",
   "type": "object"
 }

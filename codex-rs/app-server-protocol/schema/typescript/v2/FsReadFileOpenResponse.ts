@@ -5,8 +5,4 @@
 /**
  * Successful response for `fs/readFile/open`.
  */
-export type FsReadFileOpenResponse = {
-/**
- * Maximum decoded bytes returned by one read.
- */
-maxChunkBytes: number, };
+export type FsReadFileOpenResponse = Record<string, never>;

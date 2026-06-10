@@ -7,6 +7,6 @@
  */
 export type FsReadFileReadParams = { handleId: string, offset: number,
 /**
- * Requested upper bound. Values above `maxChunkBytes` are capped.
+ * Requested upper bound. Values above the server limit are capped.
  */
 maxBytes?: number | null, };

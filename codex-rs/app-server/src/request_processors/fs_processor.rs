@@ -133,8 +133,7 @@ impl FsRequestProcessor {
         connection_id: ConnectionId,
         params: FsReadFileOpenParams,
     ) -> Result<FsReadFileOpenResponse, JSONRPCErrorError> {
-        let max_chunk_bytes = self
-            .handles(connection_id)
+        self.handles(connection_id)
             .await
             .open_read(
                 self.file_system()?,
@@ -144,10 +143,7 @@ impl FsRequestProcessor {
             )
             .await
             .map_err(map_file_handle_error)?;
-        Ok(FsReadFileOpenResponse {
-            max_chunk_bytes: u32::try_from(max_chunk_bytes)
-                .map_err(|_| internal_error("file read chunk limit exceeds u32"))?,
-        })
+        Ok(FsReadFileOpenResponse {})
     }
 
     pub(crate) async fn read_file_read(

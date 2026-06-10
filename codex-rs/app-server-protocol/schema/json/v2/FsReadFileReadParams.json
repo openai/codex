@@ -6,7 +6,7 @@
       "type": "string"
     },
     "maxBytes": {
-      "description": "Requested upper bound. Values above `maxChunkBytes` are capped.",
+      "description": "Requested upper bound. Values above the server limit are capped.",
       "format": "uint32",
       "minimum": 0.0,
       "type": [

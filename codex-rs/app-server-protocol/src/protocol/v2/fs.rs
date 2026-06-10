@@ -54,10 +54,7 @@ pub struct FsReadFileOpenParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct FsReadFileOpenResponse {
-    /// Maximum decoded bytes returned by one read.
-    pub max_chunk_bytes: u32,
-}
+pub struct FsReadFileOpenResponse {}
 
 /// Read a bounded chunk from an open file at an absolute byte offset.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -67,7 +64,7 @@ pub struct FsReadFileReadParams {
     pub handle_id: String,
     #[ts(type = "number")]
     pub offset: u64,
-    /// Requested upper bound. Values above `maxChunkBytes` are capped.
+    /// Requested upper bound. Values above the server limit are capped.
     #[ts(optional = nullable)]
     pub max_bytes: Option<u32>,
 }
