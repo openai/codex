@@ -12,8 +12,9 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
-use crate::helper_materialization::bundled_executable_path_for_exe;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::identity::sandbox_setup_is_complete;
 use crate::logging::current_log_file_path;
 use crate::logging::log_note;
@@ -46,7 +47,6 @@ pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
-const SETUP_EXE_FILENAME: &str = "codex-windows-sandbox-setup.exe";
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
     ".tsh",
@@ -209,7 +209,7 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(request.codex_home);
     let sbx_dir = sandbox_dir(request.codex_home);
     let log_path = current_log_file_path(&sbx_dir);
     let cleared_report = match clear_setup_error_report(request.codex_home) {
@@ -662,17 +662,12 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
-    {
-        return setup_exe;
-    }
-    PathBuf::from(SETUP_EXE_FILENAME)
-}
-
-fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
-    bundled_executable_path_for_exe(exe, SETUP_EXE_FILENAME)
+fn find_setup_exe(codex_home: &Path) -> PathBuf {
+    resolve_helper_for_launch(
+        HelperExecutable::WindowsSandboxSetup,
+        codex_home,
+        Some(&sandbox_dir(codex_home)),
+    )
 }
 
 fn report_helper_failure(
@@ -716,7 +711,7 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(codex_home);
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
@@ -1096,7 +1091,6 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::build_payload_roots;
-    use super::find_setup_exe_for_current_exe;
     use super::gather_full_read_roots_for_permissions;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
@@ -1104,8 +1098,6 @@ mod tests {
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
     use super::verify_setup_completed;
-    use crate::helper_materialization::BIN_DIRNAME;
-    use crate::helper_materialization::RESOURCES_DIRNAME;
     use crate::helper_materialization::helper_bin_dir;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
     use crate::setup_error::SetupErrorCode;
@@ -1279,24 +1271,6 @@ mod tests {
             loopback_proxy_port_from_url("socks5h://user:pass@[::1]:1080"),
             Some(1080)
         );
-    }
-
-    #[test]
-    fn setup_exe_lookup_checks_package_resource_dir_for_bin_exe() {
-        let tmp = TempDir::new().expect("tempdir");
-        let package_dir = tmp.path().join("package");
-        let bin_dir = package_dir.join(BIN_DIRNAME);
-        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
-        fs::create_dir_all(&bin_dir).expect("create bin dir");
-        fs::create_dir_all(&resources_dir).expect("create resources dir");
-        let exe = bin_dir.join("codex.exe");
-        let setup_exe = resources_dir.join("codex-windows-sandbox-setup.exe");
-        fs::write(&exe, b"codex").expect("write exe");
-        fs::write(&setup_exe, b"setup").expect("write setup");
-
-        let resolved = find_setup_exe_for_current_exe(&exe).expect("setup exe");
-
-        assert_eq!(resolved, setup_exe);
     }
 
     #[test]

@@ -22,18 +22,29 @@ pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    WindowsSandboxSetup,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::WindowsSandboxSetup => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::WindowsSandboxSetup => "windows-sandbox-setup",
+        }
+    }
+
+    fn materialized_stem(self) -> &'static str {
+        match self {
+            Self::CommandRunner => "codex-command-runner",
+            // Avoid copied helper names that trigger Windows installer/UAC heuristics.
+            Self::WindowsSandboxSetup => "codex-windows-sandbox-helper",
         }
     }
 }
@@ -220,10 +231,7 @@ fn helper_destination_for_source(
 fn materialized_file_name(kind: HelperExecutable, suffix: &str) -> String {
     let source_name = kind.file_name();
     let path = Path::new(source_name);
-    let stem = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or(source_name);
+    let stem = kind.materialized_stem();
     let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -558,5 +566,13 @@ mod tests {
         let file_name = materialized_file_name(HelperExecutable::CommandRunner, "test-suffix");
 
         assert_eq!(file_name, "codex-command-runner-test-suffix.exe");
+    }
+
+    #[test]
+    fn setup_helper_materialized_name_avoids_setup_suffix() {
+        let file_name =
+            materialized_file_name(HelperExecutable::WindowsSandboxSetup, "test-suffix");
+
+        assert_eq!(file_name, "codex-windows-sandbox-helper-test-suffix.exe");
     }
 }
