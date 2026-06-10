@@ -172,7 +172,6 @@ pub(super) enum ConversationItemType {
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ConversationRole {
-    Developer,
     User,
 }
 

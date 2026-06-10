@@ -2391,7 +2391,7 @@ async fn conversation_sends_terminal_assistant_message_to_realtime_handoff() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_sends_only_last_assistant_message_at_turn_complete() -> Result<()> {
+async fn conversation_sends_each_assistant_message_once() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let (gate_second_message_tx, gate_second_message_rx) = oneshot::channel();
@@ -2439,6 +2439,7 @@ async fn conversation_sends_only_last_assistant_message_at_turn_complete() -> Re
             }),
         ],
         vec![],
+        vec![],
     ]])
     .await;
 
@@ -2481,14 +2482,16 @@ async fn conversation_sends_only_last_assistant_message_at_turn_complete() -> Re
     })
     .await;
 
-    let intermediate_output = timeout(
-        Duration::from_millis(200),
-        realtime_server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 1),
-    )
-    .await;
-    assert!(
-        intermediate_output.is_err(),
-        "assistant items should not be sent before turn completion"
+    let first_output = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
+        .await;
+    assert_eq!(
+        first_output.body_json(),
+        json!({
+            "type": "conversation.handoff.append",
+            "handoff_id": "handoff_item_done",
+            "output_text": "assistant message 1"
+        })
     );
 
     let _ = gate_second_message_tx.send(());
@@ -2505,11 +2508,11 @@ async fn conversation_sends_only_last_assistant_message_at_turn_complete() -> Re
     })
     .await;
 
-    let terminal_output = realtime_server
-        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
+    let second_output = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 2)
         .await;
     assert_eq!(
-        terminal_output.body_json(),
+        second_output.body_json(),
         json!({
             "type": "conversation.handoff.append",
             "handoff_id": "handoff_item_done",
@@ -2518,12 +2521,133 @@ async fn conversation_sends_only_last_assistant_message_at_turn_complete() -> Re
     );
     let duplicate_output = timeout(
         Duration::from_millis(200),
-        realtime_server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 2),
+        realtime_server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 3),
     )
     .await;
     assert!(
         duplicate_output.is_err(),
-        "turn completion should emit exactly one terminal output"
+        "each assistant message should be emitted exactly once"
+    );
+
+    realtime_server.shutdown().await;
+    api_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_clears_handoff_after_turn_abort() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (gate_first_turn_tx, gate_first_turn_rx) = oneshot::channel();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(responses::ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_first_turn_rx),
+            body: sse_event(responses::ev_completed("resp-1")),
+        },
+    ];
+    let second_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(responses::ev_response_created("resp-2")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(responses::ev_assistant_message(
+                "msg-2",
+                "assistant after abort",
+            )),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(responses::ev_completed("resp-2")),
+        },
+    ];
+    let (api_server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_abort", "instructions": "backend prompt" }
+            }),
+            json!({
+                "type": "conversation.input_transcript.delta",
+                "delta": "delegate then abort"
+            }),
+            json!({
+                "type": "conversation.handoff.requested",
+                "handoff_id": "handoff_abort",
+                "item_id": "item_abort",
+                "input_transcript": "delegate then abort"
+            }),
+        ],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
+        }
+    });
+    let test = builder.build_with_streaming_server(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(handoff),
+        }) if handoff.handoff_id == "handoff_abort" => Some(()),
+        _ => None,
+    })
+    .await;
+    api_server.wait_for_request_count(1).await;
+
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    let _ = gate_first_turn_tx.send(());
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "continue after abort".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let output = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
+        .await;
+    assert_eq!(
+        output.body_json(),
+        json!({
+            "type": "conversation.handoff.append",
+            "handoff_id": "codex",
+            "output_text": "assistant after abort"
+        })
     );
 
     realtime_server.shutdown().await;

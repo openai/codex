@@ -306,18 +306,6 @@ impl RealtimeWebsocketWriter {
         .await
     }
 
-    pub async fn send_conversation_developer_item_create(
-        &self,
-        text: String,
-    ) -> Result<(), ApiError> {
-        self.send_json(&conversation_item_create_message(
-            self.event_parser,
-            ConversationRole::Developer,
-            text,
-        ))
-        .await
-    }
-
     pub async fn send_conversation_function_call_output(
         &self,
         call_id: String,

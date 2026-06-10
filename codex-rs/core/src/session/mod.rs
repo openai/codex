@@ -1672,7 +1672,7 @@ impl Session {
             id: turn_context.sub_id.clone(),
             msg,
         };
-        self.maybe_send_realtime_terminal_output(&legacy_source)
+        self.maybe_send_realtime_assistant_output(&legacy_source)
             .await;
         self.send_event_raw(event).await;
         self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
@@ -1782,16 +1782,32 @@ impl Session {
         }
     }
 
-    async fn maybe_send_realtime_terminal_output(&self, msg: &EventMsg) {
-        let EventMsg::TurnComplete(event) = msg else {
-            return;
+    async fn maybe_send_realtime_assistant_output(&self, msg: &EventMsg) {
+        let result = match msg {
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(message),
+                ..
+            }) => {
+                let output_text = message
+                    .content
+                    .iter()
+                    .map(|content| match content {
+                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+                    })
+                    .collect::<String>();
+                if output_text.trim().is_empty() {
+                    return;
+                }
+                self.conversation.send_assistant_output(output_text).await
+            }
+            EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {
+                self.conversation.finish_turn().await;
+                return;
+            }
+            _ => return,
         };
-        if let Err(err) = self
-            .conversation
-            .finish_turn(event.last_agent_message.clone())
-            .await
-        {
-            debug!("failed to send terminal output to realtime conversation: {err}");
+        if let Err(err) = result {
+            debug!("failed to send assistant output to realtime conversation: {err}");
         }
     }
 
