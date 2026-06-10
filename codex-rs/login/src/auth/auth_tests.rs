@@ -1,4 +1,5 @@
 use super::*;
+use crate::auth::storage::AgentIdentityStorage;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
@@ -6,6 +7,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
+use codex_protocol::protocol::SessionSource;
 
 use base64::Engine;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -19,6 +21,7 @@ use tempfile::tempdir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_partial_json;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -119,7 +122,9 @@ async fn login_with_access_token_writes_only_token() {
         .expect("auth.json should parse");
     assert_eq!(auth.auth_mode, Some(AuthMode::AgentIdentity));
     assert_eq!(
-        auth.agent_identity.as_deref(),
+        auth.agent_identity
+            .as_ref()
+            .and_then(AgentIdentityStorage::as_jwt),
         Some(agent_identity.as_str())
     );
     assert!(auth.tokens.is_none(), "tokens should be cleared");
@@ -223,6 +228,101 @@ async fn login_with_access_token_rejects_invalid_jwt() {
         !get_auth_file(dir.path()).exists(),
         "invalid access token should not write auth.json"
     );
+}
+
+#[tokio::test]
+async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("account-123".to_string()),
+        },
+        codex_home.path(),
+    )?;
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await?
+    .expect("auth should load");
+
+    assert!(
+        auth.agent_identity_auth(
+            AgentIdentityAuthPolicy::JwtOnly,
+            /*chatgpt_base_url*/ None,
+            /*forced_chatgpt_workspace_id*/ None,
+            SessionSource::Cli,
+        )
+        .await?
+        .is_none()
+    );
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/agent-identities"))
+        .and(header("authorization", "Bearer test-access-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .and(body_partial_json(json!({
+            "name": "Codex CLI",
+            "ttl": null,
+        })))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "agent_runtime_id": "agent-runtime-123",
+        })))
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+
+    let agent_auth = auth
+        .agent_identity_auth(
+            AgentIdentityAuthPolicy::JwtOrChatgpt,
+            Some(server.uri()),
+            /*forced_chatgpt_workspace_id*/ None,
+            SessionSource::Cli,
+        )
+        .await?
+        .expect("agent identity should register");
+    let reused = auth
+        .agent_identity_auth(
+            AgentIdentityAuthPolicy::JwtOrChatgpt,
+            Some(server.uri()),
+            /*forced_chatgpt_workspace_id*/ None,
+            SessionSource::Cli,
+        )
+        .await?
+        .expect("agent identity should be reused");
+    Mock::given(method("POST"))
+        .and(path("/v1/agent/agent-runtime-123/task/register"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "task_id": "task-123",
+        })))
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+
+    agent_auth.ensure_run_task(Some(server.uri())).await?;
+    reused.ensure_run_task(Some(server.uri())).await?;
+
+    assert_eq!(
+        agent_auth.record().agent_runtime_id,
+        reused.record().agent_runtime_id
+    );
+    assert_eq!(agent_auth.run_task_id(), Some("task-123".to_string()));
+    assert_eq!(reused.run_task_id(), Some("task-123".to_string()));
+    assert_eq!(agent_auth.record().agent_runtime_id, "agent-runtime-123");
+    assert_eq!(agent_auth.record().account_id, "account-123");
+    assert_eq!(agent_auth.record().chatgpt_user_id, "user-12345");
+    assert_eq!(
+        auth.get_agent_identity("account-123")
+            .expect("identity should persist")
+            .agent_runtime_id,
+        "agent-runtime-123"
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -1099,6 +1199,8 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
         .mount(&server)
         .await;
     let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let _authapi_guard =
+        EnvVarGuard::set("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &chatgpt_base_url);
     save_auth(
         codex_home.path(),
         &AuthDotJson {
@@ -1106,7 +1208,7 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
             openai_api_key: None,
             tokens: None,
             last_refresh: None,
-            agent_identity: Some(agent_identity),
+            agent_identity: Some(AgentIdentityStorage::Jwt(agent_identity)),
             personal_access_token: None,
         },
         AuthCredentialsStoreMode::File,
@@ -1124,9 +1226,13 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
     let err = super::enforce_login_restrictions(&config)
         .await
         .expect_err("expected workspace mismatch to error");
-    assert!(err.to_string().contains(&format!(
-        "current credentials belong to {WORKSPACE_ID_DISALLOWED}"
-    )));
+    let message = err.to_string();
+    assert!(
+        message.contains(&format!(
+            "current credentials belong to {WORKSPACE_ID_DISALLOWED}"
+        )),
+        "{message}"
+    );
     assert!(
         !codex_home.path().join("auth.json").exists(),
         "auth.json should be removed on mismatch"
@@ -1192,6 +1298,7 @@ fn agent_identity_record(account_id: &str) -> AgentIdentityAuthRecord {
         email: "user@example.com".to_string(),
         plan_type: AccountPlanType::Pro,
         chatgpt_account_is_fedramp: false,
+        registered_at: None,
     }
 }
 

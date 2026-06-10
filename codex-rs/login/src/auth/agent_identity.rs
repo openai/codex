@@ -118,6 +118,7 @@ mod tests {
             email: "agent@example.com".to_string(),
             plan_type: AccountPlanType::Plus,
             chatgpt_account_is_fedramp: false,
+            registered_at: None,
         }
     }
 
