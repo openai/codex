@@ -209,8 +209,10 @@ where
         );
     }
 
-    pub(crate) fn request_route(&self, method: &str) -> Option<&RequestRoute<S>> {
-        self.request_routes.get(method)
+    pub(crate) fn request_route(&self, method: &str) -> Option<(&'static str, &RequestRoute<S>)> {
+        self.request_routes
+            .get_key_value(method)
+            .map(|(&method, route)| (method, route))
     }
 
     pub(crate) fn notification_route(&self, method: &str) -> Option<&NotificationRoute<S>> {
@@ -347,7 +349,7 @@ impl RpcClient {
                 id: request_id.clone(),
                 method: method.to_string(),
                 params: Some(params),
-                trace: None,
+                trace: codex_otel::current_span_w3c_trace_context(),
             }))
             .await
             .is_err()
@@ -531,11 +533,17 @@ mod tests {
 
     use codex_app_server_protocol::JSONRPCMessage;
     use codex_app_server_protocol::JSONRPCResponse;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::InMemorySpanExporter;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWriteExt;
     use tokio::io::BufReader;
     use tokio::time::timeout;
+    use tracing::Instrument;
+    use tracing_subscriber::filter::filter_fn;
+    use tracing_subscriber::prelude::*;
 
     use super::RpcClient;
     use crate::connection::JsonRpcConnection;
@@ -640,5 +648,54 @@ mod tests {
         if let Err(err) = server.await {
             panic!("server task failed: {err}");
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rpc_client_propagates_current_trace_context() {
+        let span_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(span_exporter)
+            .build();
+        let tracer = tracer_provider.tracer("exec-server-test");
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+        let parent_span = tracing::info_span!("outbound-parent");
+
+        let (client_stdin, server_reader) = tokio::io::duplex(4096);
+        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
+        let connection =
+            JsonRpcConnection::from_stdio(client_stdout, client_stdin, "test-rpc".to_string());
+        let (client, _events_rx) = RpcClient::new(connection);
+
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+            let request = match read_jsonrpc_line(&mut lines).await {
+                JSONRPCMessage::Request(request) => request,
+                other => panic!("expected JSON-RPC request, got {other:?}"),
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id.clone(),
+                    result: serde_json::json!({}),
+                }),
+            )
+            .await;
+            request.trace
+        });
+
+        let response = client
+            .call::<_, serde_json::Value>("traced", &serde_json::json!({}))
+            .instrument(parent_span)
+            .await
+            .expect("RPC response");
+        assert_eq!(response, serde_json::json!({}));
+        let trace = server.await.expect("server task").expect("trace context");
+        assert!(trace.traceparent.is_some());
     }
 }
