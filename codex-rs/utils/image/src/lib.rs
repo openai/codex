@@ -1,3 +1,4 @@
+use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -17,6 +18,8 @@ use image::codecs::webp::WebPEncoder;
 use image::imageops::FilterType;
 /// Maximum width or height used when resizing images before uploading.
 pub const MAX_DIMENSION: u32 = 2048;
+/// Maximum compressed file size accepted for an image added to a prompt.
+pub const MAX_PROMPT_IMAGE_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
 pub mod error;
 
@@ -43,6 +46,17 @@ pub enum PromptImageMode {
     Original,
 }
 
+/// Validates the compressed byte size of an image before prompt processing.
+pub fn validate_prompt_image_file_size(file_size: u64) -> io::Result<()> {
+    if file_size > MAX_PROMPT_IMAGE_FILE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("image exceeds the {MAX_PROMPT_IMAGE_FILE_BYTES}-byte limit"),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ImageCacheKey {
     digest: [u8; 20],
@@ -57,6 +71,11 @@ pub fn load_for_prompt_bytes(
     file_bytes: Vec<u8>,
     mode: PromptImageMode,
 ) -> Result<EncodedImage, ImageProcessingError> {
+    let file_size = u64::try_from(file_bytes.len()).unwrap_or(u64::MAX);
+    validate_prompt_image_file_size(file_size).map_err(|source| ImageProcessingError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
     let path_buf = path.to_path_buf();
 
     let key = ImageCacheKey {
@@ -209,6 +228,21 @@ mod tests {
             .write_to(&mut encoded, format)
             .expect("encode image to bytes");
         encoded.into_inner()
+    }
+
+    #[test]
+    fn prompt_image_file_size_limit_is_inclusive() {
+        assert!(validate_prompt_image_file_size(MAX_PROMPT_IMAGE_FILE_BYTES).is_ok());
+
+        let error = validate_prompt_image_file_size(MAX_PROMPT_IMAGE_FILE_BYTES + 1)
+            .expect_err("reject oversized image");
+        assert_eq!(
+            (error.kind(), error.to_string()),
+            (
+                io::ErrorKind::InvalidData,
+                format!("image exceeds the {MAX_PROMPT_IMAGE_FILE_BYTES}-byte limit"),
+            )
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -4,8 +4,10 @@ use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
+use codex_utils_image::MAX_PROMPT_IMAGE_FILE_BYTES;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
+use codex_utils_image::validate_prompt_image_file_size;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -1018,7 +1020,6 @@ const IMAGE_CLOSE_TAG: &str = "</image>";
 const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
 const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
-const MAX_LOCAL_IMAGE_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
 pub fn image_open_tag_text() -> String {
     IMAGE_OPEN_TAG.to_string()
@@ -1264,30 +1265,15 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                                     "local image path is not a regular file",
                                 ));
                             }
-                            if metadata.len() > MAX_LOCAL_IMAGE_FILE_BYTES {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::InvalidData,
-                                    format!(
-                                        "local image exceeds the {MAX_LOCAL_IMAGE_FILE_BYTES}-byte limit"
-                                    ),
-                                ));
-                            }
+                            validate_prompt_image_file_size(metadata.len())?;
 
                             let capacity = usize::try_from(metadata.len()).unwrap_or_default();
                             let mut file_bytes = Vec::with_capacity(capacity);
                             std::fs::File::open(&path)?
-                                .take(MAX_LOCAL_IMAGE_FILE_BYTES + 1)
+                                .take(MAX_PROMPT_IMAGE_FILE_BYTES + 1)
                                 .read_to_end(&mut file_bytes)?;
-                            if file_bytes.len()
-                                > usize::try_from(MAX_LOCAL_IMAGE_FILE_BYTES).unwrap_or(usize::MAX)
-                            {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::InvalidData,
-                                    format!(
-                                        "local image exceeds the {MAX_LOCAL_IMAGE_FILE_BYTES}-byte limit"
-                                    ),
-                                ));
-                            }
+                            let file_size = u64::try_from(file_bytes.len()).unwrap_or(u64::MAX);
+                            validate_prompt_image_file_size(file_size)?;
                             Ok(file_bytes)
                         });
                         match file_bytes {
@@ -3029,7 +3015,7 @@ mod tests {
     fn local_image_too_large_adds_placeholder() -> Result<()> {
         let dir = tempdir()?;
         let oversized_path = dir.path().join("oversized.png");
-        std::fs::File::create(&oversized_path)?.set_len(MAX_LOCAL_IMAGE_FILE_BYTES + 1)?;
+        std::fs::File::create(&oversized_path)?.set_len(MAX_PROMPT_IMAGE_FILE_BYTES + 1)?;
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
             path: oversized_path.clone(),
@@ -3042,7 +3028,7 @@ mod tests {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: format!(
-                        "Codex could not read the local image at `{}`: local image exceeds the {MAX_LOCAL_IMAGE_FILE_BYTES}-byte limit",
+                        "Codex could not read the local image at `{}`: image exceeds the {MAX_PROMPT_IMAGE_FILE_BYTES}-byte limit",
                         oversized_path.display()
                     ),
                 }],
