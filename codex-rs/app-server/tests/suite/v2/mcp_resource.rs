@@ -66,7 +66,15 @@ const SKILL_RESOURCE_URI: &str = "skill://plugin_demo/deploy";
 const SKILL_MAIN_PROMPT_URI: &str = "skill://plugin_demo/deploy/SKILL.md";
 const SKILL_REFERENCE_URI: &str = "skill://plugin_demo/deploy/references/deploy.md";
 const SKILL_MARKER: &str = "ORCHESTRATOR_SKILL_BODY_MARKER";
-const SKILL_CONTENTS: &str = "---\nname: deploy\ndescription: Deploy through the orchestrator.\n---\n\n# Deploy\n\nORCHESTRATOR_SKILL_BODY_MARKER\n";
+const SKILL_CONTENTS: &str = concat!(
+    "---\n",
+    "name: deploy\n",
+    "description: Deploy through the orchestrator.\n",
+    "---\n\n",
+    "# Deploy\n\n",
+    "ORCHESTRATOR_SKILL_BODY_MARKER\n\n",
+    "Read the [deployment reference](skill://plugin_demo/deploy/references/deploy.md).\n",
+);
 const SKILL_REFERENCE_CONTENTS: &str =
     "# Deploy reference\n\nUse the orchestrator deployment API.\n";
 const SKILLS_LIST_CALL_ID: &str = "skills-list";
@@ -116,7 +124,7 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_apps_resources_support_orchestrator_skills_without_an_environment() -> Result<()> {
+async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, apps_server_handle) = start_resource_apps_mcp_server().await?;
     let responses_server_uri = responses_server.uri();
@@ -230,6 +238,7 @@ async fn codex_apps_resources_support_orchestrator_skills_without_an_environment
     assert_eq!(1, skill_fragments.len());
     assert!(skill_fragments[0].contains(&format!("<name>{SKILL_NAME}</name>")));
     assert!(skill_fragments[0].contains(SKILL_MARKER));
+    assert!(skill_fragments[0].contains(SKILL_REFERENCE_URI));
 
     let list_output = requests[1]
         .function_call_output_text(SKILLS_LIST_CALL_ID)
