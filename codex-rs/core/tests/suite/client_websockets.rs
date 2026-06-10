@@ -363,7 +363,10 @@ async fn responses_websocket_preconnect_reuses_connection() {
         server.single_handshake().header(USER_AGENT_HEADER),
         Some(codex_login::default_client::get_codex_user_agent())
     );
-    assert_eq!(server.single_handshake().header("x-codex-window-id"), None);
+    assert_eq!(
+        server.single_handshake().header("x-codex-window-id"),
+        Some(TEST_WINDOW_ID.to_string())
+    );
     let connection = server.single_connection();
     assert_eq!(connection.len(), 1);
 
