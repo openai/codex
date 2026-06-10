@@ -291,6 +291,18 @@ impl RealtimeWebsocketWriter {
             .await
     }
 
+    pub async fn send_conversation_handoff_append(
+        &self,
+        handoff_id: String,
+        output_text: String,
+    ) -> Result<(), ApiError> {
+        self.send_json(&RealtimeOutboundMessage::ConversationHandoffAppend {
+            handoff_id,
+            output_text,
+        })
+        .await
+    }
+
     pub async fn send_conversation_function_call_output(
         &self,
         call_id: String,
