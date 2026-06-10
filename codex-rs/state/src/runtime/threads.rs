@@ -914,6 +914,34 @@ ON CONFLICT(id) DO UPDATE SET
         let now = Utc::now().timestamp();
         let mut tx = self.pool.begin().await?;
         for thread_id_string in &thread_id_strings {
+            for parent_thread_id_string in &thread_id_strings {
+                // If both the job runner and worker are being deleted, requeueing
+                // the worker item would leave a running job with no loop to consume it.
+                sqlx::query(
+                    r#"
+UPDATE agent_jobs
+SET status = ?, updated_at = ?, completed_at = ?, last_error = ?
+WHERE status IN (?, ?)
+  AND id IN (
+    SELECT item.job_id
+    FROM agent_job_items AS item
+    JOIN thread_spawn_edges AS edge ON edge.child_thread_id = item.assigned_thread_id
+    WHERE item.status = ? AND item.assigned_thread_id = ? AND edge.parent_thread_id = ?
+  )
+                    "#,
+                )
+                .bind(AgentJobStatus::Cancelled.as_str())
+                .bind(now)
+                .bind(now)
+                .bind("agent job runner thread was deleted")
+                .bind(AgentJobStatus::Pending.as_str())
+                .bind(AgentJobStatus::Running.as_str())
+                .bind(AgentJobItemStatus::Running.as_str())
+                .bind(thread_id_string)
+                .bind(parent_thread_id_string)
+                .execute(&mut *tx)
+                .await?;
+            }
             sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
                 .bind(thread_id_string)
                 .execute(&mut *tx)
@@ -1301,10 +1329,16 @@ mod tests {
             .await?;
         runtime.mark_agent_job_running("job-1").await?;
         runtime
-            .mark_agent_job_item_running_with_thread("job-1", "item-1", &thread_id.to_string())
+            .mark_agent_job_item_running_with_thread(
+                "job-1",
+                "item-1",
+                &child_thread_id.to_string(),
+            )
             .await?;
 
-        let rows = runtime.delete_thread(thread_id).await?;
+        let rows = runtime
+            .delete_threads_strict(&[thread_id, child_thread_id])
+            .await?;
 
         assert_eq!(rows, 1);
         assert!(runtime.get_thread(thread_id).await?.is_none());
@@ -1325,6 +1359,11 @@ mod tests {
             job_item.last_error,
             Some("assigned thread was deleted".to_string())
         );
+        let job = runtime
+            .get_agent_job("job-1")
+            .await?
+            .expect("job should exist");
+        assert_eq!(job.status, AgentJobStatus::Cancelled);
 
         let missing_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000403")?;
         let missing_child_thread_id =
