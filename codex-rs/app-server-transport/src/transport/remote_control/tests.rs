@@ -243,6 +243,7 @@ fn remote_control_handle_with_current_enrollment(
     )));
     RemoteControlHandle {
         desired_state_tx: Arc::new(desired_state_tx),
+        desired_state_rpc_lock: Arc::new(Semaphore::new(1)),
         desired_state_persistence_lock: Arc::new(Semaphore::new(1)),
         status_tx: Arc::new(status_tx),
         state_db_available: true,
@@ -1014,7 +1015,7 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
             status: RemoteControlConnectionStatus::Connecting,
             server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
-            environment_id: None,
+            environment_id: Some("env_test".to_string()),
         }
     );
     expect_remote_control_status_snapshot(
@@ -1023,7 +1024,7 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
             status: RemoteControlConnectionStatus::Connecting,
             server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
-            environment_id: None,
+            environment_id: Some("env_test".to_string()),
         },
     )
     .await;

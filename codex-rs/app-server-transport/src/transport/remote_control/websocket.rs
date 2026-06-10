@@ -347,7 +347,7 @@ impl RemoteControlStatusPublisher {
         }
     }
 
-    fn publish_environment_id(&self, environment_id: Option<String>) {
+    pub(super) fn publish_environment_id(&self, environment_id: Option<String>) {
         let mut status_change = None;
         self.tx.send_if_modified(|status| {
             if status.status == RemoteControlConnectionStatus::Disabled {

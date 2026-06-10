@@ -76,6 +76,7 @@ pub(super) struct QueuedServerEnvelope {
 #[derive(Clone)]
 pub struct RemoteControlHandle {
     desired_state_tx: Arc<watch::Sender<RemoteControlDesiredState>>,
+    desired_state_rpc_lock: Arc<Semaphore>,
     desired_state_persistence_lock: Arc<Semaphore>,
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
@@ -170,17 +171,6 @@ impl fmt::Display for RemoteControlUnavailable {
 impl Error for RemoteControlUnavailable {}
 
 impl RemoteControlHandle {
-    pub async fn enable(
-        &self,
-        app_server_client_name: Option<&str>,
-    ) -> io::Result<RemoteControlStatusChangedNotification> {
-        let _persistence = acquire_persistence_lock(&self.desired_state_persistence_lock).await;
-        self.persist_preference(app_server_client_name, true)
-            .await?;
-        self.enable_with_preference(Some(true))
-            .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))
-    }
-
     pub fn enable_ephemeral(
         &self,
     ) -> Result<RemoteControlStatusChangedNotification, RemoteControlUnavailable> {
@@ -229,6 +219,11 @@ impl RemoteControlHandle {
         &self,
         app_server_client_name: Option<&str>,
     ) -> io::Result<RemoteControlStatusChangedNotification> {
+        let _transition = self
+            .desired_state_rpc_lock
+            .acquire()
+            .await
+            .unwrap_or_else(|_| unreachable!());
         let _persistence = acquire_persistence_lock(&self.desired_state_persistence_lock).await;
         self.persist_preference(app_server_client_name, false)
             .await?;
@@ -396,12 +391,60 @@ impl RemoteControlHandle {
         server_name: &str,
         app_server_client_name: Option<&str>,
     ) -> io::Result<RemoteControlEnrollment> {
+        let (enrollment, created) = self
+            .load_or_enroll_server(
+                current_enrollment,
+                auth,
+                installation_id,
+                server_name,
+                app_server_client_name,
+            )
+            .await?;
+        if !created {
+            publish_current_enrollment(current_enrollment, &enrollment);
+            return Ok(enrollment);
+        }
+
+        let state_db = self
+            .state_db
+            .as_deref()
+            .ok_or_else(pairing_unavailable_error)?;
+        let _persistence = acquire_persistence_lock(&self.desired_state_persistence_lock).await;
+        let persistence_preference = match *self.desired_state_tx.borrow() {
+            RemoteControlDesiredState::Enabled {
+                persistence_preference,
+            } => persistence_preference,
+            RemoteControlDesiredState::Unknown | RemoteControlDesiredState::Disabled => {
+                return Err(Self::pairing_disabled_error());
+            }
+        };
+        update_persisted_remote_control_enrollment(
+            Some(state_db),
+            &enrollment.remote_control_target,
+            &auth.account_id,
+            app_server_client_name,
+            Some(&enrollment),
+            persistence_preference,
+        )
+        .await?;
+        publish_current_enrollment(current_enrollment, &enrollment);
+        Ok(enrollment)
+    }
+
+    async fn load_or_enroll_server(
+        &self,
+        current_enrollment: &Option<RemoteControlEnrollment>,
+        auth: &mut auth::RemoteControlConnectionAuth,
+        installation_id: &str,
+        server_name: &str,
+        app_server_client_name: Option<&str>,
+    ) -> io::Result<(RemoteControlEnrollment, bool)> {
         if let Some(enrollment) = current_enrollment
             .as_ref()
             .filter(|enrollment| enrollment.account_id == auth.account_id)
             .cloned()
         {
-            return Ok(enrollment);
+            return Ok((enrollment, false));
         }
 
         let remote_control_target = normalize_remote_control_url(&self.remote_control_url)?;
@@ -418,8 +461,7 @@ impl RemoteControlHandle {
         .await?
         {
             enrollment.server_name = server_name.to_string();
-            publish_current_enrollment(current_enrollment, &enrollment);
-            return Ok(enrollment);
+            return Ok((enrollment, false));
         }
 
         let enrollment = enroll_pairing_server(
@@ -430,26 +472,7 @@ impl RemoteControlHandle {
             server_name,
         )
         .await?;
-        let _persistence = acquire_persistence_lock(&self.desired_state_persistence_lock).await;
-        let persistence_preference = match *self.desired_state_tx.borrow() {
-            RemoteControlDesiredState::Enabled {
-                persistence_preference,
-            } => persistence_preference,
-            RemoteControlDesiredState::Unknown | RemoteControlDesiredState::Disabled => {
-                return Err(Self::pairing_disabled_error());
-            }
-        };
-        update_persisted_remote_control_enrollment(
-            Some(state_db),
-            &remote_control_target,
-            &auth.account_id,
-            app_server_client_name,
-            Some(&enrollment),
-            persistence_preference,
-        )
-        .await?;
-        publish_current_enrollment(current_enrollment, &enrollment);
-        Ok(enrollment)
+        Ok((enrollment, true))
     }
 
     fn pairing_persistence_key(
@@ -860,6 +883,7 @@ pub async fn start_remote_control(
 
     let (desired_state_tx, _desired_state_rx) = watch::channel(desired_state);
     let desired_state_tx = Arc::new(desired_state_tx);
+    let desired_state_rpc_lock = Arc::new(Semaphore::new(1));
     let desired_state_persistence_lock = Arc::new(Semaphore::new(1));
     let websocket_desired_state_tx = desired_state_tx.clone();
     let websocket_desired_state_persistence_lock = desired_state_persistence_lock.clone();
@@ -963,6 +987,7 @@ pub async fn start_remote_control(
         join_handle,
         RemoteControlHandle {
             desired_state_tx,
+            desired_state_rpc_lock,
             desired_state_persistence_lock,
             status_tx: Arc::new(status_tx),
             state_db_available,

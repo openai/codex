@@ -25,7 +25,6 @@ use codex_app_server_protocol::RemoteControlPairingStatusResponse;
 use codex_app_server_protocol::RemoteControlStatusReadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
-use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -48,7 +47,7 @@ async fn remote_control_preference(
     Ok(state_db
         .get_remote_control_enrollment(websocket_url, "account_id", Some(DEFAULT_CLIENT_NAME))
         .await?
-        .context("seeded enrollment should remain")?
+        .context("enrollment should exist")?
         .remote_control_enabled)
 }
 
@@ -106,11 +105,22 @@ async fn remote_control_status_read_returns_disabled_status() -> Result<()> {
 #[tokio::test]
 async fn remote_control_enable_returns_connecting_status() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let _backend = BlockingRemoteControlBackend::start(codex_home.path()).await?;
+    let mut backend = BlockingRemoteControlBackend::start(codex_home.path()).await?;
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_remote_control_enable_request().await?;
+    assert_eq!(
+        timeout(DEFAULT_TIMEOUT, backend.wait_for_enroll_request()).await??,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    timeout(
+        Duration::from_millis(100),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await
+    .expect_err("enable response should wait for enrollment");
+    backend.complete_enrollment()?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
@@ -120,35 +130,71 @@ async fn remote_control_enable_returns_connecting_status() -> Result<()> {
 
     assert_eq!(received.status, RemoteControlConnectionStatus::Connecting);
     assert!(!received.server_name.is_empty());
-    assert_eq!(received.environment_id, None);
+    assert_eq!(received.environment_id.as_deref(), Some("environment-id"));
     assert!(!received.installation_id.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn disable_waits_for_in_flight_durable_enable() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut backend = BlockingRemoteControlBackend::start(codex_home.path()).await?;
+    let websocket_url = backend.websocket_url().to_string();
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    mcp.send_remote_control_enable_request().await?;
+    timeout(DEFAULT_TIMEOUT, backend.wait_for_enroll_request()).await??;
+    let disable_request_id = mcp.send_remote_control_disable_request().await?;
+    timeout(
+        Duration::from_millis(100),
+        mcp.read_stream_until_response_message(RequestId::Integer(disable_request_id)),
+    )
+    .await
+    .expect_err("disable response should wait for the in-flight enable");
+
+    backend.complete_enrollment()?;
+    let response = wait_for_response(&mut mcp, disable_request_id).await?;
+    let received: RemoteControlDisableResponse = to_response(response)?;
+    assert_eq!(received.status, RemoteControlConnectionStatus::Disabled);
+    assert_eq!(
+        remote_control_preference(&state_db, &websocket_url).await?,
+        Some(false)
+    );
     Ok(())
 }
 
 #[tokio::test]
 async fn rpc_updates_durable_preference_but_ephemeral_does_not() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let listener = configured_remote_control_listener(codex_home.path()).await?;
-    let websocket_url = format!(
-        "ws://{}/backend-api/wham/remote/control/server",
-        listener.local_addr()?
-    );
+    let mut backend = BlockingRemoteControlBackend::start(codex_home.path()).await?;
+    let websocket_url = backend.websocket_url().to_string();
     let state_db =
         StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
-    state_db
-        .upsert_remote_control_enrollment(&RemoteControlEnrollmentRecord {
-            websocket_url: websocket_url.clone(),
-            account_id: "account_id".to_string(),
-            app_server_client_name: Some(DEFAULT_CLIENT_NAME.to_string()),
-            server_id: "server-id".to_string(),
-            environment_id: "environment-id".to_string(),
-            server_name: "server-name".to_string(),
-            remote_control_enabled: Some(false),
-        })
-        .await?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_remote_control_enable_request().await?;
+    assert_eq!(
+        timeout(DEFAULT_TIMEOUT, backend.wait_for_enroll_request()).await??,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    backend.complete_enrollment()?;
+    wait_for_response(&mut mcp, request_id).await?;
+    assert_eq!(
+        remote_control_preference(&state_db, &websocket_url).await?,
+        Some(true)
+    );
+
+    let request_id = mcp.send_remote_control_disable_request().await?;
+    wait_for_response(&mut mcp, request_id).await?;
+    assert_eq!(
+        remote_control_preference(&state_db, &websocket_url).await?,
+        Some(false)
+    );
 
     let request_id = mcp.send_remote_control_enable_request().await?;
     wait_for_response(&mut mcp, request_id).await?;
@@ -182,17 +228,17 @@ async fn remote_control_status_read_returns_connecting_status_after_enable() -> 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_remote_control_enable_request().await?;
-    let _: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
     let enroll_request = timeout(DEFAULT_TIMEOUT, backend.wait_for_enroll_request()).await??;
     assert_eq!(
         enroll_request,
         "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
     );
+    backend.complete_enrollment()?;
+    let _: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
 
     let request_id = mcp.send_remote_control_status_read_request().await?;
     let response: JSONRPCResponse = timeout(
@@ -204,7 +250,7 @@ async fn remote_control_status_read_returns_connecting_status_after_enable() -> 
 
     assert_eq!(received.status, RemoteControlConnectionStatus::Connecting);
     assert!(!received.server_name.is_empty());
-    assert_eq!(received.environment_id, None);
+    assert_eq!(received.environment_id.as_deref(), Some("environment-id"));
     assert!(!received.installation_id.is_empty());
     Ok(())
 }
@@ -407,6 +453,8 @@ async fn remote_control_client_management_works_while_disabled() -> Result<()> {
 
 struct BlockingRemoteControlBackend {
     enroll_request_rx: Option<oneshot::Receiver<Result<String>>>,
+    enroll_response_tx: Option<oneshot::Sender<()>>,
+    websocket_url: String,
     server_task: JoinHandle<()>,
 }
 
@@ -471,12 +519,37 @@ impl ClientManagementRemoteControlBackend {
 impl BlockingRemoteControlBackend {
     async fn start(codex_home: &std::path::Path) -> Result<Self> {
         let listener = configured_remote_control_listener(codex_home).await?;
+        let websocket_url = format!(
+            "ws://{}/backend-api/wham/remote/control/server",
+            listener.local_addr()?
+        );
 
         let (enroll_request_tx, enroll_request_rx) = oneshot::channel();
+        let (enroll_response_tx, enroll_response_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
-            match read_enroll_request(listener).await {
-                Ok((request_line, _reader)) => {
+            match read_enroll_request(&listener).await {
+                Ok((request_line, reader)) => {
                     let _ = enroll_request_tx.send(Ok(request_line));
+                    if enroll_response_rx.await.is_err() {
+                        return;
+                    }
+                    if respond_with_json(
+                        reader.into_inner(),
+                        serde_json::json!({
+                            "server_id": "server-id",
+                            "environment_id": "environment-id",
+                            "remote_control_token": "remote-control-token",
+                            "expires_at": "3026-05-22T12:34:56Z",
+                        }),
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+                    let Ok(_websocket) = listener.accept().await else {
+                        return;
+                    };
                     std::future::pending::<()>().await;
                 }
                 Err(err) => {
@@ -487,6 +560,8 @@ impl BlockingRemoteControlBackend {
 
         Ok(Self {
             enroll_request_rx: Some(enroll_request_rx),
+            enroll_response_tx: Some(enroll_response_tx),
+            websocket_url,
             server_task,
         })
     }
@@ -497,6 +572,18 @@ impl BlockingRemoteControlBackend {
             .take()
             .context("enroll request should only be awaited once")?;
         rx.await?
+    }
+
+    fn complete_enrollment(&mut self) -> Result<()> {
+        self.enroll_response_tx
+            .take()
+            .context("enrollment should only complete once")?
+            .send(())
+            .map_err(|()| anyhow::anyhow!("enrollment response receiver dropped"))
+    }
+
+    fn websocket_url(&self) -> &str {
+        &self.websocket_url
     }
 }
 
@@ -632,8 +719,8 @@ async fn configured_remote_control_listener(codex_home: &std::path::Path) -> Res
     Ok(listener)
 }
 
-async fn read_enroll_request(listener: TcpListener) -> Result<(String, BufReader<TcpStream>)> {
-    let request = read_http_request(&listener).await?;
+async fn read_enroll_request(listener: &TcpListener) -> Result<(String, BufReader<TcpStream>)> {
+    let request = read_http_request(listener).await?;
     Ok((request.request_line, request.reader))
 }
 
