@@ -22,6 +22,9 @@ use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
+use crate::local_sink::SharedLocalAnalyticsSink;
+use crate::local_sink::append_codex_analytics_events_best_effort;
+use crate::local_sink::local_analytics_sink_from_env;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
@@ -42,6 +45,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+#[cfg(test)]
+use crate::local_sink::local_analytics_sink_for_path;
+#[cfg(test)]
+use std::path::PathBuf;
+
 const ANALYTICS_EVENTS_QUEUE_SIZE: usize = 256;
 const ANALYTICS_EVENTS_TIMEOUT: Duration = Duration::from_secs(10);
 const ANALYTICS_EVENT_DEDUPE_MAX_KEYS: usize = 4096;
@@ -59,14 +67,25 @@ pub struct AnalyticsEventsClient {
 }
 
 impl AnalyticsEventsQueue {
-    pub(crate) fn new(auth_manager: Arc<AuthManager>, base_url: String) -> Self {
+    pub(crate) fn new(
+        auth_manager: Arc<AuthManager>,
+        base_url: String,
+        backend_analytics_enabled: bool,
+        local_sink: Option<SharedLocalAnalyticsSink>,
+    ) -> Self {
         let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
+        let worker_local_sink = local_sink.clone();
         tokio::spawn(async move {
             let mut reducer = AnalyticsReducer::default();
             while let Some(input) = receiver.recv().await {
                 let mut events = Vec::new();
                 reducer.ingest(input, &mut events).await;
-                send_track_events(&auth_manager, &base_url, events).await;
+                if let Some(local_sink) = worker_local_sink.as_ref() {
+                    append_codex_analytics_events_best_effort(local_sink, &events);
+                }
+                if backend_analytics_enabled {
+                    send_track_events(&auth_manager, &base_url, events).await;
+                }
             }
         });
         Self {
@@ -123,14 +142,50 @@ impl AnalyticsEventsClient {
         base_url: String,
         analytics_enabled: Option<bool>,
     ) -> Self {
-        Self {
-            queue: (analytics_enabled != Some(false))
-                .then(|| AnalyticsEventsQueue::new(Arc::clone(&auth_manager), base_url)),
-        }
+        Self::new_with_local_sink(
+            auth_manager,
+            base_url,
+            analytics_enabled,
+            local_analytics_sink_from_env(),
+        )
     }
 
     pub fn disabled() -> Self {
         Self { queue: None }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_local_sink_path(
+        auth_manager: Arc<AuthManager>,
+        base_url: String,
+        analytics_enabled: Option<bool>,
+        local_sink_path: Option<PathBuf>,
+    ) -> Self {
+        Self::new_with_local_sink(
+            auth_manager,
+            base_url,
+            analytics_enabled,
+            local_sink_path.and_then(local_analytics_sink_for_path),
+        )
+    }
+
+    fn new_with_local_sink(
+        auth_manager: Arc<AuthManager>,
+        base_url: String,
+        analytics_enabled: Option<bool>,
+        local_sink: Option<SharedLocalAnalyticsSink>,
+    ) -> Self {
+        let backend_analytics_enabled = analytics_enabled != Some(false);
+        Self {
+            queue: (backend_analytics_enabled || local_sink.is_some()).then(|| {
+                AnalyticsEventsQueue::new(
+                    auth_manager,
+                    base_url,
+                    backend_analytics_enabled,
+                    local_sink,
+                )
+            }),
+        }
     }
 
     pub fn track_skill_invocations(
