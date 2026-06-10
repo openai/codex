@@ -190,3 +190,68 @@ async fn running_item_past_max_runtime_fails_even_if_worker_never_returns() -> a
 
     Ok(())
 }
+
+#[tokio::test]
+async fn late_report_after_timeout_failure_is_rejected() -> anyhow::Result<()> {
+    let codex_home = tempfile::tempdir()?;
+    let runtime =
+        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".into())
+            .await?;
+    let job_id = "job-late-report";
+    let item_id = "row-1";
+    let thread_id = "00000000-0000-0000-0000-000000000001";
+
+    runtime
+        .create_agent_job(
+            &codex_state::AgentJobCreateParams {
+                id: job_id.to_string(),
+                name: "test-job".to_string(),
+                instruction: "Return {path}".to_string(),
+                auto_export: true,
+                max_runtime_seconds: Some(1),
+                output_schema_json: None,
+                input_headers: vec!["path".to_string()],
+                input_csv_path: "/tmp/input.csv".to_string(),
+                output_csv_path: "/tmp/output.csv".to_string(),
+            },
+            &[codex_state::AgentJobItemCreateParams {
+                item_id: item_id.to_string(),
+                row_index: 0,
+                source_id: None,
+                row_json: json!({"path": "file-1"}),
+            }],
+        )
+        .await?;
+    runtime.mark_agent_job_running(job_id).await?;
+    assert!(
+        runtime
+            .mark_agent_job_item_running_with_thread(job_id, item_id, thread_id)
+            .await?
+    );
+    assert!(
+        runtime
+            .mark_agent_job_item_failed(job_id, item_id, "worker exceeded max runtime of 1s")
+            .await?
+    );
+
+    let accepted = runtime
+        .report_agent_job_item_result(job_id, item_id, thread_id, &json!({"late": true}))
+        .await?;
+    assert!(
+        !accepted,
+        "late report from a timed-out worker must not convert the item back to completed"
+    );
+
+    let item = runtime
+        .get_agent_job_item(job_id, item_id)
+        .await?
+        .expect("job item should exist");
+    assert_eq!(item.status, codex_state::AgentJobItemStatus::Failed);
+    assert_eq!(item.result_json, None);
+    assert_eq!(
+        item.last_error,
+        Some("worker exceeded max runtime of 1s".to_string())
+    );
+
+    Ok(())
+}
