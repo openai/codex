@@ -593,22 +593,53 @@ enum ParsedProxyListDecision {
 fn parse_proxy_list(input: &str, target_scheme: &str) -> ParsedProxyListDecision {
     let mut saw_unsupported = false;
     let mut http_fallback = None;
-    for token in input
-        .split(';')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
+
     {
-        if target_scheme == "https"
-            && http_fallback.is_none()
-            && let Some(ParsedProxyListDecision::Proxy(url)) = parse_proxy_key_token(token, "http")
+        let mut process_token = |token: &str| {
+            if target_scheme == "https"
+                && http_fallback.is_none()
+                && let Some(ParsedProxyListDecision::Proxy(url)) =
+                    parse_proxy_key_token(token, "http")
+            {
+                http_fallback = Some(url);
+            }
+            match parse_proxy_token(token, target_scheme) {
+                ParsedProxyListDecision::Direct => Some(ParsedProxyListDecision::Direct),
+                ParsedProxyListDecision::Proxy(url) => Some(ParsedProxyListDecision::Proxy(url)),
+                ParsedProxyListDecision::UnsupportedScheme => {
+                    saw_unsupported = true;
+                    None
+                }
+                ParsedProxyListDecision::Unavailable => None,
+            }
+        };
+
+        for segment in input
+            .split(';')
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
         {
-            http_fallback = Some(url);
-        }
-        match parse_proxy_token(token, target_scheme) {
-            ParsedProxyListDecision::Direct => return ParsedProxyListDecision::Direct,
-            ParsedProxyListDecision::Proxy(url) => return ParsedProxyListDecision::Proxy(url),
-            ParsedProxyListDecision::UnsupportedScheme => saw_unsupported = true,
-            ParsedProxyListDecision::Unavailable => {}
+            let mut parts = segment.split_whitespace();
+            let directive = parts.next();
+            let hostport = parts.next();
+            let extra = parts.next();
+            let is_proxy_directive = matches!(
+                directive.map(str::to_ascii_lowercase).as_deref(),
+                Some("proxy" | "http" | "https" | "socks" | "socks4" | "socks5")
+            ) && hostport.is_some()
+                && extra.is_none();
+
+            if is_proxy_directive {
+                if let Some(decision) = process_token(segment) {
+                    return decision;
+                }
+            } else {
+                for token in segment.split_whitespace() {
+                    if let Some(decision) = process_token(token) {
+                        return decision;
+                    }
+                }
+            }
         }
     }
 
@@ -634,10 +665,11 @@ fn parse_proxy_token(token: &str, target_scheme: &str) -> ParsedProxyListDecisio
         return ParsedProxyListDecision::Unavailable;
     }
 
-    if let Some((scheme, hostport)) = token.split_once(' ') {
-        let scheme = scheme.trim().to_ascii_lowercase();
-        let hostport = hostport.trim();
-        return match scheme.as_str() {
+    let mut parts = token.split_whitespace();
+    let directive = parts.next();
+    let hostport = parts.next();
+    if let (Some(directive), Some(hostport), None) = (directive, hostport, parts.next()) {
+        return match directive.to_ascii_lowercase().as_str() {
             "proxy" | "http" => proxy_url_from_hostport("http", hostport),
             "https" => proxy_url_from_hostport("https", hostport),
             "socks" | "socks4" | "socks5" => ParsedProxyListDecision::UnsupportedScheme,
@@ -690,6 +722,10 @@ mod tests {
     fn parses_static_winhttp_proxy_entries_for_target_scheme() {
         assert_eq!(
             parse_proxy_list("http=web-proxy:8080;https=secure-proxy:8443", "https"),
+            ParsedProxyListDecision::Proxy("http://secure-proxy:8443".to_string())
+        );
+        assert_eq!(
+            parse_proxy_list("http=web-proxy:8080 https=secure-proxy:8443", "https"),
             ParsedProxyListDecision::Proxy("http://secure-proxy:8443".to_string())
         );
         assert_eq!(

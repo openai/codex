@@ -7,6 +7,7 @@ use super::RouteFailureClass;
 use super::SystemProxyDecision;
 use super::no_proxy_matches_origin;
 use super::parse_proxy_list;
+use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows_sys::Win32::Foundation::FALSE;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::GlobalFree;
@@ -192,7 +193,11 @@ fn current_user_ie_proxy_config() -> Result<IeProxyConfig, RouteFailureClass> {
     };
     let ok = unsafe { WinHttpGetIEProxyConfigForCurrentUser(&mut raw) };
     if ok == FALSE {
-        return Err(classify_winhttp_error(last_error()));
+        let error = last_error();
+        if error == ERROR_FILE_NOT_FOUND {
+            return Ok(IeProxyConfig::default());
+        }
+        return Err(classify_winhttp_error(error));
     }
 
     let auto_config_url = GlobalWideString::from_raw(raw.lpszAutoConfigUrl).into_string();
@@ -207,7 +212,7 @@ fn current_user_ie_proxy_config() -> Result<IeProxyConfig, RouteFailureClass> {
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct IeProxyConfig {
     auto_detect: bool,
     auto_config_url: Option<String>,
@@ -294,14 +299,22 @@ impl Drop for WinHttpSession {
 }
 
 fn proxy_bypass_matches_origin(proxy_bypass: &str, origin: &RequestOrigin) -> bool {
-    proxy_bypass.split([';', ',']).map(str::trim).any(|entry| {
-        if entry.eq_ignore_ascii_case("<local>") {
-            !origin.host.contains('.')
-        } else {
-            no_proxy_matches_origin(entry, origin)
-        }
-    })
+    proxy_bypass
+        .split(|ch: char| ch == ';' || ch == ',' || ch.is_whitespace())
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .any(|entry| {
+            if entry.eq_ignore_ascii_case("<local>") {
+                !origin.host.contains('.')
+            } else {
+                no_proxy_matches_origin(entry, origin)
+            }
+        })
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;
 
 fn wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
