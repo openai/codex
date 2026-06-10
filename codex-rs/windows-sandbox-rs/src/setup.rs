@@ -68,6 +68,19 @@ const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     r"C:\ProgramData",
 ];
 
+fn path_read_roots(env_map: &HashMap<String, String>) -> Vec<PathBuf> {
+    env_map
+        .get("PATH")
+        .map(std::ffi::OsString::from)
+        .or_else(|| std::env::var_os("PATH"))
+        .map(|path| {
+            std::env::split_paths(&path)
+                .filter(|entry| entry.is_absolute())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
 }
@@ -443,6 +456,7 @@ pub(crate) fn gather_read_roots(
                 .map(PathBuf::from),
         );
     }
+    roots.extend(path_read_roots(env_map));
     roots.extend(permissions.readable_roots_for_cwd(command_cwd));
     canonical_existing(&roots)
 }
@@ -1617,6 +1631,35 @@ mod tests {
             dunce::canonicalize(&writable_root).expect("canonical writable root");
 
         assert!(roots.contains(&expected_writable));
+    }
+
+    #[test]
+    fn gather_read_roots_includes_path_entries_for_restricted_reads() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let local_app_program = tmp
+            .path()
+            .join("AppData")
+            .join("Local")
+            .join("Programs")
+            .join("tool");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&local_app_program).expect("create local app program dir");
+        let permission_profile = PermissionProfile::read_only();
+        let workspace_roots = workspace_roots_for(command_cwd.as_path());
+        let permissions = permissions_for(&permission_profile, workspace_roots.as_slice());
+        let mut env_map = HashMap::new();
+        env_map.insert(
+            "PATH".to_string(),
+            local_app_program.to_string_lossy().to_string(),
+        );
+
+        let roots = gather_read_roots(&command_cwd, &permissions, &env_map, &codex_home);
+        let expected_path_root =
+            dunce::canonicalize(&local_app_program).expect("canonical local app program dir");
+
+        assert!(roots.contains(&expected_path_root));
     }
 
     #[test]
