@@ -1180,13 +1180,10 @@ impl Session {
                 "session_init.mcp_manager_init",
                 otel.name = "session_init.mcp_manager_init",
             ))
-            .await
-            .validate_required_servers()
-            .await?;
-            {
-                let mut manager_guard = sess.services.mcp_connection_manager.write().await;
-                *manager_guard = mcp_connection_manager;
-            }
+            .await;
+            sess.services
+                .install_mcp_connection_manager(mcp_connection_manager)
+                .await?;
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {

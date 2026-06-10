@@ -15,6 +15,7 @@ use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
+use anyhow::Result;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use codex_analytics::AnalyticsEventsClient;
@@ -81,4 +82,18 @@ pub(crate) struct SessionServices {
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.
     pub(crate) environment_manager: Arc<EnvironmentManager>,
+}
+
+impl SessionServices {
+    pub(crate) async fn install_mcp_connection_manager(
+        &self,
+        manager: McpConnectionManager,
+    ) -> Result<()> {
+        *self.mcp_connection_manager.write().await = manager;
+        self.mcp_connection_manager
+            .read()
+            .await
+            .validate_required_servers()
+            .await
+    }
 }

@@ -277,8 +277,8 @@ impl McpConnectionManager {
         manager
     }
 
-    /// Returns this manager only if every required server initialized successfully.
-    pub async fn validate_required_servers(self) -> Result<Self> {
+    /// Validates that every required server initialized successfully.
+    pub async fn validate_required_servers(&self) -> Result<()> {
         let failures = async {
             let mut failures = Vec::new();
             for server_name in &self.required_servers {
@@ -307,7 +307,7 @@ impl McpConnectionManager {
         ))
         .await;
         if failures.is_empty() {
-            return Ok(self);
+            return Ok(());
         }
 
         let details = failures
