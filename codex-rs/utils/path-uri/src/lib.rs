@@ -9,6 +9,8 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 use std::fmt;
+use std::io;
+use std::path::Path;
 use std::str::FromStr;
 use thiserror::Error;
 use ts_rs::TS;
@@ -25,7 +27,7 @@ pub const FILE_SCHEME: &str = "file";
 ///
 /// `file:` paths retain their URI spelling so they can be parsed independently
 /// of the current host. In particular, `/C:/src` remains ambiguous between a
-/// Windows drive path and a valid POSIX path until [`Self::to_native_path`]
+/// Windows drive path and a valid POSIX path until [`Self::to_abs_path`]
 /// applies the current host's rules. A local POSIX `file:` URI can also retain
 /// percent-encoded non-UTF-8 bytes for lossless native round trips.
 ///
@@ -55,15 +57,27 @@ impl PathUri {
 
     /// Converts an absolute path on the current host to a `file:` URI.
     ///
-    /// On Unix, [`AbsolutePathBuf`]'s absolute-path invariant is sufficient for
-    /// `url` to represent the path. On Windows, conversion can still fail for
-    /// absolute paths whose prefix has no `file:` URI representation, including
-    /// `\\.\` device paths and generic `\\?\` verbatim namespaces. Those cases
-    /// return [`PathUriParseError::InvalidFileUriPath`].
-    pub fn from_file_path(path: &AbsolutePathBuf) -> Result<Self, PathUriParseError> {
-        let url = Url::from_file_path(path.as_path())
-            .map_err(|()| PathUriParseError::InvalidFileUriPath)?;
-        Self::try_from(url)
+    /// On Windows, paths without a URI representation, including `\\.\` device
+    /// paths and generic `\\?\` verbatim namespaces, are reported as invalid
+    /// input.
+    pub fn from_abs_path(path: &AbsolutePathBuf) -> io::Result<Self> {
+        let url = Url::from_file_path(path.as_path()).map_err(|()| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                PathUriParseError::InvalidFileUriPath,
+            )
+        })?;
+        Self::try_from(url).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
+    }
+
+    /// Converts a path on the current host to a `file:` URI.
+    ///
+    /// Relative paths and paths without a URI representation are reported as
+    /// invalid input.
+    pub fn from_path(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = AbsolutePathBuf::from_absolute_path_checked(path)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        Self::from_abs_path(&path)
     }
 
     /// Returns the percent-encoded URI path.
@@ -149,13 +163,15 @@ impl PathUri {
     /// on POSIX or a POSIX root on Windows. Because a `file:` URI does not record
     /// its source operating system, callers should only use this method when the
     /// URI is known to identify a path on the current host.
-    pub fn to_native_path(&self) -> Result<AbsolutePathBuf, PathUriParseError> {
-        let path = self
-            .0
-            .to_file_path()
-            .map_err(|()| PathUriParseError::InvalidFileUriPath)?;
+    pub fn to_abs_path(&self) -> io::Result<AbsolutePathBuf> {
+        let path = self.0.to_file_path().map_err(|()| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                PathUriParseError::InvalidFileUriPath,
+            )
+        })?;
         AbsolutePathBuf::from_absolute_path_checked(path)
-            .map_err(|_| PathUriParseError::InvalidFileUriPath)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
     }
 
     /// Returns a clone of the canonical URL.
@@ -216,7 +232,7 @@ impl<'de> Deserialize<'de> for PathUri {
                     .map_or_else(|| path_error.to_string(), |error| error.to_string()),
             )
         })?;
-        Self::from_file_path(&path).map_err(serde::de::Error::custom)
+        Self::from_abs_path(&path).map_err(serde::de::Error::custom)
     }
 }
 

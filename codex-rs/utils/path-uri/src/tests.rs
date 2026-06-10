@@ -12,7 +12,7 @@ fn file_uri_round_trips_an_absolute_path() {
         .expect("current directory")
         .join("a path/file.rs");
 
-    let uri = PathUri::from_file_path(&path).expect("path should convert to a file URI");
+    let uri = PathUri::from_abs_path(&path).expect("path should convert to a file URI");
 
     let uri_string = uri.to_string();
     assert!(uri_string.starts_with("file:"));
@@ -22,10 +22,24 @@ fn file_uri_round_trips_an_absolute_path() {
         uri
     );
     assert_eq!(
-        uri.to_native_path()
+        uri.to_abs_path()
             .expect("local file URI should convert to a native path"),
         path
     );
+}
+
+#[test]
+fn non_native_uri_io_conversion_is_invalid_input() {
+    #[cfg(unix)]
+    let uri = PathUri::parse("file://server/share/file.txt").expect("valid file URI");
+    #[cfg(windows)]
+    let uri = PathUri::parse("file:///usr/local/file.txt").expect("valid file URI");
+
+    let error = uri
+        .to_abs_path()
+        .expect_err("URI should not be host-native");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 }
 
 #[test]
@@ -52,8 +66,10 @@ fn file_uri_rejects_windows_prefixes_without_a_uri_representation() {
             .expect("Windows namespace path should be absolute");
 
         assert_eq!(
-            PathUri::from_file_path(&path),
-            Err(PathUriParseError::InvalidFileUriPath),
+            PathUri::from_abs_path(&path)
+                .expect_err("Windows namespace path should not convert")
+                .kind(),
+            io::ErrorKind::InvalidInput,
             "converting {native_path}"
         );
     }
@@ -85,9 +101,9 @@ fn file_uri_accepts_non_utf8_posix_paths() {
     let path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/non-utf8-\xff".to_vec()));
     let path = AbsolutePathBuf::from_absolute_path_checked(path).expect("absolute POSIX path");
 
-    let uri = PathUri::from_file_path(&path).expect("non-UTF-8 path should convert to a file URI");
+    let uri = PathUri::from_abs_path(&path).expect("non-UTF-8 path should convert to a file URI");
     assert_eq!(
-        uri.to_native_path()
+        uri.to_abs_path()
             .expect("URI should convert to native path"),
         path
     );
@@ -111,10 +127,10 @@ fn file_uri_round_trips_literal_percent_characters() {
 fn file_uri_round_trips_windows_unc_paths() {
     let path = AbsolutePathBuf::from_absolute_path_checked(r"\\server\share\src\main.rs")
         .expect("absolute UNC path");
-    let uri = PathUri::from_file_path(&path).expect("UNC path should convert to a file URI");
+    let uri = PathUri::from_abs_path(&path).expect("UNC path should convert to a file URI");
 
     assert_eq!(uri.encoded_path(), "/share/src/main.rs");
-    assert_eq!(uri.to_native_path().expect("UNC URI should convert"), path);
+    assert_eq!(uri.to_abs_path().expect("UNC URI should convert"), path);
 }
 
 #[test]
@@ -184,8 +200,15 @@ fn path_uri_deserializes_legacy_absolute_paths() {
 
     assert_eq!(
         uri,
-        PathUri::from_file_path(&path).expect("expected file URI")
+        PathUri::from_abs_path(&path).expect("expected file URI")
     );
+}
+
+#[test]
+fn path_uri_rejects_relative_native_paths() {
+    let error = PathUri::from_path("src/lib.rs").expect_err("relative path should be rejected");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 }
 
 #[test]
