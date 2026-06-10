@@ -89,15 +89,14 @@ async fn validate_harness_key_requires_explicit_valid_response() {
     let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
         .expect("client");
 
-    let error = client
-        .validate_harness_key(
-            "environment-requested",
-            "registration-1",
-            &harness_public_key,
-            HARNESS_KEY_AUTHORIZATION,
-        )
-        .await
-        .expect_err("a false validation response must fail closed");
+    let error = RegistryHarnessKeyValidator {
+        client,
+        environment_id: "environment-requested".to_string(),
+        executor_registration_id: "registration-1".to_string(),
+    }
+    .validate_harness_key(&harness_public_key, HARNESS_KEY_AUTHORIZATION)
+    .await
+    .expect_err("a false validation response must fail closed");
 
     assert!(matches!(
         error,
@@ -120,15 +119,14 @@ async fn validate_harness_key_does_not_expose_error_body() {
     let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
         .expect("client");
 
-    let error = client
-        .validate_harness_key(
-            "environment-requested",
-            "registration-1",
-            &harness_public_key,
-            HARNESS_KEY_AUTHORIZATION,
-        )
-        .await
-        .expect_err("validation HTTP error should fail closed");
+    let error = RegistryHarnessKeyValidator {
+        client,
+        environment_id: "environment-requested".to_string(),
+        executor_registration_id: "registration-1".to_string(),
+    }
+    .validate_harness_key(&harness_public_key, HARNESS_KEY_AUTHORIZATION)
+    .await
+    .expect_err("validation HTTP error should fail closed");
 
     let display = error.to_string();
     assert!(!display.contains(HARNESS_KEY_AUTHORIZATION));
