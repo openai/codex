@@ -337,6 +337,7 @@ impl MessageProcessor {
             ),
         );
         let goal_service = Arc::new(GoalService::new());
+        let automation_worker_installation_id = installation_id.clone();
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 config.as_ref(),
@@ -486,8 +487,10 @@ impl MessageProcessor {
             thread_goal_processor.clone(),
             state_db.clone(),
             log_db,
+            automation_worker_installation_id,
             Arc::clone(&skills_watcher),
         );
+        thread_processor.spawn_automation_worker();
         let turn_processor = TurnRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),

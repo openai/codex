@@ -90,7 +90,7 @@ impl ThreadRequestProcessor {
             AutomationDispatchOutcome::Claimed(claim) => claim,
         };
 
-        let dispatch_result = match self.dispatch_automation_run_now(state_db, &claim).await {
+        let dispatch_result = match self.dispatch_claimed_automation(state_db, &claim).await {
             Ok(dispatch_result) => dispatch_result,
             Err(err) => {
                 let _ = state_db
@@ -142,7 +142,7 @@ impl ThreadRequestProcessor {
             .any(|thread_id| thread_id == automation.owner_thread_id))
     }
 
-    async fn dispatch_automation_run_now(
+    pub(super) async fn dispatch_claimed_automation(
         &self,
         state_db: &StateDbHandle,
         claim: &AutomationDispatchClaim,
@@ -161,27 +161,48 @@ impl ThreadRequestProcessor {
         }
 
         match &claim.automation.target {
-            AutomationTarget::Cron { cwds } => self.dispatch_cron_run_now(claim, cwds).await,
+            AutomationTarget::Cron { cwds } => {
+                self.dispatch_cron_automation(state_db, claim, cwds).await
+            }
             AutomationTarget::Heartbeat { thread_id } => {
                 self.dispatch_heartbeat_run_now(claim, *thread_id).await
             }
         }
     }
 
-    async fn dispatch_cron_run_now(
+    async fn dispatch_cron_automation(
         &self,
+        state_db: &StateDbHandle,
         claim: &AutomationDispatchClaim,
         cwds: &[PathBuf],
     ) -> Result<RunNowDispatchResult, JSONRPCErrorError> {
         let mut started_count = 0_usize;
         let mut last_error = None;
-        for cwd in cwds.iter().skip(claim.dispatch_cwd_index) {
+        for (cwd_index, cwd) in cwds.iter().enumerate().skip(claim.dispatch_cwd_index) {
             match self
                 .spawn_and_submit_automation_thread(&claim.automation, cwd)
                 .await
             {
                 Ok(()) => {
                     started_count += 1;
+                    let checkpointed = state_db
+                        .checkpoint_automation_dispatch_progress(
+                            claim.automation.id.as_str(),
+                            claim.ownership_token.as_str(),
+                            cwd_index + 1,
+                            last_error.as_deref(),
+                        )
+                        .await
+                        .map_err(|err| {
+                            internal_error(format!(
+                                "failed to checkpoint automation dispatch: {err}"
+                            ))
+                        })?;
+                    if !checkpointed {
+                        return Err(internal_error(
+                            "automation run claim was lost before checkpoint",
+                        ));
+                    }
                 }
                 Err(err) => {
                     last_error = Some(err.message);
@@ -338,7 +359,7 @@ fn run_now_response(found: bool, started_count: u32) -> ClientResponsePayload {
     .into()
 }
 
-struct RunNowDispatchResult {
+pub(super) struct RunNowDispatchResult {
     started_count: usize,
     last_error: Option<String>,
 }

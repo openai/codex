@@ -2,6 +2,7 @@ use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
+use codex_features::Feature;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
@@ -357,6 +358,8 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) thread_goal_processor: ThreadGoalRequestProcessor,
     pub(super) state_db: Option<StateDbHandle>,
     pub(super) log_db: Option<LogDbLayer>,
+    pub(super) automation_worker_id: Option<String>,
+    pub(super) automation_worker_shutdown: Option<CancellationToken>,
     pub(super) background_tasks: TaskTracker,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
 }
@@ -389,8 +392,11 @@ impl ThreadRequestProcessor {
         thread_goal_processor: ThreadGoalRequestProcessor,
         state_db: Option<StateDbHandle>,
         log_db: Option<LogDbLayer>,
+        automation_worker_installation_id: String,
         skills_watcher: Arc<SkillsWatcher>,
     ) -> Self {
+        let automation_worker_enabled =
+            config.features.enabled(Feature::Automations) && state_db.is_some();
         Self {
             auth_manager,
             thread_manager,
@@ -406,6 +412,13 @@ impl ThreadRequestProcessor {
             thread_goal_processor,
             state_db,
             log_db,
+            automation_worker_id: automation_worker_enabled.then(|| {
+                format!(
+                    "{automation_worker_installation_id}:{}",
+                    uuid::Uuid::now_v7()
+                )
+            }),
+            automation_worker_shutdown: automation_worker_enabled.then(CancellationToken::new),
             background_tasks: TaskTracker::new(),
             skills_watcher,
         }
@@ -967,6 +980,9 @@ impl ThreadRequestProcessor {
     }
 
     pub(crate) async fn drain_background_tasks(&self) {
+        if let Some(shutdown) = &self.automation_worker_shutdown {
+            shutdown.cancel();
+        }
         self.background_tasks.close();
         if tokio::time::timeout(Duration::from_secs(10), self.background_tasks.wait())
             .await

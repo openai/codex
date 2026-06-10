@@ -479,6 +479,7 @@ mod account_processor;
 mod apps_processor;
 mod automation_dispatch;
 mod automation_processor;
+mod automation_worker;
 mod catalog_processor;
 mod command_exec_processor;
 mod config_processor;
