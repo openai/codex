@@ -25,9 +25,6 @@ max-threads = 4
 [test-groups.core_apply_patch_cli_integration]
 max-threads = 1
 
-[test-groups.core_integration_local]
-max-threads = 4
-
 [test-groups.windows_sandbox_legacy_sessions]
 max-threads = 1
 
@@ -58,10 +55,6 @@ test-group = 'app_server_integration'
 # limits this to the machine's logical CPU count.
 filter = 'package(codex-app-server) & kind(test)'
 test-group = 'app_server_integration_local'
-
-[[profile.local.overrides]]
-filter = 'package(codex-core) & kind(test)'
-test-group = 'core_integration_local'
 
 [[profile.default.overrides]]
 # These tests exercise full Codex turns and apply_patch execution, and they are
