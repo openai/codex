@@ -109,11 +109,9 @@ fn resolve_sandbox_setup_identity(
     cmd: &SandboxSetupCommand,
 ) -> anyhow::Result<SandboxSetupIdentity> {
     if cmd.current_user {
-        let real_user = std::env::var("USERNAME")
-            .or_else(|_| std::env::var("USER"))
-            .map_err(|err| {
-                anyhow::anyhow!("failed to determine current user from environment: {err}")
-            })?;
+        let real_user = codex_core::windows_sandbox::qualified_real_user_from_env().ok_or_else(
+            || anyhow::anyhow!("failed to determine current user from environment"),
+        )?;
         let codex_home = match cmd.codex_home.clone() {
             Some(codex_home) => codex_home,
             None => find_codex_home()?.to_path_buf(),

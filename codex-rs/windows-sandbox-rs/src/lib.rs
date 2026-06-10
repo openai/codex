@@ -249,6 +249,8 @@ pub use setup::run_setup_refresh;
 #[cfg(target_os = "windows")]
 pub use setup::run_setup_refresh_with_extra_read_roots;
 #[cfg(target_os = "windows")]
+pub use setup::qualified_real_user_from_env;
+#[cfg(target_os = "windows")]
 pub use setup::sandbox_bin_dir;
 #[cfg(target_os = "windows")]
 pub use setup::sandbox_dir;

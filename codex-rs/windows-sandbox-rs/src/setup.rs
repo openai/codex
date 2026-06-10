@@ -88,6 +88,29 @@ pub fn sandbox_users_path(codex_home: &Path) -> PathBuf {
     sandbox_secrets_dir(codex_home).join("sandbox_users.json")
 }
 
+pub fn qualified_real_user_from_env() -> Option<String> {
+    let username = std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .ok()?;
+    qualify_real_user_name(Some(username.as_str()), std::env::var("USERDOMAIN").ok().as_deref())
+}
+
+fn qualify_real_user_name(username: Option<&str>, userdomain: Option<&str>) -> Option<String> {
+    let username = username?.trim();
+    if username.is_empty() {
+        return None;
+    }
+    if username.contains('\\') || username.contains('@') {
+        return Some(username.to_string());
+    }
+
+    let userdomain = userdomain.map(str::trim).filter(|value| !value.is_empty());
+    Some(match userdomain {
+        Some(userdomain) => format!(r"{userdomain}\{username}"),
+        None => username.to_string(),
+    })
+}
+
 pub struct SandboxSetupRequest<'a> {
     pub permissions: &'a ResolvedWindowsSandboxPermissions,
     pub command_cwd: &'a Path,
@@ -203,7 +226,8 @@ fn run_setup_refresh_inner(
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         otel: None,
-        real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        real_user: qualified_real_user_from_env()
+            .unwrap_or_else(|| "Administrators".to_string()),
         mode: SetupMode::Full,
         refresh_only: true,
     };
@@ -851,7 +875,8 @@ pub fn run_elevated_setup(
         deny_write_paths,
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
-        real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        real_user: qualified_real_user_from_env()
+            .unwrap_or_else(|| "Administrators".to_string()),
         otel: codex_otel::global_statsig_metrics_settings(),
         mode: SetupMode::Full,
         refresh_only: false,
@@ -1103,6 +1128,7 @@ mod tests {
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use super::qualify_real_user_name;
     use super::verify_setup_completed;
     use crate::helper_materialization::BIN_DIRNAME;
     use crate::helper_materialization::RESOURCES_DIRNAME;
@@ -1882,5 +1908,39 @@ mod tests {
             super::build_payload_deny_read_paths(Some(vec![existing.clone(), missing.clone()])),
             vec![existing, missing]
         );
+    }
+
+    #[test]
+    fn qualify_real_user_name_preserves_qualified_names() {
+        assert_eq!(
+            qualify_real_user_name(Some(r"DOMAIN\User.Name"), Some("DOMAIN")),
+            Some(r"DOMAIN\User.Name".to_string())
+        );
+        assert_eq!(
+            qualify_real_user_name(Some("user@example.com"), Some("DOMAIN")),
+            Some("user@example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn qualify_real_user_name_uses_userdomain_for_bare_usernames() {
+        assert_eq!(
+            qualify_real_user_name(Some("User.Name"), Some("DOMAIN")),
+            Some(r"DOMAIN\User.Name".to_string())
+        );
+    }
+
+    #[test]
+    fn qualify_real_user_name_rejects_empty_input() {
+        assert_eq!(qualify_real_user_name(Some(""), Some("DOMAIN")), None);
+        assert_eq!(
+            qualify_real_user_name(Some("User.Name"), Some("")),
+            Some("User.Name".to_string())
+        );
+        assert_eq!(
+            qualify_real_user_name(Some("User.Name"), None),
+            Some("User.Name".to_string())
+        );
+        assert_eq!(qualify_real_user_name(None, Some("DOMAIN")), None);
     }
 }
