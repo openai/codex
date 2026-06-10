@@ -1,0 +1,29 @@
+---
+source: tui/src/external_agent_config_migration.rs
+expression: rendered
+---
+
+  > Choose what to import
+  Choose the Claude Code items to import.
+  Codex may add files to your current project folder.
+  Your existing Claude Code setup will not be changed.
+  Home
+    [x] Settings (settings.json -> config.toml)
+        Import /Users/alex/.claude/settings.json into /Users/alex/.codex/conf…
+    [x] Recent chat sessions
+        Import recent Claude Code sessions
+        1 chat session: Investigate migration UX
+
+  Current project: C:\workspace\project
+    [x] Plugins
+        Import enabled plugins from .claude/settings.json (4 marketplaces, 6 …
+        • acme-tools: deployer, formatter, +1 more
+        • team-marketplace: asana
+        • debug: sample
+        • +1 more marketplaces
+    [x] Instructions (CLAUDE.md -> AGENTS.md)
+        Import CLAUDE.md to AGENTS.md
+
+  Selected 4 of 4 items.
+    1. Done customizing
+  Use ↑/↓ to move, space to toggle, b to go back
