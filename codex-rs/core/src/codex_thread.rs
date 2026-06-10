@@ -4,6 +4,8 @@ use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
+use codex_mcp::McpServerStatusSnapshot;
+use codex_mcp::McpSnapshotDetail;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -529,6 +531,13 @@ impl CodexThread {
 
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.codex.session.get_config().await
+    }
+
+    pub async fn mcp_server_status_snapshot(
+        &self,
+        detail: McpSnapshotDetail,
+    ) -> McpServerStatusSnapshot {
+        self.codex.session.mcp_server_status_snapshot(detail).await
     }
 
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
