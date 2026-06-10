@@ -27,7 +27,6 @@ impl Handler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "wait_agent")
@@ -44,168 +43,168 @@ impl ToolExecutor<ToolInvocation> for Handler {
         )
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            call_id,
-            ..
-        } = invocation;
-        let arguments = function_arguments(payload)?;
-        let args: WaitArgs = parse_arguments(&arguments)?;
-        let receiver_thread_ids = parse_agent_id_targets(args.targets)?;
-        let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
-        let mut target_by_thread_id = HashMap::with_capacity(receiver_thread_ids.len());
-        for receiver_thread_id in &receiver_thread_ids {
-            let agent_metadata = session
-                .services
-                .agent_control
-                .get_agent_metadata(*receiver_thread_id)
-                .unwrap_or_default();
-            target_by_thread_id.insert(
-                *receiver_thread_id,
-                agent_metadata
-                    .agent_path
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| receiver_thread_id.to_string()),
-            );
-            receiver_agents.push(CollabAgentRef {
-                thread_id: *receiver_thread_id,
-                agent_nickname: agent_metadata.agent_nickname,
-                agent_role: agent_metadata.agent_role,
-            });
-        }
-
-        let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
-        let timeout_ms = match timeout_ms {
-            ms if ms <= 0 => {
-                return Err(FunctionCallError::RespondToModel(
-                    "timeout_ms must be greater than zero".to_owned(),
-                ));
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                call_id,
+                ..
+            } = invocation;
+            let arguments = function_arguments(payload)?;
+            let args: WaitArgs = parse_arguments(&arguments)?;
+            let receiver_thread_ids = parse_agent_id_targets(args.targets)?;
+            let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
+            let mut target_by_thread_id = HashMap::with_capacity(receiver_thread_ids.len());
+            for receiver_thread_id in &receiver_thread_ids {
+                let agent_metadata = session
+                    .services
+                    .agent_control
+                    .get_agent_metadata(*receiver_thread_id)
+                    .unwrap_or_default();
+                target_by_thread_id.insert(
+                    *receiver_thread_id,
+                    agent_metadata
+                        .agent_path
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| receiver_thread_id.to_string()),
+                );
+                receiver_agents.push(CollabAgentRef {
+                    thread_id: *receiver_thread_id,
+                    agent_nickname: agent_metadata.agent_nickname,
+                    agent_role: agent_metadata.agent_role,
+                });
             }
-            ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
-        };
 
-        session
-            .send_event(
-                &turn,
-                CollabWaitingBeginEvent {
-                    started_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.thread_id,
-                    receiver_thread_ids: receiver_thread_ids.clone(),
-                    receiver_agents: receiver_agents.clone(),
-                    call_id: call_id.clone(),
+            let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
+            let timeout_ms = match timeout_ms {
+                ms if ms <= 0 => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "timeout_ms must be greater than zero".to_owned(),
+                    ));
                 }
-                .into(),
-            )
-            .await;
+                ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
+            };
 
-        let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
-        let mut initial_final_statuses = Vec::new();
-        for id in &receiver_thread_ids {
-            match session.services.agent_control.subscribe_status(*id).await {
-                Ok(rx) => {
-                    let status = rx.borrow().clone();
-                    if is_final(&status) {
-                        initial_final_statuses.push((*id, status));
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingBeginEvent {
+                        started_at_ms: now_unix_timestamp_ms(),
+                        sender_thread_id: session.thread_id,
+                        receiver_thread_ids: receiver_thread_ids.clone(),
+                        receiver_agents: receiver_agents.clone(),
+                        call_id: call_id.clone(),
                     }
-                    status_rxs.push((*id, rx));
-                }
-                Err(CodexErr::ThreadNotFound(_)) => {
-                    initial_final_statuses.push((*id, AgentStatus::NotFound));
-                }
-                Err(err) => {
-                    let mut statuses = HashMap::with_capacity(1);
-                    statuses.insert(*id, session.services.agent_control.get_status(*id).await);
-                    session
-                        .send_event(
-                            &turn,
-                            CollabWaitingEndEvent {
-                                sender_thread_id: session.thread_id,
-                                call_id: call_id.clone(),
-                                completed_at_ms: now_unix_timestamp_ms(),
-                                agent_statuses: build_wait_agent_statuses(
-                                    &statuses,
-                                    &receiver_agents,
-                                ),
-                                statuses,
-                            }
-                            .into(),
-                        )
-                        .await;
-                    return Err(collab_agent_error(*id, err));
-                }
-            }
-        }
+                    .into(),
+                )
+                .await;
 
-        let statuses = if !initial_final_statuses.is_empty() {
-            initial_final_statuses
-        } else {
-            let mut futures = FuturesUnordered::new();
-            for (id, rx) in status_rxs.into_iter() {
-                let session = session.clone();
-                futures.push(wait_for_final_status(session, id, rx));
-            }
-            let mut results = Vec::new();
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-            loop {
-                match timeout_at(deadline, futures.next()).await {
-                    Ok(Some(Some(result))) => {
-                        results.push(result);
-                        break;
+            let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
+            let mut initial_final_statuses = Vec::new();
+            for id in &receiver_thread_ids {
+                match session.services.agent_control.subscribe_status(*id).await {
+                    Ok(rx) => {
+                        let status = rx.borrow().clone();
+                        if is_final(&status) {
+                            initial_final_statuses.push((*id, status));
+                        }
+                        status_rxs.push((*id, rx));
                     }
-                    Ok(Some(None)) => continue,
-                    Ok(None) | Err(_) => break,
+                    Err(CodexErr::ThreadNotFound(_)) => {
+                        initial_final_statuses.push((*id, AgentStatus::NotFound));
+                    }
+                    Err(err) => {
+                        let mut statuses = HashMap::with_capacity(1);
+                        statuses.insert(*id, session.services.agent_control.get_status(*id).await);
+                        session
+                            .send_event(
+                                &turn,
+                                CollabWaitingEndEvent {
+                                    sender_thread_id: session.thread_id,
+                                    call_id: call_id.clone(),
+                                    completed_at_ms: now_unix_timestamp_ms(),
+                                    agent_statuses: build_wait_agent_statuses(
+                                        &statuses,
+                                        &receiver_agents,
+                                    ),
+                                    statuses,
+                                }
+                                .into(),
+                            )
+                            .await;
+                        return Err(collab_agent_error(*id, err));
+                    }
                 }
             }
-            if !results.is_empty() {
+
+            let statuses = if !initial_final_statuses.is_empty() {
+                initial_final_statuses
+            } else {
+                let mut futures = FuturesUnordered::new();
+                for (id, rx) in status_rxs.into_iter() {
+                    let session = session.clone();
+                    futures.push(wait_for_final_status(session, id, rx));
+                }
+                let mut results = Vec::new();
+                let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
                 loop {
-                    match futures.next().now_or_never() {
-                        Some(Some(Some(result))) => results.push(result),
-                        Some(Some(None)) => continue,
-                        Some(None) | None => break,
+                    match timeout_at(deadline, futures.next()).await {
+                        Ok(Some(Some(result))) => {
+                            results.push(result);
+                            break;
+                        }
+                        Ok(Some(None)) => continue,
+                        Ok(None) | Err(_) => break,
                     }
                 }
-            }
-            results
-        };
-
-        let timed_out = statuses.is_empty();
-        let statuses_by_id = statuses.clone().into_iter().collect::<HashMap<_, _>>();
-        let agent_statuses = build_wait_agent_statuses(&statuses_by_id, &receiver_agents);
-        let result = WaitAgentResult {
-            status: statuses
-                .into_iter()
-                .filter_map(|(thread_id, status)| {
-                    target_by_thread_id
-                        .get(&thread_id)
-                        .cloned()
-                        .map(|target| (target, status))
-                })
-                .collect(),
-            timed_out,
-        };
-
-        session
-            .send_event(
-                &turn,
-                CollabWaitingEndEvent {
-                    sender_thread_id: session.thread_id,
-                    call_id,
-                    completed_at_ms: now_unix_timestamp_ms(),
-                    agent_statuses,
-                    statuses: statuses_by_id,
+                if !results.is_empty() {
+                    loop {
+                        match futures.next().now_or_never() {
+                            Some(Some(Some(result))) => results.push(result),
+                            Some(Some(None)) => continue,
+                            Some(None) | None => break,
+                        }
+                    }
                 }
-                .into(),
-            )
-            .await;
+                results
+            };
 
-        Ok(boxed_tool_output(result))
+            let timed_out = statuses.is_empty();
+            let statuses_by_id = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+            let agent_statuses = build_wait_agent_statuses(&statuses_by_id, &receiver_agents);
+            let result = WaitAgentResult {
+                status: statuses
+                    .into_iter()
+                    .filter_map(|(thread_id, status)| {
+                        target_by_thread_id
+                            .get(&thread_id)
+                            .cloned()
+                            .map(|target| (target, status))
+                    })
+                    .collect(),
+                timed_out,
+            };
+
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingEndEvent {
+                        sender_thread_id: session.thread_id,
+                        call_id,
+                        completed_at_ms: now_unix_timestamp_ms(),
+                        agent_statuses,
+                        statuses: statuses_by_id,
+                    }
+                    .into(),
+                )
+                .await;
+
+            Ok(boxed_tool_output(result))
+        })
     }
 }
 

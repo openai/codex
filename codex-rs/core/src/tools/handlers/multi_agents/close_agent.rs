@@ -6,7 +6,6 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "close_agent")
@@ -23,11 +22,11 @@ impl ToolExecutor<ToolInvocation> for Handler {
         )
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        handle_close_agent(invocation).await.map(boxed_tool_output)
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            handle_close_agent(invocation).await.map(boxed_tool_output)
+        })
     }
 }
 

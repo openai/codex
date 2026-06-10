@@ -53,7 +53,6 @@ impl ToolSearchHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(TOOL_SEARCH_TOOL_NAME)
@@ -67,42 +66,41 @@ impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
         true
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let ToolInvocation { payload, .. } = invocation;
 
-        let args = match payload {
-            ToolPayload::ToolSearch { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::Fatal(format!(
-                    "{TOOL_SEARCH_TOOL_NAME} handler received unsupported payload"
-                )));
+            let args = match payload {
+                ToolPayload::ToolSearch { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::Fatal(format!(
+                        "{TOOL_SEARCH_TOOL_NAME} handler received unsupported payload"
+                    )));
+                }
+            };
+
+            let query = args.query.trim();
+            if query.is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "query must not be empty".to_string(),
+                ));
             }
-        };
+            let limit = args.limit.unwrap_or(TOOL_SEARCH_DEFAULT_LIMIT);
 
-        let query = args.query.trim();
-        if query.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "query must not be empty".to_string(),
-            ));
-        }
-        let limit = args.limit.unwrap_or(TOOL_SEARCH_DEFAULT_LIMIT);
+            if limit == 0 {
+                return Err(FunctionCallError::RespondToModel(
+                    "limit must be greater than zero".to_string(),
+                ));
+            }
 
-        if limit == 0 {
-            return Err(FunctionCallError::RespondToModel(
-                "limit must be greater than zero".to_string(),
-            ));
-        }
+            if self.entries.is_empty() {
+                return Ok(boxed_tool_output(ToolSearchOutput { tools: Vec::new() }));
+            }
 
-        if self.entries.is_empty() {
-            return Ok(boxed_tool_output(ToolSearchOutput { tools: Vec::new() }));
-        }
+            let tools = self.search(query, limit)?;
 
-        let tools = self.search(query, limit)?;
-
-        Ok(boxed_tool_output(ToolSearchOutput { tools }))
+            Ok(boxed_tool_output(ToolSearchOutput { tools }))
+        })
     }
 }
 

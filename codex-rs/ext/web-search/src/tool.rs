@@ -39,7 +39,6 @@ pub(crate) struct WebSearchTool {
     pub(crate) settings: SearchSettings,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolCall> for WebSearchTool {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(WEB_NAMESPACE, RUN_TOOL_NAME)
@@ -74,47 +73,49 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
         true
     }
 
-    async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        let commands = parse_commands(&call)?;
-        let command_action = command_action(&commands);
-        let provider = self
-            .provider
-            .api_provider()
-            .await
-            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
-        let auth = self
-            .provider
-            .api_auth()
-            .await
-            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
-        let client = SearchClient::new(
-            ReqwestTransport::new(build_reqwest_client()),
-            provider,
-            auth,
-        );
-        let request = SearchRequest {
-            id: self.session_id.clone(),
-            model: call.model.clone(),
-            reasoning: None,
-            input: recent_input(call.conversation_history.items()),
-            commands: Some(commands),
-            settings: Some(self.settings.clone()),
-            max_output_tokens: Some(
-                u64::try_from(call.truncation_policy.token_budget()).unwrap_or(u64::MAX),
-            ),
-        };
-        call.turn_item_emitter
-            .emit_started(web_search_item(&call.call_id, WebSearchAction::Other))
-            .await;
-        let response = client
-            .search(&request, HeaderMap::new())
-            .await
-            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
-        call.turn_item_emitter
-            .emit_completed(web_search_item(&call.call_id, command_action))
-            .await;
+    fn handle<'a>(&'a self, call: ToolCall) -> codex_extension_api::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let commands = parse_commands(&call)?;
+            let command_action = command_action(&commands);
+            let provider = self
+                .provider
+                .api_provider()
+                .await
+                .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+            let auth = self
+                .provider
+                .api_auth()
+                .await
+                .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+            let client = SearchClient::new(
+                ReqwestTransport::new(build_reqwest_client()),
+                provider,
+                auth,
+            );
+            let request = SearchRequest {
+                id: self.session_id.clone(),
+                model: call.model.clone(),
+                reasoning: None,
+                input: recent_input(call.conversation_history.items()),
+                commands: Some(commands),
+                settings: Some(self.settings.clone()),
+                max_output_tokens: Some(
+                    u64::try_from(call.truncation_policy.token_budget()).unwrap_or(u64::MAX),
+                ),
+            };
+            call.turn_item_emitter
+                .emit_started(web_search_item(&call.call_id, WebSearchAction::Other))
+                .await;
+            let response = client
+                .search(&request, HeaderMap::new())
+                .await
+                .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+            call.turn_item_emitter
+                .emit_completed(web_search_item(&call.call_id, command_action))
+                .await;
 
-        Ok(Box::new(SearchOutput::new(response.output)))
+            Ok(Box::new(SearchOutput::new(response.output)) as Box<dyn ToolOutput>)
+        })
     }
 }
 

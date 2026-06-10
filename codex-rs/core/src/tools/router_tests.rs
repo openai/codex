@@ -44,7 +44,6 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
 
 struct ExtensionEchoExecutor;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced("extension/", "echo")
@@ -73,18 +72,18 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
         })
     }
 
-    async fn handle(
-        &self,
-        call: ExtensionToolCall,
-    ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
-        let arguments: serde_json::Value =
-            serde_json::from_str(call.function_arguments()?).expect("test arguments should parse");
-        Ok(Box::new(codex_tools::JsonToolOutput::new(json!({
-            "arguments": arguments,
-            "callId": call.call_id,
-            "conversationHistory": call.conversation_history.items(),
-            "ok": true,
-        }))))
+    fn handle<'a>(&'a self, call: ExtensionToolCall) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let arguments: serde_json::Value = serde_json::from_str(call.function_arguments()?)
+                .expect("test arguments should parse");
+            Ok(Box::new(codex_tools::JsonToolOutput::new(json!({
+                "arguments": arguments,
+                "callId": call.call_id,
+                "conversationHistory": call.conversation_history.items(),
+                "ok": true,
+            }))) as Box<dyn codex_tools::ToolOutput>)
+        })
     }
 }
 

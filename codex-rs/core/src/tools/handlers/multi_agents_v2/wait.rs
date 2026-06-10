@@ -19,7 +19,6 @@ impl Handler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("wait_agent")
@@ -29,72 +28,72 @@ impl ToolExecutor<ToolInvocation> for Handler {
         create_wait_agent_tool_v2(self.options)
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            call_id,
-            ..
-        } = invocation;
-        let arguments = function_arguments(payload)?;
-        let args: WaitArgs = parse_arguments(&arguments)?;
-        let min_timeout_ms = turn.config.multi_agent_v2.min_wait_timeout_ms;
-        let max_timeout_ms = turn.config.multi_agent_v2.max_wait_timeout_ms;
-        let default_timeout_ms = turn.config.multi_agent_v2.default_wait_timeout_ms;
-        let timeout_ms = match args.timeout_ms {
-            Some(ms) if ms < min_timeout_ms => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "timeout_ms must be at least {min_timeout_ms}"
-                )));
-            }
-            Some(ms) if ms > max_timeout_ms => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "timeout_ms must be at most {max_timeout_ms}"
-                )));
-            }
-            Some(ms) => ms,
-            None => default_timeout_ms,
-        };
-
-        let mut mailbox_rx = session.input_queue.subscribe_mailbox().await;
-
-        session
-            .send_event(
-                &turn,
-                CollabWaitingBeginEvent {
-                    started_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.thread_id,
-                    receiver_thread_ids: Vec::new(),
-                    receiver_agents: Vec::new(),
-                    call_id: call_id.clone(),
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                call_id,
+                ..
+            } = invocation;
+            let arguments = function_arguments(payload)?;
+            let args: WaitArgs = parse_arguments(&arguments)?;
+            let min_timeout_ms = turn.config.multi_agent_v2.min_wait_timeout_ms;
+            let max_timeout_ms = turn.config.multi_agent_v2.max_wait_timeout_ms;
+            let default_timeout_ms = turn.config.multi_agent_v2.default_wait_timeout_ms;
+            let timeout_ms = match args.timeout_ms {
+                Some(ms) if ms < min_timeout_ms => {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "timeout_ms must be at least {min_timeout_ms}"
+                    )));
                 }
-                .into(),
-            )
-            .await;
-
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        let timed_out = !wait_for_mailbox_change(&mut mailbox_rx, deadline).await;
-        let result = WaitAgentResult::from_timed_out(timed_out);
-
-        session
-            .send_event(
-                &turn,
-                CollabWaitingEndEvent {
-                    sender_thread_id: session.thread_id,
-                    call_id,
-                    completed_at_ms: now_unix_timestamp_ms(),
-                    agent_statuses: Vec::new(),
-                    statuses: HashMap::new(),
+                Some(ms) if ms > max_timeout_ms => {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "timeout_ms must be at most {max_timeout_ms}"
+                    )));
                 }
-                .into(),
-            )
-            .await;
+                Some(ms) => ms,
+                None => default_timeout_ms,
+            };
 
-        Ok(boxed_tool_output(result))
+            let mut mailbox_rx = session.input_queue.subscribe_mailbox().await;
+
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingBeginEvent {
+                        started_at_ms: now_unix_timestamp_ms(),
+                        sender_thread_id: session.thread_id,
+                        receiver_thread_ids: Vec::new(),
+                        receiver_agents: Vec::new(),
+                        call_id: call_id.clone(),
+                    }
+                    .into(),
+                )
+                .await;
+
+            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+            let timed_out = !wait_for_mailbox_change(&mut mailbox_rx, deadline).await;
+            let result = WaitAgentResult::from_timed_out(timed_out);
+
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingEndEvent {
+                        sender_thread_id: session.thread_id,
+                        call_id,
+                        completed_at_ms: now_unix_timestamp_ms(),
+                        agent_statuses: Vec::new(),
+                        statuses: HashMap::new(),
+                    }
+                    .into(),
+                )
+                .await;
+
+            Ok(boxed_tool_output(result))
+        })
     }
 }
 

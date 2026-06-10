@@ -6,7 +6,6 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "send_input")
@@ -23,86 +22,86 @@ impl ToolExecutor<ToolInvocation> for Handler {
         )
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            call_id,
-            ..
-        } = invocation;
-        let arguments = function_arguments(payload)?;
-        let args: SendInputArgs = parse_arguments(&arguments)?;
-        let receiver_thread_id = parse_agent_id_target(&args.target)?;
-        let input_items = parse_collab_input(args.message, args.items)?;
-        let prompt = render_input_preview(&input_items);
-        let receiver_agent = session
-            .services
-            .agent_control
-            .get_agent_metadata(receiver_thread_id);
-        if receiver_agent.is_some() {
-            let resume_config = build_agent_resume_config(turn.as_ref())?;
-            session
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                call_id,
+                ..
+            } = invocation;
+            let arguments = function_arguments(payload)?;
+            let args: SendInputArgs = parse_arguments(&arguments)?;
+            let receiver_thread_id = parse_agent_id_target(&args.target)?;
+            let input_items = parse_collab_input(args.message, args.items)?;
+            let prompt = render_input_preview(&input_items);
+            let receiver_agent = session
                 .services
                 .agent_control
-                .ensure_v2_agent_loaded(resume_config, receiver_thread_id)
-                .await
-                .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-        }
-        let receiver_agent = receiver_agent.unwrap_or_default();
-        if args.interrupt {
+                .get_agent_metadata(receiver_thread_id);
+            if receiver_agent.is_some() {
+                let resume_config = build_agent_resume_config(turn.as_ref())?;
+                session
+                    .services
+                    .agent_control
+                    .ensure_v2_agent_loaded(resume_config, receiver_thread_id)
+                    .await
+                    .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+            }
+            let receiver_agent = receiver_agent.unwrap_or_default();
+            if args.interrupt {
+                session
+                    .services
+                    .agent_control
+                    .interrupt_agent(receiver_thread_id)
+                    .await
+                    .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+            }
             session
+                .send_event(
+                    &turn,
+                    CollabAgentInteractionBeginEvent {
+                        call_id: call_id.clone(),
+                        started_at_ms: now_unix_timestamp_ms(),
+                        sender_thread_id: session.thread_id,
+                        receiver_thread_id,
+                        prompt: prompt.clone(),
+                    }
+                    .into(),
+                )
+                .await;
+            let agent_control = session.services.agent_control.clone();
+            let result = agent_control
+                .send_input(receiver_thread_id, input_items)
+                .await
+                .map_err(|err| collab_agent_error(receiver_thread_id, err));
+            let status = session
                 .services
                 .agent_control
-                .interrupt_agent(receiver_thread_id)
-                .await
-                .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-        }
-        session
-            .send_event(
-                &turn,
-                CollabAgentInteractionBeginEvent {
-                    call_id: call_id.clone(),
-                    started_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.thread_id,
-                    receiver_thread_id,
-                    prompt: prompt.clone(),
-                }
-                .into(),
-            )
-            .await;
-        let agent_control = session.services.agent_control.clone();
-        let result = agent_control
-            .send_input(receiver_thread_id, input_items)
-            .await
-            .map_err(|err| collab_agent_error(receiver_thread_id, err));
-        let status = session
-            .services
-            .agent_control
-            .get_status(receiver_thread_id)
-            .await;
-        session
-            .send_event(
-                &turn,
-                CollabAgentInteractionEndEvent {
-                    call_id,
-                    completed_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.thread_id,
-                    receiver_thread_id,
-                    receiver_agent_nickname: receiver_agent.agent_nickname,
-                    receiver_agent_role: receiver_agent.agent_role,
-                    prompt,
-                    status,
-                }
-                .into(),
-            )
-            .await;
-        let submission_id = result?;
+                .get_status(receiver_thread_id)
+                .await;
+            session
+                .send_event(
+                    &turn,
+                    CollabAgentInteractionEndEvent {
+                        call_id,
+                        completed_at_ms: now_unix_timestamp_ms(),
+                        sender_thread_id: session.thread_id,
+                        receiver_thread_id,
+                        receiver_agent_nickname: receiver_agent.agent_nickname,
+                        receiver_agent_role: receiver_agent.agent_role,
+                        prompt,
+                        status,
+                    }
+                    .into(),
+                )
+                .await;
+            let submission_id = result?;
 
-        Ok(boxed_tool_output(SendInputResult { submission_id }))
+            Ok(boxed_tool_output(SendInputResult { submission_id }))
+        })
     }
 }
 

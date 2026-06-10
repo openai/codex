@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ToolCall;
@@ -132,7 +131,6 @@ impl GoalToolExecutor {
     }
 }
 
-#[async_trait]
 impl ToolExecutor<ToolCall> for GoalToolExecutor {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(match self.kind {
@@ -150,12 +148,14 @@ impl ToolExecutor<ToolCall> for GoalToolExecutor {
         }
     }
 
-    async fn handle(&self, invocation: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        match self.kind {
-            GoalToolKind::Get => self.handle_get(invocation).await,
-            GoalToolKind::Create => self.handle_create(invocation).await,
-            GoalToolKind::Update => self.handle_update(invocation).await,
-        }
+    fn handle<'a>(&'a self, invocation: ToolCall) -> codex_extension_api::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            match self.kind {
+                GoalToolKind::Get => self.handle_get(invocation).await,
+                GoalToolKind::Create => self.handle_create(invocation).await,
+                GoalToolKind::Update => self.handle_update(invocation).await,
+            }
+        })
     }
 }
 

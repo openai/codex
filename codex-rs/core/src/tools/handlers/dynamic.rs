@@ -61,7 +61,6 @@ impl DynamicToolHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
     fn tool_name(&self) -> ToolName {
         self.tool_name.clone()
@@ -86,54 +85,53 @@ impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
         )
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id,
-            payload,
-            ..
-        } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                call_id,
+                payload,
+                ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "dynamic tool handler received unsupported payload".to_string(),
-                ));
-            }
-        };
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "dynamic tool handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
 
-        let args: Value = parse_arguments(&arguments)?;
-        let response = request_dynamic_tool(
-            &session,
-            turn.as_ref(),
-            call_id,
-            self.tool_name.clone(),
-            args,
-        )
-        .await
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(
-                "dynamic tool call was cancelled before receiving a response".to_string(),
+            let args: Value = parse_arguments(&arguments)?;
+            let response = request_dynamic_tool(
+                &session,
+                turn.as_ref(),
+                call_id,
+                self.tool_name.clone(),
+                args,
             )
-        })?;
+            .await
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "dynamic tool call was cancelled before receiving a response".to_string(),
+                )
+            })?;
 
-        let DynamicToolResponse {
-            content_items,
-            success,
-        } = response;
-        let body = content_items
-            .into_iter()
-            .map(FunctionCallOutputContentItem::from)
-            .collect::<Vec<_>>();
-        Ok(boxed_tool_output(FunctionToolOutput::from_content(
-            body,
-            Some(success),
-        )))
+            let DynamicToolResponse {
+                content_items,
+                success,
+            } = response;
+            let body = content_items
+                .into_iter()
+                .map(FunctionCallOutputContentItem::from)
+                .collect::<Vec<_>>();
+            Ok(boxed_tool_output(FunctionToolOutput::from_content(
+                body,
+                Some(success),
+            )))
+        })
     }
 }
 

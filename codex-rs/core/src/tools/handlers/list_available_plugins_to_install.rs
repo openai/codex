@@ -54,7 +54,6 @@ impl ListAvailablePluginsToInstallHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ListAvailablePluginsToInstallHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME)
@@ -68,30 +67,29 @@ impl ToolExecutor<ToolInvocation> for ListAvailablePluginsToInstallHandler {
         false
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
-        match payload {
-            ToolPayload::Function { .. } => {}
-            _ => {
-                return Err(FunctionCallError::Fatal(format!(
-                    "{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME} handler received unsupported payload"
-                )));
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let ToolInvocation { payload, .. } = invocation;
+            match payload {
+                ToolPayload::Function { .. } => {}
+                _ => {
+                    return Err(FunctionCallError::Fatal(format!(
+                        "{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME} handler received unsupported payload"
+                    )));
+                }
             }
-        }
 
-        let content = serde_json::to_string(&self.result()).map_err(|err| {
+            let content = serde_json::to_string(&self.result()).map_err(|err| {
             FunctionCallError::Fatal(format!(
                 "failed to serialize {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME} response: {err}"
             ))
         })?;
 
-        Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            content,
-            Some(true),
-        )))
+            Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                content,
+                Some(true),
+            )))
+        })
     }
 }
 

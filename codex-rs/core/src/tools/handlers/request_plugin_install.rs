@@ -48,7 +48,6 @@ impl RequestPluginInstallHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME)
@@ -62,54 +61,52 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
         true
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            payload,
-            session,
-            turn,
-            call_id,
-            ..
-        } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let ToolInvocation {
+                payload,
+                session,
+                turn,
+                call_id,
+                ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::Fatal(format!(
-                    "{REQUEST_PLUGIN_INSTALL_TOOL_NAME} handler received unsupported payload"
-                )));
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::Fatal(format!(
+                        "{REQUEST_PLUGIN_INSTALL_TOOL_NAME} handler received unsupported payload"
+                    )));
+                }
+            };
+
+            let args: RequestPluginInstallArgs = parse_arguments(&arguments)?;
+            let suggest_reason = args.suggest_reason.trim();
+            if suggest_reason.is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "suggest_reason must not be empty".to_string(),
+                ));
             }
-        };
+            if args.action_type != DiscoverableToolAction::Install {
+                return Err(FunctionCallError::RespondToModel(
+                    "plugin install requests currently support only action_type=\"install\""
+                        .to_string(),
+                ));
+            }
+            if args.tool_type == DiscoverableToolType::Plugin
+                && turn.app_server_client_name.as_deref() == Some("codex-tui")
+            {
+                return Err(FunctionCallError::RespondToModel(
+                    "plugin install requests are not available in codex-tui yet".to_string(),
+                ));
+            }
 
-        let args: RequestPluginInstallArgs = parse_arguments(&arguments)?;
-        let suggest_reason = args.suggest_reason.trim();
-        if suggest_reason.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "suggest_reason must not be empty".to_string(),
-            ));
-        }
-        if args.action_type != DiscoverableToolAction::Install {
-            return Err(FunctionCallError::RespondToModel(
-                "plugin install requests currently support only action_type=\"install\""
-                    .to_string(),
-            ));
-        }
-        if args.tool_type == DiscoverableToolType::Plugin
-            && turn.app_server_client_name.as_deref() == Some("codex-tui")
-        {
-            return Err(FunctionCallError::RespondToModel(
-                "plugin install requests are not available in codex-tui yet".to_string(),
-            ));
-        }
+            let discoverable_tools = filter_request_plugin_install_discoverable_tools_for_client(
+                self.discoverable_tools.clone(),
+                turn.app_server_client_name.as_deref(),
+            );
 
-        let discoverable_tools = filter_request_plugin_install_discoverable_tools_for_client(
-            self.discoverable_tools.clone(),
-            turn.app_server_client_name.as_deref(),
-        );
-
-        let tool = discoverable_tools
+            let tool = discoverable_tools
             .into_iter()
             .find(|tool| tool.tool_type() == args.tool_type && tool.id() == args.tool_id)
             .ok_or_else(|| {
@@ -118,79 +115,80 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
                 ))
             })?;
 
-        let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
-        let params = build_request_plugin_install_elicitation_request(
-            CODEX_APPS_MCP_SERVER_NAME,
-            session.thread_id.to_string(),
-            turn.sub_id.clone(),
-            &args,
-            suggest_reason,
-            &tool,
-        );
-        let elicitation = session
-            .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
-            .await;
-        let response = elicitation.response;
-        if let Some(response) = response.as_ref() {
-            maybe_persist_disabled_install_request(&session, &turn, &tool, response).await;
-        }
-        let user_confirmed = response
-            .as_ref()
-            .is_some_and(|response| response.action == ElicitationAction::Accept);
-
-        let auth = session.services.auth_manager.auth().await;
-        let completed = if user_confirmed {
-            verify_request_plugin_install_completed(&session, &turn, &tool, auth.as_ref()).await
-        } else {
-            false
-        };
-
-        if completed && let DiscoverableTool::Connector(connector) = &tool {
-            session
-                .merge_connector_selection(HashSet::from([connector.id.clone()]))
-                .await;
-        }
-
-        if elicitation.sent {
-            let tool_type = match args.tool_type {
-                DiscoverableToolType::Connector => "connector",
-                DiscoverableToolType::Plugin => "plugin",
-            };
-            let response_action = match response.as_ref().map(|response| &response.action) {
-                Some(ElicitationAction::Accept) => "accept",
-                Some(ElicitationAction::Decline) => "decline",
-                Some(ElicitationAction::Cancel) => "cancel",
-                None => "unavailable",
-            };
-            turn.session_telemetry.record_plugin_install_suggestion(
-                tool_type,
-                tool.id(),
-                tool.name(),
-                response_action,
-                user_confirmed,
-                completed,
+            let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
+            let params = build_request_plugin_install_elicitation_request(
+                CODEX_APPS_MCP_SERVER_NAME,
+                session.thread_id.to_string(),
+                turn.sub_id.clone(),
+                &args,
+                suggest_reason,
+                &tool,
             );
-        }
+            let elicitation = session
+                .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
+                .await;
+            let response = elicitation.response;
+            if let Some(response) = response.as_ref() {
+                maybe_persist_disabled_install_request(&session, &turn, &tool, response).await;
+            }
+            let user_confirmed = response
+                .as_ref()
+                .is_some_and(|response| response.action == ElicitationAction::Accept);
 
-        let content = serde_json::to_string(&RequestPluginInstallResult {
-            completed,
-            user_confirmed,
-            tool_type: args.tool_type,
-            action_type: args.action_type,
-            tool_id: tool.id().to_string(),
-            tool_name: tool.name().to_string(),
-            suggest_reason: suggest_reason.to_string(),
+            let auth = session.services.auth_manager.auth().await;
+            let completed = if user_confirmed {
+                verify_request_plugin_install_completed(&session, &turn, &tool, auth.as_ref()).await
+            } else {
+                false
+            };
+
+            if completed && let DiscoverableTool::Connector(connector) = &tool {
+                session
+                    .merge_connector_selection(HashSet::from([connector.id.clone()]))
+                    .await;
+            }
+
+            if elicitation.sent {
+                let tool_type = match args.tool_type {
+                    DiscoverableToolType::Connector => "connector",
+                    DiscoverableToolType::Plugin => "plugin",
+                };
+                let response_action = match response.as_ref().map(|response| &response.action) {
+                    Some(ElicitationAction::Accept) => "accept",
+                    Some(ElicitationAction::Decline) => "decline",
+                    Some(ElicitationAction::Cancel) => "cancel",
+                    None => "unavailable",
+                };
+                turn.session_telemetry.record_plugin_install_suggestion(
+                    tool_type,
+                    tool.id(),
+                    tool.name(),
+                    response_action,
+                    user_confirmed,
+                    completed,
+                );
+            }
+
+            let content = serde_json::to_string(&RequestPluginInstallResult {
+                completed,
+                user_confirmed,
+                tool_type: args.tool_type,
+                action_type: args.action_type,
+                tool_id: tool.id().to_string(),
+                tool_name: tool.name().to_string(),
+                suggest_reason: suggest_reason.to_string(),
+            })
+            .map_err(|err| {
+                FunctionCallError::Fatal(format!(
+                    "failed to serialize {REQUEST_PLUGIN_INSTALL_TOOL_NAME} response: {err}"
+                ))
+            })?;
+
+            Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                content,
+                Some(true),
+            )))
         })
-        .map_err(|err| {
-            FunctionCallError::Fatal(format!(
-                "failed to serialize {REQUEST_PLUGIN_INSTALL_TOOL_NAME} response: {err}"
-            ))
-        })?;
-
-        Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            content,
-            Some(true),
-        )))
     }
 }
 

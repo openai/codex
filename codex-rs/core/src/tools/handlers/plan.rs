@@ -45,7 +45,6 @@ impl ToolOutput for PlanToolOutput {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for PlanHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("update_plan")
@@ -55,39 +54,40 @@ impl ToolExecutor<ToolInvocation> for PlanHandler {
         create_update_plan_tool()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id: _,
-            payload,
-            ..
-        } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let ToolInvocation {
+                session,
+                turn,
+                call_id: _,
+                payload,
+                ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "update_plan handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
+
+            if turn.collaboration_mode.mode == ModeKind::Plan {
                 return Err(FunctionCallError::RespondToModel(
-                    "update_plan handler received unsupported payload".to_string(),
+                    "update_plan is a TODO/checklist tool and is not allowed in Plan mode"
+                        .to_string(),
                 ));
             }
-        };
 
-        if turn.collaboration_mode.mode == ModeKind::Plan {
-            return Err(FunctionCallError::RespondToModel(
-                "update_plan is a TODO/checklist tool and is not allowed in Plan mode".to_string(),
-            ));
-        }
+            let args = parse_update_plan_arguments(&arguments)?;
+            session
+                .send_event(turn.as_ref(), EventMsg::PlanUpdate(args))
+                .await;
 
-        let args = parse_update_plan_arguments(&arguments)?;
-        session
-            .send_event(turn.as_ref(), EventMsg::PlanUpdate(args))
-            .await;
-
-        Ok(boxed_tool_output(PlanToolOutput))
+            Ok(boxed_tool_output(PlanToolOutput))
+        })
     }
 }
 

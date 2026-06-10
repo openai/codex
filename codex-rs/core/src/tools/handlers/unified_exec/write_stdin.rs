@@ -31,7 +31,6 @@ struct WriteStdinArgs {
 
 pub struct WriteStdinHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("write_stdin")
@@ -41,59 +40,59 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
         create_write_stdin_tool()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            ..
-        } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "write_stdin handler received unsupported payload".to_string(),
-                ));
-            }
-        };
-
-        let args: WriteStdinArgs = parse_arguments(&arguments)?;
-        let response = session
-            .services
-            .unified_exec_manager
-            .write_stdin(WriteStdinRequest {
-                process_id: args.session_id,
-                input: &args.chars,
-                yield_time_ms: args.yield_time_ms,
-                max_output_tokens: args.max_output_tokens,
-                truncation_policy: turn.truncation_policy,
-            })
-            .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!("write_stdin failed: {err}"))
-            })?;
-
-        // Empty stdin is a background poll, so emit it only while there is
-        // still a live process for the UI to wait on. Non-empty stdin is a real
-        // terminal interaction and should remain visible even if it completes
-        // the process before the response returns.
-        if !args.chars.is_empty() || response.process_id.is_some() {
-            let process_id = response.process_id.unwrap_or(args.session_id);
-            let interaction = TerminalInteractionEvent {
-                call_id: response.event_call_id.clone(),
-                process_id: process_id.to_string(),
-                stdin: args.chars.clone(),
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "write_stdin handler received unsupported payload".to_string(),
+                    ));
+                }
             };
-            session
-                .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
-                .await;
-        }
 
-        Ok(boxed_tool_output(response))
+            let args: WriteStdinArgs = parse_arguments(&arguments)?;
+            let response = session
+                .services
+                .unified_exec_manager
+                .write_stdin(WriteStdinRequest {
+                    process_id: args.session_id,
+                    input: &args.chars,
+                    yield_time_ms: args.yield_time_ms,
+                    max_output_tokens: args.max_output_tokens,
+                    truncation_policy: turn.truncation_policy,
+                })
+                .await
+                .map_err(|err| {
+                    FunctionCallError::RespondToModel(format!("write_stdin failed: {err}"))
+                })?;
+
+            // Empty stdin is a background poll, so emit it only while there is
+            // still a live process for the UI to wait on. Non-empty stdin is a real
+            // terminal interaction and should remain visible even if it completes
+            // the process before the response returns.
+            if !args.chars.is_empty() || response.process_id.is_some() {
+                let process_id = response.process_id.unwrap_or(args.session_id);
+                let interaction = TerminalInteractionEvent {
+                    call_id: response.event_call_id.clone(),
+                    process_id: process_id.to_string(),
+                    stdin: args.chars.clone(),
+                };
+                session
+                    .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
+                    .await;
+            }
+
+            Ok(boxed_tool_output(response))
+        })
     }
 }
 

@@ -5,7 +5,6 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("list_agents")
@@ -15,30 +14,30 @@ impl ToolExecutor<ToolInvocation> for Handler {
         create_list_agents_tool()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            ..
-        } = invocation;
-        let arguments = function_arguments(payload)?;
-        let args: ListAgentsArgs = parse_arguments(&arguments)?;
-        session
-            .services
-            .agent_control
-            .register_session_root(session.thread_id, turn.parent_thread_id);
-        let agents = session
-            .services
-            .agent_control
-            .list_agents(&turn.session_source, args.path_prefix.as_deref())
-            .await
-            .map_err(collab_spawn_error)?;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                ..
+            } = invocation;
+            let arguments = function_arguments(payload)?;
+            let args: ListAgentsArgs = parse_arguments(&arguments)?;
+            session
+                .services
+                .agent_control
+                .register_session_root(session.thread_id, turn.parent_thread_id);
+            let agents = session
+                .services
+                .agent_control
+                .list_agents(&turn.session_source, args.path_prefix.as_deref())
+                .await
+                .map_err(collab_spawn_error)?;
 
-        Ok(boxed_tool_output(ListAgentsResult { agents }))
+            Ok(boxed_tool_output(ListAgentsResult { agents }))
+        })
     }
 }
 

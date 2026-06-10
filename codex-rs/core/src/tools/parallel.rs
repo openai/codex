@@ -257,7 +257,6 @@ mod tests {
         tool_name: codex_tools::ToolName,
     }
 
-    #[async_trait::async_trait]
     impl ToolExecutor<ToolInvocation> for ImmediateHandler {
         fn tool_name(&self) -> codex_tools::ToolName {
             self.tool_name.clone()
@@ -274,14 +273,18 @@ mod tests {
             })
         }
 
-        async fn handle(
-            &self,
-            _invocation: ToolInvocation,
-        ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-            Ok(Box::new(FunctionToolOutput::from_text(
-                "ok".to_string(),
-                Some(true),
-            )))
+        fn handle<'a>(
+            &'a self,
+            invocation: ToolInvocation,
+        ) -> codex_tools::ToolExecutionFuture<'a> {
+            Box::pin(async move {
+                let _self = self;
+                let _invocation = invocation;
+                Ok(
+                    Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+                        as Box<dyn codex_tools::ToolOutput>,
+                )
+            })
         }
     }
 
@@ -294,7 +297,6 @@ mod tests {
         allow_cleanup: Arc<Notify>,
     }
 
-    #[async_trait::async_trait]
     impl ToolExecutor<ToolInvocation> for CancellationCleanupHandler {
         fn tool_name(&self) -> codex_tools::ToolName {
             self.tool_name.clone()
@@ -311,32 +313,34 @@ mod tests {
             })
         }
 
-        async fn handle(
-            &self,
+        fn handle<'a>(
+            &'a self,
             invocation: ToolInvocation,
-        ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-            let started = self
-                .started
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(started) = started {
-                let _ = started.send(());
-            }
-            invocation.cancellation_token.cancelled().await;
-            let cleanup_started = self
-                .cleanup_started
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(cleanup_started) = cleanup_started {
-                let _ = cleanup_started.send(());
-            }
-            self.allow_cleanup.notified().await;
-            Ok(Box::new(FunctionToolOutput::from_text(
-                "cleanup complete".to_string(),
-                Some(false),
-            )))
+        ) -> codex_tools::ToolExecutionFuture<'a> {
+            Box::pin(async move {
+                let started = self
+                    .started
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(started) = started {
+                    let _ = started.send(());
+                }
+                invocation.cancellation_token.cancelled().await;
+                let cleanup_started = self
+                    .cleanup_started
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(cleanup_started) = cleanup_started {
+                    let _ = cleanup_started.send(());
+                }
+                self.allow_cleanup.notified().await;
+                Ok(Box::new(FunctionToolOutput::from_text(
+                    "cleanup complete".to_string(),
+                    Some(false),
+                )) as Box<dyn codex_tools::ToolOutput>)
+            })
         }
     }
 

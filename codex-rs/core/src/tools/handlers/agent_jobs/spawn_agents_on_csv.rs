@@ -14,7 +14,6 @@ use super::*;
 
 pub struct SpawnAgentsOnCsvHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for SpawnAgentsOnCsvHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("spawn_agents_on_csv")
@@ -24,29 +23,29 @@ impl ToolExecutor<ToolInvocation> for SpawnAgentsOnCsvHandler {
         create_spawn_agents_on_csv_tool()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            ..
-        } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "agent jobs handler received unsupported payload".to_string(),
-                ));
-            }
-        };
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "agent jobs handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
 
-        handle(session, turn, arguments)
-            .await
-            .map(boxed_tool_output)
+            handle(session, turn, arguments)
+                .await
+                .map(boxed_tool_output)
+        })
     }
 }
 

@@ -124,7 +124,6 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("shell_command")
@@ -141,64 +140,64 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         true
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            cancellation_token,
-            tracker,
-            call_id,
-            payload,
-            ..
-        } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                cancellation_token,
+                tracker,
+                call_id,
+                payload,
+                ..
+            } = invocation;
 
-        let tool_name = self.tool_name();
-        let ToolPayload::Function { arguments } = payload else {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "unsupported payload for shell_command handler: {tool_name}"
-            )));
-        };
+            let tool_name = self.tool_name();
+            let ToolPayload::Function { arguments } = payload else {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "unsupported payload for shell_command handler: {tool_name}"
+                )));
+            };
 
-        #[allow(deprecated)]
-        let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
-        let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
-        #[allow(deprecated)]
-        let workdir = turn.resolve_path(params.workdir.clone());
-        maybe_emit_implicit_skill_invocation(
-            session.as_ref(),
-            turn.as_ref(),
-            &params.command,
-            &workdir,
-        )
-        .await;
-        let prefix_rule = params.prefix_rule.clone();
-        let exec_params = Self::to_exec_params(
-            &params,
-            session.as_ref(),
-            turn.as_ref(),
-            session.thread_id,
-            turn.config.permissions.allow_login_shell,
-        )?;
-        let shell_type = Some(session.user_shell().shell_type);
-        run_exec_like(RunExecLikeArgs {
-            tool_name,
-            exec_params,
-            cancellation_token,
-            hook_command: params.command,
-            shell_type,
-            additional_permissions: params.additional_permissions.clone(),
-            prefix_rule,
-            session,
-            turn,
-            tracker,
-            call_id,
-            shell_runtime_backend: self.shell_runtime_backend(),
+            #[allow(deprecated)]
+            let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+            let params: ShellCommandToolCallParams =
+                parse_arguments_with_base_path(&arguments, &cwd)?;
+            #[allow(deprecated)]
+            let workdir = turn.resolve_path(params.workdir.clone());
+            maybe_emit_implicit_skill_invocation(
+                session.as_ref(),
+                turn.as_ref(),
+                &params.command,
+                &workdir,
+            )
+            .await;
+            let prefix_rule = params.prefix_rule.clone();
+            let exec_params = Self::to_exec_params(
+                &params,
+                session.as_ref(),
+                turn.as_ref(),
+                session.thread_id,
+                turn.config.permissions.allow_login_shell,
+            )?;
+            let shell_type = Some(session.user_shell().shell_type);
+            run_exec_like(RunExecLikeArgs {
+                tool_name,
+                exec_params,
+                cancellation_token,
+                hook_command: params.command,
+                shell_type,
+                additional_permissions: params.additional_permissions.clone(),
+                prefix_rule,
+                session,
+                turn,
+                tracker,
+                call_id,
+                shell_runtime_backend: self.shell_runtime_backend(),
+            })
+            .await
+            .map(boxed_tool_output)
         })
-        .await
-        .map(boxed_tool_output)
     }
 }
 

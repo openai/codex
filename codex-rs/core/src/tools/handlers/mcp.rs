@@ -64,7 +64,6 @@ fn ensure_mcp_prefix(name: &str) -> String {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for McpHandler {
     fn tool_name(&self) -> ToolName {
         self.tool_info.canonical_tool_name()
@@ -113,46 +112,47 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
         )
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id,
-            payload,
-            ..
-        } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                call_id,
+                payload,
+                ..
+            } = invocation;
 
-        let payload = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "mcp handler received unsupported payload".to_string(),
-                ));
-            }
-        };
+            let payload = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "mcp handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
 
-        let started = Instant::now();
-        let result = handle_mcp_tool_call(
-            Arc::clone(&session),
-            &turn,
-            call_id.clone(),
-            self.tool_info.server_name.clone(),
-            self.tool_info.tool.name.to_string(),
-            self.hook_tool_name(),
-            payload,
-        )
-        .await;
+            let started = Instant::now();
+            let result = handle_mcp_tool_call(
+                Arc::clone(&session),
+                &turn,
+                call_id.clone(),
+                self.tool_info.server_name.clone(),
+                self.tool_info.tool.name.to_string(),
+                self.hook_tool_name(),
+                payload,
+            )
+            .await;
 
-        Ok(boxed_tool_output(McpToolOutput {
-            result: result.result,
-            tool_input: result.tool_input,
-            wall_time: started.elapsed(),
-            original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
-            truncation_policy: turn.truncation_policy,
-        }))
+            Ok(boxed_tool_output(McpToolOutput {
+                result: result.result,
+                tool_input: result.tool_input,
+                wall_time: started.elapsed(),
+                original_image_detail_supported: can_request_original_image_detail(
+                    &turn.model_info,
+                ),
+                truncation_policy: turn.truncation_policy,
+            }))
+        })
     }
 }
 

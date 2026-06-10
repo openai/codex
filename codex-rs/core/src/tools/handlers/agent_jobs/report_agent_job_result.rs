@@ -13,7 +13,6 @@ use super::*;
 
 pub struct ReportAgentJobResultHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ReportAgentJobResultHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("report_agent_job_result")
@@ -23,24 +22,24 @@ impl ToolExecutor<ToolInvocation> for ReportAgentJobResultHandler {
         create_report_agent_job_result_tool()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session, payload, ..
-        } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let ToolInvocation {
+                session, payload, ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "report_agent_job_result handler received unsupported payload".to_string(),
-                ));
-            }
-        };
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "report_agent_job_result handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
 
-        handle(session, arguments).await.map(boxed_tool_output)
+            handle(session, arguments).await.map(boxed_tool_output)
+        })
     }
 }
 

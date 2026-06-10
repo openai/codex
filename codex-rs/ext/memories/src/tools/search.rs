@@ -2,6 +2,7 @@ use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
+use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolSpec;
 use codex_otel::MetricsClient;
 use schemars::JsonSchema;
@@ -47,7 +48,6 @@ pub(super) struct SearchTool<B> {
     pub(super) metrics_client: Option<MetricsClient>,
 }
 
-#[async_trait::async_trait]
 impl<B> ToolExecutor<ToolCall> for SearchTool<B>
 where
     B: MemoriesBackend,
@@ -63,24 +63,22 @@ where
         )
     }
 
-    async fn handle(
-        &self,
-        call: ToolCall,
-    ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
-    {
-        let backend = self.backend.clone();
-        let args: SearchArgs = parse_args(&call)?;
-        let scope = scope_from_optional_path(args.path.as_deref(), "all");
-        let response = backend.search(args.into_request()).await;
-        record_tool_call(
-            self.metrics_client.as_ref(),
-            SEARCH_TOOL_NAME,
-            scope,
-            response.is_ok(),
-            truncated_tag(response.as_ref().ok().map(|response| response.truncated)),
-        );
-        let response = response.map_err(backend_error_to_function_call)?;
-        Ok(Box::new(JsonToolOutput::new(json!(response))))
+    fn handle<'a>(&'a self, call: ToolCall) -> codex_extension_api::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let backend = self.backend.clone();
+            let args: SearchArgs = parse_args(&call)?;
+            let scope = scope_from_optional_path(args.path.as_deref(), "all");
+            let response = backend.search(args.into_request()).await;
+            record_tool_call(
+                self.metrics_client.as_ref(),
+                SEARCH_TOOL_NAME,
+                scope,
+                response.is_ok(),
+                truncated_tag(response.as_ref().ok().map(|response| response.truncated)),
+            );
+            let response = response.map_err(backend_error_to_function_call)?;
+            Ok(Box::new(JsonToolOutput::new(json!(response))) as Box<dyn ToolOutput>)
+        })
     }
 }
 

@@ -78,7 +78,6 @@ struct ImagegenArgs {
     num_last_images_to_include: Option<usize>,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolCall> for ImageGenerationTool {
     /// Keeps the tool in the existing image-generation Responses namespace.
     fn tool_name(&self) -> ToolName {
@@ -96,50 +95,52 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
     }
 
     /// Executes the selected image operation and returns the completed image result.
-    async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        let args = parse_args(&call)?;
-        let request = request_for_args(&args, call.conversation_history.items())?;
-        call.turn_item_emitter
-            .emit_started(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
-                id: call.call_id.clone(),
-                status: "in_progress".to_string(),
-                revised_prompt: None,
-                result: String::new(),
-                saved_path: None,
-            }))
-            .await;
-        let response = match request {
-            ImageRequest::Generate(request) => self.backend.generate(request).await,
-            ImageRequest::Edit(request) => self.backend.edit(request).await,
-        }
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("image generation failed: {err}"))
-        })?;
-        let Some(result) = response.data.into_iter().next().map(|data| data.b64_json) else {
-            return Err(FunctionCallError::RespondToModel(
-                "image generation returned no image data".to_string(),
-            ));
-        };
-        call.turn_item_emitter
-            .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
-                id: call.call_id.clone(),
-                status: "completed".to_string(),
-                revised_prompt: Some(args.prompt),
-                result: result.clone(),
-                saved_path: None,
-            }))
-            .await;
-        let output_path =
-            image_generation_artifact_path(&self.codex_home, &self.thread_id, &call.call_id);
-        let output_dir = output_path
-            .parent()
-            .unwrap_or_else(|| self.codex_home.clone());
-        let output_hint =
-            extension_image_generation_output_hint(output_dir.display(), output_path.display());
-        Ok(Box::new(GeneratedImageOutput {
-            result,
-            output_hint,
-        }))
+    fn handle<'a>(&'a self, call: ToolCall) -> codex_extension_api::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let args = parse_args(&call)?;
+            let request = request_for_args(&args, call.conversation_history.items())?;
+            call.turn_item_emitter
+                .emit_started(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                    id: call.call_id.clone(),
+                    status: "in_progress".to_string(),
+                    revised_prompt: None,
+                    result: String::new(),
+                    saved_path: None,
+                }))
+                .await;
+            let response = match request {
+                ImageRequest::Generate(request) => self.backend.generate(request).await,
+                ImageRequest::Edit(request) => self.backend.edit(request).await,
+            }
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("image generation failed: {err}"))
+            })?;
+            let Some(result) = response.data.into_iter().next().map(|data| data.b64_json) else {
+                return Err(FunctionCallError::RespondToModel(
+                    "image generation returned no image data".to_string(),
+                ));
+            };
+            call.turn_item_emitter
+                .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                    id: call.call_id.clone(),
+                    status: "completed".to_string(),
+                    revised_prompt: Some(args.prompt),
+                    result: result.clone(),
+                    saved_path: None,
+                }))
+                .await;
+            let output_path =
+                image_generation_artifact_path(&self.codex_home, &self.thread_id, &call.call_id);
+            let output_dir = output_path
+                .parent()
+                .unwrap_or_else(|| self.codex_home.clone());
+            let output_hint =
+                extension_image_generation_output_hint(output_dir.display(), output_path.display());
+            Ok(Box::new(GeneratedImageOutput {
+                result,
+                output_hint,
+            }) as Box<dyn ToolOutput>)
+        })
     }
 }
 

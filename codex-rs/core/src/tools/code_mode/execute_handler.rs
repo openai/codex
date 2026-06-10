@@ -91,7 +91,6 @@ impl CodeModeExecuteHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(PUBLIC_TOOL_NAME)
@@ -101,28 +100,27 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
         self.spec.clone()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id,
-            tool_name,
-            payload,
-            ..
-        } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                call_id,
+                tool_name,
+                payload,
+                ..
+            } = invocation;
 
-        match payload {
-            ToolPayload::Custom { input } if is_exec_tool_name(&tool_name) => self
-                .execute(session, turn, call_id, input)
-                .await
-                .map(boxed_tool_output),
-            _ => Err(FunctionCallError::RespondToModel(format!(
-                "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
-            ))),
-        }
+            match payload {
+                ToolPayload::Custom { input } if is_exec_tool_name(&tool_name) => self
+                    .execute(session, turn, call_id, input)
+                    .await
+                    .map(boxed_tool_output),
+                _ => Err(FunctionCallError::RespondToModel(format!(
+                    "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
+                ))),
+            }
+        })
     }
 }
 

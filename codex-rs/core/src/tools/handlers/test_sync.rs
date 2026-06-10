@@ -57,7 +57,6 @@ fn barrier_map() -> &'static tokio::sync::Mutex<HashMap<String, BarrierState>> {
     BARRIERS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for TestSyncHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("test_sync_tool")
@@ -71,43 +70,43 @@ impl ToolExecutor<ToolInvocation> for TestSyncHandler {
         true
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let ToolInvocation { payload, .. } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "test_sync_tool handler received unsupported payload".to_string(),
-                ));
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "test_sync_tool handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
+
+            let args: TestSyncArgs = parse_arguments(&arguments)?;
+
+            if let Some(delay) = args.sleep_before_ms
+                && delay > 0
+            {
+                sleep(Duration::from_millis(delay)).await;
             }
-        };
 
-        let args: TestSyncArgs = parse_arguments(&arguments)?;
+            if let Some(barrier) = args.barrier {
+                wait_on_barrier(barrier).await?;
+            }
 
-        if let Some(delay) = args.sleep_before_ms
-            && delay > 0
-        {
-            sleep(Duration::from_millis(delay)).await;
-        }
+            if let Some(delay) = args.sleep_after_ms
+                && delay > 0
+            {
+                sleep(Duration::from_millis(delay)).await;
+            }
 
-        if let Some(barrier) = args.barrier {
-            wait_on_barrier(barrier).await?;
-        }
-
-        if let Some(delay) = args.sleep_after_ms
-            && delay > 0
-        {
-            sleep(Duration::from_millis(delay)).await;
-        }
-
-        Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            "ok".to_string(),
-            Some(true),
-        )))
+            Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                "ok".to_string(),
+                Some(true),
+            )))
+        })
     }
 }
 

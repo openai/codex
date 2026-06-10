@@ -5,7 +5,6 @@ struct TestHandler {
     tool_name: codex_tools::ToolName,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for TestHandler {
     fn tool_name(&self) -> codex_tools::ToolName {
         self.tool_name.clone()
@@ -15,13 +14,17 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
         test_spec(&self.tool_name)
     }
 
-    async fn handle(
-        &self,
-        _invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        Ok(Box::new(
-            crate::tools::context::FunctionToolOutput::from_text("ok".to_string(), Some(true)),
-        ))
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _self = self;
+            let _invocation = invocation;
+            Ok(
+                Box::new(crate::tools::context::FunctionToolOutput::from_text(
+                    "ok".to_string(),
+                    Some(true),
+                )) as Box<dyn codex_tools::ToolOutput>,
+            )
+        })
     }
 }
 
@@ -38,7 +41,6 @@ struct LifecycleTestHandler {
     result: LifecycleTestResult,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for LifecycleTestHandler {
     fn tool_name(&self) -> codex_tools::ToolName {
         self.tool_name.clone()
@@ -48,21 +50,22 @@ impl ToolExecutor<ToolInvocation> for LifecycleTestHandler {
         test_spec(&self.tool_name)
     }
 
-    async fn handle(
-        &self,
-        _invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        match self.result.clone() {
-            LifecycleTestResult::Ok { success } => Ok(Box::new(
-                crate::tools::context::FunctionToolOutput::from_text(
-                    "ok".to_string(),
-                    Some(success),
-                ),
-            )),
-            LifecycleTestResult::Err => Err(FunctionCallError::RespondToModel(
-                "handler failed".to_string(),
-            )),
-        }
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutionFuture<'a> {
+        Box::pin(async move {
+            let _invocation = invocation;
+            match self.result.clone() {
+                LifecycleTestResult::Ok { success } => Ok(Box::new(
+                    crate::tools::context::FunctionToolOutput::from_text(
+                        "ok".to_string(),
+                        Some(success),
+                    ),
+                )
+                    as Box<dyn codex_tools::ToolOutput>),
+                LifecycleTestResult::Err => Err(FunctionCallError::RespondToModel(
+                    "handler failed".to_string(),
+                )),
+            }
+        })
     }
 }
 
