@@ -1035,7 +1035,12 @@ impl PluginRequestProcessor {
                     }
                     None => None,
                 };
-                let app_summaries = load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
+                let app_summaries = load_plugin_app_summaries(
+                    &config,
+                    &outcome.plugin.apps,
+                    &outcome.plugin.app_category_by_id,
+                )
+                .await;
                 let visible_skills = outcome
                     .plugin
                     .skills
@@ -1111,7 +1116,13 @@ impl PluginRequestProcessor {
                     .cloned()
                     .map(codex_plugin::AppConnectorId)
                     .collect::<Vec<_>>();
-                let app_summaries = load_plugin_app_summaries(&config, &plugin_apps).await;
+                let app_category_by_id = remote_detail
+                    .app_manifest
+                    .as_ref()
+                    .map(plugin_app_category_by_id_from_value)
+                    .unwrap_or_default();
+                let app_summaries =
+                    load_plugin_app_summaries(&config, &plugin_apps, &app_category_by_id).await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
@@ -1558,16 +1569,28 @@ impl PluginRequestProcessor {
                         .into_iter()
                         .map(codex_plugin::AppConnectorId)
                         .collect::<Vec<_>>();
+                    let app_category_by_id = remote_detail
+                        .app_manifest
+                        .as_ref()
+                        .map(plugin_app_category_by_id_from_value)
+                        .unwrap_or_default();
                     let all_connectors = connectors::list_cached_all_connectors(&config)
                         .await
                         .unwrap_or_default();
                     connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps)
                         .into_iter()
-                        .map(|connector| AppSummary {
-                            id: connector.id,
-                            name: connector.name,
-                            description: connector.description,
-                            install_url: connector.install_url,
+                        .map(|connector| {
+                            let category = app_category_by_id
+                                .get(&connector.id)
+                                .cloned()
+                                .or_else(|| connector.category());
+                            AppSummary {
+                                category,
+                                id: connector.id,
+                                name: connector.name,
+                                description: connector.description,
+                                install_url: connector.install_url,
+                            }
                         })
                         .collect()
                 }
@@ -1872,6 +1895,7 @@ impl PluginRequestProcessor {
 async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[codex_plugin::AppConnectorId],
+    app_category_by_id: &HashMap<String, String>,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
@@ -1889,9 +1913,29 @@ async fn load_plugin_app_summaries(
         };
 
     let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
+
     plugin_connectors
         .into_iter()
-        .map(AppSummary::from)
+        .map(|connector| {
+            let category = app_category_by_id
+                .get(&connector.id)
+                .cloned()
+                .or_else(|| connector.category());
+            AppSummary {
+                id: connector.id,
+                name: connector.name,
+                description: connector.description,
+                install_url: connector.install_url,
+                category,
+            }
+        })
+        .collect()
+}
+
+fn plugin_app_category_by_id_from_value(value: &serde_json::Value) -> HashMap<String, String> {
+    codex_core_plugins::loader::plugin_app_metadata_from_value(value)
+        .into_iter()
+        .filter_map(|app| app.category.map(|category| (app.id.0, category)))
         .collect()
 }
 
@@ -1921,11 +1965,15 @@ fn plugin_apps_needing_auth(
                 && !accessible_ids.contains(connector.id.as_str())
         })
         .cloned()
-        .map(|connector| AppSummary {
-            id: connector.id,
-            name: connector.name,
-            description: connector.description,
-            install_url: connector.install_url,
+        .map(|connector| {
+            let category = connector.category();
+            AppSummary {
+                category,
+                id: connector.id,
+                name: connector.name,
+                description: connector.description,
+                install_url: connector.install_url,
+            }
         })
         .collect()
 }
@@ -2013,6 +2061,7 @@ fn remote_plugin_detail_to_info(
             template_id: template.template_id,
             name: template.name,
             description: template.description,
+            category: template.category,
             canonical_connector_id: template.canonical_connector_id,
             logo_url: template.logo_url,
             logo_url_dark: template.logo_url_dark,
