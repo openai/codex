@@ -215,6 +215,10 @@ where
             return;
         };
         if let Some(goal) = goal {
+            // Plan mode returns above today, so the Default check is not needed
+            // for the current visible modes. Keep it so this suppression does
+            // not quietly expand if more collaboration modes reach goal turn
+            // accounting.
             if goal.status == codex_state::ThreadGoalStatus::Active
                 && input.collaboration_mode.mode == ModeKind::Default
             {
