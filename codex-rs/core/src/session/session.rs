@@ -526,53 +526,47 @@ impl Session {
             } else {
                 let live_thread = match &initial_history {
                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                        LiveThread::create(
-                            Arc::clone(&thread_store),
-                            CreateThreadParams {
-                                thread_id,
-                                extra_config: config.extra_config.clone(),
-                                forked_from_id,
-                                parent_thread_id,
-                                source: session_source,
-                                thread_source: session_configuration.thread_source.clone(),
-                                base_instructions: BaseInstructions {
-                                    text: session_configuration.base_instructions.clone(),
-                                },
-                                dynamic_tools: session_configuration.dynamic_tools.clone(),
-                                multi_agent_version: initial_multi_agent_version,
-                                metadata: ThreadPersistenceMetadata {
-                                    cwd: Some(config.cwd.to_path_buf()),
-                                    model_provider: config.model_provider_id.clone(),
-                                    memory_mode: if config.memories.generate_memories {
-                                        ThreadMemoryMode::Enabled
-                                    } else {
-                                        ThreadMemoryMode::Disabled
-                                    },
+                        let params = CreateThreadParams {
+                            thread_id,
+                            extra_config: config.extra_config.clone(),
+                            forked_from_id,
+                            parent_thread_id,
+                            source: session_source,
+                            thread_source: session_configuration.thread_source.clone(),
+                            base_instructions: BaseInstructions {
+                                text: session_configuration.base_instructions.clone(),
+                            },
+                            dynamic_tools: session_configuration.dynamic_tools.clone(),
+                            multi_agent_version: initial_multi_agent_version,
+                            metadata: ThreadPersistenceMetadata {
+                                cwd: Some(config.cwd.to_path_buf()),
+                                model_provider: config.model_provider_id.clone(),
+                                memory_mode: if config.memories.generate_memories {
+                                    ThreadMemoryMode::Enabled
+                                } else {
+                                    ThreadMemoryMode::Disabled
                                 },
                             },
-                        )
-                        .await?
+                        };
+                        LiveThread::create(Arc::clone(&thread_store), params).await?
                     }
                     InitialHistory::Resumed(resumed_history) => {
-                        LiveThread::resume(
-                            Arc::clone(&thread_store),
-                            ResumeThreadParams {
-                                thread_id: resumed_history.conversation_id,
-                                rollout_path: resumed_history.rollout_path.clone(),
-                                history: Some(resumed_history.history.clone()),
-                                include_archived: true,
-                                metadata: ThreadPersistenceMetadata {
-                                    cwd: Some(config.cwd.to_path_buf()),
-                                    model_provider: config.model_provider_id.clone(),
-                                    memory_mode: if config.memories.generate_memories {
-                                        ThreadMemoryMode::Enabled
-                                    } else {
-                                        ThreadMemoryMode::Disabled
-                                    },
+                        let params = ResumeThreadParams {
+                            thread_id: resumed_history.conversation_id,
+                            rollout_path: resumed_history.rollout_path.clone(),
+                            history: Some(resumed_history.history.clone()),
+                            include_archived: true,
+                            metadata: ThreadPersistenceMetadata {
+                                cwd: Some(config.cwd.to_path_buf()),
+                                model_provider: config.model_provider_id.clone(),
+                                memory_mode: if config.memories.generate_memories {
+                                    ThreadMemoryMode::Enabled
+                                } else {
+                                    ThreadMemoryMode::Disabled
                                 },
                             },
-                        )
-                        .await?
+                        };
+                        LiveThread::resume(Arc::clone(&thread_store), params).await?
                     }
                 };
                 Ok(Some(live_thread))
