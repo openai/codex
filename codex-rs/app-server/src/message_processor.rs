@@ -336,6 +336,7 @@ impl MessageProcessor {
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::clone(&goal_service),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
+                        thread_store: Arc::clone(&thread_store),
                     },
                 ),
                 Some(analytics_events_client.clone()),

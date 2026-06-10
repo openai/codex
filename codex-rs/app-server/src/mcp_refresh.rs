@@ -202,6 +202,7 @@ mod tests {
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::new(codex_goal_extension::GoalService::new()),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
+                        thread_store: Arc::clone(&thread_store),
                     },
                 ),
                 /*analytics_events_client*/ None,
