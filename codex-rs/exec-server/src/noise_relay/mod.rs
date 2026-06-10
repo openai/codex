@@ -26,7 +26,7 @@ pub(crate) use harness::noise_harness_connection_from_websocket;
 
 // This value is already part of the relay wire contract. Keep it stable even
 // though the source module now uses the more precise Noise terminology.
-#[expect(
+#[allow(
     dead_code,
     reason = "used by the remote Noise opt-in in the next stacked change"
 )]
