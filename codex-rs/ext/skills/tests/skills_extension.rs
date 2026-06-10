@@ -11,11 +11,14 @@ use codex_core_skills::SkillsLoadInput;
 use codex_core_skills::SkillsManager;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnInputContext;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
@@ -260,7 +263,9 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
             list_calls: Some(Arc::clone(&list_calls)),
             fail_first_list: true,
         }));
-    let mut builder = ExtensionRegistryBuilder::new();
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let mut builder =
+        ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
     install_with_providers(&mut builder, providers);
     let registry = builder.build();
     let session_store = ExtensionData::new("session");
@@ -281,6 +286,13 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         .contribute(&session_store, &thread_store)
         .await;
     assert!(initial_fragments.is_empty());
+    let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
+        panic!("expected warning event");
+    };
+    assert_eq!(
+        warning.message,
+        "orchestrator skills unavailable: temporary orchestrator failure"
+    );
 
     for turn_id in ["turn-1", "turn-2"] {
         let fragments = registry.turn_input_contributors()[0]
@@ -473,6 +485,14 @@ struct StaticSkillProvider {
     read_requests: Arc<Mutex<Vec<SkillReadRequest>>>,
     list_calls: Option<Arc<AtomicUsize>>,
     fail_first_list: bool,
+}
+
+struct ChannelEventSink(std::sync::mpsc::Sender<Event>);
+
+impl ExtensionEventSink for ChannelEventSink {
+    fn emit(&self, event: Event) {
+        self.0.send(event).expect("recording event sink receiver");
+    }
 }
 
 impl SkillProvider for StaticSkillProvider {
