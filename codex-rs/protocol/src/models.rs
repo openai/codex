@@ -893,6 +893,12 @@ pub enum ResponseItem {
         #[ts(optional)]
         revised_prompt: Option<String>,
         result: String,
+        #[serde(default, skip_serializing)]
+        #[ts(skip)]
+        asset_pointer: Option<String>,
+        #[serde(default, skip_serializing)]
+        #[ts(skip)]
+        original_asset_pointer: Option<String>,
     },
     #[serde(alias = "compaction_summary")]
     Compaction {
@@ -1776,6 +1782,8 @@ mod tests {
             "status": "completed",
             "revised_prompt": "A small blue square",
             "result": "Zm9v",
+            "asset_pointer": "sediment://asset",
+            "original_asset_pointer": "sediment://original",
         }))
         .expect("image generation item should deserialize");
 
@@ -1786,7 +1794,21 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: Some("A small blue square".to_string()),
                 result: "Zm9v".to_string(),
+                asset_pointer: Some("sediment://asset".to_string()),
+                original_asset_pointer: Some("sediment://original".to_string()),
             }
+        );
+        let serialized =
+            serde_json::to_value(&item).expect("image generation item should serialize");
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "type": "image_generation_call",
+                "id": "ig_123",
+                "status": "completed",
+                "revised_prompt": "A small blue square",
+                "result": "Zm9v",
+            })
         );
     }
 
@@ -1807,6 +1829,32 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: None,
                 result: "Zm9v".to_string(),
+                asset_pointer: None,
+                original_asset_pointer: None,
+            }
+        );
+    }
+
+    #[test]
+    fn response_item_parses_image_generation_call_without_original_asset_pointer() {
+        let item = serde_json::from_value::<ResponseItem>(serde_json::json!({
+            "id": "ig_123",
+            "type": "image_generation_call",
+            "status": "completed",
+            "result": "Zm9v",
+            "asset_pointer": "sediment://asset",
+        }))
+        .expect("image generation item should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::ImageGenerationCall {
+                id: "ig_123".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: None,
+                result: "Zm9v".to_string(),
+                asset_pointer: Some("sediment://asset".to_string()),
+                original_asset_pointer: None,
             }
         );
     }

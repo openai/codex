@@ -103,6 +103,8 @@ fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             status: "completed".to_string(),
             revised_prompt: None,
             result: "generated".to_string(),
+            asset_pointer: None,
+            original_asset_pointer: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "orphan-call".to_string(),

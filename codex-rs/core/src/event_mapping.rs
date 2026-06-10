@@ -196,12 +196,16 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             status,
             revised_prompt,
             result,
+            asset_pointer,
+            original_asset_pointer,
         } => Some(TurnItem::ImageGeneration(
             codex_protocol::items::ImageGenerationItem {
                 id: id.clone(),
                 status: status.clone(),
                 revised_prompt: revised_prompt.clone(),
                 result: result.clone(),
+                asset_pointer: asset_pointer.clone(),
+                original_asset_pointer: original_asset_pointer.clone(),
                 saved_path: None,
             },
         )),

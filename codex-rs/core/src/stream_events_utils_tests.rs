@@ -410,6 +410,8 @@ fn completed_item_defers_mailbox_delivery_for_image_generation_calls() {
         status: "completed".to_string(),
         revised_prompt: None,
         result: "Zm9v".to_string(),
+        asset_pointer: None,
+        original_asset_pointer: None,
     };
 
     assert!(completed_item_defers_mailbox_delivery_to_next_turn(

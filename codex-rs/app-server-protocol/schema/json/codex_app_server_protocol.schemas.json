@@ -14606,8 +14606,22 @@
           },
           {
             "properties": {
+              "asset_pointer": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "writeOnly": true
+              },
               "id": {
                 "type": "string"
+              },
+              "original_asset_pointer": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "writeOnly": true
               },
               "result": {
                 "type": "string"
@@ -17044,8 +17058,20 @@
           },
           {
             "properties": {
+              "assetPointer": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "id": {
                 "type": "string"
+              },
+              "originalAssetPointer": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "result": {
                 "type": "string"

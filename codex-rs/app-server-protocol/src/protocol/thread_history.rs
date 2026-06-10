@@ -594,6 +594,8 @@ impl ThreadHistoryBuilder {
             status: String::new(),
             revised_prompt: None,
             result: String::new(),
+            asset_pointer: None,
+            original_asset_pointer: None,
             saved_path: None,
         };
         self.upsert_item_in_current_turn(item);
@@ -605,6 +607,8 @@ impl ThreadHistoryBuilder {
             status: payload.status.clone(),
             revised_prompt: payload.revised_prompt.clone(),
             result: payload.result.clone(),
+            asset_pointer: payload.asset_pointer.clone(),
+            original_asset_pointer: payload.original_asset_pointer.clone(),
             saved_path: payload.saved_path.clone(),
         };
         self.upsert_item_in_current_turn(item);
@@ -1577,6 +1581,8 @@ mod tests {
                 status: "completed".into(),
                 revised_prompt: Some("final prompt".into()),
                 result: "Zm9v".into(),
+                asset_pointer: Some("sediment://asset".into()),
+                original_asset_pointer: Some("sediment://original".into()),
                 saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
             })),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
@@ -1614,6 +1620,8 @@ mod tests {
                         status: "completed".into(),
                         revised_prompt: Some("final prompt".into()),
                         result: "Zm9v".into(),
+                        asset_pointer: Some("sediment://asset".into()),
+                        original_asset_pointer: Some("sediment://original".into()),
                         saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
                     },
                 ],

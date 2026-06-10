@@ -360,6 +360,8 @@ pub enum ThreadItem {
         status: String,
         revised_prompt: Option<String>,
         result: String,
+        asset_pointer: Option<String>,
+        original_asset_pointer: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         saved_path: Option<AbsolutePathBuf>,
@@ -839,6 +841,8 @@ impl From<CoreTurnItem> for ThreadItem {
                 status: image.status,
                 revised_prompt: image.revised_prompt,
                 result: image.result,
+                asset_pointer: image.asset_pointer,
+                original_asset_pointer: image.original_asset_pointer,
                 saved_path: image.saved_path,
             },
             CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {

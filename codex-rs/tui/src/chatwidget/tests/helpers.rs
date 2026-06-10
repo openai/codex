@@ -707,6 +707,8 @@ pub(super) fn handle_image_generation_end(
                 status: "completed".to_string(),
                 revised_prompt,
                 result: String::new(),
+                asset_pointer: None,
+                original_asset_pointer: None,
                 saved_path,
             },
         }),

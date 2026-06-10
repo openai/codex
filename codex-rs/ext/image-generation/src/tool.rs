@@ -105,6 +105,8 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
                 status: "in_progress".to_string(),
                 revised_prompt: None,
                 result: String::new(),
+                asset_pointer: None,
+                original_asset_pointer: None,
                 saved_path: None,
             }))
             .await;
@@ -126,6 +128,8 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
                 status: "completed".to_string(),
                 revised_prompt: Some(args.prompt),
                 result: result.clone(),
+                asset_pointer: None,
+                original_asset_pointer: None,
                 saved_path: None,
             }))
             .await;

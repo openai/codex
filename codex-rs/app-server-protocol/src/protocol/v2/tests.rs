@@ -122,6 +122,32 @@ fn turn_defaults_legacy_missing_items_view_to_full() {
 }
 
 #[test]
+fn image_generation_item_serializes_provenance_fields() {
+    let item = ThreadItem::ImageGeneration {
+        id: "ig_123".to_string(),
+        status: "completed".to_string(),
+        revised_prompt: None,
+        result: "Zm9v".to_string(),
+        asset_pointer: Some("sediment://asset".to_string()),
+        original_asset_pointer: None,
+        saved_path: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(item).expect("serialize image generation item"),
+        json!({
+            "type": "imageGeneration",
+            "id": "ig_123",
+            "status": "completed",
+            "revisedPrompt": null,
+            "result": "Zm9v",
+            "assetPointer": "sediment://asset",
+            "originalAssetPointer": null,
+        })
+    );
+}
+
+#[test]
 fn thread_turns_list_params_accepts_items_view() {
     let params = serde_json::from_value::<ThreadTurnsListParams>(json!({
         "threadId": "thr_123",

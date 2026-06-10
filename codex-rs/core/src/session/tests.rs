@@ -7573,6 +7573,8 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
                 status: "completed".to_string(),
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
+                asset_pointer: None,
+                original_asset_pointer: None,
             }],
             /*reference_context_item*/ None,
         )
@@ -7825,6 +7827,8 @@ async fn handle_output_item_done_records_image_save_history_message() {
         status: "completed".to_string(),
         revised_prompt: Some("a tiny blue square".to_string()),
         result: "Zm9v".to_string(),
+        asset_pointer: None,
+        original_asset_pointer: None,
     };
 
     let mut ctx = HandleOutputCtx {
@@ -7880,6 +7884,8 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         status: "completed".to_string(),
         revised_prompt: Some("broken payload".to_string()),
         result: "_-8".to_string(),
+        asset_pointer: None,
+        original_asset_pointer: None,
     };
 
     let mut ctx = HandleOutputCtx {

@@ -2338,6 +2338,12 @@ pub struct ImageGenerationEndEvent {
     #[ts(optional)]
     pub revised_prompt: Option<String>,
     pub result: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub asset_pointer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub original_asset_pointer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub saved_path: Option<AbsolutePathBuf>,
@@ -4715,6 +4721,8 @@ mod tests {
                 status: "in_progress".into(),
                 revised_prompt: None,
                 result: String::new(),
+                asset_pointer: None,
+                original_asset_pointer: None,
                 saved_path: None,
             }),
             started_at_ms: 0,
@@ -4811,6 +4819,8 @@ mod tests {
                 status: "completed".into(),
                 revised_prompt: Some("A tiny blue square".into()),
                 result: "Zm9v".into(),
+                asset_pointer: Some("sediment://asset".into()),
+                original_asset_pointer: Some("sediment://original".into()),
                 saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
             }),
             completed_at_ms: 0,
@@ -4824,6 +4834,11 @@ mod tests {
                 assert_eq!(event.status, "completed");
                 assert_eq!(event.revised_prompt.as_deref(), Some("A tiny blue square"));
                 assert_eq!(event.result, "Zm9v");
+                assert_eq!(event.asset_pointer.as_deref(), Some("sediment://asset"));
+                assert_eq!(
+                    event.original_asset_pointer.as_deref(),
+                    Some("sediment://original")
+                );
                 assert_eq!(
                     event.saved_path.as_ref().map(AbsolutePathBuf::as_path),
                     Some(test_path_buf("/tmp/ig-1.png").as_path())

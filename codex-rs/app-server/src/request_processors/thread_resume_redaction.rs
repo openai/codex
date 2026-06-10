@@ -96,6 +96,8 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: Some("revised".to_string()),
                 result: "base64-result".to_string(),
+                asset_pointer: None,
+                original_asset_pointer: None,
                 saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
             },
         ]);

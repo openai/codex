@@ -459,6 +459,8 @@ mod tests {
                         status: "in_progress".to_string(),
                         revised_prompt: None,
                         result: String::new(),
+                        asset_pointer: None,
+                        original_asset_pointer: None,
                         saved_path: None,
                     },
                 ))
@@ -470,6 +472,8 @@ mod tests {
                         status: "completed".to_string(),
                         revised_prompt: Some("A tiny blue square".to_string()),
                         result: "cG5n".to_string(),
+                        asset_pointer: None,
+                        original_asset_pointer: None,
                         saved_path: Some(test_path_buf("/tmp/extension-claimed.png").abs()),
                     },
                 ))
@@ -532,6 +536,8 @@ mod tests {
                 status: "in_progress".to_string(),
                 revised_prompt: None,
                 result: String::new(),
+                asset_pointer: None,
+                original_asset_pointer: None,
                 saved_path: None,
             }
         );
@@ -542,6 +548,8 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: Some("A tiny blue square".to_string()),
                 result: "cG5n".to_string(),
+                asset_pointer: None,
+                original_asset_pointer: None,
                 saved_path: Some(expected_path.clone()),
             }
         );

@@ -3811,6 +3811,8 @@ async fn turn_event_counts_completed_tool_items() {
             status: "completed".to_string(),
             revised_prompt: None,
             result: "ok".to_string(),
+            asset_pointer: None,
+            original_asset_pointer: None,
             saved_path: None,
         },
     ];

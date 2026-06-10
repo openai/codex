@@ -4,6 +4,7 @@ use crate::context::InternalContextSource;
 use crate::context::InternalModelContextFragment;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::HookPromptFragment;
+use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::items::build_hook_prompt_message;
@@ -143,6 +144,34 @@ fn parses_assistant_message_input_text_for_backward_compatibility() {
         }
         other => panic!("expected TurnItem::AgentMessage, got {other:?}"),
     }
+}
+
+#[test]
+fn parses_image_generation_asset_pointers() {
+    let item = ResponseItem::ImageGenerationCall {
+        id: "ig_123".to_string(),
+        status: "completed".to_string(),
+        revised_prompt: Some("A small blue square".to_string()),
+        result: "Zm9v".to_string(),
+        asset_pointer: Some("sediment://asset".to_string()),
+        original_asset_pointer: Some("sediment://original".to_string()),
+    };
+
+    let Some(TurnItem::ImageGeneration(image)) = parse_turn_item(&item) else {
+        panic!("expected image generation turn item");
+    };
+    assert_eq!(
+        image,
+        ImageGenerationItem {
+            id: "ig_123".to_string(),
+            status: "completed".to_string(),
+            revised_prompt: Some("A small blue square".to_string()),
+            result: "Zm9v".to_string(),
+            asset_pointer: Some("sediment://asset".to_string()),
+            original_asset_pointer: Some("sediment://original".to_string()),
+            saved_path: None,
+        }
+    );
 }
 
 #[test]

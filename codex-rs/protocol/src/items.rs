@@ -150,6 +150,12 @@ pub struct ImageGenerationItem {
     pub result: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub asset_pointer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub original_asset_pointer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub saved_path: Option<AbsolutePathBuf>,
 }
 
@@ -500,6 +506,8 @@ impl ImageGenerationItem {
             status: self.status.clone(),
             revised_prompt: self.revised_prompt.clone(),
             result: self.result.clone(),
+            asset_pointer: self.asset_pointer.clone(),
+            original_asset_pointer: self.original_asset_pointer.clone(),
             saved_path: self.saved_path.clone(),
         })
     }

@@ -1089,8 +1089,20 @@
         },
         {
           "properties": {
+            "assetPointer": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "id": {
               "type": "string"
+            },
+            "originalAssetPointer": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "result": {
               "type": "string"
