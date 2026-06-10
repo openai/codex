@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
+use axum::body::to_bytes;
 use axum::extract::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -21,6 +22,7 @@ use axum::http::header::HOST;
 use axum::http::header::WWW_AUTHENTICATE;
 use axum::middleware;
 use axum::middleware::Next;
+use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::get;
 use axum::routing::post;
@@ -64,10 +66,22 @@ const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
 const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
+const TOOL_LIST_SESSION_IDS_PATH: &str = "/test/state/tool-list-session-ids";
+
+#[derive(Clone, Default)]
+struct TestServerState {
+    session_failure: SessionFailureState,
+    tool_list_sessions: ToolListSessionState,
+}
 
 #[derive(Clone, Default)]
 struct SessionFailureState {
     armed_failure: Arc<Mutex<Option<ArmedFailure>>>,
+}
+
+#[derive(Clone, Default)]
+struct ToolListSessionState {
+    session_ids: Arc<Mutex<Vec<Option<String>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -97,7 +111,7 @@ struct EchoArgs {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = parse_bind_addr()?;
-    let session_failure_state = SessionFailureState::default();
+    let test_state = TestServerState::default();
     const MAX_BIND_RETRIES: u32 = 20;
     const BIND_RETRY_DELAY: Duration = Duration::from_millis(50);
 
@@ -129,6 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             SESSION_POST_FAILURE_CONTROL_PATH,
             post(arm_session_post_failure),
         )
+        .route(TOOL_LIST_SESSION_IDS_PATH, get(tool_list_session_ids))
         .route(
             "/.well-known/oauth-authorization-server/mcp",
             get({
@@ -162,10 +177,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         )
         .layer(middleware::from_fn_with_state(
-            session_failure_state.clone(),
+            test_state.clone(),
             fail_session_post_when_armed,
         ))
-        .with_state(session_failure_state);
+        .layer(middleware::from_fn_with_state(
+            test_state.clone(),
+            record_tool_list_session_ids,
+        ))
+        .with_state(test_state);
 
     let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
         let expected = Arc::new(format!("Bearer {token}"));
@@ -192,11 +211,31 @@ impl ServerHandler for TestToolServer {
 
     fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         let tools = self.tools.clone();
         async move {
+            if std::env::var_os("MCP_PAGINATE_TOOLS").is_some() {
+                let cursor = request.as_ref().and_then(|params| params.cursor.as_deref());
+                return match cursor {
+                    None => Ok(ListToolsResult {
+                        tools: tools.iter().take(1).cloned().collect(),
+                        next_cursor: Some("page-2".to_string()),
+                        meta: None,
+                    }),
+                    Some("page-2") => Ok(ListToolsResult {
+                        tools: tools.iter().skip(1).cloned().collect(),
+                        next_cursor: None,
+                        meta: None,
+                    }),
+                    Some(cursor) => Err(McpError::invalid_params(
+                        format!("unknown tool cursor: {cursor}"),
+                        None,
+                    )),
+                };
+            }
+
             Ok(ListToolsResult {
                 tools: (*tools).clone(),
                 next_cursor: None,
@@ -294,7 +333,7 @@ impl ServerHandler for TestToolServer {
 
 impl TestToolServer {
     fn new() -> Self {
-        let tools = vec![Self::echo_tool()];
+        let tools = vec![Self::echo_tool(), Self::second_page_tool()];
         let resources = vec![Self::memo_resource()];
         let resource_templates = vec![Self::memo_template()];
         Self {
@@ -339,6 +378,24 @@ impl TestToolServer {
         }))
         .expect("echo tool output schema should deserialize");
         tool.output_schema = Some(Arc::new(output_schema));
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
+    }
+
+    fn second_page_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("second-page tool schema should deserialize");
+
+        let mut tool = Tool::new(
+            Cow::Borrowed("second_page_tool"),
+            Cow::Borrowed("Tool that only appears on the second tools/list page."),
+            Arc::new(schema),
+        );
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
         tool
     }
@@ -389,7 +446,8 @@ async fn require_bearer(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if request.uri().path().contains("/.well-known/") {
+    if request.uri().path().contains("/.well-known/") || request.uri().path().starts_with("/test/")
+    {
         return Ok(next.run(request).await);
     }
     if request
@@ -404,7 +462,7 @@ async fn require_bearer(
 }
 
 async fn arm_session_post_failure(
-    State(state): State<SessionFailureState>,
+    State(state): State<TestServerState>,
     Json(request): Json<ArmSessionPostFailureRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let status = StatusCode::from_u16(request.status).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -422,12 +480,16 @@ async fn arm_session_post_failure(
             www_authenticate_headers,
         })
     };
-    *state.armed_failure.lock().await = armed_failure;
+    *state.session_failure.armed_failure.lock().await = armed_failure;
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn tool_list_session_ids(State(state): State<TestServerState>) -> Json<Vec<Option<String>>> {
+    Json(state.tool_list_sessions.session_ids.lock().await.clone())
+}
+
 async fn fail_session_post_when_armed(
-    State(state): State<SessionFailureState>,
+    State(state): State<TestServerState>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
@@ -439,7 +501,7 @@ async fn fail_session_post_when_armed(
     }
 
     {
-        let mut armed_failure = state.armed_failure.lock().await;
+        let mut armed_failure = state.session_failure.armed_failure.lock().await;
         if let Some(failure) = armed_failure.as_mut()
             && failure.remaining > 0
         {
@@ -463,4 +525,51 @@ async fn fail_session_post_when_armed(
     }
 
     next.run(request).await
+}
+
+async fn record_tool_list_session_ids(
+    State(state): State<TestServerState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if request.uri().path() != "/mcp" || request.method() != Method::POST {
+        return next.run(request).await;
+    }
+
+    let session_id = request
+        .headers()
+        .get(MCP_SESSION_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let (parts, body) = request.into_parts();
+    let body_bytes = match to_bytes(body, 1024 * 1024).await {
+        Ok(body) => body,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("failed to read request body: {error}"),
+            )
+                .into_response();
+        }
+    };
+    if serde_json::from_slice::<serde_json::Value>(&body_bytes)
+        .ok()
+        .and_then(|body| {
+            body.get("method")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .as_deref()
+        == Some("tools/list")
+    {
+        state
+            .tool_list_sessions
+            .session_ids
+            .lock()
+            .await
+            .push(session_id);
+    }
+
+    next.run(Request::from_parts(parts, Body::from(body_bytes)))
+        .await
 }

@@ -1753,6 +1753,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
 const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
 /// OAuth metadata path served by the Streamable HTTP MCP test server.
 const STREAMABLE_HTTP_METADATA_PATH: &str = "/.well-known/oauth-authorization-server/mcp";
+const TOOL_LIST_SESSION_IDS_PATH: &str = "/test/state/tool-list-session-ids";
 
 /// Streamable HTTP test server plus the process handle needed for cleanup.
 struct StreamableHttpTestServer {
@@ -1764,6 +1765,12 @@ struct StreamableHttpTestServer {
 enum StreamableHttpTestServerProcess {
     Local(Child),
     Remote(RemoteStreamableHttpServer),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ToolPagination {
+    Disabled,
+    Enabled,
 }
 
 /// Remote Streamable HTTP server process and copied files to remove on drop.
@@ -1872,8 +1879,12 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     // placement. In full CI this may be the remote environment container; locally
     // it is a host process.
     let expected_env_value = "propagated-env-http";
-    let Some(http_server) =
-        start_streamable_http_test_server(expected_env_value, /*expected_token*/ None).await?
+    let Some(http_server) = start_streamable_http_test_server(
+        expected_env_value,
+        /*expected_token*/ None,
+        ToolPagination::Disabled,
+    )
+    .await?
     else {
         return Ok(());
     };
@@ -1973,6 +1984,88 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(streamable_http_env)]
+async fn streamable_http_bearer_env_var_discovers_paginated_tools() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "ready"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let expected_token = "test-bearer";
+    let token_env_var = "CODEX_TEST_STREAMABLE_HTTP_MCP_TOKEN";
+    let _token_guard = EnvVarGuard::set(token_env_var, OsStr::new(expected_token));
+    let Some(http_server) = start_streamable_http_test_server(
+        "paginated-tools-env",
+        Some(expected_token),
+        ToolPagination::Enabled,
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    let server_url = http_server.url().to_string();
+    let session_state_server_url = server_url.clone();
+
+    let server_name = "rmcp_http_paginated";
+    let namespace = format!("mcp__{server_name}");
+    let fixture = test_codex()
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                server_name,
+                McpServerTransportConfig::StreamableHttp {
+                    url: server_url,
+                    bearer_token_env_var: Some(token_env_var.to_string()),
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                TestMcpServerOptions {
+                    environment_id: remote_aware_environment_id(),
+                    ..Default::default()
+                },
+            );
+        })
+        .build_with_remote_env(&server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+    assert_recorded_tool_list_session_continuity(&session_state_server_url).await?;
+
+    fixture
+        .codex
+        .submit(read_only_user_turn(
+            &fixture,
+            "confirm the paginated streamable HTTP tools are available",
+        ))
+        .await?;
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = mock.single_request();
+    assert!(
+        request.tool_by_name(&namespace, "echo").is_some(),
+        "first-page streamable HTTP MCP tool should be exposed"
+    );
+    assert!(
+        request
+            .tool_by_name(&namespace, "second_page_tool")
+            .is_some(),
+        "second-page streamable HTTP MCP tool should be exposed"
+    );
+
+    http_server.shutdown().await;
+    server.verify().await;
+
+    Ok(())
+}
+
 /// This test writes to a fallback credentials file in CODEX_HOME.
 /// Ideally, we wouldn't need to serialize the test but it's much more cumbersome to wire CODEX_HOME through the code.
 #[test]
@@ -2043,8 +2136,12 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     let expected_token = "initial-access-token";
     let client_id = "test-client-id";
     let refresh_token = "initial-refresh-token";
-    let Some(http_server) =
-        start_streamable_http_test_server(expected_env_value, Some(expected_token)).await?
+    let Some(http_server) = start_streamable_http_test_server(
+        expected_env_value,
+        Some(expected_token),
+        ToolPagination::Disabled,
+    )
+    .await?
     else {
         return Ok(());
     };
@@ -2167,6 +2264,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
 async fn start_streamable_http_test_server(
     expected_env_value: &str,
     expected_token: Option<&str>,
+    tool_pagination: ToolPagination,
 ) -> anyhow::Result<Option<StreamableHttpTestServer>> {
     let rmcp_http_server_bin = match cargo_bin("test_streamable_http_server") {
         Ok(path) => path,
@@ -2183,6 +2281,7 @@ async fn start_streamable_http_test_server(
                 &rmcp_http_server_bin,
                 expected_env_value,
                 expected_token,
+                tool_pagination,
             )
             .await?,
         ));
@@ -2202,6 +2301,9 @@ async fn start_streamable_http_test_server(
     if let Some(expected_token) = expected_token {
         command.env("MCP_EXPECT_BEARER", expected_token);
     }
+    if tool_pagination == ToolPagination::Enabled {
+        command.env("MCP_PAGINATE_TOOLS", "1");
+    }
     let mut child = command.spawn()?;
 
     wait_for_local_streamable_http_server(&mut child, &server_url, Duration::from_secs(5)).await?;
@@ -2217,6 +2319,7 @@ async fn start_remote_streamable_http_test_server(
     rmcp_http_server_bin: &Path,
     expected_env_value: &str,
     expected_token: Option<&str>,
+    tool_pagination: ToolPagination,
 ) -> anyhow::Result<StreamableHttpTestServer> {
     let remote_path = copy_binary_to_remote_env(
         container_name,
@@ -2241,6 +2344,9 @@ async fn start_remote_streamable_http_test_server(
             "MCP_EXPECT_BEARER={}",
             sh_single_quote(expected_token)
         ));
+    }
+    if tool_pagination == ToolPagination::Enabled {
+        env_assignments.push("MCP_PAGINATE_TOOLS=1".to_string());
     }
 
     let script = format!(
@@ -2510,6 +2616,38 @@ async fn wait_for_streamable_http_metadata(
 fn streamable_http_metadata_url(server_url: &str) -> String {
     let base_url = server_url.strip_suffix("/mcp").unwrap_or(server_url);
     format!("{base_url}{STREAMABLE_HTTP_METADATA_PATH}")
+}
+
+async fn assert_recorded_tool_list_session_continuity(server_url: &str) -> anyhow::Result<()> {
+    let base_url = server_url.strip_suffix("/mcp").unwrap_or(server_url);
+    let session_ids: Vec<Option<String>> = Client::builder()
+        .no_proxy()
+        .build()?
+        .get(format!("{base_url}{TOOL_LIST_SESSION_IDS_PATH}"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    ensure!(
+        session_ids.len() >= 2,
+        "expected at least two paginated tools/list calls, got {}",
+        session_ids.len()
+    );
+    let first = session_ids
+        .first()
+        .and_then(Option::as_deref)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("first tools/list request did not include a session id"))?;
+    ensure!(
+        session_ids
+            .iter()
+            .all(|session_id| session_id.as_deref() == Some(first)),
+        "paginated tools/list calls did not reuse one initialized session"
+    );
+
+    Ok(())
 }
 
 fn write_fallback_oauth_tokens(

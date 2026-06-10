@@ -8,6 +8,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
 use std::sync::Arc;
@@ -61,6 +62,7 @@ use rmcp::model::ClientCapabilities;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
+use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
 use tokio_util::sync::CancellationToken;
@@ -345,13 +347,18 @@ pub(crate) async fn list_tools_for_client_uncached(
     timeout: Option<Duration>,
     server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
-    let resp = client
-        .list_tools_with_connector_ids(/*params*/ None, timeout)
-        .await?;
-    let tools = resp
-        .tools
-        .into_iter()
-        .map(|tool| {
+    let mut tools = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = HashSet::new();
+
+    loop {
+        let params = cursor
+            .as_ref()
+            .map(|next| PaginatedRequestParams::default().with_cursor(Some(next.clone())));
+        let resp = client
+            .list_tools_with_connector_ids(params, timeout)
+            .await?;
+        tools.extend(resp.tools.into_iter().map(|tool| {
             let mut tool_def = tool.tool;
             let (connector_id, connector_name, connector_description) =
                 sanitize_tool_connector_metadata(
@@ -396,12 +403,28 @@ pub(crate) async fn list_tools_for_client_uncached(
                 connector_name,
                 plugin_display_names: Vec::new(),
             }
-        })
-        .collect();
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        return Ok(filter_disallowed_codex_apps_tools(tools));
+        }));
+
+        match resp.next_cursor {
+            Some(next) => {
+                cursor = Some(advance_tools_list_cursor(&mut seen_cursors, next)?);
+            }
+            None => {
+                if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                    return Ok(filter_disallowed_codex_apps_tools(tools));
+                }
+                return Ok(tools);
+            }
+        }
     }
-    Ok(tools)
+}
+
+fn advance_tools_list_cursor(seen_cursors: &mut HashSet<String>, next: String) -> Result<String> {
+    if seen_cursors.insert(next.clone()) {
+        Ok(next)
+    } else {
+        Err(anyhow!("tools/list returned duplicate cursor"))
+    }
 }
 
 fn sanitize_tool_connector_metadata(
@@ -660,6 +683,7 @@ async fn make_rmcp_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use rmcp::model::JsonObject;
     use rmcp::model::Meta;
 
@@ -752,5 +776,25 @@ mod tests {
         ] {
             assert!(meta.0.contains_key(key), "{key} should be preserved");
         }
+    }
+
+    #[test]
+    fn tools_list_cursor_guard_rejects_cursor_cycles() {
+        let mut seen_cursors = HashSet::new();
+
+        assert_eq!(
+            advance_tools_list_cursor(&mut seen_cursors, "page-a".to_string())
+                .expect("first cursor should be accepted"),
+            "page-a"
+        );
+        assert_eq!(
+            advance_tools_list_cursor(&mut seen_cursors, "page-b".to_string())
+                .expect("second cursor should be accepted"),
+            "page-b"
+        );
+        let error = advance_tools_list_cursor(&mut seen_cursors, "page-a".to_string())
+            .expect_err("repeated cursor should be rejected");
+
+        assert_eq!(error.to_string(), "tools/list returned duplicate cursor");
     }
 }
