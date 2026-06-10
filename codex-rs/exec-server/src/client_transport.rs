@@ -26,13 +26,9 @@ use crate::relay::harness_connection_from_websocket;
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 
 impl ExecServerClient {
-    /// Open the configured transport and complete the common JSON-RPC
-    /// initialization sequence.
-    ///
-    /// For Noise rendezvous, the provider is called at connection time rather
-    /// than environment-registration time. This matters for lazy reconnects:
-    /// every physical websocket receives a fresh registry URL and harness-key
-    /// authorization while retaining the environment's process-local identity.
+    /// Open the selected transport and run the common JSON-RPC initialization.
+    /// Noise connection details are fetched here so reconnects get a fresh URL
+    /// and authorization without replacing the harness identity.
     pub(crate) async fn connect_for_transport(
         transport_params: crate::client_api::ExecServerTransportParams,
     ) -> Result<Self, ExecServerError> {
