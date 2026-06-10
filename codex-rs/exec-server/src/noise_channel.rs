@@ -51,12 +51,6 @@ impl std::fmt::Debug for NoiseChannelPublicKey {
 }
 
 impl NoiseChannelPublicKey {
-    /// Validate suite selection, encoding, and exact key lengths.
-    pub fn validate(&self) -> Result<(), NoiseChannelError> {
-        let _ = self.decode()?;
-        Ok(())
-    }
-
     fn from_keypairs(dh: &DhKeyPair, kem: &KemKeyPair) -> Self {
         Self {
             suite: NOISE_CHANNEL_SUITE.to_string(),

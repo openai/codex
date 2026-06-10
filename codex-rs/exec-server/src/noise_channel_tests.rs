@@ -15,7 +15,8 @@ fn public_key_validation_rejects_unknown_suite() {
     let key: NoiseChannelPublicKey =
         serde_json::from_value(serde_json::Value::Object(object)).expect("deserialize key");
 
-    assert!(key.validate().is_err());
+    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
+    assert!(InitiatorHandshake::start(&initiator, &key, b"prologue", b"").is_err());
 }
 
 #[test]
