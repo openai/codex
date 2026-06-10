@@ -338,6 +338,18 @@ impl ThreadStateManager {
             .unwrap_or_default()
     }
 
+    pub(crate) async fn thread_ids_for_connection(
+        &self,
+        connection_id: ConnectionId,
+    ) -> Vec<ThreadId> {
+        let state = self.state.lock().await;
+        state
+            .thread_ids_by_connection
+            .get(&connection_id)
+            .map(|thread_ids| thread_ids.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
     pub(crate) async fn thread_state(&self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
         let mut state = self.state.lock().await;
         state.threads.entry(thread_id).or_default().state.clone()

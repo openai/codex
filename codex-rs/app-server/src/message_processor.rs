@@ -20,6 +20,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::request_processors::AccountRequestProcessor;
 use crate::request_processors::AppsRequestProcessor;
+use crate::request_processors::AutomationRequestProcessor;
 use crate::request_processors::CatalogRequestProcessor;
 use crate::request_processors::CommandExecRequestProcessor;
 use crate::request_processors::ConfigRequestProcessor;
@@ -186,6 +187,7 @@ pub(crate) struct MessageProcessor {
     skills_watcher: Arc<SkillsWatcher>,
     account_processor: AccountRequestProcessor,
     apps_processor: AppsRequestProcessor,
+    automation_processor: AutomationRequestProcessor,
     catalog_processor: CatalogRequestProcessor,
     command_exec_processor: CommandExecRequestProcessor,
     process_exec_processor: ProcessExecRequestProcessor,
@@ -464,6 +466,12 @@ impl MessageProcessor {
             state_db.clone(),
             Arc::clone(&goal_service),
         );
+        let automation_processor = AutomationRequestProcessor::new(
+            Arc::clone(&config),
+            state_db.clone(),
+            Arc::clone(&thread_manager),
+            thread_state_manager.clone(),
+        );
         let thread_processor = ThreadRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -541,6 +549,7 @@ impl MessageProcessor {
             skills_watcher,
             account_processor,
             apps_processor,
+            automation_processor,
             catalog_processor,
             command_exec_processor,
             process_exec_processor,
@@ -1184,20 +1193,30 @@ impl MessageProcessor {
             ClientRequest::ThreadList { params, .. } => {
                 self.thread_processor.thread_list(params).await
             }
-            ClientRequest::AutomationList { .. } => {
-                Err(automation_api_not_implemented("automation/list"))
+            ClientRequest::AutomationList { params, .. } => {
+                self.automation_processor
+                    .automation_list(connection_id, params)
+                    .await
             }
-            ClientRequest::AutomationRead { .. } => {
-                Err(automation_api_not_implemented("automation/read"))
+            ClientRequest::AutomationRead { params, .. } => {
+                self.automation_processor
+                    .automation_read(connection_id, params)
+                    .await
             }
-            ClientRequest::AutomationCreate { .. } => {
-                Err(automation_api_not_implemented("automation/create"))
+            ClientRequest::AutomationCreate { params, .. } => {
+                self.automation_processor
+                    .automation_create(connection_id, params)
+                    .await
             }
-            ClientRequest::AutomationUpdate { .. } => {
-                Err(automation_api_not_implemented("automation/update"))
+            ClientRequest::AutomationUpdate { params, .. } => {
+                self.automation_processor
+                    .automation_update(connection_id, params)
+                    .await
             }
-            ClientRequest::AutomationDelete { .. } => {
-                Err(automation_api_not_implemented("automation/delete"))
+            ClientRequest::AutomationDelete { params, .. } => {
+                self.automation_processor
+                    .automation_delete(connection_id, params)
+                    .await
             }
             ClientRequest::AutomationRunNow { .. } => {
                 Err(automation_api_not_implemented("automation/runNow"))
