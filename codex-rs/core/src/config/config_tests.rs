@@ -5166,8 +5166,10 @@ fn config_toml_load_result(
     config_toml: ConfigToml,
     feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<ConfigTomlLoadResult> {
-    let mut requirements = ConfigRequirements::default();
-    requirements.feature_requirements = feature_requirements;
+    let requirements = ConfigRequirements {
+        feature_requirements,
+        ..Default::default()
+    };
     Ok(ConfigTomlLoadResult {
         config_toml,
         config_layer_stack: ConfigLayerStack::new(

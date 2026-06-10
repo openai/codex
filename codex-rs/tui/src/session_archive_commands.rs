@@ -273,7 +273,7 @@ async fn start_app_server_for_archive_command(
     .await;
 
     let model_provider = if cli.oss {
-        resolve_oss_provider(cli.oss_provider.as_deref(), &config_toml)
+        resolve_oss_provider(cli.oss_provider.as_deref(), config_toml)
     } else {
         None
     };
