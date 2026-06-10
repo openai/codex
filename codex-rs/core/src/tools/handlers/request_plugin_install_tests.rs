@@ -130,6 +130,7 @@ async fn persist_disabled_install_request_writes_plugin_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let tool = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
         id: "slack@openai-curated".to_string(),
+        remote_plugin_id: None,
         name: "Slack".to_string(),
         description: None,
         has_skills: true,

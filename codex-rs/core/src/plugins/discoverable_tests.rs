@@ -393,6 +393,7 @@ remote_plugin = true
         remote_plugins,
         vec![DiscoverablePluginInfo {
             id: "github@openai-curated-remote".to_string(),
+            remote_plugin_id: Some("plugins~Plugin_remote_github".to_string()),
             name: "Remote GitHub".to_string(),
             description: Some("Remote GitHub short".to_string()),
             has_skills: true,
@@ -680,6 +681,7 @@ async fn list_tool_suggest_discoverable_plugins_normalizes_description() {
         discoverable_plugins,
         vec![DiscoverablePluginInfo {
             id: "slack@openai-curated".to_string(),
+            remote_plugin_id: None,
             name: "slack".to_string(),
             description: Some("Plugin with extra spacing".to_string()),
             has_skills: true,
@@ -816,6 +818,7 @@ discoverables = [{ type = "plugin", id = "sample@openai-curated" }]
         discoverable_plugins,
         vec![DiscoverablePluginInfo {
             id: "sample@openai-curated".to_string(),
+            remote_plugin_id: None,
             name: "sample".to_string(),
             description: Some(
                 "Plugin that includes skills, MCP servers, and app connectors".to_string(),
