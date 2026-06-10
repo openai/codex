@@ -80,17 +80,12 @@ async fn goal_menu_managed_file_snapshot() {
         AppThreadGoalStatus::Active,
         /*token_budget*/ Some(80_000),
     );
-    goal.objective = format!(
-        "Codex goal objective file: {}\nRead that file before continuing.",
-        test_path_display("/tmp/project/goal.md")
-    );
+    goal.objective =
+        "Codex goal objective file: goal.md\nRead that file before continuing.".to_string();
 
     chat.show_goal_summary(goal);
 
-    assert_chatwidget_snapshot!(
-        "goal_menu_managed_file",
-        normalize_snapshot_paths(rendered_goal_summary(&mut rx))
-    );
+    assert_chatwidget_snapshot!("goal_menu_managed_file", rendered_goal_summary(&mut rx));
 }
 
 #[tokio::test]

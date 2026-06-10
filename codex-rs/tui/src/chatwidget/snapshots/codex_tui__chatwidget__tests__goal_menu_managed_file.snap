@@ -4,7 +4,7 @@ expression: rendered_goal_summary(&mut rx)
 ---
 Goal
 Status: active
-Objective file: /tmp/project/goal.md
+Objective file: goal.md
 Time used: 1m
 Tokens used: 12.5K
 Token budget: 80K
