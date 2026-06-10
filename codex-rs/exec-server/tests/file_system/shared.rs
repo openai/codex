@@ -9,6 +9,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -130,40 +131,25 @@ async fn file_system_write_file_writes_bytes(
     Ok(())
 }
 
-#[test_case(FileSystemImplementation::Local ; "local")]
-#[test_case(FileSystemImplementation::Remote ; "remote")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_join_and_parent_preserve_lexical_paths(
-    implementation: FileSystemImplementation,
-) -> Result<()> {
-    let context = create_file_system_context(implementation).await?;
-    let file_system = context.file_system;
-
+#[test]
+fn path_uri_join_and_parent_preserve_lexical_paths() -> Result<()> {
     let tmp = TempDir::new()?;
     let source_dir = tmp.path().join("source");
-    let joined_nested = file_system
-        .join(&absolute_path(&source_dir), Path::new("nested/note.txt"))
-        .await
-        .with_context(|| format!("mode={implementation}"))?;
+    let source_dir_uri = PathUri::from_path(&source_dir)?;
+    let joined_nested = source_dir_uri.join("nested/note.txt")?;
     assert_eq!(
         joined_nested,
-        absolute_path(source_dir.join("nested").join("note.txt"))
+        PathUri::from_path(source_dir.join("nested").join("note.txt"))?
     );
-    let joined_parent = file_system
-        .parent(&joined_nested)
-        .await
-        .with_context(|| format!("mode={implementation}"))?;
+    let joined_parent = joined_nested.parent();
     assert_eq!(
         joined_parent,
-        Some(absolute_path(source_dir.join("nested")))
+        Some(PathUri::from_path(source_dir.join("nested"))?)
     );
-    let joined_parent_traversal = file_system
-        .join(&absolute_path(&source_dir), Path::new("../outside"))
-        .await
-        .with_context(|| format!("mode={implementation}"))?;
+    let joined_parent_traversal = source_dir_uri.join("../outside")?;
     assert_eq!(
         joined_parent_traversal,
-        absolute_path(source_dir.join("../outside"))
+        PathUri::from_path(source_dir.join("../outside"))?
     );
 
     Ok(())

@@ -1,5 +1,4 @@
 use std::io;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -68,18 +67,6 @@ impl ExecutorFileSystem for SyntheticFileSystem {
         }
         self.metadata(path)?;
         Ok(path.clone())
-    }
-
-    async fn join(
-        &self,
-        base_path: &AbsolutePathBuf,
-        path: &Path,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        Ok(base_path.join(path))
-    }
-
-    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        Ok(path.parent())
     }
 
     async fn read_file(

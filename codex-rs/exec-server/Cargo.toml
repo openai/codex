@@ -52,6 +52,7 @@ uuid = { workspace = true, features = ["v4"] }
 [dev-dependencies]
 anyhow = { workspace = true }
 codex-test-binary-support = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 ctor = { workspace = true }
 http = { workspace = true }
 pretty_assertions = { workspace = true }

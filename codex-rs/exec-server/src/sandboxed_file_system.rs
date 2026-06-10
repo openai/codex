@@ -3,7 +3,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::path::Path;
 use tokio::io;
 
 use crate::CopyOptions;
@@ -71,18 +70,6 @@ impl ExecutorFileSystem for SandboxedFileSystem {
             .expect_canonicalize()
             .map_err(map_sandbox_error)?;
         Ok(response.path)
-    }
-
-    async fn join(
-        &self,
-        base_path: &AbsolutePathBuf,
-        path: &Path,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        Ok(base_path.join(path))
-    }
-
-    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        Ok(path.parent())
     }
 
     async fn read_file(

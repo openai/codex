@@ -8,7 +8,6 @@ use codex_file_system::FileSystemSandboxContext;
 use codex_file_system::ReadDirectoryEntry;
 use codex_file_system::RemoveOptions;
 use pretty_assertions::assert_eq;
-use std::path::Path;
 use tempfile::tempdir;
 
 struct TestFileSystem;
@@ -21,18 +20,6 @@ impl ExecutorFileSystem for TestFileSystem {
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<AbsolutePathBuf> {
         path.canonicalize()
-    }
-
-    async fn join(
-        &self,
-        base_path: &AbsolutePathBuf,
-        path: &Path,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        Ok(base_path.join(path))
-    }
-
-    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        Ok(path.parent())
     }
 
     async fn read_file(

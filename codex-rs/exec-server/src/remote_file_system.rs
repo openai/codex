@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::path::Path;
 use tokio::io;
 use tracing::trace;
 
@@ -20,8 +19,6 @@ use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
-use crate::protocol::FsJoinParams;
-use crate::protocol::FsParentParams;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsRemoveParams;
@@ -55,33 +52,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 path: path.clone(),
                 sandbox: remote_sandbox_context(sandbox),
             })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(response.path)
-    }
-
-    async fn join(
-        &self,
-        base_path: &AbsolutePathBuf,
-        path: &Path,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        trace!("remote fs join");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        let response = client
-            .fs_join(FsJoinParams {
-                base_path: base_path.clone(),
-                path: path.to_path_buf(),
-            })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(response.path)
-    }
-
-    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        trace!("remote fs parent");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        let response = client
-            .fs_parent(FsParentParams { path: path.clone() })
             .await
             .map_err(map_remote_error)?;
         Ok(response.path)
