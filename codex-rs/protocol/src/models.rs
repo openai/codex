@@ -1107,7 +1107,10 @@ pub fn local_image_content_items_with_label_number(
             items
         }
         Err(err) => match &err {
-            ImageProcessingError::Read { .. } | ImageProcessingError::Encode { .. } => {
+            ImageProcessingError::Read { .. }
+            | ImageProcessingError::Encode { .. }
+            | ImageProcessingError::InvalidDataUrl { .. }
+            | ImageProcessingError::ImageTooLarge { .. } => {
                 vec![local_image_error_placeholder(path, &err)]
             }
             ImageProcessingError::Decode { .. } if err.is_invalid_image() => {
