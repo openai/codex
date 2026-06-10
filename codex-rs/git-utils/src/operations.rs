@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::GitToolingError;
-
-const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+use crate::safe_git::DISABLED_HOOKS_PATH;
+use crate::safe_git::configured_executable_git_config_overrides;
+use crate::safe_git::executable_git_config_override_envs;
 
 pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
     match run_git_for_stdout(
@@ -109,6 +110,7 @@ where
     for arg in iterator {
         args_vec.push(OsString::from(arg.as_ref()));
     }
+    let executable_git_config_overrides = configured_executable_git_config_overrides(dir)?;
     let command_string = build_command_string(&args_vec);
     let mut command = Command::new("git");
     command.current_dir(dir);
@@ -117,6 +119,9 @@ where
             command.env(key, value);
         }
     }
+    command.envs(executable_git_config_override_envs(
+        &executable_git_config_overrides,
+    ));
     command.args(&args_vec);
     let output = command.output()?;
     if !output.status.success() {
@@ -132,7 +137,6 @@ where
         output,
     })
 }
-
 fn build_command_string(args: &[OsString]) -> String {
     if args.is_empty() {
         return "git".to_string();
