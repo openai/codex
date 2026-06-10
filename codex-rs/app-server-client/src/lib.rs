@@ -38,6 +38,7 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
@@ -53,7 +54,6 @@ pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -847,6 +847,16 @@ impl AppServerClient {
         }
     }
 
+    pub async fn request_json_rpc(&self, request: JSONRPCRequest) -> IoResult<RequestResult> {
+        match self {
+            Self::InProcess(_) => Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "raw JSON-RPC requests are only supported by the remote app-server client",
+            )),
+            Self::Remote(client) => client.request_json_rpc(request).await,
+        }
+    }
+
     pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
     where
         T: DeserializeOwned,
@@ -900,10 +910,17 @@ impl AppServerClient {
         }
     }
 
-    pub fn remote_codex_home(&self) -> Option<&AbsolutePathBuf> {
+    pub fn remote_codex_home(&self) -> Option<&str> {
         match self {
             Self::InProcess(_) => None,
             Self::Remote(client) => client.codex_home(),
+        }
+    }
+
+    pub fn remote_platform_family(&self) -> Option<&str> {
+        match self {
+            Self::InProcess(_) => None,
+            Self::Remote(client) => client.platform_family(),
         }
     }
 
@@ -1102,6 +1119,8 @@ mod tests {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {
+        const TEST_REMOTE_CODEX_HOME: &str = r"C:\Users\codex\.codex";
+
         let JSONRPCMessage::Request(request) = read_websocket_message(websocket).await else {
             panic!("expected initialize request");
         };
@@ -1112,9 +1131,9 @@ mod tests {
                 id: request.id,
                 result: serde_json::json!({
                     "userAgent": "codex_cli_rs/9.8.7-test (Test OS; x86_64) rust",
-                    "codexHome": test_remote_codex_home().display().to_string(),
-                    "platformFamily": "unix",
-                    "platformOs": "linux",
+                    "codexHome": TEST_REMOTE_CODEX_HOME,
+                    "platformFamily": "windows",
+                    "platformOs": "windows",
                 }),
             }),
         )
@@ -1125,11 +1144,6 @@ mod tests {
             panic!("expected initialized notification");
         };
         assert_eq!(notification.method, "initialized");
-    }
-
-    fn test_remote_codex_home() -> AbsolutePathBuf {
-        AbsolutePathBuf::from_absolute_path(std::env::temp_dir().join("codex-remote-home"))
-            .expect("test remote codex home should be absolute")
     }
 
     async fn read_websocket_message<S>(
@@ -1456,7 +1470,8 @@ mod tests {
             .expect("remote client should connect");
 
         assert_eq!(client.server_version(), Some("9.8.7-test"));
-        assert_eq!(client.codex_home(), Some(&test_remote_codex_home()));
+        assert_eq!(client.codex_home(), Some(r"C:\Users\codex\.codex"));
+        assert_eq!(client.platform_family(), Some("windows"));
         let response: GetAccountResponse = client
             .request_typed(ClientRequest::GetAccount {
                 request_id: RequestId::Integer(1),
