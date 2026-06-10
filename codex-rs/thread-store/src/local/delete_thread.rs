@@ -66,14 +66,14 @@ pub(super) async fn delete_thread(
     }
 
     let found_rollout_path = !rollout_paths.is_empty();
+    for rollout_path in rollout_paths {
+        delete_rollout_file(store, rollout_path.as_path(), thread_id)?;
+    }
     remove_thread_name_entries(store.config.codex_home.as_path(), thread_id)
         .await
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to delete thread name index entries for {thread_id}: {err}"),
         })?;
-    for rollout_path in rollout_paths {
-        delete_rollout_file(store, rollout_path.as_path(), thread_id)?;
-    }
 
     if !found_rollout_path {
         return Err(ThreadStoreError::ThreadNotFound { thread_id });

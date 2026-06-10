@@ -5,18 +5,21 @@ use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionMetaLine;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
 
 const SESSION_INDEX_FILE: &str = "session_index.jsonl";
 const READ_CHUNK_SIZE: usize = 8192;
+static SESSION_INDEX_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionIndexEntry {
@@ -52,16 +55,18 @@ pub async fn append_session_index_entry(
     codex_home: &Path,
     entry: &SessionIndexEntry,
 ) -> std::io::Result<()> {
+    let _guard = SESSION_INDEX_LOCK
+        .lock()
+        .map_err(|err| std::io::Error::other(err.to_string()))?;
     let path = session_index_path(codex_home);
-    let mut file = tokio::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
-        .await?;
+        .open(&path)?;
     let mut line = serde_json::to_string(entry).map_err(std::io::Error::other)?;
     line.push('\n');
-    file.write_all(line.as_bytes()).await?;
-    file.flush().await?;
+    file.write_all(line.as_bytes())?;
+    file.flush()?;
     Ok(())
 }
 
@@ -70,8 +75,11 @@ pub async fn remove_thread_name_entries(
     codex_home: &Path,
     thread_id: ThreadId,
 ) -> std::io::Result<()> {
+    let _guard = SESSION_INDEX_LOCK
+        .lock()
+        .map_err(|err| std::io::Error::other(err.to_string()))?;
     let path = session_index_path(codex_home);
-    let contents = match tokio::fs::read_to_string(&path).await {
+    let contents = match std::fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
@@ -92,8 +100,8 @@ pub async fn remove_thread_name_entries(
         return Ok(());
     }
     let temp_path = path.with_extension("jsonl.tmp");
-    tokio::fs::write(&temp_path, remaining).await?;
-    tokio::fs::rename(temp_path, path).await
+    std::fs::write(&temp_path, remaining)?;
+    std::fs::rename(temp_path, path)
 }
 
 /// Find the latest thread name for a thread id, if any.
