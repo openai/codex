@@ -28,7 +28,6 @@ use codex_protocol::ThreadId;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_home_dir::find_codex_home;
 use codex_utils_oss::get_default_model_for_oss_provider;
-use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use color_eyre::eyre::eyre;
@@ -90,14 +89,10 @@ async fn run_session_archive_action_with_app_server(
     target: &str,
 ) -> Result<String> {
     let resolved = resolve_session_target(app_server, action, target).await?;
-    match action {
+    let session_name = match action {
         SessionArchiveAction::Archive => {
             app_server.thread_archive(resolved.session_id).await?;
-            Ok(success_message(
-                action,
-                resolved.session_id,
-                resolved.session_name.as_deref(),
-            ))
+            resolved.session_name
         }
         SessionArchiveAction::Delete(confirmation) => {
             if matches!(confirmation, DeleteConfirmation::Prompt)
@@ -106,22 +101,18 @@ async fn run_session_archive_action_with_app_server(
                 return Ok("Delete cancelled.".to_string());
             }
             app_server.thread_delete(resolved.session_id).await?;
-            Ok(success_message(
-                action,
-                resolved.session_id,
-                resolved.session_name.as_deref(),
-            ))
+            resolved.session_name
         }
         SessionArchiveAction::Unarchive => {
             let thread = app_server.thread_unarchive(resolved.session_id).await?;
-            let session_name = thread.name.or(resolved.session_name);
-            Ok(success_message(
-                action,
-                resolved.session_id,
-                session_name.as_deref(),
-            ))
+            thread.name.or(resolved.session_name)
         }
-    }
+    };
+    Ok(success_message(
+        action,
+        resolved.session_id,
+        session_name.as_deref(),
+    ))
 }
 
 async fn resolve_session_target(
@@ -140,7 +131,10 @@ async fn resolve_session_target(
                 .with_context(|| {
                     format!("No active or archived session found matching '{target}'.")
                 })?;
-            return session_target_from_app_server_thread(thread);
+            return Ok(ResolvedSessionTarget {
+                session_id,
+                session_name: thread.name,
+            });
         }
         return Ok(ResolvedSessionTarget {
             session_id,
@@ -148,29 +142,19 @@ async fn resolve_session_target(
         });
     }
 
-    let search_scope = match action {
-        SessionArchiveAction::Archive => "active",
-        SessionArchiveAction::Delete(_) => "active or archived",
-        SessionArchiveAction::Unarchive => "archived",
+    let (search_scope, archived_values): (&str, &[bool]) = match action {
+        SessionArchiveAction::Archive => ("active", &[false]),
+        SessionArchiveAction::Delete(_) => ("active or archived", &[false, true]),
+        SessionArchiveAction::Unarchive => ("archived", &[true]),
     };
-    let resolved = match action {
-        SessionArchiveAction::Archive => {
-            lookup_session_by_exact_name(app_server, target, false).await?
-        }
-        SessionArchiveAction::Delete(_) => {
-            match lookup_session_by_exact_name(app_server, target, false).await? {
-                Some(thread) => Some(thread),
-                None => lookup_session_by_exact_name(app_server, target, true).await?,
-            }
-        }
-        SessionArchiveAction::Unarchive => {
-            lookup_session_by_exact_name(app_server, target, true).await?
+    for &archived in archived_values {
+        if let Some(thread) = lookup_session_by_exact_name(app_server, target, archived).await? {
+            return session_target_from_app_server_thread(thread);
         }
     }
-    .map(session_target_from_app_server_thread)
-    .transpose()?;
-
-    resolved.with_context(|| format!("No {search_scope} session found matching '{target}'."))
+    Err(eyre!(
+        "No {search_scope} session found matching '{target}'."
+    ))
 }
 
 async fn lookup_session_by_exact_name(
