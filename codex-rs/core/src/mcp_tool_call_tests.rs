@@ -1279,8 +1279,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
     )
-    .await
-    .expect("construct MCP connection manager");
+    .await;
     *session.services.mcp_connection_manager.write().await = manager;
 }
 

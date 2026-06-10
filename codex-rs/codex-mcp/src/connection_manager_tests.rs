@@ -1108,7 +1108,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
 }
 
 #[tokio::test]
-async fn required_local_stdio_without_local_runtime_fails_manager_construction() {
+async fn required_local_stdio_without_local_runtime_fails_validation() {
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let (tx_event, rx_event) = async_channel::unbounded();
     drop(rx_event);
@@ -1166,7 +1166,8 @@ async fn required_local_stdio_without_local_runtime_fails_manager_construction()
         /*auth*/ None,
         /*elicitation_reviewer*/ None,
     )
-    .await;
+    .await
+    .validate_required_servers();
 
     let error = match result {
         Ok(_) => panic!("required MCP startup should fail"),

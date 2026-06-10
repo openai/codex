@@ -360,6 +360,7 @@ impl Session {
             elicitation_reviewer,
         )
         .await
+        .validate_required_servers()
         {
             Ok(manager) => manager,
             Err(err) => {

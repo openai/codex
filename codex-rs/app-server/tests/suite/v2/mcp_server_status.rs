@@ -10,7 +10,6 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use axum::Router;
-use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatusDetail;
@@ -44,7 +43,7 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()> {
+async fn mcp_server_status_list_includes_healthy_and_failed_required_servers() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let (mcp_server_url, mcp_server_handle) = start_mcp_server("look-up.raw").await?;
     let codex_home = TempDir::new()?;
@@ -64,6 +63,10 @@ async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()
         r#"
 [mcp_servers.some-server]
 url = "{mcp_server_url}/mcp"
+
+[mcp_servers.required_broken]
+command = "codex-definitely-not-a-real-binary"
+required = true
 "#
     ));
     std::fs::write(config_path, config_toml)?;
@@ -87,8 +90,12 @@ url = "{mcp_server_url}/mcp"
     let response: ListMcpServerStatusResponse = to_response(response)?;
 
     assert_eq!(response.next_cursor, None);
-    assert_eq!(response.data.len(), 1);
-    let status = &response.data[0];
+    assert_eq!(response.data.len(), 2);
+    let status = response
+        .data
+        .iter()
+        .find(|status| status.name == "some-server")
+        .expect("healthy MCP server status");
     assert_eq!(status.name, "some-server");
     assert_eq!(
         status.tools.keys().cloned().collect::<BTreeSet<_>>(),
@@ -108,74 +115,23 @@ url = "{mcp_server_url}/mcp"
             .and_then(|info| info.title.as_deref()),
         Some("Lookup Server")
     );
+    let required_broken = response
+        .data
+        .iter()
+        .find(|status| status.name == "required_broken")
+        .expect("failed required MCP server status");
+    assert_eq!(
+        (
+            required_broken.server_info.as_ref(),
+            required_broken.tools.is_empty(),
+            required_broken.resources.is_empty(),
+            required_broken.resource_templates.is_empty(),
+        ),
+        (None, true, true, true),
+    );
 
     mcp_server_handle.abort();
     let _ = mcp_server_handle.await;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn mcp_server_status_list_returns_startup_failure_and_keeps_server_running() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-
-    let config_path = codex_home.path().join("config.toml");
-    let mut config_toml = std::fs::read_to_string(&config_path)?;
-    config_toml.push_str(
-        r#"
-[mcp_servers.required_broken]
-command = "codex-definitely-not-a-real-binary"
-required = true
-"#,
-    );
-    std::fs::write(config_path, config_toml)?;
-
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
-            cursor: None,
-            limit: None,
-            detail: None,
-            thread_id: None,
-        })
-        .await?;
-    let error = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    assert_eq!(
-        (
-            error.error.code,
-            error
-                .error
-                .message
-                .contains("required MCP servers failed to initialize: required_broken"),
-            error.error.data,
-        ),
-        (-32603, true, None),
-    );
-
-    let follow_up_request_id = mcp
-        .send_experimental_feature_list_request(ExperimentalFeatureListParams::default())
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(follow_up_request_id)),
-    )
-    .await??;
 
     Ok(())
 }

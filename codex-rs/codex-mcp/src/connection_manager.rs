@@ -106,6 +106,7 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_metadata: HashMap<String, McpServerMetadata>,
+    required_startup_failures: Vec<McpStartupFailure>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
     host_owned_codex_apps_enabled: bool,
     prefix_mcp_tool_names: bool,
@@ -114,7 +115,7 @@ pub struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
-    #[allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         mcp_servers: &HashMap<String, EffectiveMcpServer>,
         store_mode: OAuthCredentialsStoreMode,
@@ -133,7 +134,7 @@ impl McpConnectionManager {
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
-    ) -> Result<Self> {
+    ) -> Self {
         let mut required_servers = mcp_servers
             .iter()
             .filter(|(_, server)| server.enabled() && server.required())
@@ -241,9 +242,10 @@ impl McpConnectionManager {
                 (server_name, outcome)
             });
         }
-        let manager = Self {
+        let mut manager = Self {
             clients,
             server_metadata,
+            required_startup_failures: Vec::new(),
             tool_plugin_provenance,
             host_owned_codex_apps_enabled,
             prefix_mcp_tool_names,
@@ -272,26 +274,32 @@ impl McpConnectionManager {
                 })
                 .await;
         });
-        let failures = manager
-            .required_startup_failures(&required_servers)
+        manager.required_startup_failures = manager
+            .collect_required_startup_failures(&required_servers)
             .instrument(info_span!(
                 "session_init.required_mcp_wait",
                 otel.name = "session_init.required_mcp_wait",
                 session_init.required_mcp_server_count = required_servers.len(),
             ))
             .await;
-        if !failures.is_empty() {
-            startup_cancellation_token.cancel();
-            let details = failures
-                .iter()
-                .map(|failure| format!("{}: {}", failure.server, failure.error))
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(anyhow!(
-                "required MCP servers failed to initialize: {details}"
-            ));
+        manager
+    }
+
+    /// Returns this manager only if every required server initialized successfully.
+    pub fn validate_required_servers(self) -> Result<Self> {
+        if self.required_startup_failures.is_empty() {
+            return Ok(self);
         }
-        Ok(manager)
+
+        let details = self
+            .required_startup_failures
+            .iter()
+            .map(|failure| format!("{}: {}", failure.server, failure.error))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Err(anyhow!(
+            "required MCP servers failed to initialize: {details}"
+        ))
     }
 
     pub fn new_uninitialized_with_permission_profile(
@@ -302,6 +310,7 @@ impl McpConnectionManager {
         Self {
             clients: HashMap::new(),
             server_metadata: HashMap::new(),
+            required_startup_failures: Vec::new(),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             host_owned_codex_apps_enabled: false,
             prefix_mcp_tool_names,
@@ -776,7 +785,7 @@ impl McpConnectionManager {
             .context("failed to get client")
     }
 
-    async fn required_startup_failures(
+    async fn collect_required_startup_failures(
         &self,
         required_servers: &[String],
     ) -> Vec<McpStartupFailure> {

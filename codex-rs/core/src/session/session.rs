@@ -1180,7 +1180,8 @@ impl Session {
                 "session_init.mcp_manager_init",
                 otel.name = "session_init.mcp_manager_init",
             ))
-            .await?;
+            .await
+            .validate_required_servers()?;
             {
                 let mut manager_guard = sess.services.mcp_connection_manager.write().await;
                 *manager_guard = mcp_connection_manager;

@@ -279,8 +279,7 @@ impl McpRequestProcessor {
             runtime_context,
             detail,
         )
-        .await
-        .map_err(|err| internal_error(format!("failed to collect MCP server status: {err:#}")))?;
+        .await;
 
         let McpServerStatusSnapshot {
             server_infos,
