@@ -3018,6 +3018,44 @@ impl Session {
         state.advance_auto_compact_window_id()
     }
 
+    pub(crate) async fn request_new_context_window(&self) {
+        let mut state = self.state.lock().await;
+        state.request_new_context_window();
+    }
+
+    pub(crate) async fn maybe_start_new_context_window(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<u64> {
+        let window_id = {
+            let mut state = self.state.lock().await;
+            state.start_new_context_window_if_requested()
+        };
+        let window_id = window_id?;
+        let context_items = self.build_initial_context(turn_context).await;
+        let turn_context_item = turn_context.to_turn_context_item();
+        let replacement_history = context_items;
+        {
+            let mut state = self.state.lock().await;
+            state.replace_history(replacement_history.clone(), Some(turn_context_item.clone()));
+        };
+        self.persist_rollout_items(&[
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: Some(replacement_history),
+                window_id: Some(window_id),
+            }),
+            RolloutItem::TurnContext(turn_context_item),
+        ])
+        .await;
+        {
+            let mut state = self.state.lock().await;
+            state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
+        }
+        self.recompute_token_usage(turn_context).await;
+        Some(window_id)
+    }
+
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
         let state = self.state.lock().await;
         state.reference_context_item()

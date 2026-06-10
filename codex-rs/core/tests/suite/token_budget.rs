@@ -4,10 +4,13 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use core_test_support::PathBufExt;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -17,6 +20,8 @@ use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
 
 const CONFIGURED_CONTEXT_WINDOW: i64 = 128_000;
 const EFFECTIVE_CONTEXT_WINDOW: i64 = CONFIGURED_CONTEXT_WINDOW * 95 / 100;
@@ -26,6 +31,17 @@ fn token_budget_texts(request: &ResponsesRequest) -> Vec<String> {
         .message_input_texts("developer")
         .into_iter()
         .filter(|text| text.starts_with("<token_budget>"))
+        .collect()
+}
+
+fn tool_names(request: &ResponsesRequest) -> Vec<String> {
+    request
+        .body_json()
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
         .collect()
 }
 
@@ -207,6 +223,87 @@ async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
         vec![format!(
             "<token_budget>\nCurrent context window 1.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
         )]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "new-window-call";
+    let continue_call_id = "continue-call";
+    let continue_args = json!({
+        "plan": [
+            {"step": "Continue in the new context window", "status": "in_progress"}
+        ],
+    })
+    .to_string();
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "new_context", "{}"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call(continue_call_id, "update_plan", &continue_args),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("request new context window").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        tool_names(&requests[0])
+            .iter()
+            .any(|name| name == "new_context"),
+        "new_context should be exposed when token budget is enabled"
+    );
+    assert_eq!(
+        token_budget_texts(&requests[2]),
+        vec![format!(
+            "<token_budget>\nCurrent context window 1.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
+        )]
+    );
+    assert!(
+        !requests[2].body_contains_text("request new context window"),
+        "new_context should drop the prior window history before continuing the turn"
+    );
+    assert_eq!(
+        requests[2].function_call_output_text(continue_call_id),
+        Some("Plan updated".to_string())
+    );
+    insta::assert_snapshot!(
+        "token_budget_new_context_window_tool_full_context",
+        context_snapshot::format_labeled_requests_snapshot(
+            "New context window tool installs fresh full context before the next follow-up request.",
+            &[("Final Follow-Up Request", &requests[2])],
+            &ContextSnapshotOptions::default(),
+        )
     );
 
     Ok(())
