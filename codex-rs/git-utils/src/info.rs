@@ -17,6 +17,10 @@ use tokio::time::timeout;
 use ts_rs::TS;
 
 use crate::GitSha;
+use crate::safe_git::DISABLED_HOOKS_PATH;
+use crate::safe_git::EXECUTABLE_GIT_CONFIG_PATTERN;
+use crate::safe_git::GitConfigOverride;
+use crate::safe_git::executable_git_config_overrides_from_output;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -59,7 +63,6 @@ pub async fn get_git_repo_root_with_fs(
 
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
-const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct GitInfo {
@@ -435,21 +438,70 @@ async fn run_git_command_with_timeout_from(
     cwd: &Path,
     fsmonitor: crate::FsmonitorOverride,
 ) -> Option<std::process::Output> {
+    let executable_git_config_overrides =
+        configured_executable_git_config_overrides_from(git, cwd).await?;
+    let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
     let mut command = Command::new(git);
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         // Keep internal Git commands independent of repository-selected hooks
-        // and fsmonitor helpers while preserving built-in fsmonitor acceleration.
-        .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
+        // and executable Git helpers while preserving built-in fsmonitor acceleration.
+        .args(["-c", &disabled_hooks])
         .args(["-c", fsmonitor.git_config_arg()])
-        .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
+    add_executable_git_config_overrides(&mut command, &executable_git_config_overrides);
+    command.args(args);
     let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
 
     match result {
         Ok(Ok(output)) => Some(output),
         _ => None, // Timeout or error
+    }
+}
+
+async fn configured_executable_git_config_overrides_from(
+    git: &Path,
+    cwd: &Path,
+) -> Option<Vec<GitConfigOverride>> {
+    let mut command = Command::new(git);
+    command
+        .args([
+            "config",
+            "--null",
+            "--name-only",
+            "--get-regexp",
+            EXECUTABLE_GIT_CONFIG_PATTERN,
+        ])
+        .current_dir(cwd)
+        .kill_on_drop(true);
+    let output = match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => output,
+        _ => return None,
+    };
+    if !output
+        .status
+        .code()
+        .is_some_and(|code| code == 0 || code == 1)
+    {
+        return None;
+    }
+
+    Some(executable_git_config_overrides_from_output(&output.stdout))
+}
+
+fn add_executable_git_config_overrides(
+    command: &mut Command,
+    config_overrides: &[GitConfigOverride],
+) {
+    if config_overrides.is_empty() {
+        return;
+    }
+    command.env("GIT_CONFIG_COUNT", config_overrides.len().to_string());
+    for (index, (key, value)) in config_overrides.iter().enumerate() {
+        command
+            .env(format!("GIT_CONFIG_KEY_{index}"), key)
+            .env(format!("GIT_CONFIG_VALUE_{index}"), value);
     }
 }
 
@@ -917,6 +969,68 @@ mod tests {
     use pretty_assertions::assert_eq;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    async fn run_git(repo_path: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repo_path)
+            .output()
+            .await
+            .expect("run git command");
+        assert!(
+            output.status.success(),
+            "git command failed: {args:?}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    async fn create_test_git_repo(temp_dir: &tempfile::TempDir) -> std::path::PathBuf {
+        let repo_path = temp_dir.path().join("repo");
+        std::fs::create_dir(&repo_path).expect("create repo dir");
+        run_git(&repo_path, &["init"]).await;
+        run_git(&repo_path, &["config", "user.name", "Test User"]).await;
+        run_git(&repo_path, &["config", "user.email", "test@example.com"]).await;
+        std::fs::write(repo_path.join("test.txt"), "test content").expect("write test file");
+        run_git(&repo_path, &["add", "."]).await;
+        run_git(&repo_path, &["commit", "-m", "initial"]).await;
+        repo_path
+    }
+
+    async fn configure_clean_filter(repo_path: &Path, tracked_path: &str) {
+        std::fs::write(
+            repo_path.join(".gitattributes"),
+            format!("{tracked_path} filter=x=y\n"),
+        )
+        .expect("write attributes");
+        run_git(repo_path, &["add", ".gitattributes"]).await;
+        run_git(repo_path, &["commit", "-m", "attributes"]).await;
+        run_git(
+            repo_path,
+            &[
+                "config",
+                "filter.x=y.clean",
+                "git config codex.filterran true && git hash-object --stdin",
+            ],
+        )
+        .await;
+
+        let tracked_file = repo_path.join(tracked_path);
+        let contents = std::fs::read_to_string(&tracked_file).expect("read tracked file");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::fs::write(tracked_file, contents).expect("refresh tracked file");
+    }
+
+    async fn configured_filter_ran(repo_path: &Path) -> bool {
+        let output = Command::new("git")
+            .args(["config", "--get", "codex.filterran"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .expect("read filter marker");
+        output.status.success()
+    }
 
     #[test]
     fn canonicalize_git_remote_url_normalizes_github_variants() {
@@ -953,6 +1067,54 @@ mod tests {
         for remote in ["", "file:///tmp/repo", "github.com/openai", "/tmp/repo"] {
             assert_eq!(canonicalize_git_remote_url(remote), None);
         }
+    }
+
+    #[tokio::test]
+    async fn get_has_changes_ignores_configured_clean_filter() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+        configure_clean_filter(&repo_path, "test.txt").await;
+
+        assert_eq!(get_has_changes(&repo_path).await, Some(false));
+        assert!(!configured_filter_ran(&repo_path).await);
+    }
+
+    #[tokio::test]
+    async fn git_diff_to_remote_ignores_configured_clean_filter() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+        let remote_path = temp_dir.path().join("remote.git");
+        run_git(
+            temp_dir.path(),
+            &["init", "--bare", remote_path.to_str().unwrap()],
+        )
+        .await;
+        run_git(
+            &repo_path,
+            &["remote", "add", "origin", remote_path.to_str().unwrap()],
+        )
+        .await;
+        let branch_output = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("read branch");
+        assert!(branch_output.status.success(), "read branch");
+        let branch = String::from_utf8(branch_output.stdout)
+            .expect("branch utf8")
+            .trim()
+            .to_string();
+        run_git(&repo_path, &["push", "-u", "origin", &branch]).await;
+
+        configure_clean_filter(&repo_path, "test.txt").await;
+        run_git(&repo_path, &["push", "origin", &branch]).await;
+
+        let state = git_diff_to_remote(&repo_path)
+            .await
+            .expect("collect working tree state");
+        assert!(state.diff.is_empty());
+        assert!(!configured_filter_ran(&repo_path).await);
     }
 
     #[cfg(unix)]
@@ -1005,6 +1167,9 @@ mod tests {
                 "config --null --get core.fsmonitor".to_string(),
                 "config --null --type=bool --fixed-value --get core.fsmonitor /tmp/fsmonitor-helper"
                     .to_string(),
+                format!(
+                    "config --null --name-only --get-regexp {EXECUTABLE_GIT_CONFIG_PATTERN}"
+                ),
                 format!("-c {disabled_hooks} -c core.fsmonitor=false status --porcelain"),
             ]
         );
@@ -1092,6 +1257,7 @@ mod tests {
             vec![
                 "config --null --get core.fsmonitor".to_string(),
                 "version --build-options".to_string(),
+                format!("config --null --name-only --get-regexp {EXECUTABLE_GIT_CONFIG_PATTERN}"),
                 format!("-c {disabled_hooks} -c core.fsmonitor=true status --porcelain"),
             ]
         );
