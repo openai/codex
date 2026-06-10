@@ -196,14 +196,6 @@ impl FileWriteHandle for TestWriteHandle {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'a>> {
         unreachable!("write is not used by these tests")
     }
-
-    fn commit(
-        &self,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = io::Result<FileWriteCommitResult>> + Send + '_>,
-    > {
-        unreachable!("commit is not used by these tests")
-    }
 }
 
 impl Drop for TestWriteHandle {

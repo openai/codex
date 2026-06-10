@@ -14,7 +14,6 @@ use codex_app_server_protocol::FsReadFileResponse;
 use codex_app_server_protocol::FsReadFileStatResponse;
 use codex_app_server_protocol::FsUnwatchParams;
 use codex_app_server_protocol::FsWatchResponse;
-use codex_app_server_protocol::FsWriteFileCommitResponse;
 use codex_app_server_protocol::FsWriteFileOpenResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -505,7 +504,7 @@ async fn fs_streaming_read_supports_stat_and_positional_reads() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fs_streaming_write_is_atomic_and_protocol_errors_keep_handle_open() -> Result<()> {
+async fn fs_streaming_write_is_direct() -> Result<()> {
     let codex_home = TempDir::new()?;
     let file_path = codex_home.path().join("stream.txt");
     std::fs::write(&file_path, "old")?;
@@ -528,6 +527,7 @@ async fn fs_streaming_write_is_atomic_and_protocol_errors_keep_handle_open() -> 
         .await??,
     )?;
     assert!(open.max_chunk_bytes >= 3);
+    assert_eq!(std::fs::read_to_string(&file_path)?, "");
 
     let wrong_type_id = mcp
         .send_raw_request(
@@ -580,24 +580,21 @@ async fn fs_streaming_write_is_atomic_and_protocol_errors_keep_handle_open() -> 
         mcp.read_stream_until_response_message(RequestId::Integer(write_id)),
     )
     .await??;
-    assert_eq!(std::fs::read_to_string(&file_path)?, "old");
+    assert_eq!(std::fs::read_to_string(&file_path)?, "new");
 
-    let commit_id = mcp
+    let close_id = mcp
         .send_raw_request(
-            "fs/writeFile/commit",
+            "fs/writeFile/close",
             Some(json!({
                 "handleId": "write-1",
             })),
         )
         .await?;
-    let commit: FsWriteFileCommitResponse = to_response(
-        timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_response_message(RequestId::Integer(commit_id)),
-        )
-        .await??,
-    )?;
-    assert_eq!(commit.size_bytes, 3);
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(close_id)),
+    )
+    .await??;
     assert_eq!(std::fs::read_to_string(&file_path)?, "new");
 
     Ok(())

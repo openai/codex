@@ -6,7 +6,7 @@
       "type": "string"
     }
   },
-  "description": "Open a destination-local temporary file for streamed writes.",
+  "description": "Create or truncate a file for streamed writes.",
   "properties": {
     "handleId": {
       "description": "Client-supplied handle identifier scoped to this connection.",

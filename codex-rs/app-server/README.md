@@ -181,7 +181,7 @@ Example with notification opt-out:
 - `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
 - `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
 - `fs/readFile/open`, `fs/readFile/read`, `fs/readFile/stat`, `fs/readFile/close` — bounded positional reads through a connection-scoped file handle.
-- `fs/writeFile/open`, `fs/writeFile/write`, `fs/writeFile/commit`, `fs/writeFile/close` — bounded sequential writes to a destination-local temporary file, atomically published by commit.
+- `fs/writeFile/open`, `fs/writeFile/write`, `fs/writeFile/close` — bounded sequential writes that create or truncate the destination directly.
 - `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
 - `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `isSymlink`, `createdAtMs`, and `modifiedAtMs`.
 - `fs/readDirectory` — list direct child entries for an absolute directory path; each entry contains `fileName`, `isDirectory`, and `isFile`, and `fileName` is just the child name, not a path.
@@ -1163,8 +1163,8 @@ All filesystem paths in this section must be absolute.
 - Streaming file handles use caller-supplied `handleId` values scoped to one connection. The server advertises a 262144-byte decoded chunk limit from each open response.
 - `fs/readFile/read` is positional: pass an absolute byte `offset` and optional `maxBytes`. `eof` reports whether more bytes were available at that read; a growing file may later return more data.
 - `fs/readFile/stat` reads metadata from the opened file object, so it remains valid if the original path is renamed or replaced.
-- Streamed writes remain in a destination-local temporary file until `fs/writeFile/commit`, which flushes the file and atomically replaces the destination.
-- `fs/readFile/close` and `fs/writeFile/close` are idempotent cancellation operations. A write commit that has started runs to completion. Disconnecting closes all handles owned by that connection.
+- Opening a streamed write creates or truncates the destination immediately. Completed chunks are visible immediately, and cancellation, disconnection, or an I/O error may leave a partially written file. Existing file identity and metadata are preserved like `fs/writeFile`.
+- `fs/readFile/close` and `fs/writeFile/close` are idempotent cancellation operations. Disconnecting closes all handles owned by that connection.
 - `fs/copy` handles both file copies and directory-tree copies; it requires `recursive: true` when `sourcePath` is a directory. Recursive copies traverse regular files, directories, and symlinks; other entry types are skipped.
 
 ### Example: Filesystem watch

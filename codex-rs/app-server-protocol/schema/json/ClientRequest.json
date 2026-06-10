@@ -1015,19 +1015,7 @@
       "type": "object"
     },
     "FsWriteFileCloseParams": {
-      "description": "Close an open write handle and discard its temporary file.",
-      "properties": {
-        "handleId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "handleId"
-      ],
-      "type": "object"
-    },
-    "FsWriteFileCommitParams": {
-      "description": "Atomically publish an open write handle.",
+      "description": "Close an open write handle.",
       "properties": {
         "handleId": {
           "type": "string"
@@ -1039,7 +1027,7 @@
       "type": "object"
     },
     "FsWriteFileOpenParams": {
-      "description": "Open a destination-local temporary file for streamed writes.",
+      "description": "Create or truncate a file for streamed writes.",
       "properties": {
         "handleId": {
           "description": "Client-supplied handle identifier scoped to this connection.",
@@ -5530,30 +5518,6 @@
         "params"
       ],
       "title": "Fs/writeFile/writeRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "fs/writeFile/commit"
-          ],
-          "title": "Fs/writeFile/commitRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/FsWriteFileCommitParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Fs/writeFile/commitRequest",
       "type": "object"
     },
     {

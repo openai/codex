@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_file_system::FileReadHandle;
-use codex_file_system::FileWriteCommitResult;
 use codex_file_system::FileWriteHandle;
 use codex_file_system::OpenFileMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -34,7 +33,6 @@ use crate::protocol::FsReadFileReadParams;
 use crate::protocol::FsReadFileStatParams;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsWriteFileCloseParams;
-use crate::protocol::FsWriteFileCommitParams;
 use crate::protocol::FsWriteFileOpenParams;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileWriteParams;
@@ -390,26 +388,6 @@ impl FileWriteHandle for RemoteFileWriteHandle {
                 .await
                 .map_err(map_remote_error)?;
             Ok(())
-        })
-    }
-
-    fn commit(
-        &self,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = FileSystemResult<FileWriteCommitResult>> + Send + '_>,
-    > {
-        Box::pin(async move {
-            let response = self
-                .client
-                .fs_write_file_commit(FsWriteFileCommitParams {
-                    handle_id: self.handle_id.clone(),
-                })
-                .await
-                .map_err(map_remote_error)?;
-            Ok(FileWriteCommitResult {
-                size_bytes: response.size_bytes,
-                modified_at_ms: response.modified_at_ms,
-            })
         })
     }
 }

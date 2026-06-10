@@ -5,7 +5,6 @@ use std::sync::Arc;
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::FileReadHandle;
 use codex_file_system::FileSystemSandboxContext;
-use codex_file_system::FileWriteCommitResult;
 use codex_file_system::FileWriteHandle;
 use codex_file_system::OpenFileMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -182,13 +181,6 @@ impl FileHandleManager {
         if result.is_err() {
             self.remove_if_write(handle_id, &entry).await;
         }
-        result
-    }
-
-    pub async fn commit_write(&self, handle_id: &str) -> io::Result<FileWriteCommitResult> {
-        let entry = self.write_entry(handle_id).await?;
-        let result = entry.handle.commit().await;
-        self.remove_if_write(handle_id, &entry).await;
         result
     }
 

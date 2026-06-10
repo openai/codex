@@ -748,11 +748,6 @@ client_request_definitions! {
         serialization: file_handle_id(params.handle_id),
         response: v2::FsWriteFileWriteResponse,
     },
-    FsWriteFileCommit => "fs/writeFile/commit" {
-        params: v2::FsWriteFileCommitParams,
-        serialization: file_handle_id(params.handle_id),
-        response: v2::FsWriteFileCommitResponse,
-    },
     FsWriteFileClose => "fs/writeFile/close" {
         params: v2::FsWriteFileCloseParams,
         serialization: None,

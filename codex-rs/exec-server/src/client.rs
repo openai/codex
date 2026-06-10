@@ -57,7 +57,6 @@ use crate::protocol::FS_READ_FILE_READ_METHOD;
 use crate::protocol::FS_READ_FILE_STAT_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_CLOSE_METHOD;
-use crate::protocol::FS_WRITE_FILE_COMMIT_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FS_WRITE_FILE_OPEN_METHOD;
 use crate::protocol::FS_WRITE_FILE_WRITE_METHOD;
@@ -89,8 +88,6 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileCloseParams;
 use crate::protocol::FsWriteFileCloseResponse;
-use crate::protocol::FsWriteFileCommitParams;
-use crate::protocol::FsWriteFileCommitResponse;
 use crate::protocol::FsWriteFileOpenParams;
 use crate::protocol::FsWriteFileOpenResponse;
 use crate::protocol::FsWriteFileParams;
@@ -485,13 +482,6 @@ impl ExecServerClient {
         params: FsWriteFileWriteParams,
     ) -> Result<FsWriteFileWriteResponse, ExecServerError> {
         self.call(FS_WRITE_FILE_WRITE_METHOD, &params).await
-    }
-
-    pub async fn fs_write_file_commit(
-        &self,
-        params: FsWriteFileCommitParams,
-    ) -> Result<FsWriteFileCommitResponse, ExecServerError> {
-        self.call(FS_WRITE_FILE_COMMIT_METHOD, &params).await
     }
 
     pub async fn fs_write_file_close(

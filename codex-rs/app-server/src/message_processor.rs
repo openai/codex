@@ -1004,11 +1004,6 @@ impl MessageProcessor {
                 .write_file_write(connection_id, params)
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::FsWriteFileCommit { params, .. } => self
-                .fs_processor
-                .write_file_commit(connection_id, params)
-                .await
-                .map(|response| Some(response.into())),
             ClientRequest::FsWriteFileClose { params, .. } => self
                 .fs_processor
                 .write_file_close(connection_id, params)

@@ -49,12 +49,6 @@ pub struct OpenFileMetadata {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileWriteCommitResult {
-    pub size_bytes: u64,
-    pub modified_at_ms: i64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReadDirectoryEntry {
     pub file_name: String,
     pub is_directory: bool,
@@ -164,10 +158,11 @@ pub trait FileReadHandle: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = FileSystemResult<OpenFileMetadata>> + Send + '_>>;
 }
 
-/// An open temporary file used to build an atomic whole-file replacement.
+/// An open file used for bounded sequential writes.
 ///
-/// Implementations append complete chunks and expose the destination only
-/// after a successful commit. Dropping an uncommitted handle must discard it.
+/// Implementations must match ordinary whole-file write behavior: opening the
+/// handle creates or truncates the destination, and writes append complete
+/// chunks to that open file object.
 pub trait FileWriteHandle: Send + Sync {
     fn max_chunk_bytes(&self) -> usize;
 
@@ -175,10 +170,6 @@ pub trait FileWriteHandle: Send + Sync {
         &'a self,
         data: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = FileSystemResult<()>> + Send + 'a>>;
-
-    fn commit(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = FileSystemResult<FileWriteCommitResult>> + Send + '_>>;
 }
 
 /// Abstract filesystem access used by components that may operate locally or via

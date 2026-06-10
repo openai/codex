@@ -1268,30 +1268,6 @@
             },
             "method": {
               "enum": [
-                "fs/writeFile/commit"
-              ],
-              "title": "Fs/writeFile/commitRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/FsWriteFileCommitParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Fs/writeFile/commitRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
                 "fs/writeFile/close"
               ],
               "title": "Fs/writeFile/closeRequestMethod",
@@ -9881,7 +9857,7 @@
       },
       "FsWriteFileCloseParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Close an open write handle and discard its temporary file.",
+        "description": "Close an open write handle.",
         "properties": {
           "handleId": {
             "type": "string"
@@ -9899,44 +9875,9 @@
         "title": "FsWriteFileCloseResponse",
         "type": "object"
       },
-      "FsWriteFileCommitParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Atomically publish an open write handle.",
-        "properties": {
-          "handleId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "handleId"
-        ],
-        "title": "FsWriteFileCommitParams",
-        "type": "object"
-      },
-      "FsWriteFileCommitResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Metadata returned after a successful write commit.",
-        "properties": {
-          "modifiedAtMs": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "sizeBytes": {
-            "format": "uint64",
-            "minimum": 0.0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "modifiedAtMs",
-          "sizeBytes"
-        ],
-        "title": "FsWriteFileCommitResponse",
-        "type": "object"
-      },
       "FsWriteFileOpenParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Open a destination-local temporary file for streamed writes.",
+        "description": "Create or truncate a file for streamed writes.",
         "properties": {
           "handleId": {
             "description": "Client-supplied handle identifier scoped to this connection.",

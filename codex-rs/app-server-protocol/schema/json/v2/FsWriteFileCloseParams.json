@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "Close an open write handle and discard its temporary file.",
+  "description": "Close an open write handle.",
   "properties": {
     "handleId": {
       "type": "string"

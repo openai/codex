@@ -31,8 +31,6 @@ use codex_app_server_protocol::FsWatchParams;
 use codex_app_server_protocol::FsWatchResponse;
 use codex_app_server_protocol::FsWriteFileCloseParams;
 use codex_app_server_protocol::FsWriteFileCloseResponse;
-use codex_app_server_protocol::FsWriteFileCommitParams;
-use codex_app_server_protocol::FsWriteFileCommitResponse;
 use codex_app_server_protocol::FsWriteFileOpenParams;
 use codex_app_server_protocol::FsWriteFileOpenResponse;
 use codex_app_server_protocol::FsWriteFileParams;
@@ -238,23 +236,6 @@ impl FsRequestProcessor {
             .await
             .map_err(map_file_handle_error)?;
         Ok(FsWriteFileWriteResponse {})
-    }
-
-    pub(crate) async fn write_file_commit(
-        &self,
-        connection_id: ConnectionId,
-        params: FsWriteFileCommitParams,
-    ) -> Result<FsWriteFileCommitResponse, JSONRPCErrorError> {
-        let result = self
-            .handles(connection_id)
-            .await
-            .commit_write(&params.handle_id)
-            .await
-            .map_err(map_file_handle_error)?;
-        Ok(FsWriteFileCommitResponse {
-            size_bytes: result.size_bytes,
-            modified_at_ms: result.modified_at_ms,
-        })
     }
 
     pub(crate) async fn write_file_close(

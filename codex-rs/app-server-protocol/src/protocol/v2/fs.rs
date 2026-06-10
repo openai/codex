@@ -119,7 +119,7 @@ pub struct FsReadFileCloseParams {
 #[ts(export_to = "v2/")]
 pub struct FsReadFileCloseResponse {}
 
-/// Open a destination-local temporary file for streamed writes.
+/// Create or truncate a file for streamed writes.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -154,26 +154,7 @@ pub struct FsWriteFileWriteParams {
 #[ts(export_to = "v2/")]
 pub struct FsWriteFileWriteResponse {}
 
-/// Atomically publish an open write handle.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct FsWriteFileCommitParams {
-    pub handle_id: String,
-}
-
-/// Metadata returned after a successful write commit.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct FsWriteFileCommitResponse {
-    #[ts(type = "number")]
-    pub size_bytes: u64,
-    #[ts(type = "number")]
-    pub modified_at_ms: i64,
-}
-
-/// Close an open write handle and discard its temporary file.
+/// Close an open write handle.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

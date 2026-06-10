@@ -20,7 +20,6 @@ use crate::protocol::FS_READ_FILE_READ_METHOD;
 use crate::protocol::FS_READ_FILE_STAT_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_CLOSE_METHOD;
-use crate::protocol::FS_WRITE_FILE_COMMIT_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FS_WRITE_FILE_OPEN_METHOD;
 use crate::protocol::FS_WRITE_FILE_WRITE_METHOD;
@@ -38,7 +37,6 @@ use crate::protocol::FsReadFileReadParams;
 use crate::protocol::FsReadFileStatParams;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsWriteFileCloseParams;
-use crate::protocol::FsWriteFileCommitParams;
 use crate::protocol::FsWriteFileOpenParams;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileWriteParams;
@@ -145,12 +143,6 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         FS_WRITE_FILE_WRITE_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsWriteFileWriteParams| async move {
             handler.fs_write_file_write(params).await
-        },
-    );
-    router.request(
-        FS_WRITE_FILE_COMMIT_METHOD,
-        |handler: Arc<ExecServerHandler>, params: FsWriteFileCommitParams| async move {
-            handler.fs_write_file_commit(params).await
         },
     );
     router.request(

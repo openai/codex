@@ -41,8 +41,6 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileCloseParams;
 use crate::protocol::FsWriteFileCloseResponse;
-use crate::protocol::FsWriteFileCommitParams;
-use crate::protocol::FsWriteFileCommitResponse;
 use crate::protocol::FsWriteFileOpenParams;
 use crate::protocol::FsWriteFileOpenResponse;
 use crate::protocol::FsWriteFileParams;
@@ -188,21 +186,6 @@ impl FileSystemHandler {
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileWriteResponse {})
-    }
-
-    pub(crate) async fn write_file_commit(
-        &self,
-        params: FsWriteFileCommitParams,
-    ) -> Result<FsWriteFileCommitResponse, JSONRPCErrorError> {
-        let result = self
-            .handles
-            .commit_write(&params.handle_id)
-            .await
-            .map_err(map_fs_error)?;
-        Ok(FsWriteFileCommitResponse {
-            size_bytes: result.size_bytes,
-            modified_at_ms: result.modified_at_ms,
-        })
     }
 
     pub(crate) async fn write_file_close(
@@ -362,7 +345,7 @@ mod tests {
     use crate::protocol::FsReadFileParams;
     use crate::protocol::FsReadFileReadParams;
     use crate::protocol::FsReadFileStatParams;
-    use crate::protocol::FsWriteFileCommitParams;
+    use crate::protocol::FsWriteFileCloseParams;
     use crate::protocol::FsWriteFileOpenParams;
     use crate::protocol::FsWriteFileParams;
     use crate::protocol::FsWriteFileWriteParams;
@@ -420,7 +403,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streamed_file_operations_are_positional_and_commit_atomically() {
+    async fn streamed_file_operations_are_positional_and_write_directly() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let runtime_paths = ExecServerRuntimePaths::new(
             std::env::current_exe().expect("current exe"),
@@ -431,7 +414,19 @@ mod tests {
         let path =
             AbsolutePathBuf::from_absolute_path(temp_dir.path().join("stream.txt").as_path())
                 .expect("absolute path");
+        let linked_path = temp_dir.path().join("linked.txt");
         std::fs::write(&path, "old").expect("write initial file");
+        std::fs::hard_link(&path, &linked_path).expect("create hard link");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(&path)
+                .expect("stat initial file")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&path, permissions).expect("make initial file executable");
+        }
 
         handler
             .write_file_open(FsWriteFileOpenParams {
@@ -441,20 +436,10 @@ mod tests {
             })
             .await
             .expect("open write handle");
-        let temp_file_name = std::fs::read_dir(temp_dir.path())
-            .expect("read tempdir")
-            .map(|entry| {
-                entry
-                    .expect("read tempdir entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .find(|file_name| file_name != "stream.txt")
-            .expect("streaming write temp file");
-        assert!(
-            temp_file_name.starts_with(".codex-tmp-"),
-            "unexpected streaming write temp file name: {temp_file_name}"
+        assert_eq!(std::fs::read_to_string(&path).expect("read file"), "");
+        assert_eq!(
+            std::fs::read_to_string(&linked_path).expect("read hard link"),
+            ""
         );
         handler
             .write_file_write(FsWriteFileWriteParams {
@@ -464,20 +449,32 @@ mod tests {
             .await
             .expect("write chunk");
         assert_eq!(
-            std::fs::read_to_string(&path).expect("read old file"),
-            "old"
+            std::fs::read_to_string(&path).expect("read written file"),
+            "new"
         );
-        let commit = handler
-            .write_file_commit(FsWriteFileCommitParams {
+        assert_eq!(
+            std::fs::read_to_string(&linked_path).expect("read written hard link"),
+            "new"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            use std::os::unix::fs::PermissionsExt;
+
+            let metadata = std::fs::metadata(&path).expect("stat written file");
+            let linked_metadata = std::fs::metadata(&linked_path).expect("stat written hard link");
+            assert_eq!(
+                (metadata.dev(), metadata.ino()),
+                (linked_metadata.dev(), linked_metadata.ino())
+            );
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o755);
+        }
+        handler
+            .write_file_close(FsWriteFileCloseParams {
                 handle_id: "write-1".to_string(),
             })
             .await
-            .expect("commit write");
-        assert_eq!(commit.size_bytes, 3);
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("read new file"),
-            "new"
-        );
+            .expect("close write handle");
 
         handler
             .read_file_open(FsReadFileOpenParams {

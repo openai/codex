@@ -349,7 +349,6 @@ or unavailable paths:
 - `fs/readFile/close`
 - `fs/writeFile/open`
 - `fs/writeFile/write`
-- `fs/writeFile/commit`
 - `fs/writeFile/close`
 - `fs/createDirectory`
 - `fs/getMetadata`

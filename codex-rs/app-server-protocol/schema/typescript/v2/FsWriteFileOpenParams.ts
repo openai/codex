@@ -4,7 +4,7 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 
 /**
- * Open a destination-local temporary file for streamed writes.
+ * Create or truncate a file for streamed writes.
  */
 export type FsWriteFileOpenParams = {
 /**

@@ -12,7 +12,8 @@ The existing buffered `fs/readFile` and `fs/writeFile` methods remain unchanged.
 - Provide backpressure through bounded request/response chunks.
 - Allow positional reads.
 - Support cancellation and deterministic cleanup.
-- Atomically replace destination files after successful streamed writes.
+- Match the existing whole-file write behavior, including preserving the
+  identity and metadata of existing destination files.
 
 ## Read API
 
@@ -104,9 +105,9 @@ Response:
 
 ### `fs/writeFile/open`
 
-Creates an empty temporary file in the destination directory. Its name starts
-with `.codex-tmp-` so abandoned files are attributable and hidden on platforms
-where dot-prefixed files are hidden.
+Creates the destination if needed or truncates the existing file. Existing file
+identity and metadata, including hardlinks and platform access controls, are
+preserved in the same way as `fs/writeFile`.
 
 ```json
 {
@@ -125,8 +126,9 @@ Response:
 
 ### `fs/writeFile/write`
 
-Decodes and appends the complete chunk to the temporary file. A successful
-response acknowledges the entire decoded chunk; partial success is not exposed.
+Decodes and appends the complete chunk to the open destination file. A
+successful response acknowledges the entire decoded chunk; partial success is
+not exposed.
 
 ```json
 {
@@ -141,29 +143,9 @@ Response:
 {}
 ```
 
-### `fs/writeFile/commit`
-
-Flushes the completed file, atomically replaces the destination, and closes the
-write handle.
-
-```json
-{
-  "handleId": "write-1"
-}
-```
-
-Response:
-
-```json
-{
-  "sizeBytes": 5,
-  "modifiedAtMs": 1730910000000
-}
-```
-
 ### `fs/writeFile/close`
 
-Closes the write handle and deletes the uncommitted temporary file.
+Closes the write handle.
 
 ```json
 {
@@ -193,16 +175,15 @@ Response:
   round-trip latency without accumulating unbounded response data.
 - Close operations are idempotent. App-server close requests bypass queued
   operations and cancel an active open or chunk operation. A close received
-  while open is pending prevents that handle from becoming live. Once commit
-  starts, it runs to completion so the server never reports cancellation while
-  an atomic replacement may still publish. Exec-server handles bounded file
-  RPCs in request order, so close takes effect before the next file operation.
+  while open is pending prevents that handle from becoming live. Exec-server
+  handles bounded file RPCs in request order, so close takes effect before the
+  next file operation.
 - Closing a connection closes all of its handles.
 - Any filesystem or I/O error closes the affected handle. Protocol errors such
   as an unknown handle do not affect other handles.
-- Failed or cancelled writes delete their temporary files.
-- Write commit replaces the destination, matching existing `fs/writeFile`
-  overwrite behavior.
+- Streamed writes are visible as they complete. Opening truncates an existing
+  destination, and an I/O error, cancellation, or disconnect may leave a
+  partially written file.
 - Errors use normal JSON-RPC error responses.
 - App-server operations target the app-server host filesystem. Exec-server
   exposes the same pull-based handle operations for remote filesystem clients.

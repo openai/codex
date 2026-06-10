@@ -45,8 +45,6 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileCloseParams;
 use crate::protocol::FsWriteFileCloseResponse;
-use crate::protocol::FsWriteFileCommitParams;
-use crate::protocol::FsWriteFileCommitResponse;
 use crate::protocol::FsWriteFileOpenParams;
 use crate::protocol::FsWriteFileOpenResponse;
 use crate::protocol::FsWriteFileParams;
@@ -299,14 +297,6 @@ impl ExecServerHandler {
     ) -> Result<FsWriteFileWriteResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.write_file_write(params).await
-    }
-
-    pub(crate) async fn fs_write_file_commit(
-        &self,
-        params: FsWriteFileCommitParams,
-    ) -> Result<FsWriteFileCommitResponse, JSONRPCErrorError> {
-        self.require_initialized_for("filesystem")?;
-        self.file_system.write_file_commit(params).await
     }
 
     pub(crate) async fn fs_write_file_close(

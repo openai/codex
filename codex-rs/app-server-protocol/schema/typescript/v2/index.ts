@@ -148,8 +148,6 @@ export type { FsWatchParams } from "./FsWatchParams";
 export type { FsWatchResponse } from "./FsWatchResponse";
 export type { FsWriteFileCloseParams } from "./FsWriteFileCloseParams";
 export type { FsWriteFileCloseResponse } from "./FsWriteFileCloseResponse";
-export type { FsWriteFileCommitParams } from "./FsWriteFileCommitParams";
-export type { FsWriteFileCommitResponse } from "./FsWriteFileCommitResponse";
 export type { FsWriteFileOpenParams } from "./FsWriteFileOpenParams";
 export type { FsWriteFileOpenResponse } from "./FsWriteFileOpenResponse";
 export type { FsWriteFileParams } from "./FsWriteFileParams";

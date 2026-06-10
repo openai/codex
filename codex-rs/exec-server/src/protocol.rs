@@ -28,7 +28,6 @@ pub const FS_READ_FILE_STAT_METHOD: &str = "fs/readFile/stat";
 pub const FS_READ_FILE_CLOSE_METHOD: &str = "fs/readFile/close";
 pub const FS_WRITE_FILE_OPEN_METHOD: &str = "fs/writeFile/open";
 pub const FS_WRITE_FILE_WRITE_METHOD: &str = "fs/writeFile/write";
-pub const FS_WRITE_FILE_COMMIT_METHOD: &str = "fs/writeFile/commit";
 pub const FS_WRITE_FILE_CLOSE_METHOD: &str = "fs/writeFile/close";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
@@ -288,19 +287,6 @@ pub struct FsWriteFileWriteParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsWriteFileWriteResponse {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsWriteFileCommitParams {
-    pub handle_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsWriteFileCommitResponse {
-    pub size_bytes: u64,
-    pub modified_at_ms: i64,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
