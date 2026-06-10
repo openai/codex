@@ -1,0 +1,24 @@
+---
+source: tui/src/chatwidget/tests/guardian.rs
+expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
+---
+
+
+⚠ Automatic approval review failed: request timed out. Organization policy
+  allowed the request to proceed.
+
+! Review failed, but organization policy allowed this action: curl -sS
+  https://example.com
+
+! Review failed, but organization policy allowed this action: apply_patch
+  touching 2 files
+
+! Review failed, but organization policy allowed this action: MCP
+  create_pull_request on github
+
+• Working (0s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  gpt-5.5 default · /tmp/project

@@ -317,6 +317,113 @@ async fn guardian_timed_out_exec_renders_warning_and_timed_out_request() {
 }
 
 #[tokio::test]
+async fn guardian_failed_open_exec_renders_policy_approval() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    let action = GuardianAssessmentAction::Command {
+        source: GuardianCommandSource::Shell,
+        command: "curl -sS https://example.com".to_string(),
+        cwd: test_path_buf("/tmp").abs(),
+    };
+    let rationale = "Automatic approval review failed: request timed out. Organization policy allowed the request to proceed.";
+
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-1".into(),
+        target_item_id: Some("guardian-target-1".into()),
+        turn_id: "turn-1".into(),
+        started_at_ms: 0,
+        completed_at_ms: None,
+        status: GuardianAssessmentStatus::InProgress,
+        risk_level: None,
+        user_authorization: None,
+        rationale: None,
+        decision_source: None,
+        action: action,
+    });
+    chat.on_warning(rationale);
+    chat.handle_server_notification(
+        ServerNotification::ItemGuardianApprovalReviewCompleted(
+            ItemGuardianApprovalReviewCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                started_at_ms: 0,
+                completed_at_ms: 1,
+                review_id: "guardian-1".to_string(),
+                target_item_id: Some("guardian-target-1".to_string()),
+                decision_source: AppServerGuardianApprovalReviewDecisionSource::OrganizationPolicy,
+                review: GuardianApprovalReview {
+                    status: GuardianApprovalReviewStatus::Approved,
+                    risk_level: None,
+                    user_authorization: None,
+                    rationale: Some(rationale.to_string()),
+                },
+                action: AppServerGuardianApprovalReviewAction::Command {
+                    source: AppServerGuardianCommandSource::Shell,
+                    command: "curl -sS https://example.com".to_string(),
+                    cwd: test_path_buf("/tmp").abs(),
+                },
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    let actions = [
+        GuardianAssessmentAction::ApplyPatch {
+            cwd: test_path_buf("/tmp").abs(),
+            files: vec![
+                test_path_buf("/tmp/src/lib.rs").abs(),
+                test_path_buf("/tmp/src/main.rs").abs(),
+            ],
+        },
+        GuardianAssessmentAction::McpToolCall {
+            server: "github".into(),
+            tool_name: "create_pull_request".into(),
+            connector_id: None,
+            connector_name: None,
+            tool_title: None,
+        },
+    ];
+    for (index, action) in actions.into_iter().enumerate() {
+        chat.on_guardian_assessment(GuardianAssessmentEvent {
+            id: format!("guardian-{}", index + 2),
+            target_item_id: Some(format!("guardian-target-{}", index + 2)),
+            turn_id: "turn-1".into(),
+            started_at_ms: 0,
+            completed_at_ms: Some(index as i64 + 2),
+            status: GuardianAssessmentStatus::Approved,
+            risk_level: None,
+            user_authorization: None,
+            rationale: Some(rationale.into()),
+            decision_source: Some(GuardianAssessmentDecisionSource::OrganizationPolicy),
+            action,
+        });
+    }
+
+    let width: u16 = 140;
+    let ui_height: u16 = chat.desired_height(width);
+    let vt_height: u16 = 20;
+    let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
+
+    let backend = VT100Backend::new(width, vt_height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    term.set_viewport_area(viewport);
+
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
+    }
+
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .expect("draw Guardian fail-open history");
+
+    assert_chatwidget_snapshot!(
+        "guardian_failed_open_exec_renders_policy_approval",
+        normalize_snapshot_paths(term.backend().vt100().screen().contents())
+    );
+}
+
+#[tokio::test]
 async fn app_server_guardian_review_started_sets_review_status() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let action = AppServerGuardianApprovalReviewAction::Command {

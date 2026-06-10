@@ -892,6 +892,7 @@ fn sample_guardian_review_completed(
     review_id: &str,
     target_item_id: Option<&str>,
     status: GuardianApprovalReviewStatus,
+    decision_source: codex_app_server_protocol::AutoReviewDecisionSource,
 ) -> ServerNotification {
     ServerNotification::ItemGuardianApprovalReviewCompleted(
         ItemGuardianApprovalReviewCompletedNotification {
@@ -901,7 +902,7 @@ fn sample_guardian_review_completed(
             completed_at_ms: 1_042,
             review_id: review_id.to_string(),
             target_item_id: target_item_id.map(str::to_string),
-            decision_source: codex_app_server_protocol::AutoReviewDecisionSource::Agent,
+            decision_source,
             review: GuardianApprovalReview {
                 status,
                 risk_level: None,
@@ -2340,6 +2341,7 @@ async fn guardian_completed_notification_publishes_review_event_with_thread_meta
                 "guardian-review-1",
                 Some("item-1"),
                 GuardianApprovalReviewStatus::Denied,
+                codex_app_server_protocol::AutoReviewDecisionSource::Agent,
             ))),
             &mut events,
         )
@@ -2356,6 +2358,37 @@ async fn guardian_completed_notification_publishes_review_event_with_thread_meta
     assert_eq!(payload["event_params"]["started_at_ms"], 1_000);
     assert_eq!(payload["event_params"]["completed_at_ms"], 1_042);
     assert_eq!(payload["event_params"]["duration_ms"], 42);
+}
+
+#[tokio::test]
+async fn guardian_failed_open_denormalizes_onto_tool_item_events() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_review_prerequisites(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_guardian_review_completed(
+                "guardian-review-failed-open",
+                Some("item-1"),
+                GuardianApprovalReviewStatus::Approved,
+                codex_app_server_protocol::AutoReviewDecisionSource::OrganizationPolicy,
+            ))),
+            &mut events,
+        )
+        .await;
+
+    let review_payload = serde_json::to_value(&events[0]).expect("serialize review event");
+    assert_eq!(review_payload["event_params"]["status"], "failed_open");
+    events.clear();
+
+    ingest_completed_command_execution_item(&mut reducer, &mut events, "thread-1", "item-1").await;
+
+    let item_payload = serde_json::to_value(&events[0]).expect("serialize tool item event");
+    assert_eq!(
+        item_payload["event_params"]["final_approval_outcome"],
+        "guardian_failed_open"
+    );
 }
 
 #[tokio::test]

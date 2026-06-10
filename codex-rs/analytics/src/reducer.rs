@@ -86,6 +86,7 @@ use crate::now_unix_seconds;
 use crate::option_i64_to_u64;
 use crate::serialize_enum_as_string;
 use crate::usize_to_u64;
+use codex_app_server_protocol::AutoReviewDecisionSource;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexErrorInfo;
@@ -1312,7 +1313,9 @@ impl AnalyticsReducer {
         notification: codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let Some((status, resolution)) = guardian_review_result(notification.review.status) else {
+        let Some((status, resolution)) =
+            guardian_review_result(notification.review.status, notification.decision_source)
+        else {
             return;
         };
         let (subject_kind, subject_name, trigger) =
@@ -2108,19 +2111,23 @@ fn effective_permissions_review_result(
 
 fn guardian_review_result(
     status: GuardianApprovalReviewStatus,
+    decision_source: AutoReviewDecisionSource,
 ) -> Option<(ReviewStatus, ReviewResolution)> {
-    match status {
-        GuardianApprovalReviewStatus::InProgress => None,
-        GuardianApprovalReviewStatus::Approved => {
+    match (status, decision_source) {
+        (GuardianApprovalReviewStatus::InProgress, _) => None,
+        (GuardianApprovalReviewStatus::Approved, AutoReviewDecisionSource::OrganizationPolicy) => {
+            Some((ReviewStatus::FailedOpen, ReviewResolution::None))
+        }
+        (GuardianApprovalReviewStatus::Approved, AutoReviewDecisionSource::Agent) => {
             Some((ReviewStatus::Approved, ReviewResolution::None))
         }
-        GuardianApprovalReviewStatus::Denied => {
+        (GuardianApprovalReviewStatus::Denied, _) => {
             Some((ReviewStatus::Denied, ReviewResolution::None))
         }
-        GuardianApprovalReviewStatus::TimedOut => {
+        (GuardianApprovalReviewStatus::TimedOut, _) => {
             Some((ReviewStatus::TimedOut, ReviewResolution::None))
         }
-        GuardianApprovalReviewStatus::Aborted => {
+        (GuardianApprovalReviewStatus::Aborted, _) => {
             Some((ReviewStatus::Aborted, ReviewResolution::None))
         }
     }
@@ -2222,6 +2229,9 @@ fn final_approval_outcome(
     match (reviewer, status, resolution) {
         (Reviewer::Guardian, ReviewStatus::Approved, _) => FinalApprovalOutcome::GuardianApproved,
         (Reviewer::Guardian, ReviewStatus::Denied, _) => FinalApprovalOutcome::GuardianDenied,
+        (Reviewer::Guardian, ReviewStatus::FailedOpen, _) => {
+            FinalApprovalOutcome::GuardianFailedOpen
+        }
         (Reviewer::Guardian, _, _) => FinalApprovalOutcome::GuardianAborted,
         (Reviewer::User, ReviewStatus::Approved, ReviewResolution::SessionApproval) => {
             FinalApprovalOutcome::UserApprovedForSession
@@ -2694,10 +2704,26 @@ mod tests {
 
     #[test]
     fn guardian_review_result_maps_terminal_statuses() {
-        assert!(guardian_review_result(GuardianApprovalReviewStatus::InProgress).is_none());
+        assert!(
+            guardian_review_result(
+                GuardianApprovalReviewStatus::InProgress,
+                AutoReviewDecisionSource::Agent,
+            )
+            .is_none()
+        );
         assert!(matches!(
-            guardian_review_result(GuardianApprovalReviewStatus::TimedOut),
+            guardian_review_result(
+                GuardianApprovalReviewStatus::TimedOut,
+                AutoReviewDecisionSource::Agent,
+            ),
             Some((ReviewStatus::TimedOut, ReviewResolution::None))
+        ));
+        assert!(matches!(
+            guardian_review_result(
+                GuardianApprovalReviewStatus::Approved,
+                AutoReviewDecisionSource::OrganizationPolicy,
+            ),
+            Some((ReviewStatus::FailedOpen, ReviewResolution::None))
         ));
     }
 }

@@ -148,6 +148,23 @@ impl ChatWidget {
             self.set_status_header(String::from("Working"));
         }
 
+        if ev.status == GuardianAssessmentStatus::Approved
+            && ev.decision_source == Some(GuardianAssessmentDecisionSource::OrganizationPolicy)
+        {
+            let summary = if let Some(summary) = guardian_action_summary(&ev.action) {
+                summary
+            } else {
+                serde_json::to_string(&ev.action)
+                    .unwrap_or_else(|_| "<unrenderable guardian action>".to_string())
+            };
+
+            self.add_boxed_history(history_cell::new_guardian_failed_open_action_request(
+                summary,
+            ));
+            self.request_redraw();
+            return;
+        }
+
         if ev.status == GuardianAssessmentStatus::Approved {
             let cell = if let Some(command) = guardian_command(&ev.action) {
                 history_cell::new_approval_decision_cell(

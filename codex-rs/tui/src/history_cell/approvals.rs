@@ -352,6 +352,16 @@ pub fn new_guardian_timed_out_action_request(summary: String) -> Box<dyn History
     Box::new(PrefixedWrappedHistoryCell::new(line, "✗ ".red(), "  "))
 }
 
+pub fn new_guardian_failed_open_action_request(summary: String) -> Box<dyn HistoryCell> {
+    let line = Line::from(vec![
+        "Review ".into(),
+        "failed".bold(),
+        ", but organization policy allowed this action: ".into(),
+        Span::from(summary).dim(),
+    ]);
+    Box::new(PrefixedWrappedHistoryCell::new(line, "! ".magenta(), "  "))
+}
+
 /// Cyan history cell line showing the current review status.
 pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
     PlainHistoryCell {
