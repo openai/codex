@@ -1,75 +1,84 @@
+use std::sync::Arc;
+
 use codex_agent_identity::AgentIdentityKey;
 use codex_agent_identity::register_agent_task;
 use codex_protocol::account::PlanType as AccountPlanType;
-use std::env;
 
 use crate::default_client::build_reqwest_client;
 
 use super::storage::AgentIdentityAuthRecord;
 
-const PROD_AGENT_IDENTITY_AUTHAPI_BASE_URL: &str = "https://auth.openai.com/api/accounts";
-const CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL_ENV_VAR: &str = "CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL";
-
 #[derive(Clone, Debug)]
 pub struct AgentIdentityAuth {
+    inner: Arc<AgentIdentityAuthInner>,
+}
+
+#[derive(Debug)]
+struct AgentIdentityAuthInner {
     record: AgentIdentityAuthRecord,
-    process_task_id: String,
+    run_task_id: String,
 }
 
 impl AgentIdentityAuth {
-    pub async fn load(record: AgentIdentityAuthRecord) -> std::io::Result<Self> {
-        let agent_identity_authapi_base_url = agent_identity_authapi_base_url();
-        let process_task_id = register_agent_task(
+    pub async fn load(
+        record: AgentIdentityAuthRecord,
+        agent_identity_authapi_base_url: &str,
+    ) -> std::io::Result<Self> {
+        let run_task_id = register_agent_task(
             &build_reqwest_client(),
-            &agent_identity_authapi_base_url,
-            key(&record),
+            agent_identity_authapi_base_url,
+            key_for_record(&record),
         )
         .await
         .map_err(std::io::Error::other)?;
         Ok(Self {
-            record,
-            process_task_id,
+            inner: Arc::new(AgentIdentityAuthInner {
+                record,
+                run_task_id,
+            }),
         })
     }
 
-    pub fn record(&self) -> &AgentIdentityAuthRecord {
-        &self.record
+    #[cfg(test)]
+    fn from_initialized_record(record: AgentIdentityAuthRecord, run_task_id: String) -> Self {
+        Self {
+            inner: Arc::new(AgentIdentityAuthInner {
+                record,
+                run_task_id,
+            }),
+        }
     }
 
-    pub fn process_task_id(&self) -> &str {
-        &self.process_task_id
+    pub fn record(&self) -> &AgentIdentityAuthRecord {
+        &self.inner.record
+    }
+
+    pub fn run_task_id(&self) -> &str {
+        &self.inner.run_task_id
     }
 
     pub fn account_id(&self) -> &str {
-        &self.record.account_id
+        &self.inner.record.account_id
     }
 
     pub fn chatgpt_user_id(&self) -> &str {
-        &self.record.chatgpt_user_id
+        &self.inner.record.chatgpt_user_id
     }
 
     pub fn email(&self) -> &str {
-        &self.record.email
+        &self.inner.record.email
     }
 
     pub fn plan_type(&self) -> AccountPlanType {
-        self.record.plan_type
+        self.inner.record.plan_type
     }
 
     pub fn is_fedramp_account(&self) -> bool {
-        self.record.chatgpt_account_is_fedramp
+        self.inner.record.chatgpt_account_is_fedramp
     }
 }
 
-fn agent_identity_authapi_base_url() -> String {
-    env::var(CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL_ENV_VAR)
-        .ok()
-        .map(|base_url| base_url.trim().trim_end_matches('/').to_string())
-        .filter(|base_url| !base_url.is_empty())
-        .unwrap_or_else(|| PROD_AGENT_IDENTITY_AUTHAPI_BASE_URL.to_string())
-}
-
-fn key(record: &AgentIdentityAuthRecord) -> AgentIdentityKey<'_> {
+fn key_for_record(record: &AgentIdentityAuthRecord) -> AgentIdentityKey<'_> {
     AgentIdentityKey {
         agent_runtime_id: &record.agent_runtime_id,
         private_key_pkcs8_base64: &record.agent_private_key,
@@ -78,63 +87,110 @@ fn key(record: &AgentIdentityAuthRecord) -> AgentIdentityKey<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    use codex_agent_identity::generate_agent_key_material;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
     use super::*;
-    use serial_test::serial;
 
-    #[test]
-    #[serial(codex_auth_env)]
-    fn agent_identity_authapi_base_url_prefers_env_value() {
-        let _guard = EnvVarGuard::set(
-            CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL_ENV_VAR,
-            "https://authapi.example.test/api/accounts/",
-        );
-        assert_eq!(
-            agent_identity_authapi_base_url(),
-            "https://authapi.example.test/api/accounts"
-        );
-    }
-
-    #[test]
-    #[serial(codex_auth_env)]
-    fn agent_identity_authapi_base_url_uses_prod_authapi_by_default() {
-        let _guard = EnvVarGuard::remove(CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL_ENV_VAR);
-        assert_eq!(
-            agent_identity_authapi_base_url(),
-            PROD_AGENT_IDENTITY_AUTHAPI_BASE_URL
-        );
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<std::ffi::OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let original = env::var_os(key);
-            unsafe {
-                env::set_var(key, value);
-            }
-            Self { key, original }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let original = env::var_os(key);
-            unsafe {
-                env::remove_var(key);
-            }
-            Self { key, original }
+    fn agent_identity_record(private_key: String) -> AgentIdentityAuthRecord {
+        AgentIdentityAuthRecord {
+            agent_runtime_id: "agent-runtime-1".to_string(),
+            agent_private_key: private_key,
+            account_id: "account-1".to_string(),
+            chatgpt_user_id: "user-1".to_string(),
+            email: "agent@example.com".to_string(),
+            plan_type: AccountPlanType::Plus,
+            chatgpt_account_is_fedramp: false,
         }
     }
 
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.original {
-                    Some(value) => env::set_var(self.key, value),
-                    None => env::remove_var(self.key),
+    fn agent_identity_record_with_generated_key() -> AgentIdentityAuthRecord {
+        let key_material = generate_agent_key_material().expect("generate key material");
+        agent_identity_record(key_material.private_key_pkcs8_base64)
+    }
+
+    #[tokio::test]
+    async fn load_registers_run_task() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/agent/agent-runtime-1/task/register"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "task_id": "task-run-1",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let auth =
+            AgentIdentityAuth::load(agent_identity_record_with_generated_key(), &server.uri())
+                .await?;
+
+        assert_eq!(auth.run_task_id(), "task-run-1");
+        let requests = server
+            .received_requests()
+            .await
+            .expect("failed to fetch task registration request");
+        let request_body = requests[0]
+            .body_json::<serde_json::Value>()
+            .expect("task registration request should be JSON");
+        let request_body = request_body
+            .as_object()
+            .expect("request body should be object");
+        assert!(request_body.get("timestamp").is_some());
+        assert!(request_body.get("signature").is_some());
+        assert_eq!(request_body.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn run_task_is_shared_across_clones() {
+        let auth = AgentIdentityAuth::from_initialized_record(
+            agent_identity_record_with_generated_key(),
+            "task-run-1".to_string(),
+        );
+        let cloned = auth.clone();
+
+        assert!(Arc::ptr_eq(&auth.inner, &cloned.inner));
+        assert_eq!(cloned.run_task_id(), "task-run-1");
+    }
+
+    #[tokio::test]
+    async fn failed_run_task_registration_can_be_retried_on_next_call() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let response_count = Arc::clone(&request_count);
+        Mock::given(method("POST"))
+            .and(path("/v1/agent/agent-runtime-1/task/register"))
+            .respond_with(move |_request: &wiremock::Request| {
+                if response_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(500)
+                } else {
+                    ResponseTemplate::new(200).set_body_json(json!({
+                        "task_id": "task-run-1",
+                    }))
                 }
-            }
-        }
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        let record = agent_identity_record_with_generated_key();
+        AgentIdentityAuth::load(record.clone(), &server.uri())
+            .await
+            .expect_err("first registration should fail");
+        let auth = AgentIdentityAuth::load(record, &server.uri()).await?;
+
+        assert_eq!(request_count.load(Ordering::SeqCst), 2);
+        assert_eq!(auth.run_task_id(), "task-run-1");
+        Ok(())
     }
 }
