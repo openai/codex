@@ -97,9 +97,10 @@ impl FsRequestProcessor {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         self.file_system()?
             .create_directory(
-                &params.path,
+                &path,
                 CreateDirectoryOptions {
                     recursive: params.recursive.unwrap_or(true),
                 },

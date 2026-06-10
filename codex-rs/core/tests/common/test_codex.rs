@@ -136,10 +136,11 @@ pub async fn test_env() -> Result<TestEnv> {
             let environment =
                 codex_exec_server::Environment::create_for_tests(Some(websocket_url.clone()))?;
             let cwd = remote_aware_cwd_path();
+            let cwd_uri = PathUri::from_path(&cwd)?;
             environment
                 .get_filesystem()
                 .create_directory(
-                    &cwd,
+                    &cwd_uri,
                     CreateDirectoryOptions { recursive: true },
                     /*sandbox*/ None,
                 )
@@ -908,10 +909,11 @@ impl TestCodexHarness {
     ) -> Result<()> {
         let abs_path = self.path_abs(rel);
         if let Some(parent) = abs_path.parent() {
+            let parent_uri = PathUri::from_path(&parent)?;
             self.test
                 .fs()
                 .create_directory(
-                    &parent,
+                    &parent_uri,
                     CreateDirectoryOptions { recursive: true },
                     /*sandbox*/ None,
                 )
@@ -940,10 +942,12 @@ impl TestCodexHarness {
     }
 
     pub async fn create_dir_all(&self, rel: impl AsRef<Path>) -> Result<()> {
+        let path = self.path_abs(rel);
+        let path_uri = PathUri::from_path(&path)?;
         self.test
             .fs()
             .create_directory(
-                &self.path_abs(rel),
+                &path_uri,
                 CreateDirectoryOptions { recursive: true },
                 /*sandbox*/ None,
             )

@@ -110,7 +110,7 @@ impl ExecutorFileSystem for LocalFileSystem {
 
     async fn create_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -194,7 +194,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 
     async fn create_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -299,11 +299,12 @@ impl ExecutorFileSystem for DirectFileSystem {
 
     async fn create_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
+        let path = path.to_abs_path()?;
         if options.recursive {
             tokio::fs::create_dir_all(path.as_path()).await?;
         } else {

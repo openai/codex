@@ -149,9 +149,10 @@ async fn configured_fallback_is_used_when_agents_candidate_is_directory() -> Res
             .with_workspace_setup(|cwd, fs| async move {
                 let agents_dir = cwd.join("AGENTS.md");
                 let fallback = cwd.join("WORKFLOW.md");
+                let agents_dir_uri = PathUri::from_path(&agents_dir)?;
                 let fallback_uri = PathUri::from_path(&fallback)?;
                 fs.create_directory(
-                    &agents_dir,
+                    &agents_dir_uri,
                     CreateDirectoryOptions { recursive: true },
                     /*sandbox*/ None,
                 )
@@ -191,12 +192,13 @@ async fn agents_docs_are_concatenated_from_project_root_to_cwd() -> Result<()> {
                 let root_agents = root.join("AGENTS.md");
                 let git_marker = root.join(".git");
                 let nested_agents = nested.join("AGENTS.md");
+                let nested_uri = PathUri::from_path(&nested)?;
                 let root_agents_uri = PathUri::from_path(&root_agents)?;
                 let git_marker_uri = PathUri::from_path(&git_marker)?;
                 let nested_agents_uri = PathUri::from_path(&nested_agents)?;
 
                 fs.create_directory(
-                    &nested,
+                    &nested_uri,
                     CreateDirectoryOptions { recursive: true },
                     /*sandbox*/ None,
                 )

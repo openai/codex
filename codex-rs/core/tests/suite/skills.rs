@@ -30,8 +30,9 @@ async fn write_repo_skill(
     body: &str,
 ) -> Result<()> {
     let skill_dir = cwd.join(".agents").join("skills").join(name);
+    let skill_dir_uri = PathUri::from_path(&skill_dir)?;
     fs.create_directory(
-        &skill_dir,
+        &skill_dir_uri,
         CreateDirectoryOptions { recursive: true },
         /*sandbox*/ None,
     )

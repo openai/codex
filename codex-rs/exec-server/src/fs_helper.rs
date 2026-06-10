@@ -214,9 +214,11 @@ pub(crate) async fn run_direct_request(
             Ok(FsHelperPayload::WriteFile(FsWriteFileResponse {}))
         }
         FsHelperRequest::CreateDirectory(params) => {
+            let path =
+                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             file_system
                 .create_directory(
-                    &params.path,
+                    &path,
                     CreateDirectoryOptions {
                         recursive: params.recursive.unwrap_or(true),
                     },

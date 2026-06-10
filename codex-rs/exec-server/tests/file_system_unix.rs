@@ -475,7 +475,7 @@ async fn file_system_create_directory_rejects_symlink_escape(
     let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
         .create_directory(
-            &absolute_path(&requested_path),
+            &PathUri::from_path(&requested_path)?,
             CreateDirectoryOptions { recursive: false },
             Some(&sandbox),
         )

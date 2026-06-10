@@ -633,8 +633,9 @@ async fn write_file_with_missing_parent_retry(
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             if let Some(parent_abs) = path_abs.parent() {
+                let parent_uri = PathUri::from_abs_path(&parent_abs)?;
                 fs.create_directory(
-                    &parent_abs,
+                    &parent_uri,
                     CreateDirectoryOptions { recursive: true },
                     sandbox,
                 )

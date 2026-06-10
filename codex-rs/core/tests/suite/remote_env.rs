@@ -297,10 +297,11 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     ))
     .abs();
     let remote_marker_name = "marker.txt";
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
     let remote_marker_uri = PathUri::from_path(remote_cwd.join(remote_marker_name))?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &remote_cwd_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -393,9 +394,10 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
     let local_write_root = local_cwd.path().join(relative_write_root);
     let local_target_path = local_cwd.path().join(relative_target_path);
     fs::create_dir(&local_write_root)?;
+    let remote_write_root_uri = PathUri::from_path(&remote_write_root)?;
     test.fs()
         .create_directory(
-            &remote_write_root,
+            &remote_write_root_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -573,9 +575,10 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &remote_cwd_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -660,9 +663,10 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &remote_cwd_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -842,9 +846,10 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &remote_cwd_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -932,10 +937,11 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
     let allowed_dir = PathBuf::from(format!("/tmp/codex-remote-readable-{}", std::process::id()));
     let file_path = allowed_dir.join("note.txt");
+    let allowed_dir_uri = PathUri::from_path(&allowed_dir)?;
     let file_path_uri = PathUri::from_path(&file_path)?;
     file_system
         .create_directory(
-            &absolute_path(allowed_dir.clone()),
+            &allowed_dir_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )

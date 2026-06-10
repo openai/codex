@@ -121,7 +121,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn create_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -129,7 +129,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::CreateDirectory(FsCreateDirectoryParams {
-                path: path.clone(),
+                path: path.to_abs_path()?,
                 recursive: Some(options.recursive),
                 sandbox: None,
             }),

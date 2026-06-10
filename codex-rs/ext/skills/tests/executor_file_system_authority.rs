@@ -94,7 +94,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn create_directory(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _options: CreateDirectoryOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {

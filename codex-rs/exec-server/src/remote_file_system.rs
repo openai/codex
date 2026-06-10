@@ -104,15 +104,16 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn create_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs create_directory");
+        let path = path.to_abs_path()?;
         let client = self.client.get().await.map_err(map_remote_error)?;
         client
             .fs_create_directory(FsCreateDirectoryParams {
-                path: path.clone(),
+                path,
                 recursive: Some(options.recursive),
                 sandbox: remote_sandbox_context(sandbox),
             })

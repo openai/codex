@@ -96,7 +96,7 @@ async fn file_system_create_directory_creates_nested_directories(
 
     file_system
         .create_directory(
-            &absolute_path(&nested_dir),
+            &PathUri::from_path(&nested_dir)?,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )

@@ -45,7 +45,7 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn create_directory(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _create_directory_options: CreateDirectoryOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
