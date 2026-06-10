@@ -87,7 +87,10 @@ async fn goal_menu_managed_file_snapshot() {
 
     chat.show_goal_summary(goal);
 
-    assert_chatwidget_snapshot!("goal_menu_managed_file", rendered_goal_summary(&mut rx));
+    assert_chatwidget_snapshot!(
+        "goal_menu_managed_file",
+        normalize_snapshot_paths(rendered_goal_summary(&mut rx))
+    );
 }
 
 #[tokio::test]
