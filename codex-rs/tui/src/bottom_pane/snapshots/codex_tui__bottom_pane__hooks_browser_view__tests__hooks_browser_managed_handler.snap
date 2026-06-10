@@ -12,6 +12,7 @@ expression: "render_lines(&view, 112)"
   Matcher   Bash                                                                                                
   Source    Admin config                                                                                        
   Command   /enterprise/hooks/permission-check.sh                                                               
+  Mode      Sync                                                                                                
   Timeout   30s                                                                                                 
   Trust     Managed                                                                                             
                                                                                                                 

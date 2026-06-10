@@ -3,6 +3,11 @@ use anyhow::Context;
 use anyhow::Result;
 use tempfile::tempdir;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::path::Path;
+
 #[tokio::test]
 async fn small_hook_output_remains_inline() -> Result<()> {
     let dir = tempdir()?;
@@ -38,5 +43,16 @@ async fn large_hook_output_spills_to_file() -> Result<()> {
         .find_map(|line| line.strip_prefix("Full hook output saved to: "))
         .context("spill path")?;
     assert_eq!(fs::read_to_string(path).await?, text);
+    #[cfg(unix)]
+    {
+        let path = Path::new(path);
+        let parent_mode = fs::metadata(path.parent().context("spill parent")?)
+            .await?
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = fs::metadata(path).await?.permissions().mode() & 0o777;
+        assert_eq!((parent_mode, file_mode), (0o700, 0o600));
+    }
     Ok(())
 }

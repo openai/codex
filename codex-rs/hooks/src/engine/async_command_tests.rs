@@ -2,7 +2,7 @@ use pretty_assertions::assert_eq;
 
 use super::AsyncCommandRuntime;
 use super::AsyncHookCompletion;
-use super::MAX_DELIVERED_CONTEXT_TOKENS_PER_TURN;
+use super::MAX_DELIVERED_OUTPUT_TOKENS_PER_TURN;
 use super::MAX_IN_FLIGHT_COMMANDS;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
@@ -29,6 +29,26 @@ fn complete(
             ready_sequence,
             additional_context: Some(text.to_string()),
             system_message: None,
+        },
+    );
+}
+
+fn complete_with_system_message(
+    runtime: &AsyncCommandRuntime,
+    launch_sequence: u64,
+    deliver_at_generation: u64,
+    text: &str,
+) {
+    let mut state = runtime.inner.state.lock().expect("async hook state");
+    let ready_sequence = state.next_ready_sequence;
+    state.next_ready_sequence += 1;
+    state.completions.insert(
+        launch_sequence,
+        AsyncHookCompletion {
+            deliver_at_generation,
+            ready_sequence,
+            additional_context: None,
+            system_message: Some(text.to_string()),
         },
     );
 }
@@ -134,21 +154,34 @@ async fn launch_is_skipped_at_session_concurrency_limit() {
 }
 
 #[test]
-fn context_delivery_budget_leaves_remaining_completions_queued() {
+fn shared_output_budget_leaves_remaining_completions_queued() {
     let runtime = AsyncCommandRuntime::new();
-    let context = "x".repeat(MAX_DELIVERED_CONTEXT_TOKENS_PER_TURN);
-    for launch_sequence in 0..5 {
-        complete(
-            &runtime,
-            launch_sequence,
-            /*deliver_at_generation*/ 1,
-            &context,
-        );
-    }
+    let output = "x".repeat(MAX_DELIVERED_OUTPUT_TOKENS_PER_TURN);
+    complete(
+        &runtime, /*launch_sequence*/ 0, /*deliver_at_generation*/ 1, &output,
+    );
+    complete_with_system_message(
+        &runtime, /*launch_sequence*/ 1, /*deliver_at_generation*/ 1, &output,
+    );
+    complete(
+        &runtime, /*launch_sequence*/ 2, /*deliver_at_generation*/ 1, &output,
+    );
+    complete_with_system_message(
+        &runtime, /*launch_sequence*/ 3, /*deliver_at_generation*/ 1, &output,
+    );
+    complete(
+        &runtime, /*launch_sequence*/ 4, /*deliver_at_generation*/ 1, &output,
+    );
 
     let first_delivery = runtime.commit_accepted_turn_and_drain(runtime.delivery_cutoff());
-    assert_eq!(first_delivery.additional_contexts, vec![context.clone(); 4]);
+    assert_eq!(
+        first_delivery,
+        super::AsyncHookDelivery {
+            additional_contexts: vec![output.clone(), output.clone()],
+            system_messages: vec![output.clone(), output.clone()],
+        }
+    );
 
     let second_delivery = runtime.commit_accepted_turn_and_drain(runtime.delivery_cutoff());
-    assert_eq!(second_delivery.additional_contexts, vec![context]);
+    assert_eq!(second_delivery.additional_contexts, vec![output]);
 }

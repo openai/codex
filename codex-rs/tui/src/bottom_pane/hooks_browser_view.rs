@@ -1,4 +1,5 @@
 use codex_app_server_protocol::HookEventName;
+use codex_app_server_protocol::HookExecutionMode;
 use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
 use codex_app_server_protocol::HookTrustStatus;
@@ -491,6 +492,10 @@ impl HooksBrowserView {
             width,
             Some(MAX_COMMAND_DETAIL_LINES),
         ));
+        lines.push(detail_line(
+            "Mode",
+            hook_execution_mode_label(hook.execution_mode),
+        ));
         lines.push(detail_line("Timeout", &format!("{}s", hook.timeout_sec)));
         lines.push(detail_line("Trust", hook_trust_label(hook.trust_status)));
         lines
@@ -724,6 +729,13 @@ fn hook_trust_label(status: HookTrustStatus) -> &'static str {
         HookTrustStatus::Trusted => "Trusted",
         HookTrustStatus::Untrusted => "New hook - review required",
         HookTrustStatus::Modified => "Modified since last trusted - review required",
+    }
+}
+
+fn hook_execution_mode_label(mode: HookExecutionMode) -> &'static str {
+    match mode {
+        HookExecutionMode::Sync => "Sync",
+        HookExecutionMode::Async => "Async",
     }
 }
 
@@ -1094,6 +1106,7 @@ mod tests {
             /*display_order*/ 0,
         );
         untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        untrusted_hook.execution_mode = HookExecutionMode::Async;
         let mut view = HooksBrowserView::new(
             vec![untrusted_hook],
             Vec::new(),

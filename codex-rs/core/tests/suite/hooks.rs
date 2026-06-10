@@ -360,6 +360,88 @@ Path(r"{ready_path}").write_text(prompt, encoding="utf-8")
     Ok(())
 }
 
+fn write_gated_async_user_prompt_submit_hook(home: &Path) -> Result<()> {
+    let script_path = home.join("gated_async_user_prompt_submit_hook.py");
+    let started_path = home.join("gated_async_user_prompt_submit_started");
+    let release_path = home.join("gated_async_user_prompt_submit_release");
+    let ready_path = home.join("gated_async_user_prompt_submit_ready");
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+import time
+
+payload = json.load(sys.stdin)
+prompt = payload.get("prompt")
+Path(r"{started_path}").write_text(prompt, encoding="utf-8")
+release_path = Path(r"{release_path}")
+while not release_path.exists():
+    time.sleep(0.01)
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": f"async context surviving refresh for {{prompt}}"
+    }}
+}}))
+Path(r"{ready_path}").write_text(prompt, encoding="utf-8")
+"#,
+        started_path = started_path.display(),
+        release_path = release_path.display(),
+        ready_path = ready_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "async": true,
+                }]
+            }]
+        }
+    });
+
+    fs::write(script_path, script).context("write gated async user prompt submit hook")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_async_session_start_hook_with_system_message(
+    home: &Path,
+    system_message: &str,
+) -> Result<()> {
+    let script_path = home.join("async_session_start_system_message_hook.py");
+    let ready_path = home.join("async_session_start_system_message_ready");
+    let system_message_json =
+        serde_json::to_string(system_message).context("serialize async system message")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+json.load(sys.stdin)
+print(json.dumps({{"systemMessage": {system_message_json}}}))
+Path(r"{ready_path}").write_text("ready", encoding="utf-8")
+"#,
+        ready_path = ready_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "async": true,
+                }]
+            }]
+        }
+    });
+
+    fs::write(script_path, script).context("write async session start system message hook")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_async_session_start_hook(home: &Path) -> Result<()> {
     let script_path = home.join("async_session_start_hook.py");
     let ready_path = home.join("async_session_start_ready");
@@ -1558,6 +1640,139 @@ async fn async_startup_output_skips_first_accepted_turn() -> Result<()> {
             .message_input_texts("developer")
             .contains(&"async startup context".to_string())
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn async_output_survives_runtime_config_refresh() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "first"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "second"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_gated_async_user_prompt_submit_hook(home)
+                .expect("write gated async user prompt submit hook");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("before refresh").await?;
+    wait_for_async_hook(
+        &test
+            .codex_home_path()
+            .join("gated_async_user_prompt_submit_started"),
+    )
+    .await?;
+
+    test.codex.refresh_runtime_config(test.config.clone()).await;
+    fs::write(
+        test.codex_home_path()
+            .join("gated_async_user_prompt_submit_release"),
+        "release",
+    )?;
+    wait_for_async_hook(
+        &test
+            .codex_home_path()
+            .join("gated_async_user_prompt_submit_ready"),
+    )
+    .await?;
+
+    test.submit_turn("after refresh").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&"async context surviving refresh for before refresh".to_string())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn async_system_message_spills_large_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "first"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "second"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let system_message = "async warning output ".repeat(800);
+
+    let mut builder = test_codex()
+        .with_pre_build_hook({
+            let system_message = system_message.clone();
+            move |home| {
+                write_async_session_start_hook_with_system_message(home, &system_message)
+                    .expect("write async session start system message hook");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("first prompt").await?;
+    wait_for_async_hook(
+        &test
+            .codex_home_path()
+            .join("async_session_start_system_message_ready"),
+    )
+    .await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "second prompt".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let warning = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Warning(_))).await;
+    let EventMsg::Warning(warning) = warning else {
+        unreachable!("waited for warning event")
+    };
+    assert!(warning.message.contains("tokens truncated"));
+    let path = spilled_hook_output_path(&warning.message).context("spilled system message path")?;
+    assert_eq!(fs::read_to_string(path)?, system_message);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     Ok(())
 }

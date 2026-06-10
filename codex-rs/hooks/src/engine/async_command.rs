@@ -37,7 +37,7 @@ use crate::output_spill::HookOutputSpiller;
 const MAX_QUEUED_COMPLETIONS: usize = 64;
 const MAX_IN_FLIGHT_COMMANDS: usize = 32;
 const MAX_DELIVERED_COMPLETIONS_PER_TURN: usize = 8;
-const MAX_DELIVERED_CONTEXT_TOKENS_PER_TURN: usize = 10_000;
+const MAX_DELIVERED_OUTPUT_TOKENS_PER_TURN: usize = 10_000;
 
 /// Informational async hook output ready to be recorded for a model request.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -209,6 +209,14 @@ impl AsyncCommandRuntime {
                         .await,
                 );
             }
+            if let Some(system_message) = output.system_message.take() {
+                output.system_message = Some(
+                    inner
+                        .output_spiller
+                        .maybe_spill_text(thread_id, system_message)
+                        .await,
+                );
+            }
             if inner.shutting_down.load(Ordering::Acquire) {
                 return;
             }
@@ -265,7 +273,7 @@ impl AsyncCommandRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut eligible = Vec::new();
-        let mut context_tokens = 0usize;
+        let mut output_tokens = 0usize;
         for (launch_sequence, completion) in &state.completions {
             if completion.ready_sequence >= cutoff.ready_sequence
                 || completion.deliver_at_generation > accepted_generation
@@ -275,18 +283,25 @@ impl AsyncCommandRuntime {
             if eligible.len() >= MAX_DELIVERED_COMPLETIONS_PER_TURN {
                 break;
             }
-            let completion_context_tokens = completion
+            let completion_output_tokens = completion
                 .additional_context
                 .as_deref()
                 .map(approx_token_count)
-                .unwrap_or_default();
-            if context_tokens.saturating_add(completion_context_tokens)
-                > MAX_DELIVERED_CONTEXT_TOKENS_PER_TURN
+                .unwrap_or_default()
+                .saturating_add(
+                    completion
+                        .system_message
+                        .as_deref()
+                        .map(approx_token_count)
+                        .unwrap_or_default(),
+                );
+            if output_tokens.saturating_add(completion_output_tokens)
+                > MAX_DELIVERED_OUTPUT_TOKENS_PER_TURN
             {
                 break;
             }
             eligible.push(*launch_sequence);
-            context_tokens = context_tokens.saturating_add(completion_context_tokens);
+            output_tokens = output_tokens.saturating_add(completion_output_tokens);
         }
         let mut delivery = AsyncHookDelivery::default();
         for launch_sequence in eligible {

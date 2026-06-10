@@ -5,6 +5,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -20,14 +21,14 @@ impl HookOutputSpiller {
     pub(crate) fn new() -> Self {
         Self {
             output_dir: AbsolutePathBuf::resolve_path_against_base(std::env::temp_dir(), "/")
-                .join(HOOK_OUTPUTS_DIR),
+                .join(format!("{HOOK_OUTPUTS_DIR}-{}", Uuid::new_v4())),
         }
     }
 
     /// Keeps hook text within the model-visible hook-output budget.
     ///
     /// Oversized text is written in full under the OS temp directory at
-    /// `<temp_dir>/hook_outputs/<thread_id>/`
+    /// `<temp_dir>/hook_outputs-<runtime_id>/<thread_id>/`
     /// and replaced with the same head/tail preview style used for other truncated
     /// output, plus a path back to the preserved full text.
     pub(crate) async fn maybe_spill_text(&self, thread_id: ThreadId, text: String) -> String {
@@ -36,20 +37,51 @@ impl HookOutputSpiller {
         }
 
         let path = hook_output_path(&self.output_dir, thread_id);
-        if let Some(parent) = path.parent()
-            && let Err(err) = fs::create_dir_all(parent.as_ref()).await
-        {
-            warn!(
-                "failed to create hook output directory {}: {err}",
-                parent.display()
-            );
-            return formatted_truncate_text(
-                &text,
-                TruncationPolicy::Tokens(HOOK_OUTPUT_TOKEN_LIMIT),
-            );
+        if let Some(parent) = path.parent() {
+            let mut dir_builder = fs::DirBuilder::new();
+            dir_builder.recursive(true);
+            #[cfg(unix)]
+            dir_builder.mode(0o700);
+            if let Err(err) = dir_builder.create(parent.as_ref()).await {
+                warn!(
+                    "failed to create hook output directory {}: {err}",
+                    parent.display()
+                );
+                return formatted_truncate_text(
+                    &text,
+                    TruncationPolicy::Tokens(HOOK_OUTPUT_TOKEN_LIMIT),
+                );
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                if let Err(err) =
+                    fs::set_permissions(parent.as_ref(), std::fs::Permissions::from_mode(0o700))
+                        .await
+                {
+                    warn!(
+                        "failed to secure hook output directory {}: {err}",
+                        parent.display()
+                    );
+                    return formatted_truncate_text(
+                        &text,
+                        TruncationPolicy::Tokens(HOOK_OUTPUT_TOKEN_LIMIT),
+                    );
+                }
+            }
         }
 
-        if let Err(err) = fs::write(path.as_ref(), &text).await {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let write_result = async {
+            let mut file = options.open(path.as_ref()).await?;
+            file.write_all(text.as_bytes()).await
+        }
+        .await;
+        if let Err(err) = write_result {
             warn!("failed to write hook output {}: {err}", path.display());
             return formatted_truncate_text(
                 &text,
