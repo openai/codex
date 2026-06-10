@@ -51,7 +51,7 @@ pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     {
         Ok(runtime) => Some(runtime),
         Err(err) => {
-            emit_startup_warning(&format!("failed to initialize state runtime: {err}"));
+            emit_startup_warning(&format!("failed to initialize state runtime: {err:#}"));
             None
         }
     }

@@ -74,15 +74,32 @@ fn sqlite_error_detail_classifies_corruption_and_lock_errors() {
     assert!(sqlite_error_detail_is_lock("database is busy"));
 }
 
-#[test]
-fn runtime_db_path_for_corruption_error_returns_failed_database_path() {
-    let path = PathBuf::from("/tmp/logs_2.sqlite");
-    let err = anyhow::Error::new(RuntimeDbInitError::new(
-        "log DB",
-        "open",
-        path.as_path(),
-        anyhow::anyhow!("database disk image is malformed"),
-    ));
+#[tokio::test]
+async fn runtime_db_path_for_corruption_error_returns_failed_database_path() -> std::io::Result<()>
+{
+    let sqlite_home = unique_temp_dir();
+    tokio::fs::create_dir_all(sqlite_home.as_path()).await?;
+    let path = super::super::state_db_path(sqlite_home.as_path());
+    tokio::fs::write(path.as_path(), b"not sqlite").await?;
+
+    let err = match super::super::StateRuntime::init(sqlite_home, "openai".to_string()).await {
+        Ok(_) => panic!("malformed sqlite should fail to initialize"),
+        Err(err) => err,
+    };
 
     assert_eq!(runtime_db_path_for_corruption_error(&err), Some(path));
+    Ok(())
+}
+
+#[test]
+fn runtime_db_path_for_corruption_error_ignores_corrupt_word_in_path() {
+    let path = PathBuf::from("/tmp/sqlite_corrupt/state_5.sqlite");
+    let err = anyhow::Error::new(RuntimeDbInitError::new(
+        "state DB",
+        "open",
+        path.as_path(),
+        anyhow::anyhow!("permission denied"),
+    ));
+
+    assert_eq!(runtime_db_path_for_corruption_error(&err), None);
 }

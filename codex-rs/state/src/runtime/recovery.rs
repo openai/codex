@@ -5,6 +5,7 @@
 //! moves only that database file and its sidecars into a backup folder so the
 //! other databases keep their data.
 
+use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -100,10 +101,27 @@ pub fn runtime_db_path_for_corruption_error(err: &anyhow::Error) -> Option<PathB
 }
 
 pub fn is_sqlite_corruption_error(err: &anyhow::Error) -> bool {
-    err.chain().any(|source| {
-        let detail = source.to_string();
-        sqlite_error_detail_is_corruption(&detail)
-    })
+    err.chain().any(sqlite_error_source_is_corruption)
+}
+
+fn sqlite_error_source_is_corruption(source: &(dyn std::error::Error + 'static)) -> bool {
+    let Some(err) = source.downcast_ref::<sqlx::Error>() else {
+        return false;
+    };
+    let sqlx::Error::Database(database_error) = err else {
+        return false;
+    };
+    sqlite_error_detail_is_corruption(database_error.message())
+        || database_error
+            .code()
+            .is_some_and(sqlite_database_code_is_corruption)
+}
+
+fn sqlite_database_code_is_corruption(code: Cow<'_, str>) -> bool {
+    matches!(
+        code.as_ref().to_ascii_lowercase().as_str(),
+        "11" | "26" | "sqlite_corrupt" | "sqlite_notadb"
+    )
 }
 
 pub fn sqlite_error_detail_is_corruption(detail: &str) -> bool {
