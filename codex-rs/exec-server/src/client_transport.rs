@@ -19,6 +19,7 @@ use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::client_api::redacted_websocket_url;
 use crate::connection::JsonRpcConnection;
+use crate::noise_relay::NoiseHarnessConnectionArgs;
 use crate::noise_relay::noise_harness_connection_from_websocket;
 use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::harness_connection_from_websocket;
@@ -144,12 +145,14 @@ impl ExecServerClient {
         let connection_label = format!("Noise exec-server rendezvous websocket {diagnostic_url}");
         let connection = noise_harness_connection_from_websocket(
             stream,
-            connection_label,
-            environment_id,
-            executor_registration_id,
-            harness_identity,
-            executor_public_key,
-            harness_key_authorization,
+            NoiseHarnessConnectionArgs {
+                connection_label,
+                environment_id,
+                executor_registration_id,
+                identity: harness_identity,
+                responder_public_key: executor_public_key,
+                harness_key_authorization,
+            },
         );
         Self::connect(
             connection,

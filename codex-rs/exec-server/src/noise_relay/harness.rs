@@ -38,6 +38,20 @@ use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
 
+/// Values that bind one harness websocket to the intended executor registration.
+///
+/// These fields all come from the same registry response. Keeping them together
+/// makes that relationship visible at the call site and avoids mixing up the
+/// several string and key arguments used to start the handshake.
+pub(crate) struct NoiseHarnessConnectionArgs {
+    pub(crate) connection_label: String,
+    pub(crate) environment_id: String,
+    pub(crate) executor_registration_id: String,
+    pub(crate) identity: NoiseChannelIdentity,
+    pub(crate) responder_public_key: NoiseChannelPublicKey,
+    pub(crate) harness_key_authorization: String,
+}
+
 /// Adapt one harness rendezvous websocket into an authenticated JSON-RPC connection.
 ///
 /// The returned connection is not usable until the background task completes
@@ -47,17 +61,20 @@ use crate::relay_proto::RelayMessageFrame;
 /// back to plaintext.
 pub(crate) fn noise_harness_connection_from_websocket<T, E>(
     stream: T,
-    connection_label: String,
-    environment_id: String,
-    executor_registration_id: String,
-    identity: NoiseChannelIdentity,
-    responder_public_key: NoiseChannelPublicKey,
-    harness_key_authorization: String,
+    args: NoiseHarnessConnectionArgs,
 ) -> JsonRpcConnection
 where
     T: Sink<Message, Error = E> + Stream<Item = Result<Message, E>> + Unpin + Send + 'static,
     E: std::fmt::Display + Send + 'static,
 {
+    let NoiseHarnessConnectionArgs {
+        connection_label,
+        environment_id,
+        executor_registration_id,
+        identity,
+        responder_public_key,
+        harness_key_authorization,
+    } = args;
     let stream_id = Uuid::new_v4().to_string();
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);

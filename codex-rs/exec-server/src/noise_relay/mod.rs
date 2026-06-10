@@ -6,6 +6,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 use crate::ExecServerError;
 
+pub(crate) use harness::NoiseHarnessConnectionArgs;
 pub(crate) use harness::noise_harness_connection_from_websocket;
 
 // This bounds allocation in tungstenite before protobuf and Noise record
