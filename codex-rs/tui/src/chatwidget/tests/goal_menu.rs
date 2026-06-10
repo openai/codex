@@ -81,7 +81,7 @@ async fn goal_menu_managed_file_snapshot() {
         /*token_budget*/ Some(80_000),
     );
     goal.objective = format!(
-        "Goal objective file: {}\nRead that file before continuing.",
+        "Codex goal objective file: {}\nRead that file before continuing.",
         test_path_display("/tmp/project/goal.md")
     );
 
@@ -178,7 +178,7 @@ async fn goal_edit_prompt_hydrates_and_materializes_oversized_objective_file() {
         /*token_budget*/ Some(80_000),
     );
     goal.objective = format!(
-        "Goal objective file: {}\nRead that file before continuing.",
+        "Codex goal objective file: {}\nRead that file before continuing.",
         path.display()
     );
 

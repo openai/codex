@@ -30,6 +30,12 @@ struct PreparedSlashCommandArgs {
     source: SlashCommandDispatchSource,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreparedSlashCommandOutcome {
+    UseDefaultQueuedDrain,
+    ContinueQueuedDrain,
+}
+
 const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
@@ -620,7 +626,7 @@ impl ChatWidget {
         &mut self,
         cmd: SlashCommand,
         prepared: PreparedSlashCommandArgs,
-    ) {
+    ) -> PreparedSlashCommandOutcome {
         let PreparedSlashCommandArgs {
             args,
             text_elements,
@@ -665,19 +671,19 @@ impl ChatWidget {
             },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
-                    return;
+                    return PreparedSlashCommandOutcome::UseDefaultQueuedDrain;
                 }
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 let Some(name) = normalize_thread_name(&args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
-                    return;
+                    return PreparedSlashCommandOutcome::UseDefaultQueuedDrain;
                 };
                 self.app_event_tx.set_thread_name(name);
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
                 if !self.apply_plan_slash_command() {
-                    return;
+                    return PreparedSlashCommandOutcome::UseDefaultQueuedDrain;
                 }
                 let user_message = self.prepared_inline_user_message(
                     args,
@@ -701,7 +707,7 @@ impl ChatWidget {
                     if source == SlashCommandDispatchSource::Live {
                         self.clear_live_goal_submission();
                     }
-                    return;
+                    return PreparedSlashCommandOutcome::UseDefaultQueuedDrain;
                 }
                 enum GoalControlCommand {
                     Clear,
@@ -716,7 +722,7 @@ impl ChatWidget {
                         if source == SlashCommandDispatchSource::Live {
                             self.clear_live_goal_submission();
                         }
-                        return;
+                        return PreparedSlashCommandOutcome::UseDefaultQueuedDrain;
                     }
                     "pause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Paused)),
                     "resume" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
@@ -733,7 +739,7 @@ impl ChatWidget {
                         if source == SlashCommandDispatchSource::Live {
                             self.clear_live_goal_submission();
                         }
-                        return;
+                        return PreparedSlashCommandOutcome::UseDefaultQueuedDrain;
                     };
                     match command {
                         GoalControlCommand::Clear => {
@@ -749,7 +755,7 @@ impl ChatWidget {
                     if source == SlashCommandDispatchSource::Live {
                         self.clear_live_goal_submission();
                     }
-                    return;
+                    return PreparedSlashCommandOutcome::UseDefaultQueuedDrain;
                 }
                 let pending_pastes = if source == SlashCommandDispatchSource::Live {
                     self.bottom_pane.composer_pending_pastes()
@@ -760,6 +766,7 @@ impl ChatWidget {
                     self.config.codex_home.as_path(),
                     GoalDraft {
                         objective: args,
+                        text_elements,
                         pending_pastes,
                         local_images,
                         remote_image_urls,
@@ -768,7 +775,14 @@ impl ChatWidget {
                     Ok(objective) => objective,
                     Err(err) => {
                         self.add_error_message(err.to_string());
-                        return;
+                        return match source {
+                            SlashCommandDispatchSource::Live => {
+                                PreparedSlashCommandOutcome::UseDefaultQueuedDrain
+                            }
+                            SlashCommandDispatchSource::Queued => {
+                                PreparedSlashCommandOutcome::ContinueQueuedDrain
+                            }
+                        };
                     }
                 };
                 let Some(thread_id) = self.thread_id else {
@@ -790,7 +804,7 @@ impl ChatWidget {
                             Some("The session must start before you can set a goal.".to_string()),
                         );
                     }
-                    return;
+                    return PreparedSlashCommandOutcome::UseDefaultQueuedDrain;
                 };
                 self.app_event_tx.send(AppEvent::SetThreadGoalObjective {
                     thread_id,
@@ -808,7 +822,7 @@ impl ChatWidget {
                     self.add_error_message(format!(
                         "'/{command}' is unavailable before the session starts."
                     ));
-                    return;
+                    return PreparedSlashCommandOutcome::UseDefaultQueuedDrain;
                 };
                 let user_message = self.prepared_inline_user_message(
                     args,
@@ -849,6 +863,7 @@ impl ChatWidget {
         if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
             self.bottom_pane.drain_pending_submission_state();
         }
+        PreparedSlashCommandOutcome::UseDefaultQueuedDrain
     }
 
     pub(super) fn submit_queued_slash_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
@@ -936,7 +951,7 @@ impl ChatWidget {
             rest_offset + leading_trimmed,
             &text_elements,
         );
-        self.dispatch_prepared_command_with_args(
+        let outcome = self.dispatch_prepared_command_with_args(
             cmd,
             PreparedSlashCommandArgs {
                 args: trimmed_rest.to_string(),
@@ -947,7 +962,12 @@ impl ChatWidget {
                 source: SlashCommandDispatchSource::Queued,
             },
         );
-        self.queued_command_drain_result(cmd)
+        match outcome {
+            PreparedSlashCommandOutcome::UseDefaultQueuedDrain => {
+                self.queued_command_drain_result(cmd)
+            }
+            PreparedSlashCommandOutcome::ContinueQueuedDrain => QueueDrain::Continue,
+        }
     }
 
     fn builtin_command_flags(&self) -> BuiltinCommandFlags {

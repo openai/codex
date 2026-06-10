@@ -8,42 +8,51 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::LocalImageAttachment;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
+use codex_protocol::user_input::TextElement;
 use uuid::Uuid;
 
 const GOAL_ATTACHMENT_DIR: &str = "attachments";
-const GOAL_FILE_PREFIX: &str = "Goal objective file: ";
+const GOAL_FILE_PREFIX: &str = "Codex goal objective file: ";
 const GOAL_FILE_NAME: &str = "goal-objective.md";
 
 #[derive(Debug, Default)]
 pub(crate) struct GoalDraft {
     pub(crate) objective: String,
+    pub(crate) text_elements: Vec<TextElement>,
     pub(crate) pending_pastes: Vec<(String, String)>,
     pub(crate) local_images: Vec<LocalImageAttachment>,
     pub(crate) remote_image_urls: Vec<String>,
 }
 
 pub(crate) fn materialize_goal_draft(codex_home: &Path, draft: GoalDraft) -> Result<String> {
-    let mut objective = draft.objective.trim().to_string();
-    if objective.is_empty() {
+    let mut objective = draft.objective;
+    if objective.trim().is_empty() {
         bail!("Goal objective must not be empty.");
     }
 
     let mut output_dir = None;
+    let mut materialized_pastes = Vec::new();
     for (idx, (placeholder, text)) in draft.pending_pastes.iter().enumerate() {
         let path = ensure_output_dir(codex_home, &mut output_dir)?
             .join(format!("pasted-text-{}.txt", idx + 1));
         write_file(&path, text)?;
 
         if !placeholder.is_empty() {
-            let replacement = format!("pasted text file: {}", path.display());
-            objective = objective.replace(placeholder, &replacement);
+            materialized_pastes.push((
+                placeholder.clone(),
+                format!("pasted text file: {}", path.display()),
+            ));
         }
     }
+    let (expanded_objective, _) =
+        ChatComposer::expand_pending_pastes(&objective, draft.text_elements, &materialized_pastes);
+    objective = expanded_objective.trim().to_string();
 
     let mut image_lines = Vec::new();
     for (idx, image) in draft.local_images.iter().enumerate() {

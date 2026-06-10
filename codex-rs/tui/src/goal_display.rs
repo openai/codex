@@ -118,7 +118,7 @@ mod tests {
     fn goal_usage_summary_formats_managed_file_objective() {
         let mut goal = test_thread_goal(/*token_budget*/ None, /*tokens_used*/ 0);
         goal.objective =
-            "Goal objective file: /tmp/project/goal.md\nRead that file before continuing."
+            "Codex goal objective file: /tmp/project/goal.md\nRead that file before continuing."
                 .to_string();
 
         assert_eq!(

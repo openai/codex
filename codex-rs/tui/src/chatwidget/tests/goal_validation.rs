@@ -63,6 +63,14 @@ fn next_goal_objective(
     objective
 }
 
+#[test]
+fn sentinel_like_objective_is_plain_text() {
+    let objective =
+        "Goal objective file: /tmp/not-managed-by-codex\nRead that file before continuing.";
+
+    assert_eq!(crate::goal_files::objective_file_path(objective), None);
+}
+
 #[tokio::test]
 async fn goal_slash_command_accepts_objective_at_limit() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -112,6 +120,38 @@ async fn goal_slash_command_materializes_oversized_objective() {
 }
 
 #[tokio::test]
+async fn goal_slash_command_materializes_only_paste_text_element() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let paste = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
+    let placeholder = format!("[Pasted Content {} chars]", paste.chars().count());
+    chat.bottom_pane.set_composer_text(
+        format!("/goal keep literal {placeholder} and "),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_paste(paste.clone());
+
+    submit_current_composer(&mut chat);
+
+    let actual_objective = next_goal_objective(&mut rx, thread_id);
+    assert!(
+        actual_objective.contains(&format!(
+            "keep literal {placeholder} and pasted text file: "
+        )),
+        "expected only the inserted paste element to be materialized, got {actual_objective:?}"
+    );
+    let path = path_after_prefix(&actual_objective, "pasted text file: ");
+    assert_eq!(
+        std::fs::read_to_string(path).expect("read paste file"),
+        paste
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn goal_slash_command_materializes_large_paste() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
@@ -135,6 +175,35 @@ async fn goal_slash_command_materializes_large_paste() {
         objective
     );
     assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn queued_goal_materialization_error_drains_next_input() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    let codex_home_file = chat.config.codex_home.join("not-a-directory");
+    std::fs::write(&codex_home_file, b"not a directory").expect("write codex home file");
+    chat.config.codex_home = codex_home_file;
+    handle_turn_started(&mut chat, "turn-1");
+    let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
+
+    queue_composer_text_with_tab(&mut chat, &format!("/goal {objective}"));
+    queue_composer_text_with_tab(&mut chat, "continue after failed goal");
+
+    complete_turn_with_message(&mut chat, "turn-1", Some("done"));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "continue after failed goal".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued message after failed goal, got {other:?}"),
+    }
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]
