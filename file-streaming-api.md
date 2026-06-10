@@ -30,13 +30,16 @@ Opens a file for positional reads.
 Response:
 
 ```json
-{}
+{
+  "maxChunkBytes": 262144
+}
 ```
 
 ### `fs/readFile/read`
 
 Reads at most `maxBytes` starting at the absolute byte offset. If `maxBytes`
-is omitted or exceeds the server's read limit, the server uses that limit.
+is omitted or exceeds `maxChunkBytes`, the server uses `maxChunkBytes`.
+Clients may use `maxChunkBytes` to size a reusable read buffer.
 
 ```json
 {
@@ -182,10 +185,9 @@ Response:
   concurrently.
 - Reads are positional and do not maintain a server-side cursor.
 - Writes are sequential appends.
-- Each read transfers at most the server's read limit.
-- Each write transfers at most the `maxChunkBytes` returned by
-  `fs/writeFile/open`.
-- Both limits are currently 262144 bytes.
+- Each read or write transfers at most the `maxChunkBytes` returned by its
+  corresponding open operation.
+- `maxChunkBytes` is currently 262144 bytes.
 - Backpressure comes from awaiting bounded read and write responses. Clients
   should use a bounded pipeline of up to two read requests to hide transport
   round-trip latency without accumulating unbounded response data.
