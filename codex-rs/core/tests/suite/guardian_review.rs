@@ -3,10 +3,11 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
@@ -29,19 +30,24 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
-    const FIRST_REVIEW_TOTAL_TOKENS: i64 = 500_000;
-    const COMPACTION_TOTAL_TOKENS: i64 = 50;
+    const FIRST_REVIEW_TOTAL_TOKENS: i64 = 220_000;
     const AUTO_COMPACT_TOKEN_LIMIT: i64 = 200_000;
-    const REQUEST_RETRIES: u64 = 0;
-    const STREAM_RETRIES: u64 = 0;
 
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
@@ -52,29 +58,31 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
         exclude_slash_tmp: true,
     };
     let sandbox_policy_for_config = sandbox_policy.clone();
-    let mut builder = test_codex().with_config(move |config| {
-        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
-            .expect("set sandbox policy");
-        config.model_auto_compact_token_limit = Some(AUTO_COMPACT_TOKEN_LIMIT);
-        config.model_provider.request_max_retries = Some(REQUEST_RETRIES);
-        config.model_provider.stream_max_retries = Some(STREAM_RETRIES);
-        config.model_provider.supports_websockets = false;
-        config
-            .features
-            .enable(Feature::RemoteCompactionV2)
-            .expect("enable remote compaction v2");
-    });
-    let test = builder.build(&server).await?;
-
-    let first_justification = "Approve the first eager-compaction command.";
+    let test = test_codex()
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+                .expect("set sandbox policy");
+            config.model_auto_compact_token_limit = Some(AUTO_COMPACT_TOKEN_LIMIT);
+            config.model_auto_compact_token_limit_scope =
+                AutoCompactTokenLimitScope::BodyAfterPrefix;
+            config.model_provider.request_max_retries = Some(u64::MAX);
+            config.model_provider.stream_max_retries = Some(u64::default());
+            config.model_provider.supports_websockets = false;
+        })
+        .build(&server)
+        .await?;
+    let first_tool_gate = test.cwd.path().join("release-first-tool");
     let second_justification = "Approve the second eager-compaction command.";
     let first_args = json!({
-        "cmd": "sleep 0.2; printf first",
+        "cmd": format!(
+            "while [ ! -f {} ]; do sleep 0.01; done; printf first",
+            shlex::try_join([first_tool_gate.to_string_lossy().as_ref()])?
+        ),
         "yield_time_ms": 1_000_u64,
         "sandbox_permissions": SandboxPermissions::RequireEscalated,
-        "justification": first_justification,
+        "justification": "Approve the first eager-compaction command.",
     });
     let second_args = json!({
         "cmd": "printf second",
@@ -82,13 +90,10 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
         "sandbox_permissions": SandboxPermissions::RequireEscalated,
         "justification": second_justification,
     });
-    let guardian_assessment = json!({
-        "risk_level": "low",
-        "user_authorization": "high",
-        "outcome": "allow",
-        "rationale": "The command writes a bounded marker file requested by the user.",
-    })
-    .to_string();
+    let mut first_guardian_completed =
+        ev_completed_with_tokens("resp-guardian-first", FIRST_REVIEW_TOTAL_TOKENS);
+    first_guardian_completed["response"]["usage"]["input_tokens"] = 10_000.into();
+    first_guardian_completed["response"]["usage"]["output_tokens"] = 210_000.into();
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -103,19 +108,8 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
             ]),
             sse(vec![
                 ev_response_created("resp-guardian-first"),
-                ev_assistant_message("msg-guardian-first", &guardian_assessment),
-                ev_completed_with_tokens("resp-guardian-first", FIRST_REVIEW_TOTAL_TOKENS),
-            ]),
-            sse(vec![
-                ev_response_created("resp-guardian-compact"),
-                json!({
-                    "type": "response.output_item.done",
-                    "item": {
-                        "type": "compaction",
-                        "encrypted_content": "EAGER_GUARDIAN_COMPACTED_CONTEXT",
-                    }
-                }),
-                ev_completed_with_tokens("resp-guardian-compact", COMPACTION_TOTAL_TOKENS),
+                ev_assistant_message("msg-guardian-first", r#"{"outcome":"allow"}"#),
+                first_guardian_completed,
             ]),
             sse(vec![
                 ev_response_created("resp-parent-second-tool"),
@@ -128,7 +122,7 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
             ]),
             sse(vec![
                 ev_response_created("resp-guardian-second"),
-                ev_assistant_message("msg-guardian-second", &guardian_assessment),
+                ev_assistant_message("msg-guardian-second", r#"{"outcome":"allow"}"#),
                 ev_completed("resp-guardian-second"),
             ]),
             sse(vec![
@@ -139,6 +133,40 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
         ],
     )
     .await;
+    let compact_response_released = Arc::new(AtomicBool::new(false));
+    let compact_request_count = Arc::new(AtomicUsize::new(0));
+    let compact_response_released_for_mock = Arc::clone(&compact_response_released);
+    let compact_request_count_for_mock = Arc::clone(&compact_request_count);
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact$"))
+        .respond_with(move |_: &wiremock::Request| {
+            compact_request_count_for_mock.fetch_add(1, Ordering::AcqRel);
+            if !compact_response_released_for_mock.load(Ordering::Acquire) {
+                return ResponseTemplate::new(503);
+            }
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(json!({
+                    "output": [{
+                        "type": "compaction",
+                        "encrypted_content": "EAGER_GUARDIAN_COMPACTED_CONTEXT",
+                    }],
+                }))
+        })
+        .mount(&server)
+        .await;
+    let compact_request_count_for_release = Arc::clone(&compact_request_count);
+    let release_first_tool = tokio::spawn(async move {
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
+            while compact_request_count_for_release.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("compact request was not observed"))?;
+        fs::write(first_tool_gate, "release")?;
+        Ok::<(), anyhow::Error>(())
+    });
 
     test.codex
         .submit(Op::UserInput {
@@ -158,41 +186,40 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
             },
         })
         .await?;
+    for _ in 0..2 {
+        wait_for_event(&test.codex, |event| {
+            matches!(
+                event,
+                EventMsg::GuardianAssessment(assessment)
+                    if assessment.status == GuardianAssessmentStatus::InProgress
+            )
+        })
+        .await;
+    }
+    assert!(
+        responses
+            .requests()
+            .iter()
+            .all(|request| !request.body_contains_text(second_justification)),
+        "the second Guardian request must wait for eager compaction"
+    );
+    compact_response_released.store(true, Ordering::Release);
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    release_first_tool.await??;
 
-    let requests = responses.requests();
-    let first_guardian_index = requests
-        .iter()
-        .position(|request| request.body_contains_text(first_justification))
-        .expect("first Guardian request");
-    let second_guardian_index = requests
-        .iter()
-        .position(|request| request.body_contains_text(second_justification))
+    let second_guardian = responses
+        .requests()
+        .into_iter()
+        .find(|request| request.body_contains_text(second_justification))
         .expect("second Guardian request");
-    let compaction_indexes = requests
-        .iter()
-        .enumerate()
-        .filter_map(|(index, request)| {
-            request.body_json()["input"]
-                .as_array()
-                .is_some_and(|input| {
-                    input.iter().any(|item| {
-                        item.get("type").and_then(Value::as_str) == Some("compaction_trigger")
-                    })
-                })
-                .then_some(index)
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(compaction_indexes.len(), 1);
     assert!(
-        first_guardian_index < compaction_indexes[0]
-            && compaction_indexes[0] < second_guardian_index,
-        "expected eager compaction between Guardian reviews, requests: {requests:#?}"
+        second_guardian.body_contains_text("EAGER_GUARDIAN_COMPACTED_CONTEXT"),
+        "the second Guardian request must use the installed compacted history"
     );
+    assert!(compact_request_count.load(Ordering::Acquire) >= 2);
 
     Ok(())
 }

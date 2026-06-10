@@ -802,7 +802,9 @@ async fn run_pre_sampling_compact(
     client_session: &mut ModelClientSession,
 ) -> CodexResult<()> {
     maybe_run_previous_model_inline_compact(sess, turn_context, client_session).await?;
-    run_pre_turn_auto_compact_if_needed(sess, turn_context, client_session).await?;
+    if auto_compact_needed(sess.as_ref(), turn_context.as_ref()).await {
+        run_pre_turn_auto_compact(sess, turn_context, client_session).await?;
+    }
     Ok(())
 }
 
@@ -812,15 +814,11 @@ pub(crate) async fn auto_compact_needed(sess: &Session, turn_context: &TurnConte
         .token_limit_reached
 }
 
-pub(crate) async fn run_pre_turn_auto_compact_if_needed(
+pub(crate) async fn run_pre_turn_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
-) -> CodexResult<bool> {
-    if !auto_compact_needed(sess.as_ref(), turn_context.as_ref()).await {
-        return Ok(false);
-    }
-
+) -> CodexResult<()> {
     run_auto_compact(
         sess,
         turn_context,
@@ -829,8 +827,7 @@ pub(crate) async fn run_pre_turn_auto_compact_if_needed(
         CompactionReason::ContextLimit,
         CompactionPhase::PreTurn,
     )
-    .await?;
-    Ok(true)
+    .await
 }
 
 /// Returns true only when both turns declare compaction compatibility hashes and they differ.

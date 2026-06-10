@@ -10,6 +10,8 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
 use codex_analytics::GuardianApprovalRequestSource;
+use codex_analytics::GuardianReviewAnalyticsResult;
+use codex_analytics::GuardianReviewSessionKind;
 use codex_config::ConfigLayerStack;
 use codex_config::FeatureRequirementsToml;
 use codex_config::NetworkConstraints;
@@ -31,6 +33,7 @@ use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -2155,307 +2158,162 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
 }
 
 fn configure_guardian_eager_compaction_test(turn: &mut Arc<TurnContext>) {
-    const AUTO_COMPACT_TOKEN_LIMIT: i64 = 200_000;
-    const COMPACTION_STREAM_RETRIES: u64 = 0;
-    const REQUEST_RETRIES: u64 = 0;
-
     let mut config = (*turn.config).clone();
-    config.model_auto_compact_token_limit = Some(AUTO_COMPACT_TOKEN_LIMIT);
-    config.model_provider.request_max_retries = Some(REQUEST_RETRIES);
-    config.model_provider.stream_max_retries = Some(COMPACTION_STREAM_RETRIES);
+    config.model_auto_compact_token_limit = Some(200_000);
+    config.model_auto_compact_token_limit_scope = AutoCompactTokenLimitScope::BodyAfterPrefix;
+    config.model_provider.request_max_retries = Some(0);
+    config.model_provider.stream_max_retries = Some(0);
     config.model_provider.supports_websockets = false;
-    let _ = config.features.enable(Feature::RemoteCompactionV2);
+    config.model_provider.name = "Test".to_string();
     Arc::get_mut(turn)
         .expect("guardian test turn should be uniquely owned")
         .config = Arc::new(config);
 }
 
-fn request_is_remote_compaction(request: &[u8]) -> anyhow::Result<bool> {
-    let body = serde_json::from_slice::<serde_json::Value>(request)?;
-    Ok(body["input"].as_array().is_some_and(|input| {
-        input.iter().any(|item| {
-            item.get("type").and_then(serde_json::Value::as_str) == Some("compaction_trigger")
-        })
-    }))
+const EAGER_COMPACTION_GUARDIAN_ASSESSMENT: &str = r#"{"outcome":"allow"}"#;
+const EAGER_COMPACTION_GUARDIAN_PREFILL_TOKENS: i64 = 10_000;
+const EAGER_COMPACTION_TEST_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
+
+fn guardian_review_sse(
+    id: &str,
+    completed: impl FnOnce(&str) -> serde_json::Value,
+) -> Vec<StreamingSseChunk> {
+    let response_id = format!("resp-guardian-{id}");
+    let message_id = format!("msg-guardian-{id}");
+    vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created(&response_id),
+            ev_assistant_message(&message_id, EAGER_COMPACTION_GUARDIAN_ASSESSMENT),
+            completed(&response_id),
+        ]),
+    }]
 }
 
-fn eager_compaction_guardian_assessment(rationale: &str) -> String {
-    serde_json::json!({
-        "risk_level": "low",
-        "user_authorization": "high",
-        "outcome": "allow",
-        "rationale": rationale,
+fn guardian_review_sse_with_body_tokens(id: &str, body_tokens: i64) -> Vec<StreamingSseChunk> {
+    guardian_review_sse(id, |response_id| {
+        let mut completed = ev_completed_with_tokens(
+            response_id,
+            EAGER_COMPACTION_GUARDIAN_PREFILL_TOKENS + body_tokens,
+        );
+        completed["response"]["usage"]["input_tokens"] =
+            EAGER_COMPACTION_GUARDIAN_PREFILL_TOKENS.into();
+        completed["response"]["usage"]["output_tokens"] = body_tokens.into();
+        completed
     })
-    .to_string()
 }
 
-async fn run_initial_eager_compaction_review(
+async fn run_eager_compaction_review(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
-) -> (
-    GuardianReviewOutcome,
-    codex_analytics::GuardianReviewAnalyticsResult,
-) {
-    run_guardian_review_session_for_test(
-        Arc::clone(session),
-        Arc::clone(turn),
-        GuardianApprovalRequest::Shell {
-            id: "shell-ca-540-1".to_string(),
-            command: vec!["git".to_string(), "status".to_string()],
-            cwd: test_path_buf("/repo/codex-rs/core").abs(),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: Some("Inspect repository state.".to_string()),
-        },
-        /*retry_reason*/ None,
-        guardian_output_schema(),
-        /*external_cancel*/ None,
+    retry_reason: Option<&str>,
+) -> anyhow::Result<GuardianReviewAnalyticsResult> {
+    let outcome = tokio::time::timeout(
+        EAGER_COMPACTION_TEST_TIMEOUT,
+        run_guardian_review_session_for_test(
+            Arc::clone(session),
+            Arc::clone(turn),
+            GuardianApprovalRequest::Shell {
+                id: "shell-ca-540".to_string(),
+                command: vec!["git".to_string(), "push".to_string()],
+                cwd: test_path_buf("/repo/codex-rs/core").abs(),
+                sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+                additional_permissions: None,
+                justification: Some("Push the reviewed change.".to_string()),
+            },
+            retry_reason.map(str::to_string),
+            guardian_output_schema(),
+            /*external_cancel*/ None,
+        ),
     )
-    .await
-}
-
-async fn run_followup_eager_compaction_review(
-    session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
-    retry_reason: &str,
-) -> (
-    GuardianReviewOutcome,
-    codex_analytics::GuardianReviewAnalyticsResult,
-) {
-    run_guardian_review_session_for_test(
-        Arc::clone(session),
-        Arc::clone(turn),
-        GuardianApprovalRequest::Shell {
-            id: "shell-ca-540-2".to_string(),
-            command: vec!["git".to_string(), "push".to_string()],
-            cwd: test_path_buf("/repo/codex-rs/core").abs(),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: Some("Push the reviewed change.".to_string()),
-        },
-        Some(retry_reason.to_string()),
-        guardian_output_schema(),
-        /*external_cancel*/ None,
-    )
-    .await
+    .await?;
+    let (GuardianReviewOutcome::Completed(_), analytics_result) = outcome else {
+        anyhow::bail!("expected guardian assessment");
+    };
+    Ok(analytics_result)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_waits_until_eager_compaction_snapshot_is_committed() -> anyhow::Result<()>
-{
-    const REQUEST_WAIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
-    const BLOCKED_REVIEW_OBSERVATION: Duration = Duration::from_millis(/*millis*/ 100);
+async fn guardian_recovers_from_eager_compaction_failure_and_timeout() -> anyhow::Result<()> {
+    const EAGER_COMPACTION_WAIT_TIMEOUT: Duration = Duration::from_millis(/*millis*/ 50);
     const FIRST_REVIEW_TOTAL_TOKENS: i64 = 500_000;
-    const COMPACTION_TOTAL_TOKENS: i64 = 50;
-
-    let first_assessment = eager_compaction_guardian_assessment("first guardian rationale");
-    let second_assessment = eager_compaction_guardian_assessment("second guardian rationale");
+    let (failed_compaction_tx, failed_compaction_rx) = tokio::sync::oneshot::channel();
     let (compaction_tx, compaction_rx) = tokio::sync::oneshot::channel();
-    let (second_review_tx, second_review_rx) = tokio::sync::oneshot::channel();
     let (server, _) = start_streaming_sse_server(vec![
+        guardian_review_sse_with_body_tokens(
+            "1",
+            FIRST_REVIEW_TOTAL_TOKENS - EAGER_COMPACTION_GUARDIAN_PREFILL_TOKENS,
+        ),
         vec![StreamingSseChunk {
-            gate: None,
+            gate: Some(failed_compaction_rx),
             body: sse(vec![
-                ev_response_created("resp-guardian-1"),
-                ev_assistant_message("msg-guardian-1", &first_assessment),
-                ev_completed_with_tokens("resp-guardian-1", FIRST_REVIEW_TOTAL_TOKENS),
+                ev_response_created("resp-eager-compact-failed"),
+                ev_assistant_message("msg-eager-compact-partial", "partial summary"),
             ]),
         }],
+        guardian_review_sse("2", ev_completed),
+        guardian_review_sse_with_body_tokens(
+            "3",
+            FIRST_REVIEW_TOTAL_TOKENS - EAGER_COMPACTION_GUARDIAN_PREFILL_TOKENS,
+        ),
         vec![StreamingSseChunk {
             gate: Some(compaction_rx),
-            body: sse(vec![
-                ev_response_created("resp-compact-success"),
-                serde_json::json!({
-                    "type": "response.output_item.done",
-                    "item": {
-                        "type": "compaction",
-                        "encrypted_content": "CA540_COMPACTED_CONTEXT",
-                    }
-                }),
-                ev_completed_with_tokens("resp-compact-success", COMPACTION_TOTAL_TOKENS),
-            ]),
+            body: sse(vec![ev_response_created("resp-eager-compact-timeout")]),
         }],
-        vec![StreamingSseChunk {
-            gate: Some(second_review_rx),
-            body: sse(vec![
-                ev_response_created("resp-guardian-2"),
-                ev_assistant_message("msg-guardian-2", &second_assessment),
-                ev_completed("resp-guardian-2"),
-            ]),
-        }],
+        guardian_review_sse("4", ev_completed),
     ])
     .await;
-
-    let (session, mut turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
+    let (mut session, mut turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
+    Arc::get_mut(&mut session)
+        .expect("guardian parent session should be uniquely owned")
+        .guardian_review_session = GuardianReviewSessionManager::new(EAGER_COMPACTION_WAIT_TIMEOUT);
     configure_guardian_eager_compaction_test(&mut turn);
     seed_guardian_parent_history(&session, &turn).await;
 
-    let first_outcome = tokio::time::timeout(
-        REQUEST_WAIT_TIMEOUT,
-        run_initial_eager_compaction_review(&session, &turn),
-    )
-    .await?;
-    let (GuardianReviewOutcome::Completed(_), _) = first_outcome else {
-        panic!("expected first guardian assessment");
-    };
-    tokio::time::timeout(
-        REQUEST_WAIT_TIMEOUT,
-        server.wait_for_request_count(/*count*/ 2),
-    )
-    .await?;
-
-    let session_for_second = Arc::clone(&session);
-    let turn_for_second = Arc::clone(&turn);
-    let second_review = tokio::spawn(async move {
-        run_followup_eager_compaction_review(
-            &session_for_second,
-            &turn_for_second,
-            "Follow-up approval on the reused guardian thread.",
-        )
-        .await
-    });
-
-    assert!(
-        tokio::time::timeout(
-            BLOCKED_REVIEW_OBSERVATION,
-            server.wait_for_request_count(/*count*/ 3),
-        )
-        .await
-        .is_err(),
-        "the next guardian request must not start while eager compaction is in flight"
-    );
-    assert!(!second_review.is_finished());
-
-    compaction_tx
-        .send(())
-        .expect("eager compaction response gate should still be open");
-    tokio::time::timeout(
-        REQUEST_WAIT_TIMEOUT,
-        server.wait_for_request_count(/*count*/ 3),
-    )
-    .await?;
-
-    let committed_rollout_items = session
+    run_eager_compaction_review(&session, &turn, /*retry_reason*/ None).await?;
+    let discarded_rollout_path = session
         .guardian_review_session
-        .committed_fork_rollout_items_for_test()
+        .trunk_rollout_path()
         .await
-        .expect("committed guardian fork snapshot");
-    assert!(
-        committed_rollout_items.iter().any(|item| matches!(
-            item,
-            RolloutItem::Compacted(compacted) if compacted.replacement_history.is_some()
-        )),
-        "eager compaction must refresh the fork snapshot before releasing the next review"
-    );
-    assert!(!second_review.is_finished());
-
-    second_review_tx
+        .expect("discarded guardian rollout path");
+    let committed_rollout = tokio::fs::read(&discarded_rollout_path).await?;
+    failed_compaction_tx
         .send(())
-        .expect("second guardian review gate should still be open");
-    let second_outcome = tokio::time::timeout(REQUEST_WAIT_TIMEOUT, second_review).await??;
-    let (GuardianReviewOutcome::Completed(_), second_metadata) = second_outcome else {
-        panic!("expected second guardian assessment");
-    };
-    assert!(matches!(
-        second_metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
-    ));
-
-    let requests = server.requests().await;
-    assert_eq!(requests.len(), 3);
-    assert!(request_is_remote_compaction(&requests[1])?);
-    assert!(!request_is_remote_compaction(&requests[2])?);
-
-    server.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_eager_compaction_failure_falls_back_to_pre_turn_compaction() -> anyhow::Result<()>
-{
-    const REQUEST_WAIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
-    const FIRST_REVIEW_TOTAL_TOKENS: i64 = 500_000;
-    const COMPACTION_TOTAL_TOKENS: i64 = 50;
-
-    let first_assessment = eager_compaction_guardian_assessment("first guardian rationale");
-    let second_assessment = eager_compaction_guardian_assessment("second guardian rationale");
-    let (server, _) = start_streaming_sse_server(vec![
-        vec![StreamingSseChunk {
-            gate: None,
-            body: sse(vec![
-                ev_response_created("resp-guardian-1"),
-                ev_assistant_message("msg-guardian-1", &first_assessment),
-                ev_completed_with_tokens("resp-guardian-1", FIRST_REVIEW_TOTAL_TOKENS),
-            ]),
-        }],
-        vec![StreamingSseChunk {
-            gate: None,
-            body: sse(vec![ev_response_created("resp-eager-compact-failed")]),
-        }],
-        vec![StreamingSseChunk {
-            gate: None,
-            body: sse(vec![
-                ev_response_created("resp-pre-turn-compact-success"),
-                serde_json::json!({
-                    "type": "response.output_item.done",
-                    "item": {
-                        "type": "compaction",
-                        "encrypted_content": "CA540_RETRY_COMPACTED_CONTEXT",
-                    }
-                }),
-                ev_completed_with_tokens("resp-pre-turn-compact-success", COMPACTION_TOTAL_TOKENS),
-            ]),
-        }],
-        vec![StreamingSseChunk {
-            gate: None,
-            body: sse(vec![
-                ev_response_created("resp-guardian-2"),
-                ev_assistant_message("msg-guardian-2", &second_assessment),
-                ev_completed("resp-guardian-2"),
-            ]),
-        }],
-    ])
-    .await;
-
-    let (session, mut turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
-    configure_guardian_eager_compaction_test(&mut turn);
-    seed_guardian_parent_history(&session, &turn).await;
-
-    let first_outcome = tokio::time::timeout(
-        REQUEST_WAIT_TIMEOUT,
-        run_initial_eager_compaction_review(&session, &turn),
-    )
-    .await?;
-    let (GuardianReviewOutcome::Completed(_), _) = first_outcome else {
-        panic!("expected first guardian assessment");
-    };
-    tokio::time::timeout(
-        REQUEST_WAIT_TIMEOUT,
-        server.wait_for_request_count(/*count*/ 2),
-    )
-    .await?;
-
-    let second_outcome = run_followup_eager_compaction_review(
+        .expect("failed compaction response gate should still be open");
+    let second_metadata = run_eager_compaction_review(
         &session,
         &turn,
-        "Retry after eager compaction failure.",
+        Some("Retry after eager compaction failure."),
     )
-    .await;
-    let (GuardianReviewOutcome::Completed(_), second_metadata) = second_outcome else {
-        panic!("expected second guardian assessment");
-    };
+    .await?;
+    assert_eq!(
+        tokio::fs::read(&discarded_rollout_path).await?,
+        committed_rollout
+    );
+    run_eager_compaction_review(&session, &turn, Some("Start a replacement guardian trunk."))
+        .await?;
+    tokio::time::timeout(
+        EAGER_COMPACTION_TEST_TIMEOUT,
+        server.wait_for_request_count(/*count*/ 5),
+    )
+    .await?;
+    let fourth_metadata = run_eager_compaction_review(
+        &session,
+        &turn,
+        Some("Retry after eager compaction timeout."),
+    )
+    .await?;
     assert!(matches!(
-        second_metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
+        (
+            second_metadata.guardian_session_kind,
+            fourth_metadata.guardian_session_kind
+        ),
+        (
+            Some(GuardianReviewSessionKind::EphemeralForked),
+            Some(GuardianReviewSessionKind::EphemeralForked)
+        )
     ));
-
-    let requests = server.requests().await;
-    assert_eq!(requests.len(), 4);
-    assert!(request_is_remote_compaction(&requests[1])?);
-    assert!(request_is_remote_compaction(&requests[2])?);
-    assert!(!request_is_remote_compaction(&requests[3])?);
-
-    server.shutdown().await;
+    let _ = compaction_tx.send(());
     Ok(())
 }
 
