@@ -659,6 +659,9 @@ pub enum Op {
     /// include shell syntax (pipes, redirects, etc.). Output is streamed via
     /// `ExecCommand*` events and the UI regains control upon `TurnComplete`.
     RunUserShellCommand {
+        /// Optional explicit environment target. `None` preserves the legacy
+        /// local app-server/TUI path.
+        environment_id: Option<String>,
         /// The raw command string after '!'
         command: String,
     },
