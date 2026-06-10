@@ -1,7 +1,10 @@
 use crate::certs::ManagedMitmCa;
 use crate::config::NetworkMode;
+use crate::mitm_hook::HookEvaluation;
+use crate::mitm_hook::MitmHookActions;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_MITM_HOOK_DENIED;
 use crate::responses::blocked_text_response;
 use crate::responses::text_response;
 use crate::runtime::HostBlockDecision;
@@ -13,16 +16,20 @@ use crate::upstream::UpstreamClient;
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::bytes::Bytes;
 use rama_core::error::BoxError;
+use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
-use rama_core::futures::stream::Stream;
+use rama_core::futures::stream::Stream as FuturesStream;
 use rama_core::rt::Executor;
 use rama_core::service::service_fn;
+use rama_core::stream::Stream;
 use rama_http::Body;
 use rama_http::BodyDataStream;
+use rama_http::HeaderMap;
 use rama_http::HeaderValue;
 use rama_http::Request;
 use rama_http::Response;
@@ -71,6 +78,13 @@ struct MitmRequestContext {
     mitm: Arc<MitmState>,
 }
 
+enum MitmPolicyDecision {
+    Allow {
+        hook_actions: Option<MitmHookActions>,
+    },
+    Block(Response),
+}
+
 const MITM_INSPECT_BODIES: bool = false;
 const MITM_MAX_BODY_BYTES: usize = 4096;
 
@@ -86,9 +100,12 @@ impl std::fmt::Debug for MitmState {
 
 impl MitmState {
     pub(crate) fn new(config: MitmUpstreamConfig) -> Result<Self> {
-        // MITM exists to make limited-mode HTTPS enforceable: once CONNECT is established, plain
-        // proxying would lose visibility into the inner HTTP request. We generate/load a local CA
-        // and issue per-host leaf certs so we can terminate TLS and apply policy.
+        ensure_rustls_crypto_provider();
+
+        // MITM exists when HTTPS policy depends on the inner request: limited-mode method clamps
+        // and host-specific hooks both need visibility after CONNECT is established. We
+        // generate/load a local CA and issue per-host leaf certs so we can terminate TLS and
+        // apply policy.
         let ca = ManagedMitmCa::load_or_create()?;
 
         let upstream = if config.allow_upstream_proxy {
@@ -120,17 +137,25 @@ impl MitmState {
 
 /// Terminate the upgraded CONNECT stream with a generated leaf cert and proxy inner HTTPS traffic.
 pub(crate) async fn mitm_tunnel(upgraded: Upgraded) -> Result<()> {
-    let mitm = upgraded
+    mitm_stream(upgraded).await
+}
+
+/// Terminate a raw client stream with a generated leaf cert and proxy inner HTTPS traffic.
+pub(crate) async fn mitm_stream<S>(stream: S) -> Result<()>
+where
+    S: Stream + Unpin + ExtensionsMut,
+{
+    let mitm = stream
         .extensions()
         .get::<Arc<MitmState>>()
         .cloned()
         .context("missing MITM state")?;
-    let app_state = upgraded
+    let app_state = stream
         .extensions()
         .get::<Arc<NetworkProxyState>>()
         .cloned()
         .context("missing app state")?;
-    let target = upgraded
+    let target = stream
         .extensions()
         .get::<ProxyTarget>()
         .context("missing proxy target")?
@@ -139,7 +164,7 @@ pub(crate) async fn mitm_tunnel(upgraded: Upgraded) -> Result<()> {
     let target_host = normalize_host(&target.host.to_string());
     let target_port = target.port;
     let acceptor_data = mitm.tls_acceptor_data_for_host(&target_host)?;
-    let mode = upgraded
+    let mode = stream
         .extensions()
         .get::<NetworkMode>()
         .copied()
@@ -154,7 +179,7 @@ pub(crate) async fn mitm_tunnel(upgraded: Upgraded) -> Result<()> {
         mitm,
     });
 
-    let executor = upgraded
+    let executor = stream
         .extensions()
         .get::<Executor>()
         .cloned()
@@ -179,7 +204,7 @@ pub(crate) async fn mitm_tunnel(upgraded: Upgraded) -> Result<()> {
         .into_layer(http_service);
 
     https_service
-        .serve(upgraded)
+        .serve(stream)
         .await
         .map_err(|err| anyhow!("MITM serve error: {err}"))?;
     Ok(())
@@ -200,9 +225,10 @@ async fn handle_mitm_request(
 }
 
 async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Result<Response> {
-    if let Some(response) = mitm_blocking_response(&req, &request_ctx.policy).await? {
-        return Ok(response);
-    }
+    let hook_actions = match evaluate_mitm_policy(&req, &request_ctx.policy).await? {
+        MitmPolicyDecision::Allow { hook_actions } => hook_actions,
+        MitmPolicyDecision::Block(response) => return Ok(response),
+    };
 
     let target_host = request_ctx.policy.target_host.clone();
     let target_port = request_ctx.policy.target_port;
@@ -213,6 +239,7 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
     let log_path = path_for_log(req.uri());
 
     let (mut parts, body) = req.into_parts();
+    apply_mitm_hook_actions(&mut parts.headers, hook_actions.as_ref());
     let authority = authority_header_value(&target_host, target_port);
     parts.uri = build_https_uri(&authority, &path)?;
     parts
@@ -247,12 +274,23 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
     )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 async fn mitm_blocking_response(
     req: &Request,
     policy: &MitmPolicyContext,
 ) -> Result<Option<Response>> {
+    match evaluate_mitm_policy(req, policy).await? {
+        MitmPolicyDecision::Allow { .. } => Ok(None),
+        MitmPolicyDecision::Block(response) => Ok(Some(response)),
+    }
+}
+
+async fn evaluate_mitm_policy(
+    req: &Request,
+    policy: &MitmPolicyContext,
+) -> Result<MitmPolicyDecision> {
     if req.method().as_str() == "CONNECT" {
-        return Ok(Some(text_response(
+        return Ok(MitmPolicyDecision::Block(text_response(
             StatusCode::METHOD_NOT_ALLOWED,
             "CONNECT not supported inside MITM",
         )));
@@ -272,7 +310,7 @@ async fn mitm_blocking_response(
                 "MITM host mismatch (target={}, request_host={normalized})",
                 policy.target_host
             );
-            return Ok(Some(text_response(
+            return Ok(MitmPolicyDecision::Block(text_response(
                 StatusCode::BAD_REQUEST,
                 "host mismatch",
             )));
@@ -307,8 +345,40 @@ async fn mitm_blocking_response(
             "MITM blocked local/private target after CONNECT (host={}, port={}, method={method}, path={log_path})",
             policy.target_host, policy.target_port
         );
-        return Ok(Some(blocked_text_response(reason)));
+        return Ok(MitmPolicyDecision::Block(blocked_text_response(reason)));
     }
+
+    let hook_actions = match policy
+        .app_state
+        .evaluate_mitm_hook_request(&policy.target_host, req)
+        .await?
+    {
+        HookEvaluation::Matched { actions } => Some(actions),
+        HookEvaluation::HookedHostNoMatch => {
+            let _ = policy
+                .app_state
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: policy.target_host.clone(),
+                    reason: REASON_MITM_HOOK_DENIED.to_string(),
+                    client: client.clone(),
+                    method: Some(method.clone()),
+                    mode: Some(policy.mode),
+                    protocol: "https".to_string(),
+                    decision: None,
+                    source: None,
+                    port: Some(policy.target_port),
+                }))
+                .await;
+            warn!(
+                "MITM blocked by hook policy (host={}, method={method}, mode={:?})",
+                policy.target_host, policy.mode
+            );
+            return Ok(MitmPolicyDecision::Block(blocked_text_response(
+                REASON_MITM_HOOK_DENIED,
+            )));
+        }
+        HookEvaluation::NoHooksForHost => None,
+    };
 
     if !policy.mode.allows_method(&method) {
         let _ = policy
@@ -329,10 +399,25 @@ async fn mitm_blocking_response(
             "MITM blocked by method policy (host={}, method={method}, path={log_path}, mode={:?}, allowed_methods=GET, HEAD, OPTIONS)",
             policy.target_host, policy.mode
         );
-        return Ok(Some(blocked_text_response(REASON_METHOD_NOT_ALLOWED)));
+        return Ok(MitmPolicyDecision::Block(blocked_text_response(
+            REASON_METHOD_NOT_ALLOWED,
+        )));
     }
 
-    Ok(None)
+    Ok(MitmPolicyDecision::Allow { hook_actions })
+}
+
+fn apply_mitm_hook_actions(headers: &mut HeaderMap, actions: Option<&MitmHookActions>) {
+    let Some(actions) = actions else {
+        return;
+    };
+
+    for header_name in &actions.strip_request_headers {
+        headers.remove(header_name);
+    }
+    for injected_header in &actions.inject_request_headers {
+        headers.insert(injected_header.name.clone(), injected_header.value.clone());
+    }
 }
 
 fn respond_with_inspection(
@@ -381,7 +466,7 @@ struct InspectStream<T> {
     max_body_bytes: usize,
 }
 
-impl<T: BodyLoggable> Stream for InspectStream<T> {
+impl<T: BodyLoggable> FuturesStream for InspectStream<T> {
     type Item = Result<Bytes, BoxError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {

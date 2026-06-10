@@ -19,7 +19,7 @@ async def main() -> None:
         print("server:", server_label(codex.metadata))
         models = await codex.models()
         print("models.count:", len(models.data))
-        print("models:", ", ".join(model.id for model in models.data[:5]) or "[none]")
+        print("models:", ", ".join(model.id for model in models.data[:5]))
 
 
 if __name__ == "__main__":

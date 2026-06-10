@@ -7,9 +7,17 @@ pub(crate) struct UserInstructions {
 }
 
 impl ContextualUserFragment for UserInstructions {
-    const ROLE: &'static str = "user";
-    const START_MARKER: &'static str = "# AGENTS.md instructions for ";
-    const END_MARKER: &'static str = "</INSTRUCTIONS>";
+    fn role(&self) -> &'static str {
+        "user"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("# AGENTS.md instructions for ", "</INSTRUCTIONS>")
+    }
 
     fn body(&self) -> String {
         format!("{}\n\n<INSTRUCTIONS>\n{}\n", self.directory, self.text)

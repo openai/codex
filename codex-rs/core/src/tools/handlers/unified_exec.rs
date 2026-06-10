@@ -1,16 +1,15 @@
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
-use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
-use crate::unified_exec::resolve_max_tokens;
+use codex_exec_server::Environment;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
-use codex_utils_output_truncation::TruncationPolicy;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -72,32 +71,27 @@ fn default_tty() -> bool {
     false
 }
 
-fn effective_max_output_tokens(
-    max_output_tokens: Option<usize>,
-    truncation_policy: TruncationPolicy,
-) -> usize {
-    resolve_max_tokens(max_output_tokens).min(truncation_policy.token_budget())
+#[derive(Debug)]
+pub(crate) struct ResolvedCommand {
+    pub(crate) command: Vec<String>,
+    pub(crate) shell_type: ShellType,
 }
 
 fn post_unified_exec_tool_use_payload(
     invocation: &ToolInvocation,
-    result: &ExecCommandToolOutput,
+    result: &dyn ToolOutput,
 ) -> Option<PostToolUsePayload> {
     let ToolPayload::Function { .. } = &invocation.payload else {
         return None;
     };
 
-    let command = result.hook_command.clone()?;
-    let tool_use_id = if result.event_call_id.is_empty() {
-        invocation.call_id.clone()
-    } else {
-        result.event_call_id.clone()
-    };
+    let tool_input = result.post_tool_use_input(&invocation.payload)?;
+    let tool_use_id = result.post_tool_use_id(&invocation.call_id);
     let tool_response = result.post_tool_use_response(&tool_use_id, &invocation.payload)?;
     Some(PostToolUsePayload {
         tool_name: HookToolName::bash(),
         tool_use_id,
-        tool_input: serde_json::json!({ "command": command }),
+        tool_input,
         tool_response,
     })
 }
@@ -107,7 +101,7 @@ pub(crate) fn get_command(
     session_shell: Arc<Shell>,
     shell_mode: &UnifiedExecShellMode,
     allow_login_shell: bool,
-) -> Result<Vec<String>, String> {
+) -> Result<ResolvedCommand, String> {
     let use_login_shell = match args.login {
         Some(true) if !allow_login_shell => {
             return Err(
@@ -126,13 +120,38 @@ pub(crate) fn get_command(
                 shell
             });
             let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
-            Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
+            Ok(ResolvedCommand {
+                command: shell.derive_exec_args(&args.cmd, use_login_shell),
+                shell_type: shell.shell_type,
+            })
         }
-        UnifiedExecShellMode::ZshFork(zsh_fork_config) => Ok(vec![
-            zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),
-            if use_login_shell { "-lc" } else { "-c" }.to_string(),
-            args.cmd.clone(),
-        ]),
+        UnifiedExecShellMode::ZshFork(zsh_fork_config) => {
+            if args.shell.is_some() {
+                return Err(
+                    "`shell` is not supported for local zsh-fork exec; omit `shell` to use zsh-fork, or target a remote environment where `shell` is supported.".to_string(),
+                );
+            }
+
+            Ok(ResolvedCommand {
+                command: vec![
+                    zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),
+                    if use_login_shell { "-lc" } else { "-c" }.to_string(),
+                    args.cmd.clone(),
+                ],
+                shell_type: ShellType::Zsh,
+            })
+        }
+    }
+}
+
+pub(crate) fn shell_mode_for_environment(
+    turn_shell_mode: &UnifiedExecShellMode,
+    environment: &Environment,
+) -> UnifiedExecShellMode {
+    if environment.is_remote() {
+        UnifiedExecShellMode::Direct
+    } else {
+        turn_shell_mode.clone()
     }
 }
 

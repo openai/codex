@@ -1,5 +1,6 @@
 use crate::ipc_framed::EmptyPayload;
 use crate::ipc_framed::FramedMessage;
+use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::OutputStream;
 use crate::ipc_framed::ResizePayload;
@@ -70,7 +71,7 @@ pub(crate) fn start_runner_stdin_writer(
                 bytes
             };
             let msg = FramedMessage {
-                version: 1,
+                version: IPC_PROTOCOL_VERSION,
                 message: Message::Stdin {
                     payload: StdinPayload {
                         data_b64: encode_bytes(&bytes),
@@ -83,7 +84,7 @@ pub(crate) fn start_runner_stdin_writer(
         }
         if stdin_open {
             let _ = outbound_tx.send(FramedMessage {
-                version: 1,
+                version: IPC_PROTOCOL_VERSION,
                 message: Message::CloseStdin {
                     payload: EmptyPayload::default(),
                 },
@@ -165,7 +166,7 @@ pub(crate) fn make_runner_resizer(
     Box::new(move |size: TerminalSize| {
         outbound_tx
             .send(FramedMessage {
-                version: 1,
+                version: IPC_PROTOCOL_VERSION,
                 message: Message::Resize {
                     payload: ResizePayload {
                         rows: size.rows,

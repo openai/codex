@@ -269,6 +269,7 @@ mod tests {
         let mut items = vec![
             UserInput::LocalImage {
                 path: PathBuf::from("/tmp/screenshot.png"),
+                detail: None,
             },
             UserInput::Text {
                 text,
@@ -288,6 +289,7 @@ mod tests {
             vec![
                 UserInput::LocalImage {
                     path: PathBuf::from("/tmp/screenshot.png"),
+                    detail: None,
                 },
                 UserInput::Text {
                     text: format!("{expected_prefix}Ask $figma"),

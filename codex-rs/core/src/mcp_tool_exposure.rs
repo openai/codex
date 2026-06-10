@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
-use codex_tools::ToolsConfig;
+use codex_mcp::tool_is_model_visible;
+use tracing::instrument;
 
 use crate::config::Config;
 use crate::connectors;
@@ -15,12 +16,12 @@ pub(crate) struct McpToolExposure {
     pub(crate) deferred_tools: Option<Vec<McpToolInfo>>,
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) fn build_mcp_tool_exposure(
     all_mcp_tools: &[McpToolInfo],
     connectors: Option<&[connectors::AppInfo]>,
-    explicitly_enabled_connectors: &[connectors::AppInfo],
     config: &Config,
-    tools_config: &ToolsConfig,
+    search_tool_enabled: bool,
 ) -> McpToolExposure {
     let mut deferred_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
     if let Some(connectors) = connectors {
@@ -31,7 +32,7 @@ pub(crate) fn build_mcp_tool_exposure(
         ));
     }
 
-    let should_defer = tools_config.search_tool
+    let should_defer = search_tool_enabled
         && (config
             .features
             .enabled(Feature::ToolSearchAlwaysDeferMcpTools)
@@ -44,16 +45,8 @@ pub(crate) fn build_mcp_tool_exposure(
         };
     }
 
-    let direct_tools =
-        filter_codex_apps_mcp_tools(all_mcp_tools, explicitly_enabled_connectors, config);
-    let direct_tool_names = direct_tools
-        .iter()
-        .map(McpToolInfo::canonical_tool_name)
-        .collect::<HashSet<_>>();
-    deferred_tools.retain(|tool| !direct_tool_names.contains(&tool.canonical_tool_name()));
-
     McpToolExposure {
-        direct_tools,
+        direct_tools: Vec::new(),
         deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
     }
 }
@@ -61,7 +54,9 @@ pub(crate) fn build_mcp_tool_exposure(
 fn filter_non_codex_apps_mcp_tools_only(mcp_tools: &[McpToolInfo]) -> Vec<McpToolInfo> {
     mcp_tools
         .iter()
-        .filter(|tool| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
+        .filter(|tool| {
+            tool.server_name != CODEX_APPS_MCP_SERVER_NAME && tool_is_model_visible(tool)
+        })
         .cloned()
         .collect()
 }
@@ -80,6 +75,9 @@ fn filter_codex_apps_mcp_tools(
         .iter()
         .filter(|tool| {
             if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+                return false;
+            }
+            if !tool_is_model_visible(tool) {
                 return false;
             }
             let Some(connector_id) = tool.connector_id.as_deref() else {

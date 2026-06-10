@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -13,6 +14,7 @@ use codex_connectors::merge::merge_plugin_connectors;
 use codex_core::config::Config;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager;
+pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
 pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
@@ -154,20 +156,21 @@ pub fn connectors_for_plugin_apps(
     connectors: Vec<AppInfo>,
     plugin_apps: &[AppConnectorId],
 ) -> Vec<AppInfo> {
-    let plugin_app_ids = plugin_apps
-        .iter()
-        .map(|connector_id| connector_id.0.as_str())
-        .collect::<HashSet<_>>();
-
     let connectors = merge_plugin_connectors(
         connectors,
         plugin_apps
             .iter()
             .map(|connector_id| connector_id.0.clone()),
     );
-    filter_disallowed_connectors(connectors, originator().value.as_str())
-        .into_iter()
-        .filter(|connector| plugin_app_ids.contains(connector.id.as_str()))
+    let mut connectors_by_id =
+        filter_disallowed_connectors(connectors, originator().value.as_str())
+            .into_iter()
+            .map(|connector| (connector.id.clone(), connector))
+            .collect::<HashMap<_, _>>();
+
+    plugin_apps
+        .iter()
+        .filter_map(|connector_id| connectors_by_id.remove(connector_id.0.as_str()))
         .collect()
 }
 
@@ -266,13 +269,14 @@ mod tests {
         let connectors = connectors_for_plugin_apps(
             vec![app("alpha"), app("beta")],
             &[
+                AppConnectorId("gmail".to_string()),
                 AppConnectorId("alpha".to_string()),
                 AppConnectorId("gmail".to_string()),
             ],
         );
         assert_eq!(
             connectors,
-            vec![app("alpha"), merged_app("gmail", /*is_accessible*/ false)]
+            vec![merged_app("gmail", /*is_accessible*/ false), app("alpha")]
         );
     }
 

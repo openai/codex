@@ -1,11 +1,14 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 2562
 expression: popup
 ---
   Upload logs?
 
   The following files will be sent:
     • codex-logs.log
+    • codex-doctor-report.json
+    • windows-sandbox.log
     • auto-review-rollout-thread-1.jsonl
     • codex-connectivity-diagnostics.txt
 
@@ -13,8 +16,8 @@ expression: popup
     - Proxy environment variables are set and may affect connectivity.
       - HTTPS_PROXY = hello
 
-› 1. Yes  Share the current Codex session logs with the team for
-          troubleshooting.
+› 1. Yes  Share the current Codex session logs and diagnostics with the team
+          for troubleshooting.
   2. No
 
   Press enter to confirm or esc to go back

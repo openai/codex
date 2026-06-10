@@ -42,20 +42,16 @@ pub(super) fn tool_callback(
     let promise = resolver.get_promise(scope);
 
     let resolver = v8::Global::new(scope, resolver);
-    let tool_name = {
+    let (tool_name, tool_kind) = {
         let Some(state) = scope.get_slot::<RuntimeState>() else {
             throw_type_error(scope, "runtime state unavailable");
             return;
         };
-        let Some(tool_name) = state
-            .enabled_tools
-            .get(tool_index)
-            .map(|tool| tool.tool_name.clone())
-        else {
+        let Some(tool) = state.enabled_tools.get(tool_index) else {
             throw_type_error(scope, "tool callback data is out of range");
             return;
         };
-        tool_name
+        (tool.tool_name.clone(), tool.kind)
     };
 
     let Some(state) = scope.get_slot_mut::<RuntimeState>() else {
@@ -69,6 +65,7 @@ pub(super) fn tool_callback(
     let _ = event_tx.send(RuntimeEvent::ToolCall {
         id,
         name: tool_name,
+        kind: tool_kind,
         input,
     });
     retval.set(promise.into());
@@ -132,6 +129,58 @@ pub(super) fn image_callback(
     retval.set(v8::undefined(scope).into());
 }
 
+pub(super) fn generated_image_callback(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue<v8::Value>,
+) {
+    let value = if args.length() == 0 {
+        v8::undefined(scope).into()
+    } else {
+        args.get(0)
+    };
+    let output_hint = match generated_image_output_hint(scope, value) {
+        Ok(output_hint) => output_hint,
+        Err(error_text) => {
+            throw_type_error(scope, &error_text);
+            return;
+        }
+    };
+    let image_item = match normalize_output_image(scope, value, /*detail_override*/ None) {
+        Ok(image_item) => image_item,
+        Err(()) => return,
+    };
+    if let Some(state) = scope.get_slot::<RuntimeState>() {
+        let _ = state.event_tx.send(RuntimeEvent::ContentItem(image_item));
+        if let Some(text) = output_hint {
+            let _ = state.event_tx.send(RuntimeEvent::ContentItem(
+                FunctionCallOutputContentItem::InputText { text },
+            ));
+        }
+    }
+    retval.set(v8::undefined(scope).into());
+}
+
+fn generated_image_output_hint(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<Option<String>, String> {
+    let object = v8::Local::<v8::Object>::try_from(value)
+        .map_err(|_| "generatedImage expects an image generation result object".to_string())?;
+    let key = v8::String::new(scope, "output_hint")
+        .ok_or_else(|| "failed to allocate generatedImage helper keys".to_string())?;
+    let output_hint = object
+        .get(scope, key.into())
+        .ok_or_else(|| "failed to read generatedImage output_hint".to_string())?;
+    if output_hint.is_undefined() {
+        return Ok(None);
+    }
+    if !output_hint.is_string() {
+        return Err("generatedImage output_hint must be a string when provided".to_string());
+    }
+    Ok(Some(output_hint.to_rust_string_lossy(scope)))
+}
+
 pub(super) fn store_callback(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -160,7 +209,8 @@ pub(super) fn store_callback(
         }
     };
     if let Some(state) = scope.get_slot_mut::<RuntimeState>() {
-        state.stored_values.insert(key, serialized);
+        state.stored_values.insert(key.clone(), serialized.clone());
+        state.stored_value_writes.insert(key, serialized);
     }
 }
 

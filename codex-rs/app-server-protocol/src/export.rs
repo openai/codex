@@ -39,6 +39,11 @@ use ts_rs::TS;
 pub(crate) const GENERATED_TS_HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 const JSON_V1_ALLOWLIST: &[&str] = &["InitializeParams", "InitializeResponse"];
+const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] = &[
+    "RemoteControlClient",
+    "RemoteControlClientsListOrder",
+    "ThreadBackgroundTerminal",
+];
 const SPECIAL_DEFINITIONS: &[&str] = &[
     "ClientNotification",
     "ClientRequest",
@@ -554,6 +559,7 @@ fn experimental_method_types() -> HashSet<String> {
     let mut type_names = HashSet::new();
     collect_experimental_type_names(EXPERIMENTAL_CLIENT_METHOD_PARAM_TYPES, &mut type_names);
     collect_experimental_type_names(EXPERIMENTAL_CLIENT_METHOD_RESPONSE_TYPES, &mut type_names);
+    collect_experimental_type_names(EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES, &mut type_names);
     type_names
 }
 
@@ -948,10 +954,8 @@ impl ScanState {
             '(' => self.depth.paren += 1,
             ')' => self.depth.paren = (self.depth.paren - 1).max(0),
             '<' => self.depth.angle += 1,
-            '>' => {
-                if self.depth.angle > 0 {
-                    self.depth.angle -= 1;
-                }
+            '>' if self.depth.angle > 0 => {
+                self.depth.angle -= 1;
             }
             _ => {}
         }
@@ -2134,6 +2138,14 @@ mod tests {
             fixture_tree.contains_key(Path::new("v2/MockExperimentalMethodResponse.ts")),
             false
         );
+        assert_eq!(
+            fixture_tree.contains_key(Path::new("v2/RemoteControlClient.ts")),
+            false
+        );
+        assert_eq!(
+            fixture_tree.contains_key(Path::new("v2/RemoteControlClientsListOrder.ts")),
+            false
+        );
 
         let mut undefined_offenders = Vec::new();
         let mut optional_nullable_offenders = BTreeSet::new();
@@ -2212,20 +2224,14 @@ mod tests {
                         continue;
                     }
                     match ch {
-                        '\\' => {
-                            if in_single || in_double {
-                                escape = true;
-                            }
+                        '\\' if (in_single || in_double) => {
+                            escape = true;
                         }
-                        '\'' => {
-                            if !in_double {
-                                in_single = !in_single;
-                            }
+                        '\'' if !in_double => {
+                            in_single = !in_single;
                         }
-                        '"' => {
-                            if !in_single {
-                                in_double = !in_double;
-                            }
+                        '"' if !in_single => {
+                            in_double = !in_double;
                         }
                         '{' if !in_single && !in_double => level_brace += 1,
                         '}' if !in_single && !in_double => level_brace -= 1,
@@ -2747,7 +2753,6 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         let _guard = TempDirGuard(output_dir.clone());
         let path = output_dir.join("CommandExecParams.ts");
         let content = r#"import type { CommandExecTerminalSize } from "./CommandExecTerminalSize";
-import type { PermissionProfile } from "./PermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
 
 export type CommandExecParams = {/**
@@ -2770,12 +2775,12 @@ size?: CommandExecTerminalSize | null, /**
  */
 sandboxPolicy?: SandboxPolicy | null,
 /**
- * Optional full permissions profile for this command.
+ * Optional active permissions profile id for this command.
  *
  * Defaults to the user's configured permissions when omitted. Cannot be
  * combined with `sandboxPolicy`.
  */
-permissionProfile?: PermissionProfile | null};
+permissionProfile?: string | null};
 "#;
         fs::write(&path, content)?;
 
@@ -2788,14 +2793,7 @@ permissionProfile?: PermissionProfile | null};
         filter_experimental_type_fields_ts(&output_dir, &[&CUSTOM_FIELD])?;
 
         let filtered = fs::read_to_string(&path)?;
-        assert_eq!(
-            filtered.contains("permissionProfile?: PermissionProfile"),
-            false
-        );
-        assert_eq!(
-            filtered.contains(r#"import type { PermissionProfile } from "./PermissionProfile";"#),
-            false
-        );
+        assert_eq!(filtered.contains("permissionProfile?: string"), false);
         assert_eq!(filtered.contains("sandboxPolicy?: SandboxPolicy"), true);
         assert_eq!(
             filtered.contains(r#"import type { SandboxPolicy } from "./SandboxPolicy";"#),
@@ -2861,6 +2859,11 @@ permissionProfile?: PermissionProfile | null};
         );
         assert_eq!(
             flat_v2_bundle_json.contains("MockExperimentalMethodResponse"),
+            false
+        );
+        assert_eq!(flat_v2_bundle_json.contains("RemoteControlClient"), false);
+        assert_eq!(
+            flat_v2_bundle_json.contains("RemoteControlClientsListOrder"),
             false
         );
         assert_eq!(flat_v2_bundle_json.contains("#/definitions/v2/"), false);
@@ -2936,6 +2939,48 @@ permissionProfile?: PermissionProfile | null};
                 .exists(),
             false
         );
+        assert_eq!(
+            output_dir
+                .join("v2")
+                .join("RemoteControlClient.json")
+                .exists(),
+            false
+        );
+        assert_eq!(
+            output_dir
+                .join("v2")
+                .join("RemoteControlClientsListOrder.json")
+                .exists(),
+            false
+        );
+
+        let _cleanup = fs::remove_dir_all(&output_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn generate_json_includes_remote_control_methods_with_experimental_api() -> Result<()> {
+        let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
+        fs::create_dir(&output_dir)?;
+        generate_json_with_experimental(&output_dir, /*experimental_api*/ true)?;
+
+        let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
+        assert!(client_request_json.contains("remoteControl/pairing/start"));
+        assert!(client_request_json.contains("remoteControl/pairing/status"));
+        assert!(client_request_json.contains("remoteControl/client/list"));
+        assert!(client_request_json.contains("remoteControl/client/revoke"));
+        for schema in [
+            "RemoteControlPairingStartParams.json",
+            "RemoteControlPairingStartResponse.json",
+            "RemoteControlPairingStatusParams.json",
+            "RemoteControlPairingStatusResponse.json",
+            "RemoteControlClientsListParams.json",
+            "RemoteControlClientsListResponse.json",
+            "RemoteControlClientsRevokeParams.json",
+            "RemoteControlClientsRevokeResponse.json",
+        ] {
+            assert!(output_dir.join("v2").join(schema).exists());
+        }
 
         let _cleanup = fs::remove_dir_all(&output_dir);
         Ok(())

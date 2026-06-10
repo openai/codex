@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::collections::VecDeque;
 
 #[tokio::test]
 async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
@@ -181,6 +182,7 @@ async fn live_app_server_review_prompt_item_is_not_rendered() {
             completed_at_ms: 0,
             item: AppServerThreadItem::UserMessage {
                 id: "review-prompt".to_string(),
+                client_id: None,
                 content: vec![AppServerUserInput::Text {
                     text: "Review the code changes against the base branch 'main'.".to_string(),
                     text_elements: Vec::new(),
@@ -281,6 +283,29 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
         ),
         other => panic!("expected queued draft submit after rejected steers, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn esc_with_review_queued_steers_shows_warning_and_does_not_interrupt() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+    handle_entered_review_mode(&mut chat, "feature branch");
+    let _ = drain_insert_history(&mut rx);
+    chat.input_queue
+        .pending_steers
+        .push_back(pending_steer("review follow-up"));
+    chat.refresh_pending_input_preview();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert!(!chat.input_queue.submit_pending_steers_after_interrupt);
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
+    assert_no_submit_op(&mut op_rx);
+
+    let cells = drain_insert_history(&mut rx);
+    let last = lines_to_single_string(cells.last().expect("review warning"));
+    assert_chatwidget_snapshot!("review_submission_warning_snapshot", last);
 }
 
 #[tokio::test]
@@ -596,6 +621,7 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
         vec![
             UserInput::Image {
                 url: "data:image/png;base64,placeholder".to_string(),
+                detail: None,
             },
             UserInput::Text {
                 text,
@@ -873,6 +899,7 @@ async fn manual_interrupt_restores_pending_steer_mention_bindings_to_composer() 
     chat.on_agent_message_delta("Final answer line\n".to_string());
 
     let mention_bindings = vec![MentionBinding {
+        sigil: '$',
         mention: "figma".to_string(),
         path: "/tmp/skills/figma/SKILL.md".to_string(),
     }];

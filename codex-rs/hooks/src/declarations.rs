@@ -65,6 +65,7 @@ mod tests {
                         HookHandlerConfig::Prompt {},
                         HookHandlerConfig::Command {
                             command: "echo hi".to_string(),
+                            command_windows: None,
                             timeout_sec: None,
                             r#async: false,
                             status_message: None,

@@ -7,11 +7,14 @@ use rand::rngs::SmallRng;
 use serde::Serialize;
 use std::ffi::OsStr;
 use std::ffi::c_void;
-use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows_sys::Win32::Foundation::GENERIC_WRITE;
 use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
 use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INFO_3;
@@ -25,12 +28,19 @@ use windows_sys::Win32::NetworkManagement::NetManagement::UF_SCRIPT;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1003;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_PRIV_USER;
+use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+use windows_sys::Win32::Security::Authorization::SDDL_REVISION_1;
 use windows_sys::Win32::Security::CopySid;
 use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
+use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
+use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::Security::SID_NAME_USE;
+use windows_sys::Win32::Storage::FileSystem::CREATE_NEW;
+use windows_sys::Win32::Storage::FileSystem::CreateFileW;
+use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
@@ -49,7 +59,7 @@ const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
 const SID_EVERYONE: &str = "S-1-1-0";
 const SID_SYSTEM: &str = "S-1-5-18";
 
-pub fn ensure_sandbox_users_group(log: &mut File) -> Result<()> {
+pub fn ensure_sandbox_users_group(log: &mut dyn Write) -> Result<()> {
     ensure_local_group(SANDBOX_USERS_GROUP, SANDBOX_USERS_GROUP_COMMENT, log)
 }
 
@@ -61,9 +71,7 @@ pub fn provision_sandbox_users(
     codex_home: &Path,
     offline_username: &str,
     online_username: &str,
-    proxy_ports: &[u16],
-    allow_local_binding: bool,
-    log: &mut File,
+    log: &mut dyn Write,
 ) -> Result<()> {
     ensure_sandbox_users_group(log)?;
     super::log_line(
@@ -80,19 +88,17 @@ pub fn provision_sandbox_users(
         &offline_password,
         online_username,
         &online_password,
-        proxy_ports,
-        allow_local_binding,
     )?;
     Ok(())
 }
 
-pub fn ensure_sandbox_user(username: &str, password: &str, log: &mut File) -> Result<()> {
+pub fn ensure_sandbox_user(username: &str, password: &str, log: &mut dyn Write) -> Result<()> {
     ensure_local_user(username, password, log)?;
     ensure_local_group_member(SANDBOX_USERS_GROUP, username)?;
     Ok(())
 }
 
-pub fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<()> {
+pub fn ensure_local_user(name: &str, password: &str, log: &mut dyn Write) -> Result<()> {
     let name_w = to_wide(OsStr::new(name));
     let pwd_w = to_wide(OsStr::new(password));
     unsafe {
@@ -156,7 +162,7 @@ pub fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<(
     Ok(())
 }
 
-pub fn ensure_local_group(name: &str, comment: &str, log: &mut File) -> Result<()> {
+pub fn ensure_local_group(name: &str, comment: &str, log: &mut dyn Write) -> Result<()> {
     const ERROR_ALIAS_EXISTS: u32 = 1379;
     const NERR_GROUP_EXISTS: u32 = 2223;
 
@@ -402,19 +408,7 @@ fn write_secrets(
     offline_pwd: &str,
     online_user: &str,
     online_pwd: &str,
-    proxy_ports: &[u16],
-    allow_local_binding: bool,
 ) -> Result<()> {
-    let sandbox_dir = sandbox_dir(codex_home);
-    std::fs::create_dir_all(&sandbox_dir).map_err(|err| {
-        anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperUsersFileWriteFailed,
-            format!(
-                "failed to create sandbox dir {}: {err}",
-                sandbox_dir.display()
-            ),
-        ))
-    })?;
     let secrets_dir = sandbox_secrets_dir(codex_home);
     std::fs::create_dir_all(&secrets_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -448,18 +442,7 @@ fn write_secrets(
             password: BASE64.encode(online_blob),
         },
     };
-    let marker = SetupMarker {
-        version: SETUP_VERSION,
-        offline_username: offline_user.to_string(),
-        online_username: online_user.to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        proxy_ports: proxy_ports.to_vec(),
-        allow_local_binding,
-        read_roots: Vec::new(),
-        write_roots: Vec::new(),
-    };
     let users_path = secrets_dir.join("sandbox_users.json");
-    let marker_path = sandbox_dir.join("setup_marker.json");
     let users_json = serde_json::to_vec_pretty(&users).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersFileWriteFailed,
@@ -475,6 +458,114 @@ fn write_secrets(
             ),
         ))
     })?;
+    Ok(())
+}
+
+// Create the final marker path with its protected ACL before provisioning begins. The empty file
+// intentionally fails readiness checks while setup is in progress, and sandbox users cannot read,
+// modify, or replace it. Once every setup step succeeds, `commit_setup_marker` writes the valid
+// marker contents without changing the file's ACL.
+pub(super) fn prepare_setup_marker(codex_home: &Path, real_user: &str) -> Result<()> {
+    let marker_path = sandbox_dir(codex_home).join("setup_marker.json");
+    match std::fs::remove_file(&marker_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperSetupMarkerWriteFailed,
+                format!(
+                    "remove setup marker file {} failed: {err}",
+                    marker_path.display()
+                ),
+            )));
+        }
+    }
+
+    let real_user_sid = resolve_sid(real_user)
+        .and_then(|sid| string_from_sid_bytes(&sid).map_err(anyhow::Error::msg))
+        .map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperSetupMarkerWriteFailed,
+                format!("resolve real user SID for setup marker failed: {err}"),
+            ))
+        })?;
+    let sddl = to_wide(format!(
+        "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{real_user_sid})"
+    ));
+    let mut security_descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let converted = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut security_descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    if converted == 0 {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSetupMarkerWriteFailed,
+            format!(
+                "create setup marker security descriptor failed: {}",
+                unsafe { GetLastError() }
+            ),
+        )));
+    }
+
+    let security_attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: security_descriptor,
+        bInheritHandle: 0,
+    };
+    let marker_path_wide = to_wide(marker_path.as_os_str());
+    let marker_handle = unsafe {
+        CreateFileW(
+            marker_path_wide.as_ptr(),
+            GENERIC_WRITE,
+            /*dwsharemode*/ 0,
+            &security_attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            /*htemplatefile*/ 0,
+        )
+    };
+    let create_error = unsafe { GetLastError() };
+    unsafe {
+        LocalFree(security_descriptor as _);
+    }
+    if marker_handle == INVALID_HANDLE_VALUE {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSetupMarkerWriteFailed,
+            format!(
+                "create protected setup marker file {} failed: {}",
+                marker_path.display(),
+                create_error
+            ),
+        )));
+    }
+    unsafe {
+        CloseHandle(marker_handle);
+    }
+    Ok(())
+}
+
+pub(super) fn commit_setup_marker(
+    codex_home: &Path,
+    offline_user: &str,
+    online_user: &str,
+    proxy_ports: &[u16],
+    allow_local_binding: bool,
+) -> Result<()> {
+    let marker = SetupMarker {
+        version: SETUP_VERSION,
+        offline_username: offline_user.to_string(),
+        online_username: online_user.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        proxy_ports: proxy_ports.to_vec(),
+        allow_local_binding,
+        read_roots: Vec::new(),
+        write_roots: Vec::new(),
+    };
+    let marker_path = sandbox_dir(codex_home).join("setup_marker.json");
     let marker_json = serde_json::to_vec_pretty(&marker).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSetupMarkerWriteFailed,

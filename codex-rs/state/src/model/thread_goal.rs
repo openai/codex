@@ -3,15 +3,19 @@ use anyhow::anyhow;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
+use serde::Serialize;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
 use super::epoch_millis_to_datetime;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ThreadGoalStatus {
     Active,
     Paused,
+    Blocked,
+    UsageLimited,
     BudgetLimited,
     Complete,
 }
@@ -21,6 +25,8 @@ impl ThreadGoalStatus {
         match self {
             Self::Active => "active",
             Self::Paused => "paused",
+            Self::Blocked => "blocked",
+            Self::UsageLimited => "usage_limited",
             Self::BudgetLimited => "budget_limited",
             Self::Complete => "complete",
         }
@@ -42,6 +48,8 @@ impl TryFrom<&str> for ThreadGoalStatus {
         match value {
             "active" => Ok(Self::Active),
             "paused" => Ok(Self::Paused),
+            "blocked" => Ok(Self::Blocked),
+            "usage_limited" => Ok(Self::UsageLimited),
             "budget_limited" => Ok(Self::BudgetLimited),
             "complete" => Ok(Self::Complete),
             other => Err(anyhow!("unknown thread goal status `{other}`")),

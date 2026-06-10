@@ -126,7 +126,7 @@ impl FileSystemPermissions {
             match entry.access {
                 FileSystemAccessMode::Read => read.push(path.clone()),
                 FileSystemAccessMode::Write => write.push(path.clone()),
-                FileSystemAccessMode::None => return None,
+                FileSystemAccessMode::Deny => return None,
             }
         }
 
@@ -297,6 +297,15 @@ impl ManagedFileSystemPermissions {
     }
 }
 
+/// Reserved identifier for the built-in read-only permission profile.
+pub const BUILT_IN_PERMISSION_PROFILE_READ_ONLY: &str = ":read-only";
+
+/// Reserved identifier for the built-in workspace-write permission profile.
+pub const BUILT_IN_PERMISSION_PROFILE_WORKSPACE: &str = ":workspace";
+
+/// Reserved identifier for the built-in full-access permission profile.
+pub const BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS: &str = ":danger-full-access";
+
 /// Canonical active runtime permissions for a conversation, turn, or command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -330,26 +339,11 @@ pub struct ActivePermissionProfile {
     /// profile.
     pub id: String,
 
-    /// Optional parent profile identifier once permissions profiles support
-    /// inheritance. This is always `None` until that config feature exists.
+    /// Optional parent profile identifier from the selected permissions
+    /// profile's `extends` setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub extends: Option<String>,
-
-    /// Bounded user-requested modifications applied on top of the named
-    /// profile, if any.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub modifications: Vec<ActivePermissionProfileModification>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[ts(tag = "type")]
-pub enum ActivePermissionProfileModification {
-    /// Additional concrete directory that should be writable.
-    #[serde(rename_all = "snake_case")]
-    #[ts(rename_all = "snake_case")]
-    AdditionalWritableRoot { path: AbsolutePathBuf },
 }
 
 impl ActivePermissionProfile {
@@ -357,16 +351,11 @@ impl ActivePermissionProfile {
         Self {
             id: id.into(),
             extends: None,
-            modifications: Vec::new(),
         }
     }
 
-    pub fn with_modifications(
-        mut self,
-        modifications: Vec<ActivePermissionProfileModification>,
-    ) -> Self {
-        self.modifications = modifications;
-        self
+    pub fn read_only() -> Self {
+        Self::new(BUILT_IN_PERMISSION_PROFILE_READ_ONLY)
     }
 }
 
@@ -385,16 +374,9 @@ impl Default for PermissionProfile {
 impl PermissionProfile {
     /// Managed read-only filesystem access with restricted network access.
     pub fn read_only() -> Self {
+        let file_system = FileSystemSandboxPolicy::read_only();
         Self::Managed {
-            file_system: ManagedFileSystemPermissions::Restricted {
-                entries: vec![FileSystemSandboxEntry {
-                    path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::Root,
-                    },
-                    access: FileSystemAccessMode::Read,
-                }],
-                glob_scan_max_depth: None,
-            },
+            file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network: NetworkSandboxPolicy::Restricted,
         }
     }
@@ -402,7 +384,7 @@ impl PermissionProfile {
     /// Managed workspace-write filesystem access with restricted network
     /// access.
     ///
-    /// The returned profile contains symbolic `:project_roots` entries that
+    /// The returned profile contains symbolic `:workspace_roots` entries that
     /// must be resolved against the active permission root before enforcement.
     pub fn workspace_write() -> Self {
         Self::workspace_write_with(
@@ -416,7 +398,7 @@ impl PermissionProfile {
     /// Managed workspace-write filesystem access with the legacy
     /// `sandbox_workspace_write` knobs applied directly to the profile.
     ///
-    /// The returned profile contains symbolic `:project_roots` entries that
+    /// The returned profile contains symbolic `:workspace_roots` entries that
     /// must be resolved against the active permission root before enforcement.
     pub fn workspace_write_with(
         writable_roots: &[AbsolutePathBuf],
@@ -432,6 +414,28 @@ impl PermissionProfile {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network,
+        }
+    }
+
+    pub fn materialize_project_roots_with_workspace_roots(
+        self,
+        workspace_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        match self {
+            Self::Managed {
+                file_system,
+                network,
+            } => {
+                let file_system = file_system
+                    .to_sandbox_policy()
+                    .materialize_project_roots_with_workspace_roots(workspace_roots);
+                Self::Managed {
+                    file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
+                    network,
+                }
+            }
+            Self::Disabled => Self::Disabled,
+            Self::External { network } => Self::External { network },
         }
     }
 
@@ -711,6 +715,12 @@ pub enum ContentItem {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentMessageInputContent {
+    EncryptedContent { encrypted_content: String },
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageDetail {
@@ -753,6 +763,11 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         phase: Option<MessagePhase>,
+    },
+    AgentMessage {
+        author: String,
+        recipient: String,
+        content: Vec<AgentMessageInputContent>,
     },
     Reasoning {
         #[serde(default, skip_serializing)]
@@ -880,7 +895,10 @@ pub enum ResponseItem {
         result: String,
     },
     #[serde(alias = "compaction_summary")]
-    Compaction { encrypted_content: String },
+    Compaction {
+        encrypted_content: String,
+    },
+    CompactionTrigger,
     ContextCompaction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -888,6 +906,13 @@ pub enum ResponseItem {
     },
     #[serde(other)]
     Other,
+}
+
+impl ResponseItem {
+    /// Returns whether this item is an ordinary user-role message.
+    pub fn is_user_message(&self) -> bool {
+        matches!(self, Self::Message { role, .. } if role == "user")
+    }
 }
 
 pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");
@@ -1005,9 +1030,10 @@ pub fn local_image_label_text(label_number: usize) -> String {
     format!("[Image #{label_number}]")
 }
 
-pub fn local_image_open_tag_text(label_number: usize) -> String {
+pub fn local_image_open_tag_text_with_path(label_number: usize, path: &std::path::Path) -> String {
     let label = local_image_label_text(label_number);
-    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
+    let path = path.display();
+    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label} path=\"{path}\"{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
 }
 
 pub fn is_local_image_open_tag_text(text: &str) -> bool {
@@ -1054,19 +1080,24 @@ pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
     file_bytes: Vec<u8>,
     label_number: Option<usize>,
-    mode: PromptImageMode,
+    detail: ImageDetail,
 ) -> Vec<ContentItem> {
+    let mode = match detail {
+        ImageDetail::Original => PromptImageMode::Original,
+        ImageDetail::Auto | ImageDetail::Low | ImageDetail::High => PromptImageMode::ResizeToFit,
+    };
+
     match load_for_prompt_bytes(path, file_bytes, mode) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
             if let Some(label_number) = label_number {
                 items.push(ContentItem::InputText {
-                    text: local_image_open_tag_text(label_number),
+                    text: local_image_open_tag_text_with_path(label_number, path),
                 });
             }
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
+                detail: Some(detail),
             });
             if label_number.is_some() {
                 items.push(ContentItem::InputText {
@@ -1211,29 +1242,25 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .into_iter()
                 .flat_map(|c| match c {
                     UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
-                    UserInput::Image { image_url } => {
+                    UserInput::Image {
+                        image_url, detail, ..
+                    } => {
                         image_index += 1;
-                        vec![
-                            ContentItem::InputText {
-                                text: image_open_tag_text(),
-                            },
-                            ContentItem::InputImage {
-                                image_url,
-                                detail: Some(DEFAULT_IMAGE_DETAIL),
-                            },
-                            ContentItem::InputText {
-                                text: image_close_tag_text(),
-                            },
-                        ]
+                        let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
+                        vec![ContentItem::InputImage {
+                            image_url,
+                            detail: Some(detail),
+                        }]
                     }
-                    UserInput::LocalImage { path } => {
+                    UserInput::LocalImage { path, detail, .. } => {
                         image_index += 1;
+                        let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
                         match std::fs::read(&path) {
                             Ok(file_bytes) => local_image_content_items_with_label_number(
                                 &path,
                                 file_bytes,
                                 Some(image_index),
-                                PromptImageMode::ResizeToFit,
+                                detail,
                             ),
                             Err(err) => vec![local_image_error_placeholder(&path, err)],
                         }
@@ -1251,30 +1278,6 @@ pub struct SearchToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub limit: Option<usize>,
-}
-
-/// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
-/// or `shell`, the `arguments` field should deserialize to this struct.
-#[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-pub struct ShellToolCallParams {
-    pub command: Vec<String>,
-    pub workdir: Option<String>,
-
-    /// This is the maximum time in milliseconds that the command is allowed to run.
-    #[serde(alias = "timeout")]
-    pub timeout_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub sandbox_permissions: Option<SandboxPermissions>,
-    /// Suggests a command prefix to persist for future sessions
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub prefix_rule: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub justification: Option<String>,
 }
 
 /// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
@@ -1319,6 +1322,9 @@ pub enum FunctionCallOutputContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
+    EncryptedContent {
+        encrypted_content: String,
+    },
 }
 
 /// Converts structured function-call output content into plain text for
@@ -1342,7 +1348,8 @@ pub fn function_call_output_content_items_to_text(
                 Some(text.as_str())
             }
             FunctionCallOutputContentItem::InputText { .. }
-            | FunctionCallOutputContentItem::InputImage { .. } => None,
+            | FunctionCallOutputContentItem::InputImage { .. }
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
         })
         .collect::<Vec<_>>();
 
@@ -1647,6 +1654,14 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::tempdir;
 
+    // A tiny valid PNG (1x1) so image conversion tests don't depend on cross-crate
+    // file paths, which break under Bazel sandboxing.
+    const TINY_PNG_BYTES: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0,
+        1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
     #[test]
     fn response_input_message_conversion_preserves_phase() {
         let item = ResponseItem::from(ResponseInputItem::Message {
@@ -1668,6 +1683,36 @@ mod tests {
                 phase: Some(MessagePhase::Commentary),
             }
         );
+    }
+
+    #[test]
+    fn image_detail_roundtrips_all_wire_values() -> Result<()> {
+        assert_eq!(
+            serde_json::from_str::<ImageDetail>("\"auto\"")?,
+            ImageDetail::Auto
+        );
+        assert_eq!(
+            serde_json::from_str::<ImageDetail>("\"low\"")?,
+            ImageDetail::Low
+        );
+        assert_eq!(serde_json::to_string(&ImageDetail::Auto)?, "\"auto\"");
+        assert_eq!(serde_json::to_string(&ImageDetail::Low)?, "\"low\"");
+
+        let content_item: ContentItem = serde_json::from_value(serde_json::json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,abc",
+            "detail": "auto",
+        }))?;
+
+        assert_eq!(
+            content_item,
+            ContentItem::InputImage {
+                image_url: "data:image/png;base64,abc".to_string(),
+                detail: Some(ImageDetail::Auto),
+            }
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -1787,7 +1832,7 @@ mod tests {
                 path: FileSystemPath::GlobPattern {
                     pattern: "**/*.env".to_string(),
                 },
-                access: FileSystemAccessMode::None,
+                access: FileSystemAccessMode::Deny,
             }]);
         file_system_sandbox_policy.glob_scan_max_depth = Some(2);
 
@@ -2062,6 +2107,9 @@ mod tests {
                 image_url: "data:image/png;base64,AAA".to_string(),
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
+            FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: "enc_opaque".to_string(),
+            },
         ];
 
         let text = function_call_output_content_items_to_text(&content_items);
@@ -2270,6 +2318,35 @@ mod tests {
     }
 
     #[test]
+    fn serializes_encrypted_function_output_content_as_array() -> Result<()> {
+        let item = ResponseInputItem::FunctionCallOutput {
+            call_id: "call1".into(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::EncryptedContent {
+                    encrypted_content: "enc_opaque".into(),
+                },
+            ]),
+        };
+
+        let json = serde_json::to_value(&item)?;
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "function_call_output",
+                "call_id": "call1",
+                "output": [
+                    {
+                        "type": "encrypted_content",
+                        "encrypted_content": "enc_opaque",
+                    }
+                ],
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn preserves_existing_image_data_urls() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![serde_json::json!({
@@ -2394,6 +2471,30 @@ mod tests {
     }
 
     #[test]
+    fn deserializes_encrypted_array_payload_into_items() -> Result<()> {
+        let json = r#"[
+            {"type": "encrypted_content", "encrypted_content": "enc_opaque"}
+        ]"#;
+
+        let payload: FunctionCallOutputPayload = serde_json::from_str(json)?;
+        let expected_items = vec![FunctionCallOutputContentItem::EncryptedContent {
+            encrypted_content: "enc_opaque".into(),
+        }];
+
+        assert_eq!(payload.success, None);
+        assert_eq!(
+            payload.body,
+            FunctionCallOutputBody::ContentItems(expected_items.clone())
+        );
+        assert_eq!(
+            serde_json::to_string(&payload)?,
+            serde_json::to_string(&expected_items)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn deserializes_compaction_alias() -> Result<()> {
         let json = r#"{"type":"compaction_summary","encrypted_content":"abc"}"#;
 
@@ -2424,17 +2525,25 @@ mod tests {
     }
 
     #[test]
-    fn serializes_context_compaction_trigger_without_payload() -> Result<()> {
-        let item = ResponseItem::ContextCompaction {
-            encrypted_content: None,
-        };
+    fn serializes_compaction_trigger_without_payload() -> Result<()> {
+        let item = ResponseItem::CompactionTrigger;
 
         assert_eq!(
             serde_json::to_value(item)?,
             serde_json::json!({
-                "type": "context_compaction",
+                "type": "compaction_trigger",
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserializes_compaction_trigger_without_payload() -> Result<()> {
+        let json = r#"{"type":"compaction_trigger"}"#;
+
+        let item: ResponseItem = serde_json::from_str(json)?;
+
+        assert_eq!(item, ResponseItem::CompactionTrigger);
         Ok(())
     }
 
@@ -2546,52 +2655,46 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_shell_tool_call_params() -> Result<()> {
-        let json = r#"{
-            "command": ["ls", "-l"],
-            "workdir": "/tmp",
-            "timeout": 1000
-        }"#;
-
-        let params: ShellToolCallParams = serde_json::from_str(json)?;
-        assert_eq!(
-            ShellToolCallParams {
-                command: vec!["ls".to_string(), "-l".to_string()],
-                workdir: Some("/tmp".to_string()),
-                timeout_ms: Some(1000),
-                sandbox_permissions: None,
-                prefix_rule: None,
-                additional_permissions: None,
-                justification: None,
-            },
-            params
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn wraps_image_user_input_with_tags() -> Result<()> {
+    fn serializes_image_user_input_without_tags() -> Result<()> {
         let image_url = "data:image/png;base64,abc".to_string();
 
         let item = ResponseInputItem::from(vec![UserInput::Image {
             image_url: image_url.clone(),
+            detail: None,
         }]);
 
         match item {
             ResponseInputItem::Message { content, .. } => {
-                let expected = vec![
-                    ContentItem::InputText {
-                        text: image_open_tag_text(),
-                    },
-                    ContentItem::InputImage {
-                        image_url,
-                        detail: Some(DEFAULT_IMAGE_DETAIL),
-                    },
-                    ContentItem::InputText {
-                        text: image_close_tag_text(),
-                    },
-                ];
+                let expected = vec![ContentItem::InputImage {
+                    image_url,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                }];
                 assert_eq!(content, expected);
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn image_user_input_preserves_requested_detail() -> Result<()> {
+        let image_url = "data:image/png;base64,abc".to_string();
+
+        let item = ResponseInputItem::from(vec![UserInput::Image {
+            image_url: image_url.clone(),
+            detail: Some(ImageDetail::Original),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(
+                    content.first(),
+                    Some(&ContentItem::InputImage {
+                        image_url,
+                        detail: Some(ImageDetail::Original),
+                    })
+                );
             }
             other => panic!("expected message response but got {other:?}"),
         }
@@ -2767,59 +2870,85 @@ mod tests {
         let image_url = "data:image/png;base64,abc".to_string();
         let dir = tempdir()?;
         let local_path = dir.path().join("local.png");
-        // A tiny valid PNG (1x1) so this test doesn't depend on cross-crate file paths, which
-        // break under Bazel sandboxing.
-        const TINY_PNG_BYTES: &[u8] = &[
-            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
-            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2,
-            0, 0, 5, 0, 1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
-        ];
         std::fs::write(&local_path, TINY_PNG_BYTES)?;
 
         let item = ResponseInputItem::from(vec![
             UserInput::Image {
                 image_url: image_url.clone(),
+                detail: None,
             },
-            UserInput::LocalImage { path: local_path },
+            UserInput::LocalImage {
+                path: local_path.clone(),
+                detail: None,
+            },
         ]);
 
         match item {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(
                     content.first(),
-                    Some(&ContentItem::InputText {
-                        text: image_open_tag_text(),
-                    })
-                );
-                assert_eq!(
-                    content.get(1),
                     Some(&ContentItem::InputImage {
                         image_url,
                         detail: Some(DEFAULT_IMAGE_DETAIL),
                     })
                 );
                 assert_eq!(
-                    content.get(2),
+                    content.get(1),
                     Some(&ContentItem::InputText {
-                        text: image_close_tag_text(),
-                    })
-                );
-                assert_eq!(
-                    content.get(3),
-                    Some(&ContentItem::InputText {
-                        text: local_image_open_tag_text(/*label_number*/ 2),
+                        text: local_image_open_tag_text_with_path(
+                            /*label_number*/ 2,
+                            &local_path
+                        ),
                     })
                 );
                 assert!(matches!(
-                    content.get(4),
+                    content.get(2),
                     Some(ContentItem::InputImage { .. })
                 ));
                 assert_eq!(
-                    content.get(5),
+                    content.get(3),
                     Some(&ContentItem::InputText {
                         text: image_close_tag_text(),
                     })
                 );
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn local_image_open_tag_preserves_path() {
+        assert_eq!(
+            local_image_open_tag_text_with_path(
+                /*label_number*/ 1,
+                std::path::Path::new(r#"/tmp/a&"<b>.png"#),
+            ),
+            r#"<image name=[Image #1] path="/tmp/a&"<b>.png">"#
+        );
+    }
+
+    #[test]
+    fn local_image_user_input_preserves_requested_detail() -> Result<()> {
+        let dir = tempdir()?;
+        let local_path = dir.path().join("local.png");
+        std::fs::write(&local_path, TINY_PNG_BYTES)?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: local_path,
+            detail: Some(ImageDetail::Original),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert!(matches!(
+                    content.get(1),
+                    Some(ContentItem::InputImage {
+                        detail: Some(ImageDetail::Original),
+                        ..
+                    })
+                ));
             }
             other => panic!("expected message response but got {other:?}"),
         }
@@ -2834,6 +2963,7 @@ mod tests {
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
             path: missing_path.clone(),
+            detail: None,
         }]);
 
         match item {
@@ -2868,6 +2998,7 @@ mod tests {
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
             path: json_path.clone(),
+            detail: None,
         }]);
 
         match item {
@@ -2905,6 +3036,7 @@ mod tests {
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
             path: svg_path.clone(),
+            detail: None,
         }]);
 
         match item {

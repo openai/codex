@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::ErrorNotification;
@@ -15,6 +15,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnModerationMetadataNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
@@ -48,7 +49,7 @@ async fn openai_model_header_mismatch_emits_model_rerouted_notification_v2() -> 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -67,6 +68,7 @@ async fn openai_model_header_mismatch_emits_model_rerouted_notification_v2() -> 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "trigger safeguard".to_string(),
                 text_elements: Vec::new(),
@@ -114,7 +116,7 @@ async fn cyber_policy_response_emits_typed_error_notification_v2() -> Result<()>
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -133,6 +135,7 @@ async fn cyber_policy_response_emits_typed_error_notification_v2() -> Result<()>
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "trigger cyber policy error".to_string(),
                 text_elements: Vec::new(),
@@ -190,7 +193,7 @@ async fn response_model_field_mismatch_emits_model_rerouted_notification_v2_when
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -209,6 +212,7 @@ async fn response_model_field_mismatch_emits_model_rerouted_notification_v2_when
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "trigger response model check".to_string(),
                 text_elements: Vec::new(),
@@ -258,7 +262,7 @@ async fn model_verification_emits_typed_notification_and_warning_v2() -> Result<
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -277,6 +281,7 @@ async fn model_verification_emits_typed_notification_and_warning_v2() -> Result<
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "trigger model verification".to_string(),
                 text_elements: Vec::new(),
@@ -305,8 +310,89 @@ async fn model_verification_emits_typed_notification_and_warning_v2() -> Result<
     Ok(())
 }
 
+#[tokio::test]
+async fn turn_moderation_metadata_emits_typed_notification_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        serde_json::json!({
+            "type": "response.metadata",
+            "sequence_number": 1,
+            "response_id": "resp-1",
+            "metadata": {
+                "openai_chatgpt_moderation_metadata": {
+                    "presentation": "inline"
+                }
+            }
+        }),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response = responses::sse_response(body);
+    let _response_mock = responses::mount_response_once(&server, response).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some(REQUESTED_MODEL.to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "trigger moderation metadata".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let turn_start: TurnStartResponse = to_response(turn_resp)?;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/moderationMetadata"),
+    )
+    .await??;
+    let metadata: TurnModerationMetadataNotification =
+        serde_json::from_value(notification.params.ok_or_else(|| {
+            anyhow::anyhow!("turn/moderationMetadata notifications must include params")
+        })?)?;
+    assert_eq!(
+        metadata,
+        TurnModerationMetadataNotification {
+            thread_id: thread.id,
+            turn_id: turn_start.turn.id,
+            metadata: serde_json::json!({"presentation": "inline"}),
+        }
+    );
+
+    Ok(())
+}
+
 async fn collect_turn_notifications_and_validate_no_warning_item(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
 ) -> Result<ModelReroutedNotification> {
     let mut rerouted = None;
 
@@ -348,7 +434,7 @@ async fn collect_turn_notifications_and_validate_no_warning_item(
 }
 
 async fn collect_model_verification_notifications_and_validate_no_warning_item(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
 ) -> Result<ModelVerificationNotification> {
     let mut verification = None;
 
@@ -399,7 +485,7 @@ async fn collect_model_verification_notifications_and_validate_no_warning_item(
 }
 
 async fn collect_cyber_policy_error_and_validate_no_reroute(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
 ) -> Result<ErrorNotification> {
     let mut error = None;
 

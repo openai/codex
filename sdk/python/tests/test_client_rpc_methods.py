@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-from openai_codex.client import AppServerClient, _params_dict
+from openai_codex.client import CodexClient, _params_dict
 from openai_codex.generated.notification_registry import notification_turn_id
 from openai_codex.generated.v2_all import (
     AgentMessageDeltaNotification,
@@ -17,23 +16,6 @@ from openai_codex.generated.v2_all import (
 from openai_codex.models import Notification, UnknownNotification
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def test_thread_set_name_and_compact_use_current_rpc_methods() -> None:
-    client = AppServerClient()
-    calls: list[tuple[str, dict[str, Any] | None]] = []
-
-    def fake_request(method: str, params, *, response_model):  # type: ignore[no-untyped-def]
-        calls.append((method, params))
-        return response_model.model_validate({})
-
-    client.request = fake_request  # type: ignore[method-assign]
-
-    client.thread_set_name("thread-1", "sdk-name")
-    client.thread_compact("thread-1")
-
-    assert calls[0][0] == "thread/name/set"
-    assert calls[1][0] == "thread/compact/start"
 
 
 def test_generated_params_models_are_snake_case_and_dump_by_alias() -> None:
@@ -81,7 +63,7 @@ def test_thread_resume_response_accepts_auto_review_reviewer() -> None:
 
 
 def test_notifications_are_typed_with_canonical_v2_methods() -> None:
-    client = AppServerClient()
+    client = CodexClient()
     event = client._coerce_notification(
         "thread/tokenUsage/updated",
         {
@@ -112,7 +94,7 @@ def test_notifications_are_typed_with_canonical_v2_methods() -> None:
 
 
 def test_unknown_notifications_fall_back_to_unknown_payloads() -> None:
-    client = AppServerClient()
+    client = CodexClient()
     event = client._coerce_notification(
         "unknown/notification",
         {
@@ -128,10 +110,8 @@ def test_unknown_notifications_fall_back_to_unknown_payloads() -> None:
 
 
 def test_invalid_notification_payload_falls_back_to_unknown() -> None:
-    client = AppServerClient()
-    event = client._coerce_notification(
-        "thread/tokenUsage/updated", {"threadId": "missing"}
-    )
+    client = CodexClient()
+    event = client._coerce_notification("thread/tokenUsage/updated", {"threadId": "missing"})
 
     assert event.method == "thread/tokenUsage/updated"
     assert isinstance(event.payload, UnknownNotification)
@@ -164,7 +144,7 @@ def test_generated_notification_turn_id_handles_known_payload_shapes() -> None:
 
 def test_turn_notification_router_demuxes_registered_turns() -> None:
     """The router should deliver out-of-order turn events to the matching queues."""
-    client = AppServerClient()
+    client = CodexClient()
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")
 
@@ -205,9 +185,35 @@ def test_turn_notification_router_demuxes_registered_turns() -> None:
     ]
 
 
+def test_goal_notification_router_routes_by_thread_id() -> None:
+    """A goal operation should receive turn notifications across physical turn ids."""
+    client = CodexClient()
+    state = client.register_goal_operation("thread-1")
+
+    client._router.route_notification(
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "continued",
+                "itemId": "item-1",
+                "threadId": "thread-1",
+                "turnId": "turn-2",
+            },
+        )
+    )
+
+    event = client.next_goal_notification(state)
+
+    assert isinstance(event.payload, AgentMessageDeltaNotification)
+    assert (event.method, event.payload.delta) == (
+        "item/agentMessage/delta",
+        "continued",
+    )
+
+
 def test_client_reader_routes_interleaved_turn_notifications_by_turn_id() -> None:
     """Reader-loop routing should preserve order within each interleaved turn stream."""
-    client = AppServerClient()
+    client = CodexClient()
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")
 
@@ -286,7 +292,7 @@ def test_client_reader_routes_interleaved_turn_notifications_by_turn_id() -> Non
 
 def test_turn_notification_router_buffers_events_before_registration() -> None:
     """Early turn events should be replayed once their TurnHandle registers."""
-    client = AppServerClient()
+    client = CodexClient()
     client._router.route_notification(
         client._coerce_notification(
             "item/agentMessage/delta",
@@ -311,7 +317,7 @@ def test_turn_notification_router_buffers_events_before_registration() -> None:
 
 def test_turn_notification_router_clears_unregistered_turn_when_completed() -> None:
     """A completed unregistered turn should not leave a pending queue behind."""
-    client = AppServerClient()
+    client = CodexClient()
     client._router.route_notification(
         client._coerce_notification(
             "item/agentMessage/delta",
@@ -338,7 +344,7 @@ def test_turn_notification_router_clears_unregistered_turn_when_completed() -> N
 
 def test_turn_notification_router_routes_unknown_turn_notifications() -> None:
     """Unknown notifications should still route when their raw params carry a turn id."""
-    client = AppServerClient()
+    client = CodexClient()
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")
 

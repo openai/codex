@@ -93,9 +93,11 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
         "id": plugin_id,
         "name": "demo-plugin",
         "scope": "WORKSPACE",
+        "discoverability": "PRIVATE",
         "installation_policy": "AVAILABLE",
         "authentication_policy": "ON_USE",
         "release": {
+            "version": "0.1.0",
             "display_name": "Demo Plugin",
             "description": "Demo plugin description",
             "interface": {
@@ -321,6 +323,34 @@ fn archive_plugin_for_upload_places_manifest_at_archive_root() {
             .get("skills/example/SKILL.md")
             .map(Vec::as_slice),
         Some(b"# Example\n\nA test skill.\n".as_slice())
+    );
+}
+
+#[test]
+fn archive_plugin_for_upload_round_trips_through_plugin_bundle_archive_with_long_paths() {
+    let temp_dir = TempDir::new().unwrap();
+    let plugin_path = write_test_plugin(temp_dir.path(), "demo-plugin");
+    let long_skill_path = Path::new("skills")
+        .join(["segment"; 40].join("/"))
+        .join("SKILL.md");
+    write_file(&plugin_path.join(&long_skill_path), "# Long path skill\n");
+
+    let archive_bytes = archive_plugin_for_upload(&plugin_path).unwrap();
+    let destination = TempDir::new().unwrap();
+    crate::plugin_bundle_archive::unpack_plugin_bundle_tar_gz(
+        &archive_bytes,
+        destination.path(),
+        /*max_total_bytes*/ 1024 * 1024,
+    )
+    .expect("extract shared plugin archive");
+
+    assert_eq!(
+        fs::read_to_string(destination.path().join(".codex-plugin/plugin.json")).unwrap(),
+        r#"{"name":"demo-plugin"}"#
+    );
+    assert_eq!(
+        fs::read_to_string(destination.path().join(long_skill_path)).unwrap(),
+        "# Long path skill\n"
     );
 }
 
@@ -584,10 +614,12 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         vec![
             RemotePluginShareSummary {
                 summary: RemotePluginSummary {
-                    id: "plugins_123".to_string(),
+                    id: "demo-plugin@workspace-shared-with-me".to_string(),
+                    remote_plugin_id: "plugins_123".to_string(),
                     name: "demo-plugin".to_string(),
                     share_context: Some(RemotePluginShareContext {
                         remote_plugin_id: "plugins_123".to_string(),
+                        remote_version: Some("0.1.0".to_string()),
                         discoverability: RemotePluginShareDiscoverability::Private,
                         share_url: Some(
                             "https://chatgpt.example/plugins/share/share-key-1".to_string(),
@@ -621,10 +653,12 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
             },
             RemotePluginShareSummary {
                 summary: RemotePluginSummary {
-                    id: "plugins_456".to_string(),
+                    id: "demo-plugin@workspace-shared-with-me".to_string(),
+                    remote_plugin_id: "plugins_456".to_string(),
                     name: "demo-plugin".to_string(),
                     share_context: Some(RemotePluginShareContext {
                         remote_plugin_id: "plugins_456".to_string(),
+                        remote_version: Some("0.1.0".to_string()),
                         discoverability: RemotePluginShareDiscoverability::Private,
                         share_url: None,
                         creator_account_user_id: None,

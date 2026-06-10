@@ -19,6 +19,8 @@ pub enum SetupErrorCode {
     OrchestratorSandboxDirCreateFailed,
     /// Failed to determine whether the current process is elevated.
     OrchestratorElevationCheckFailed,
+    /// The setup command requires an already elevated process.
+    OrchestratorElevationRequired,
     /// Failed to serialize the elevation payload before launching the helper.
     OrchestratorPayloadSerializeFailed,
     /// Failed to launch the setup helper process (spawn or ShellExecuteExW).
@@ -29,6 +31,8 @@ pub enum SetupErrorCode {
     OrchestratorHelperExitNonzero,
     /// Helper exited non-zero and reading `setup_error.json` failed.
     OrchestratorHelperReportReadFailed,
+    /// Helper exited successfully before setup completed.
+    OrchestratorHelperIncomplete,
     // Helper (elevated process) failures.
     /// Helper failed while validating or decoding the request payload.
     HelperRequestArgsFailed,
@@ -46,7 +50,7 @@ pub enum SetupErrorCode {
     HelperDpapiProtectFailed,
     /// Helper failed to write the sandbox users secrets file.
     HelperUsersFileWriteFailed,
-    /// Helper failed to write the setup marker file.
+    /// Helper failed to write or protect the setup marker file.
     HelperSetupMarkerWriteFailed,
     /// Helper failed to resolve a SID or convert it to a PSID.
     HelperSidResolveFailed,
@@ -56,6 +60,8 @@ pub enum SetupErrorCode {
     HelperFirewallComInitFailed,
     /// Helper failed to access firewall policy or rule collections.
     HelperFirewallPolicyAccessFailed,
+    /// Helper detected that local firewall policy changes will not fully take effect.
+    HelperFirewallPolicyIneffective,
     /// Helper failed to create, update, or add the firewall rule.
     HelperFirewallRuleCreateOrAddFailed,
     /// Helper failed to verify the configured firewall rule scope.
@@ -73,11 +79,13 @@ impl SetupErrorCode {
         match self {
             Self::OrchestratorSandboxDirCreateFailed => "orchestrator_sandbox_dir_create_failed",
             Self::OrchestratorElevationCheckFailed => "orchestrator_elevation_check_failed",
+            Self::OrchestratorElevationRequired => "orchestrator_elevation_required",
             Self::OrchestratorPayloadSerializeFailed => "orchestrator_payload_serialize_failed",
             Self::OrchestratorHelperLaunchFailed => "orchestrator_helper_launch_failed",
             Self::OrchestratorHelperLaunchCanceled => "orchestrator_helper_launch_canceled",
             Self::OrchestratorHelperExitNonzero => "orchestrator_helper_exit_nonzero",
             Self::OrchestratorHelperReportReadFailed => "orchestrator_helper_report_read_failed",
+            Self::OrchestratorHelperIncomplete => "orchestrator_helper_incomplete",
             Self::HelperRequestArgsFailed => "helper_request_args_failed",
             Self::HelperSandboxDirCreateFailed => "helper_sandbox_dir_create_failed",
             Self::HelperLogFailed => "helper_log_failed",
@@ -91,6 +99,7 @@ impl SetupErrorCode {
             Self::HelperCapabilitySidFailed => "helper_capability_sid_failed",
             Self::HelperFirewallComInitFailed => "helper_firewall_com_init_failed",
             Self::HelperFirewallPolicyAccessFailed => "helper_firewall_policy_access_failed",
+            Self::HelperFirewallPolicyIneffective => "helper_firewall_policy_ineffective",
             Self::HelperFirewallRuleCreateOrAddFailed => {
                 "helper_firewall_rule_create_or_add_failed"
             }
@@ -108,7 +117,7 @@ pub struct SetupErrorReport {
     pub message: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SetupFailure {
     pub code: SetupErrorCode,
     pub message: String,

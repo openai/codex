@@ -53,11 +53,20 @@ fi
 
 run_bazel() {
   if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-    MSYS2_ARG_CONV_EXCL='*' bazel "$@"
+    MSYS2_ARG_CONV_EXCL='*' "$(dirname "${BASH_SOURCE[0]}")/run_bazel_with_buildbuddy.py" "$@"
     return
   fi
 
-  bazel "$@"
+  "$(dirname "${BASH_SOURCE[0]}")/run_bazel_with_buildbuddy.py" "$@"
+}
+
+run_bazel_with_startup_args() {
+  if (( ${#bazel_startup_args[@]} > 0 )); then
+    run_bazel "${bazel_startup_args[@]}" "$@"
+    return
+  fi
+
+  run_bazel "$@"
 }
 
 ci_config=ci-linux
@@ -77,23 +86,16 @@ esac
 print_bazel_test_log_tails() {
   local console_log="$1"
   local testlogs_dir
-  local -a bazel_info_cmd=(bazel)
+
   local -a bazel_info_args=(info)
-
-  if (( ${#bazel_startup_args[@]} > 0 )); then
-    bazel_info_cmd+=("${bazel_startup_args[@]}")
-  fi
-
-  # `bazel info` needs the same CI config as the failed test invocation so
-  # platform-specific output roots match. On Windows, omitting `ci-windows`
-  # would point at `local_windows-fastbuild` even when the test ran with the
-  # MSVC host platform under `local_windows_msvc-fastbuild`.
   if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-    bazel_info_args+=(
-      "--config=${ci_config}"
-      "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
-    )
+    # `bazel info` needs the same CI config as the failed test invocation so
+    # platform-specific output roots match. On Windows, omitting `ci-windows`
+    # would point at `local_windows-fastbuild` even when the test ran with the
+    # MSVC host platform under `local_windows_msvc-fastbuild`.
+    bazel_info_args+=("--config=${ci_config}")
   fi
+
   # Only pass flags that affect Bazel's output-root selection or repository
   # lookup. Test/build-only flags such as execution logs or remote download
   # mode can make `bazel info` fail, which would hide the real test log path.
@@ -105,7 +107,7 @@ print_bazel_test_log_tails() {
     esac
   done
 
-  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" \
+  testlogs_dir="$(run_bazel_with_startup_args \
     --noexperimental_remote_repo_contents_cache \
     "${bazel_info_args[@]}" \
     bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
@@ -254,8 +256,9 @@ if [[ ${#bazel_args[@]} -eq 0 || ${#bazel_targets[@]} -eq 0 ]]; then
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
-  # Fork PRs do not receive the BuildBuddy secret needed for the remote
-  # cross-compile config. Preserve the previous local Windows build shape.
+  # Windows cross-compilation depends on authenticated RBE. Preserve the local
+  # Windows build shape when credentials are unavailable.
+  ci_config=ci-windows
   windows_msvc_host_platform=1
 fi
 
@@ -297,9 +300,9 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -n "${BUI
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
-  # The Windows cross-compile config depends on remote execution. Fork PRs do
-  # not receive the BuildBuddy secret, so fall back to the existing local build
-  # shape and keep its lower concurrency cap.
+  # The Windows cross-compile config depends on authenticated remote
+  # execution. When credentials are unavailable, keep the local build shape
+  # and its lower concurrency cap.
   post_config_bazel_args+=(--jobs=8)
 fi
 
@@ -377,70 +380,31 @@ fi
 bazel_console_log="$(mktemp)"
 trap 'rm -f "$bazel_console_log"' EXIT
 
-bazel_cmd=(bazel)
-if (( ${#bazel_startup_args[@]} > 0 )); then
-  bazel_cmd+=("${bazel_startup_args[@]}")
-fi
-
+bazel_run_args=(
+  "${bazel_args[@]}"
+)
 if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   echo "BuildBuddy API key is available; using remote Bazel configuration."
-  # Work around Bazel 9 remote repo contents cache / overlay materialization failures
-  # seen in CI (for example "is not a symlink" or permission errors while
-  # materializing external repos such as rules_perl). We still use BuildBuddy for
-  # remote execution/cache; this only disables the startup-level repo contents cache.
-  bazel_run_args=(
-    "${bazel_args[@]}"
-    "--config=${ci_config}"
-    "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
-  )
-  if (( ${#post_config_bazel_args[@]} > 0 )); then
-    bazel_run_args+=("${post_config_bazel_args[@]}")
-  fi
-  set +e
-  run_bazel "${bazel_cmd[@]:1}" \
-    --noexperimental_remote_repo_contents_cache \
-    "${bazel_run_args[@]}" \
-    -- \
-    "${bazel_targets[@]}" \
-    2>&1 | tee "$bazel_console_log"
-  bazel_status=${PIPESTATUS[0]}
-  set -e
+  bazel_run_args+=("--config=${ci_config}")
 else
   echo "BuildBuddy API key is not available; using local Bazel configuration."
-  # Keep fork/community PRs on Bazel but disable remote services that are
-  # configured in .bazelrc and require auth.
-  #
-  # Flag docs:
-  # - Command-line reference: https://bazel.build/reference/command-line-reference
-  # - Remote caching overview: https://bazel.build/remote/caching
-  # - Remote execution overview: https://bazel.build/remote/rbe
-  # - Build Event Protocol overview: https://bazel.build/remote/bep
-  #
-  # --noexperimental_remote_repo_contents_cache:
-  #   disable remote repo contents cache enabled in .bazelrc startup options.
-  #   https://bazel.build/reference/command-line-reference#startup_options-flag--experimental_remote_repo_contents_cache
-  # --remote_cache= and --remote_executor=:
-  #   clear remote cache/execution endpoints configured in .bazelrc.
-  #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
-  #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
-  bazel_run_args=(
-    "${bazel_args[@]}"
-    --remote_cache=
-    --remote_executor=
-  )
-  if (( ${#post_config_bazel_args[@]} > 0 )); then
-    bazel_run_args+=("${post_config_bazel_args[@]}")
-  fi
-  set +e
-  run_bazel "${bazel_cmd[@]:1}" \
-    --noexperimental_remote_repo_contents_cache \
-    "${bazel_run_args[@]}" \
-    -- \
-    "${bazel_targets[@]}" \
-    2>&1 | tee "$bazel_console_log"
-  bazel_status=${PIPESTATUS[0]}
-  set -e
 fi
+if (( ${#post_config_bazel_args[@]} > 0 )); then
+  bazel_run_args+=("${post_config_bazel_args[@]}")
+fi
+set +e
+# Work around Bazel 9 remote repo contents cache / overlay materialization
+# failures seen in CI (for example "is not a symlink" or permission errors
+# while materializing external repos such as rules_perl). This only disables
+# the startup-level repo contents cache; keyed runs still use BuildBuddy.
+run_bazel_with_startup_args \
+  --noexperimental_remote_repo_contents_cache \
+  "${bazel_run_args[@]}" \
+  -- \
+  "${bazel_targets[@]}" \
+  2>&1 | tee "$bazel_console_log"
+bazel_status=${PIPESTATUS[0]}
+set -e
 
 if [[ ${bazel_status:-0} -ne 0 ]]; then
   if [[ $print_failed_bazel_action_summary -eq 1 ]]; then

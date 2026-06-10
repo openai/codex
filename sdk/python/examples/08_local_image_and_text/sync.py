@@ -6,9 +6,7 @@ if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
 from _bootstrap import (
-    assistant_text_from_turn,
     ensure_local_sdk_src,
-    find_turn_by_id,
     runtime_config,
     temporary_sample_image_path,
 )
@@ -23,12 +21,12 @@ with temporary_sample_image_path() as image_path:
 
         result = thread.turn(
             [
-                TextInput("Read this generated local image and summarize the colors/layout in 2 bullets."),
+                TextInput(
+                    "Read this generated local image and summarize the colors/layout in 2 bullets."
+                ),
                 LocalImageInput(str(image_path.resolve())),
             ]
         ).run()
-        persisted = thread.read(include_turns=True)
-        persisted_turn = find_turn_by_id(persisted.thread.turns, result.id)
 
         print("Status:", result.status)
-        print(assistant_text_from_turn(persisted_turn))
+        print(result.final_response)

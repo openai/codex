@@ -1,0 +1,70 @@
+{
+  "source": "standard/google_drive/tools",
+  "tools": [
+    {
+      "name": "google_drive_copy_file",
+      "description": "Copy a Google Drive file.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "description": "File selector.",
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "A Drive file ID."
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "shared_drive_id": {
+                    "type": "string",
+                    "description": "Shared drive identifier."
+                  }
+                }
+              }
+            ]
+          },
+          "metadata": {
+            "description": "Optional copy metadata.",
+            "allOf": [
+              {
+                "type": "object",
+                "description": "Base metadata.",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "description": "Metadata source."
+                  }
+                }
+              }
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "Copied file title."
+          }
+        },
+        "required": [
+          "file"
+        ]
+      },
+      "expected_preserved": [
+        {
+          "pointer": "/properties/title/description",
+          "value": "Copied file title."
+        },
+        {
+          "pointer": "/properties/file/oneOf/0/type",
+          "value": "string"
+        },
+        {
+          "pointer": "/properties/metadata/allOf/0/properties/source/type",
+          "value": "string"
+        }
+      ],
+      "expected_pruned": [],
+      "expected_dropped_fields": []
+    }
+  ]
+}

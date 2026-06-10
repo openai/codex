@@ -55,6 +55,7 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -119,6 +120,7 @@ async fn refresh_token_refreshes_when_auth_is_unchanged() -> Result<()> {
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -160,6 +162,104 @@ async fn refresh_token_refreshes_when_auth_is_unchanged() -> Result<()> {
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
+async fn auth_refreshes_when_access_token_is_near_expiry() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_last_refresh = Utc::now();
+    let near_expiry_access_token = access_token_with_expiration(Utc::now() + Duration::minutes(4));
+    let initial_tokens = build_tokens(&near_expiry_access_token, INITIAL_REFRESH_TOKEN);
+    let initial_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens.clone()),
+        last_refresh: Some(initial_last_refresh),
+        agent_identity: None,
+        personal_access_token: None,
+    };
+    ctx.write_auth(&initial_auth).await?;
+
+    let cached_auth = ctx
+        .auth_manager
+        .auth()
+        .await
+        .context("auth should be cached")?;
+
+    let refreshed_tokens = TokenData {
+        access_token: "new-access-token".to_string(),
+        refresh_token: "new-refresh-token".to_string(),
+        ..initial_tokens.clone()
+    };
+    let cached = cached_auth
+        .get_token_data()
+        .context("token data should refresh")?;
+    assert_eq!(cached, refreshed_tokens);
+    let stored = ctx.load_auth()?;
+    let tokens = stored.tokens.as_ref().context("tokens should exist")?;
+    assert_eq!(tokens, &refreshed_tokens);
+    let refreshed_at = stored
+        .last_refresh
+        .as_ref()
+        .context("last_refresh should be recorded")?;
+    assert!(
+        *refreshed_at >= initial_last_refresh,
+        "last_refresh should advance"
+    );
+
+    server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
+async fn auth_skips_access_token_outside_refresh_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_last_refresh = Utc::now();
+    let fresh_access_token = access_token_with_expiration(Utc::now() + Duration::minutes(6));
+    let initial_tokens = build_tokens(&fresh_access_token, INITIAL_REFRESH_TOKEN);
+    let initial_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens.clone()),
+        last_refresh: Some(initial_last_refresh),
+        agent_identity: None,
+        personal_access_token: None,
+    };
+    ctx.write_auth(&initial_auth).await?;
+
+    let cached_auth = ctx
+        .auth_manager
+        .auth()
+        .await
+        .context("auth should be cached")?;
+
+    let cached = cached_auth
+        .get_token_data()
+        .context("token data should remain cached")?;
+    assert_eq!(cached, initial_tokens);
+    assert_eq!(ctx.load_auth()?, initial_auth);
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert!(requests.is_empty(), "expected no refresh token requests");
+
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
 async fn refresh_token_skips_refresh_when_auth_changed() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -174,6 +274,7 @@ async fn refresh_token_skips_refresh_when_auth_changed() -> Result<()> {
         tokens: Some(initial_tokens),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -184,6 +285,7 @@ async fn refresh_token_skips_refresh_when_auth_changed() -> Result<()> {
         tokens: Some(disk_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     save_auth(
         ctx.codex_home.path(),
@@ -239,6 +341,7 @@ async fn refresh_token_errors_on_account_mismatch() -> Result<()> {
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -250,6 +353,7 @@ async fn refresh_token_errors_on_account_mismatch() -> Result<()> {
         tokens: Some(disk_tokens),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     save_auth(
         ctx.codex_home.path(),
@@ -309,6 +413,7 @@ async fn returns_fresh_tokens_as_is() -> Result<()> {
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(stale_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -357,6 +462,7 @@ async fn refreshes_token_when_access_token_is_expired() -> Result<()> {
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(fresh_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -407,6 +513,7 @@ async fn auth_reloads_disk_auth_when_cached_auth_is_stale() -> Result<()> {
         tokens: Some(initial_tokens),
         last_refresh: Some(stale_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -418,6 +525,7 @@ async fn auth_reloads_disk_auth_when_cached_auth_is_stale() -> Result<()> {
         tokens: Some(disk_tokens.clone()),
         last_refresh: Some(fresh_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     save_auth(
         ctx.codex_home.path(),
@@ -470,6 +578,7 @@ async fn auth_reloads_disk_auth_without_calling_expired_refresh_token() -> Resul
         tokens: Some(initial_tokens),
         last_refresh: Some(stale_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -481,6 +590,7 @@ async fn auth_reloads_disk_auth_without_calling_expired_refresh_token() -> Resul
         tokens: Some(disk_tokens.clone()),
         last_refresh: Some(fresh_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     save_auth(
         ctx.codex_home.path(),
@@ -531,6 +641,7 @@ async fn refresh_token_returns_permanent_error_for_expired_refresh_token() -> Re
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -584,6 +695,75 @@ async fn refresh_token_does_not_retry_after_permanent_failure() -> Result<()> {
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
+    };
+    ctx.write_auth(&initial_auth).await?;
+
+    let first_err = ctx
+        .auth_manager
+        .refresh_token()
+        .await
+        .err()
+        .context("first refresh should fail")?;
+    assert_eq!(
+        first_err.failed_reason(),
+        Some(RefreshTokenFailedReason::Exhausted)
+    );
+
+    let second_err = ctx
+        .auth_manager
+        .refresh_token()
+        .await
+        .err()
+        .context("second refresh should fail without retrying")?;
+    assert_eq!(
+        second_err.failed_reason(),
+        Some(RefreshTokenFailedReason::Exhausted)
+    );
+
+    let stored = ctx.load_auth()?;
+    assert_eq!(stored, initial_auth);
+    let cached_auth = ctx
+        .auth_manager
+        .auth()
+        .await
+        .context("auth should remain cached")?;
+    let cached = cached_auth
+        .get_token_data()
+        .context("token data should remain cached")?;
+    assert_eq!(cached, initial_tokens);
+
+    server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
+async fn refresh_token_does_not_retry_after_bad_request_reused_failure() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "refresh_token_reused"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_last_refresh = Utc::now() - Duration::days(1);
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    let initial_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens.clone()),
+        last_refresh: Some(initial_last_refresh),
+        agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -651,6 +831,7 @@ async fn refresh_token_reloads_changed_auth_after_permanent_failure() -> Result<
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -673,6 +854,7 @@ async fn refresh_token_reloads_changed_auth_after_permanent_failure() -> Result<
         tokens: Some(disk_tokens.clone()),
         last_refresh: Some(fresh_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     save_auth(
         ctx.codex_home.path(),
@@ -732,6 +914,7 @@ async fn refresh_token_returns_transient_error_on_server_failure() -> Result<()>
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -785,6 +968,7 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -795,6 +979,7 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
         tokens: Some(disk_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     save_auth(
         ctx.codex_home.path(),
@@ -879,6 +1064,7 @@ async fn unauthorized_recovery_errors_on_account_mismatch() -> Result<()> {
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -890,6 +1076,7 @@ async fn unauthorized_recovery_errors_on_account_mismatch() -> Result<()> {
         tokens: Some(disk_tokens),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     save_auth(
         ctx.codex_home.path(),
@@ -948,6 +1135,7 @@ async fn unauthorized_recovery_requires_chatgpt_auth() -> Result<()> {
         tokens: None,
         last_refresh: None,
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&auth).await?;
 

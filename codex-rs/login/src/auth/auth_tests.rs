@@ -19,8 +19,13 @@ use tempfile::tempdir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
+const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
+const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
 
 #[tokio::test]
 async fn refresh_without_id_token() {
@@ -87,7 +92,7 @@ fn login_with_api_key_overwrites_existing_auth_json() {
 async fn login_with_access_token_writes_only_token() {
     let dir = tempdir().unwrap();
     let auth_path = dir.path().join("auth.json");
-    let record = agent_identity_record("account-123");
+    let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity =
         signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
     let server = MockServer::start().await;
@@ -123,6 +128,84 @@ async fn login_with_access_token_writes_only_token() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
+async fn login_with_access_token_writes_only_personal_access_token() {
+    let dir = tempdir().unwrap();
+    let auth_path = dir.path().join("auth.json");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .and(header("authorization", "Bearer at-login-test"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    super::login_with_access_token(
+        dir.path(),
+        "at-login-test",
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("personal access token login should succeed");
+
+    let storage = FileAuthStorage::new(dir.path().to_path_buf());
+    let auth = storage
+        .try_read_auth_json(&auth_path)
+        .expect("auth.json should parse");
+    assert_eq!(
+        auth,
+        AuthDotJson {
+            auth_mode: None,
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+            personal_access_token: Some("at-login-test".to_string()),
+        }
+    );
+    assert_eq!(auth.resolved_mode(), AuthMode::PersonalAccessToken);
+    let persisted: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(auth_path).unwrap()).unwrap();
+    assert!(persisted.get("auth_mode").is_none());
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn login_with_access_token_rejects_invalid_personal_access_token() {
+    let dir = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+
+    let err = super::login_with_access_token(
+        dir.path(),
+        "at-invalid-login",
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect_err("invalid personal access token should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    assert!(
+        !get_auth_file(dir.path()).exists(),
+        "invalid personal access token should not write auth.json"
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn login_with_access_token_rejects_invalid_jwt() {
     let dir = tempdir().unwrap();
 
@@ -145,7 +228,7 @@ async fn login_with_access_token_rejects_invalid_jwt() {
 #[tokio::test]
 async fn login_with_access_token_rejects_unsigned_jwt() {
     let dir = tempdir().unwrap();
-    let record = agent_identity_record("account-123");
+    let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -241,6 +324,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
             }),
             last_refresh: Some(last_refresh),
             agent_identity: None,
+            personal_access_token: None,
         },
         auth_dot_json
     );
@@ -282,6 +366,7 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
         tokens: None,
         last_refresh: None,
         agent_identity: None,
+        personal_access_token: None,
     };
     super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
     let auth_file = get_auth_file(dir.path());
@@ -329,7 +414,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         AuthFileParams {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
-            chatgpt_account_id: Some("org_mine".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
         },
         codex_home.path(),
     )
@@ -654,7 +739,7 @@ fn fake_jwt_for_auth_file_params(params: &AuthFileParams) -> std::io::Result<Str
 async fn build_config(
     codex_home: &Path,
     forced_login_method: Option<ForcedLoginMethod>,
-    forced_chatgpt_workspace_id: Option<String>,
+    forced_chatgpt_workspace_id: Option<Vec<String>>,
 ) -> AuthConfig {
     AuthConfig {
         codex_home: codex_home.to_path_buf(),
@@ -712,7 +797,7 @@ fn remove_access_token_env_var() -> EnvVarGuard {
 #[serial(codex_auth_env)]
 async fn load_auth_reads_access_token_from_env() {
     let codex_home = tempdir().unwrap();
-    let expected_record = agent_identity_record("account-123");
+    let expected_record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity =
         signed_agent_identity_jwt(&expected_record, json!(expected_record.plan_type))
             .expect("signed agent identity");
@@ -760,9 +845,101 @@ async fn load_auth_reads_access_token_from_env() {
 
 #[tokio::test]
 #[serial(codex_auth_env)]
+async fn load_auth_reads_personal_access_token_from_env() {
+    let codex_home = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .and(header("authorization", "Bearer at-env-test"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, "at-env-test");
+
+    for auth_credentials_store_mode in [
+        AuthCredentialsStoreMode::File,
+        AuthCredentialsStoreMode::Ephemeral,
+    ] {
+        let auth = super::load_auth(
+            codex_home.path(),
+            /*enable_codex_api_key_env*/ false,
+            auth_credentials_store_mode,
+            /*chatgpt_base_url*/ None,
+        )
+        .await
+        .expect("env auth should load")
+        .expect("env auth should be present");
+
+        assert_eq!(auth.api_auth_mode(), AuthMode::PersonalAccessToken);
+        assert_eq!(
+            auth.get_token()
+                .expect("personal access token should be exposed"),
+            "at-env-test"
+        );
+        assert_eq!(auth.get_account_id().as_deref(), Some(WORKSPACE_ID_ALLOWED));
+        assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-123"));
+        assert_eq!(
+            auth.get_account_email().as_deref(),
+            Some("user@example.com")
+        );
+        assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Business));
+        assert!(auth.is_fedramp_account());
+    }
+    assert!(
+        !get_auth_file(codex_home.path()).exists(),
+        "env auth should not write auth.json"
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn personal_access_token_does_not_offer_unauthorized_recovery() {
+    let codex_home = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    let _access_token_guard =
+        EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, "at-no-unauthorized-recovery");
+    let manager = Arc::new(
+        AuthManager::new(
+            codex_home.path().to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
+        )
+        .await,
+    );
+
+    let recovery = manager.unauthorized_recovery();
+
+    assert!(!recovery.has_next());
+    assert_eq!(recovery.unavailable_reason(), "not_refreshable_auth");
+    manager
+        .refresh_token_from_authority()
+        .await
+        .expect("personal access tokens do not use OAuth refresh");
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
 async fn load_auth_keeps_codex_api_key_env_precedence() {
     let codex_home = tempdir().unwrap();
-    let record = agent_identity_record("account-123");
+    let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
     let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, &agent_identity);
     let _api_key_guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
@@ -814,7 +991,7 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
         AuthFileParams {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
-            chatgpt_account_id: Some("org_another_org".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_DISALLOWED.to_string()),
         },
         codex_home.path(),
     )
@@ -823,14 +1000,17 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
     let config = build_config(
         codex_home.path(),
         /*forced_login_method*/ None,
-        Some("org_mine".to_string()),
+        Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
     )
     .await;
 
     let err = super::enforce_login_restrictions(&config)
         .await
         .expect_err("expected workspace mismatch to error");
-    assert!(err.to_string().contains("workspace org_mine"));
+    assert!(
+        err.to_string()
+            .contains(&format!("workspace(s) {WORKSPACE_ID_ALLOWED}"))
+    );
     assert!(
         !codex_home.path().join("auth.json").exists(),
         "auth.json should be removed on mismatch"
@@ -846,7 +1026,7 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
         AuthFileParams {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
-            chatgpt_account_id: Some("org_mine".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
         },
         codex_home.path(),
     )
@@ -855,7 +1035,7 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
     let config = build_config(
         codex_home.path(),
         /*forced_login_method*/ None,
-        Some("org_mine".to_string()),
+        Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
     )
     .await;
 
@@ -870,6 +1050,95 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
 
 #[tokio::test]
 #[serial(codex_auth_env)]
+async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
+    let codex_home = tempdir().unwrap();
+    let _jwt = write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        Some(vec![
+            WORKSPACE_ID_SECOND_ALLOWED.to_string(),
+            WORKSPACE_ID_ALLOWED.to_string(),
+        ]),
+    )
+    .await;
+
+    super::enforce_login_restrictions(&config)
+        .await
+        .expect("any matching workspace in the allowed list should succeed");
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismatch() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    let record = agent_identity_record(WORKSPACE_ID_DISALLOWED);
+    let agent_identity =
+        signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/agent-identities/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(test_jwks_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/v1/agent/agent-runtime-id/task/register"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "task_id": "task-123",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let _authapi_guard =
+        EnvVarGuard::set("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &chatgpt_base_url);
+    save_auth(
+        codex_home.path(),
+        &AuthDotJson {
+            auth_mode: Some(ApiAuthMode::AgentIdentity),
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: Some(agent_identity),
+            personal_access_token: None,
+        },
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("seed agent identity auth");
+
+    let config = AuthConfig {
+        codex_home: codex_home.path().to_path_buf(),
+        auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        forced_login_method: None,
+        forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
+        chatgpt_base_url: Some(chatgpt_base_url),
+    };
+
+    let err = super::enforce_login_restrictions(&config)
+        .await
+        .expect_err("expected workspace mismatch to error");
+    assert!(err.to_string().contains(&format!(
+        "current credentials belong to {WORKSPACE_ID_DISALLOWED}"
+    )));
+    assert!(
+        !codex_home.path().join("auth.json").exists(),
+        "auth.json should be removed on mismatch"
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_forced_chatgpt_workspace_id_is_set()
  {
     let codex_home = tempdir().unwrap();
@@ -880,7 +1149,7 @@ async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_f
     let config = build_config(
         codex_home.path(),
         /*forced_login_method*/ None,
-        Some("org_mine".to_string()),
+        Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
     )
     .await;
 
@@ -993,6 +1262,16 @@ fn test_jwks_body() -> serde_json::Value {
             "n": "1qQF2MqTrGAMDm7wXbjJP5sWqGA83tAGUs2ksy7iJXLJdhCg4AtwGm4SFl4f6kxhCSzlN1QdXuZjvRT2wZZiGUi9xUE28rf4WLrTxSnwqLuTy5knMP08yC0t_0YU_FGPZMcWb14hG05IvZr8UbmRaVagxSR8H4rSIymRoVwwmFSrqz068XrWGSYNIfLEASyo5GdAaqmk1JALINHgYGQJVxMxtwcvDxoVKmC7eltUNymMNBZhsv4E8sx9YNLpBoEibznfEpDU_DGzrM5eZCsQzaqbhBOlGd427ifud_Nnd9cPqzgCUc23-0FXSPfpbgksCXAwAmD0OFjQWrgqVdKL6Q",
             "e": "AQAB",
         }]
+    })
+}
+
+fn personal_access_token_whoami(account_id: &str) -> serde_json::Value {
+    json!({
+        "email": "user@example.com",
+        "chatgpt_user_id": "user-123",
+        "chatgpt_account_id": account_id,
+        "chatgpt_plan_type": "business",
+        "chatgpt_account_is_fedramp": true,
     })
 }
 

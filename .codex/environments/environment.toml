@@ -3,9 +3,9 @@ version = 1
 name = "codex"
 
 [setup]
-script = ""
+script = "python ./.codex/environments/setup.py"
 
 [[actions]]
 name = "Run"
 icon = "run"
-command = "cargo +1.93.0 run --manifest-path=codex-rs/Cargo.toml --bin codex -- -c mcp_oauth_credentials_store=file"
+command = "cargo +1.95.0 run --manifest-path=codex-rs/Cargo.toml --bin codex -- -c mcp_oauth_credentials_store=file"

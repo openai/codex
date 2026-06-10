@@ -13,9 +13,11 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::ServerResponse;
 use codex_otel::span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -139,6 +141,20 @@ impl ThreadScopedOutgoingMessageSender {
                 Some(self.thread_id),
             )
             .await
+    }
+
+    pub(crate) fn track_effective_permissions_approval_response(
+        &self,
+        request_id: RequestId,
+        response: RequestPermissionsResponse,
+    ) {
+        self.outgoing
+            .analytics_events_client
+            .track_effective_permissions_approval_response(
+                now_unix_timestamp_ms(),
+                request_id,
+                response,
+            );
     }
 
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
@@ -360,7 +376,9 @@ impl OutgoingMessageSender {
         match entry {
             Some((id, entry)) => {
                 let completed_at_ms = now_unix_timestamp_ms();
-                if let Ok(response) = entry.request.response_from_result(result.clone()) {
+                if let Ok(response) = entry.request.response_from_result(result.clone())
+                    && !matches!(response, ServerResponse::PermissionsRequestApproval { .. })
+                {
                     self.analytics_events_client
                         .track_server_response(completed_at_ms, response);
                 }
@@ -380,6 +398,8 @@ impl OutgoingMessageSender {
         match entry {
             Some((id, entry)) => {
                 warn!("client responded with error for {id:?}: {error:?}");
+                self.analytics_events_client
+                    .track_server_request_aborted(now_unix_timestamp_ms(), id.clone());
                 if let Err(err) = entry.callback.send(Err(error)) {
                     warn!("could not notify callback for {id:?} due to: {err:?}");
                 }
@@ -391,7 +411,14 @@ impl OutgoingMessageSender {
     }
 
     pub(crate) async fn cancel_request(&self, id: &RequestId) -> bool {
-        self.take_request_callback(id).await.is_some()
+        let entry = self.take_request_callback(id).await;
+        if let Some((request_id, _entry)) = entry {
+            self.analytics_events_client
+                .track_server_request_aborted(now_unix_timestamp_ms(), request_id);
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) async fn cancel_all_requests(&self, error: Option<JSONRPCErrorError>) {
@@ -403,12 +430,14 @@ impl OutgoingMessageSender {
                 .collect::<Vec<_>>()
         };
 
-        if let Some(error) = error {
-            for entry in entries {
-                if let Err(err) = entry.callback.send(Err(error.clone())) {
-                    let request_id = entry.request.id();
-                    warn!("could not notify callback for {request_id:?} due to: {err:?}");
-                }
+        for entry in entries {
+            self.analytics_events_client
+                .track_server_request_aborted(now_unix_timestamp_ms(), entry.request.id().clone());
+            if let Some(error) = error.as_ref()
+                && let Err(err) = entry.callback.send(Err(error.clone()))
+            {
+                let request_id = entry.request.id();
+                warn!("could not notify callback for {request_id:?} due to: {err:?}");
             }
         }
     }
@@ -427,8 +456,8 @@ impl OutgoingMessageSender {
     ) -> Vec<ServerRequest> {
         let request_id_to_callback = self.request_id_to_callback.lock().await;
         let mut requests = request_id_to_callback
-            .iter()
-            .filter_map(|(_, entry)| {
+            .values()
+            .filter_map(|entry| {
                 (entry.thread_id == Some(thread_id)).then_some(entry.request.clone())
             })
             .collect::<Vec<_>>();
@@ -459,12 +488,14 @@ impl OutgoingMessageSender {
             entries
         };
 
-        if let Some(error) = error {
-            for entry in entries {
-                if let Err(err) = entry.callback.send(Err(error.clone())) {
-                    let request_id = entry.request.id();
-                    warn!("could not notify callback for {request_id:?} due to: {err:?}",);
-                }
+        for entry in entries {
+            self.analytics_events_client
+                .track_server_request_aborted(now_unix_timestamp_ms(), entry.request.id().clone());
+            if let Some(error) = error.as_ref()
+                && let Err(err) = entry.callback.send(Err(error.clone()))
+            {
+                let request_id = entry.request.id();
+                warn!("could not notify callback for {request_id:?} due to: {err:?}",);
             }
         }
     }
@@ -684,6 +715,7 @@ mod tests {
     use codex_app_server_protocol::RateLimitWindow;
     use codex_app_server_protocol::ServerResponse;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_app_server_protocol::TurnModerationMetadataNotification;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -757,6 +789,7 @@ mod tests {
                     }),
                     secondary: None,
                     credits: None,
+                    individual_limit: None,
                     plan_type: Some(PlanType::Plus),
                     rate_limit_reached_type: None,
                 },
@@ -777,6 +810,7 @@ mod tests {
                         },
                         "secondary": null,
                         "credits": null,
+                        "individualLimit": null,
                         "planType": "plus",
                         "rateLimitReachedType": null
                     }
@@ -900,6 +934,31 @@ mod tests {
                     "threadId": "thread-1",
                     "turnId": "turn-1",
                     "verifications": ["trustedAccessForCyber"],
+                },
+            }),
+            serde_json::to_value(jsonrpc_notification)
+                .expect("ensure the notification serializes correctly"),
+            "ensure the notification serializes correctly"
+        );
+    }
+
+    #[test]
+    fn verify_turn_moderation_metadata_notification_serialization() {
+        let notification =
+            ServerNotification::TurnModerationMetadata(TurnModerationMetadataNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                metadata: json!({"presentation": "inline"}),
+            });
+
+        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
+        assert_eq!(
+            json!({
+                "method": "turn/moderationMetadata",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "metadata": {"presentation": "inline"},
                 },
             }),
             serde_json::to_value(jsonrpc_notification)

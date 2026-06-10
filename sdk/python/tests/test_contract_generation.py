@@ -31,10 +31,7 @@ def _snapshot_target(root: Path, rel_path: Path) -> dict[str, bytes] | bytes | N
 
 def _snapshot_targets(root: Path) -> dict[str, dict[str, bytes] | bytes | None]:
     """Capture all checked-in generated artifacts before and after regeneration."""
-    return {
-        str(rel_path): _snapshot_target(root, rel_path)
-        for rel_path in GENERATED_TARGETS
-    }
+    return {str(rel_path): _snapshot_target(root, rel_path) for rel_path in GENERATED_TARGETS}
 
 
 def test_generated_files_are_up_to_date():
@@ -43,7 +40,7 @@ def test_generated_files_are_up_to_date():
 
     # Regenerate contract artifacts via the pinned runtime package, not a local
     # app-server binary from the checkout or CI environment.
-    assert importlib.metadata.version("openai-codex-cli-bin") == "0.131.0a4"
+    assert importlib.metadata.version("openai-codex-cli-bin") == "0.137.0a4"
     env = os.environ.copy()
     env.pop("CODEX_EXEC_PATH", None)
     python_bin = str(Path(sys.executable).parent)

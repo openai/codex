@@ -62,7 +62,7 @@
       "enum": [
         "read",
         "write",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -284,6 +284,13 @@
   "properties": {
     "cwd": {
       "$ref": "#/definitions/AbsolutePathBuf"
+    },
+    "environmentId": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "itemId": {
       "type": "string"

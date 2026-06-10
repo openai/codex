@@ -7,9 +7,9 @@ use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use dirs::home_dir;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Component;
@@ -59,6 +59,7 @@ pub struct MarketplaceInterface {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketplacePlugin {
     pub name: String,
+    pub local_version: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
@@ -224,6 +225,16 @@ pub fn list_marketplaces(
     list_marketplaces_with_home(additional_roots, home_dir().as_deref())
 }
 
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .find(|path| path.is_absolute())
+        .or_else(dirs::home_dir)
+}
+
 pub fn validate_marketplace_root(root: &Path) -> Result<String, MarketplaceError> {
     let Some(path) = find_marketplace_manifest_path(root) else {
         return Err(MarketplaceError::InvalidMarketplaceFile {
@@ -289,15 +300,22 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
             Err(err) => return Err(err),
         };
 
+        let local_version = plugin
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.version.clone());
+        let keywords = plugin
+            .manifest
+            .map(|manifest| manifest.keywords)
+            .unwrap_or_default();
+
         plugins.push(MarketplacePlugin {
             name: plugin.plugin_id.plugin_name,
+            local_version,
             source: plugin.source,
             policy: plugin.policy,
             interface: plugin.interface,
-            keywords: plugin
-                .manifest
-                .map(|manifest| manifest.keywords)
-                .unwrap_or_default(),
+            keywords,
         });
     }
 
@@ -307,6 +325,16 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
         interface: resolve_marketplace_interface(marketplace.interface),
         plugins,
     })
+}
+
+pub(crate) fn load_raw_marketplace_plugin_names(
+    path: &AbsolutePathBuf,
+) -> Result<HashSet<String>, MarketplaceError> {
+    Ok(load_raw_marketplace_manifest(path)?
+        .plugins
+        .into_iter()
+        .map(|plugin| plugin.name)
+        .collect())
 }
 
 #[doc(hidden)]
@@ -681,7 +709,8 @@ pub fn plugin_interface_with_marketplace_category(
     interface
 }
 
-fn marketplace_root_dir(
+#[doc(hidden)]
+pub fn marketplace_root_dir(
     marketplace_path: &AbsolutePathBuf,
 ) -> Result<AbsolutePathBuf, MarketplaceError> {
     for relative_path in MARKETPLACE_MANIFEST_RELATIVE_PATHS {

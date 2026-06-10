@@ -7,12 +7,15 @@ use tokio_tungstenite::connect_async;
 use tracing::debug;
 use tracing::warn;
 
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
+
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
+use crate::relay::harness_connection_from_websocket;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 
@@ -53,6 +56,7 @@ impl ExecServerClient {
     pub async fn connect_websocket(
         args: RemoteExecServerConnectArgs,
     ) -> Result<Self, ExecServerError> {
+        ensure_rustls_crypto_provider();
         let websocket_url = args.websocket_url.clone();
         let connect_timeout = args.connect_timeout;
         let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
@@ -66,14 +70,13 @@ impl ExecServerClient {
                 source,
             })?;
 
-        Self::connect(
-            JsonRpcConnection::from_websocket(
-                stream,
-                format!("exec-server websocket {websocket_url}"),
-            ),
-            args.into(),
-        )
-        .await
+        let connection_label = format!("exec-server websocket {websocket_url}");
+        let connection = if is_rendezvous_harness_url(&websocket_url) {
+            harness_connection_from_websocket(stream, connection_label)
+        } else {
+            JsonRpcConnection::from_websocket(stream, connection_label)
+        };
+        Self::connect(connection, args.into()).await
     }
 
     pub(crate) async fn connect_stdio_command(
@@ -115,6 +118,16 @@ impl ExecServerClient {
         )
         .await
     }
+}
+
+fn is_rendezvous_harness_url(websocket_url: &str) -> bool {
+    let Some((_path, query)) = websocket_url.split_once('?') else {
+        return false;
+    };
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .any(|(key, value)| key == "role" && value == "harness")
 }
 
 fn stdio_command_process(stdio_command: &StdioExecServerCommand) -> Command {

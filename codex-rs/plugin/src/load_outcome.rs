@@ -126,6 +126,7 @@ impl<M: Clone> PluginLoadOutcome<M> {
                     skill_roots.push(PluginSkillRoot {
                         path: path.clone(),
                         plugin_id: plugin.config_name.clone(),
+                        plugin_root: plugin.root.clone(),
                     });
                 }
             }
@@ -245,6 +246,7 @@ mod tests {
             vec![PluginSkillRoot {
                 path: shared_root,
                 plugin_id: "zeta@test".to_string(),
+                plugin_root: test_path("zeta@test"),
             }]
         );
     }

@@ -13,10 +13,10 @@ use chrono::Utc;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_thread_store::StoredThread;
 use core_test_support::PathBufExt;
@@ -30,8 +30,10 @@ use tempfile::TempDir;
 fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThread {
     StoredThread {
         thread_id: ThreadId::new(),
+        extra_config: None,
         rollout_path: Some(PathBuf::from("/tmp/rollout.jsonl")),
         forked_from_id: None,
+        parent_thread_id: None,
         preview: first_user_message.to_string(),
         name: (!title.is_empty()).then(|| title.to_string()),
         model_provider: "test-provider".to_string(),
@@ -59,7 +61,7 @@ fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThre
             repository_url: None,
         }),
         approval_mode: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: PermissionProfile::read_only(),
         token_usage: None,
         first_user_message: Some(first_user_message.to_string()),
         history: None,

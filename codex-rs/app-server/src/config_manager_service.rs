@@ -125,7 +125,6 @@ impl ConfigManager {
         };
 
         let effective = layers.effective_config();
-
         let effective_config_toml: ConfigToml = effective
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
@@ -196,8 +195,9 @@ impl ConfigManager {
         expected_version: Option<String>,
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, ConfigManagerError> {
-        let allowed_path =
-            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, self.codex_home());
+        let allowed_path = self
+            .user_config_path()
+            .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?;
         let provided_path = match file_path {
             Some(path) => AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
                 .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?,
@@ -215,7 +215,7 @@ impl ConfigManager {
             .load_thread_agnostic_config()
             .await
             .map_err(|err| ConfigManagerError::io("failed to load configuration", err))?;
-        let user_layer = match layers.get_user_layer() {
+        let user_layer = match layers.get_active_user_layer() {
             Some(layer) => Cow::Borrowed(layer),
             None => Cow::Owned(create_empty_user_layer(&allowed_path).await?),
         };
@@ -237,6 +237,23 @@ impl ConfigManager {
             let segments = parse_key_path(&key_path).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
+            if !value.is_null() {
+                match segments.as_slice() {
+                    [segment] if segment == "profile" => {
+                        return Err(ConfigManagerError::write(
+                            ConfigWriteErrorCode::ConfigValidationError,
+                            "`profile` is a legacy config selector and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
+                        ));
+                    }
+                    [segment, ..] if segment == "profiles" => {
+                        return Err(ConfigManagerError::write(
+                            ConfigWriteErrorCode::ConfigValidationError,
+                            "`profiles` contains legacy config profile tables and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
+                        ));
+                    }
+                    _ => {}
+                }
+            }
             let original_value = value_at_path(&user_config, &segments).cloned();
             let parsed_value = parse_value(value).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
@@ -305,7 +322,7 @@ impl ConfigManager {
         })?;
 
         if !config_edits.is_empty() {
-            ConfigEditsBuilder::new(self.codex_home())
+            ConfigEditsBuilder::for_config_path(provided_path.as_path())
                 .with_edits(config_edits)
                 .apply()
                 .await
@@ -321,7 +338,7 @@ impl ConfigManager {
         Ok(ConfigWriteResponse {
             status,
             version: updated_layers
-                .get_user_layer()
+                .get_active_user_layer()
                 .ok_or_else(|| {
                     ConfigManagerError::write(
                         ConfigWriteErrorCode::UserLayerNotFound,
@@ -375,6 +392,7 @@ async fn create_empty_user_layer(
     Ok(ConfigLayerEntry::new(
         ConfigLayerSource::User {
             file: config_toml.clone(),
+            profile: None,
         },
         toml_value,
     ))
@@ -401,10 +419,47 @@ fn parse_key_path(path: &str) -> Result<Vec<String>, String> {
     if path.trim().is_empty() {
         return Err("keyPath must not be empty".to_string());
     }
-    Ok(path
-        .split('.')
-        .map(std::string::ToString::to_string)
-        .collect())
+
+    let mut segments = Vec::new();
+    let mut segment = String::new();
+    let mut chars = path.chars();
+    let mut quoted = false;
+
+    // Split on dots unless they appear inside a quoted segment. Bare segments
+    // intentionally stay permissive so existing paths like `sample@catalog`
+    // remain valid.
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if segment.is_empty() && !quoted => quoted = true,
+            '"' if quoted => quoted = false,
+            '\\' if quoted => {
+                // Quoted segments may escape punctuation that would otherwise
+                // participate in parsing, such as `.` or `"`.
+                let Some(escaped) = chars.next() else {
+                    return Err("unterminated escape in keyPath".to_string());
+                };
+                segment.push(escaped);
+            }
+            '.' if !quoted => {
+                if segment.is_empty() {
+                    return Err("keyPath segments must not be empty".to_string());
+                }
+                segments.push(std::mem::take(&mut segment));
+            }
+            '"' => return Err("invalid quoted keyPath segment".to_string()),
+            _ => segment.push(ch),
+        }
+    }
+
+    if quoted {
+        return Err("unterminated quoted keyPath segment".to_string());
+    }
+    if segment.is_empty() {
+        return Err("keyPath segments must not be empty".to_string());
+    }
+
+    segments.push(segment);
+    Ok(segments)
 }
 
 #[derive(Debug)]
@@ -569,12 +624,15 @@ fn override_message(layer: &ConfigLayerSource) -> String {
         ConfigLayerSource::System { file } => {
             format!("Overridden by managed config (system): {}", file.display())
         }
+        ConfigLayerSource::EnterpriseManaged { id: _, name } => {
+            format!("Overridden by enterprise-managed config: {name}")
+        }
         ConfigLayerSource::Project { dot_codex_folder } => format!(
             "Overridden by project config: {}/{CONFIG_TOML_FILE}",
             dot_codex_folder.display(),
         ),
         ConfigLayerSource::SessionFlags => "Overridden by session flags".to_string(),
-        ConfigLayerSource::User { file } => {
+        ConfigLayerSource::User { file, .. } => {
             format!("Overridden by user config: {}", file.display())
         }
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
@@ -594,7 +652,7 @@ fn compute_override_metadata(
     effective: &TomlValue,
     segments: &[String],
 ) -> Option<OverriddenMetadata> {
-    let user_value = match layers.get_user_layer() {
+    let user_value = match layers.get_active_user_layer() {
         Some(user_layer) => value_at_path(&user_layer.config, segments),
         None => return None,
     };

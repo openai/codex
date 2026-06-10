@@ -32,7 +32,7 @@ async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
             Ok::<(), anyhow::Error>(())
         });
     let test = builder
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await
         .expect("build test codex");
 
@@ -76,7 +76,7 @@ async fn hierarchical_agents_emits_when_no_project_doc() {
             .expect("test config should allow feature update");
     });
     let test = builder
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await
         .expect("build test codex");
 

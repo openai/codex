@@ -6,21 +6,14 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import (
-    assistant_text_from_turn,
-    ensure_local_sdk_src,
-    find_turn_by_id,
-    runtime_config,
-)
+from _bootstrap import ensure_local_sdk_src, runtime_config
 
 ensure_local_sdk_src()
 
 from openai_codex import (
     Codex,
-    TextInput,
 )
 from openai_codex.types import (
-    AskForApproval,
     Personality,
     ReasoningSummary,
 )
@@ -44,37 +37,39 @@ PROMPT = (
     "Analyze a safe rollout plan for enabling a feature flag in production. "
     "Return JSON matching the requested schema."
 )
-APPROVAL_POLICY = AskForApproval.model_validate("never")
 
 with Codex(config=runtime_config()) as codex:
     thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
 
     turn = thread.turn(
-        TextInput(PROMPT),
-        approval_policy=APPROVAL_POLICY,
+        PROMPT,
         output_schema=OUTPUT_SCHEMA,
         personality=Personality.pragmatic,
         summary=SUMMARY,
     )
     result = turn.run()
-    persisted = thread.read(include_turns=True)
-    persisted_turn = find_turn_by_id(persisted.thread.turns, result.id)
-    structured_text = assistant_text_from_turn(persisted_turn).strip()
+    structured_text = result.final_response.strip()
     try:
         structured = json.loads(structured_text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Expected JSON matching OUTPUT_SCHEMA, got: {structured_text!r}") from exc
+        raise RuntimeError(
+            f"Expected JSON matching OUTPUT_SCHEMA, got: {structured_text!r}"
+        ) from exc
 
-    summary = structured.get("summary")
-    actions = structured.get("actions")
-    if not isinstance(summary, str) or not isinstance(actions, list) or not all(
-        isinstance(action, str) for action in actions
+    summary = structured["summary"]
+    actions = structured["actions"]
+    if (
+        not isinstance(summary, str)
+        or not isinstance(actions, list)
+        or not all(isinstance(action, str) for action in actions)
     ):
-        raise RuntimeError(f"Expected structured output with string summary/actions, got: {structured!r}")
+        raise RuntimeError(
+            f"Expected structured output with string summary/actions, got: {structured!r}"
+        )
 
     print("Status:", result.status)
     print("summary:", summary)
     print("actions:")
     for action in actions:
         print("-", action)
-    print("Items:", 0 if persisted_turn is None else len(persisted_turn.items or []))
+    print("Items:", len(result.items))

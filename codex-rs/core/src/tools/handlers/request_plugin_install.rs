@@ -2,23 +2,23 @@ use std::collections::HashSet;
 
 use codex_app_server_protocol::AppInfo;
 use codex_config::types::ToolSuggestDisabledTool;
+use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
+use codex_tools::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
 use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
 use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use codex_tools::RequestPluginInstallArgs;
-use codex_tools::RequestPluginInstallEntry;
 use codex_tools::RequestPluginInstallResult;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::all_requested_connectors_picked_up;
 use codex_tools::build_request_plugin_install_elicitation_request;
-use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_tools::verified_connector_install_completed;
 use rmcp::model::RequestId;
@@ -32,48 +32,45 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 
-#[derive(Default)]
 pub struct RequestPluginInstallHandler {
-    discoverable_tools: Vec<RequestPluginInstallEntry>,
+    discoverable_tools: Vec<DiscoverableTool>,
 }
 
 impl RequestPluginInstallHandler {
-    pub(crate) fn new(discoverable_tools: &[DiscoverableTool]) -> Self {
-        Self {
-            discoverable_tools: collect_request_plugin_install_entries(discoverable_tools),
-        }
+    pub(crate) fn new(discoverable_tools: Vec<DiscoverableTool>) -> Self {
+        Self { discoverable_tools }
     }
 }
 
-impl ToolHandler for RequestPluginInstallHandler {
-    type Output = FunctionToolOutput;
-
+impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_request_plugin_install_tool(&self.discoverable_tools))
+    fn spec(&self) -> ToolSpec {
+        create_request_plugin_install_tool()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
     }
+}
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "plugin install discovery reads through the session-owned manager guard"
-    )]
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+impl RequestPluginInstallHandler {
+    async fn handle_call(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             payload,
             session,
@@ -112,53 +109,33 @@ impl ToolHandler for RequestPluginInstallHandler {
             ));
         }
 
-        let auth = session.services.auth_manager.auth().await;
-        let manager = session.services.mcp_connection_manager.read().await;
-        let mcp_tools = manager.list_all_tools().await;
-        drop(manager);
-        let accessible_connectors = connectors::with_app_enabled_state(
-            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-            &turn.config,
+        let discoverable_tools = filter_request_plugin_install_discoverable_tools_for_client(
+            self.discoverable_tools.clone(),
+            turn.app_server_client_name.as_deref(),
         );
-        let discoverable_tools = connectors::list_tool_suggest_discoverable_tools_with_auth(
-            &turn.config,
-            auth.as_ref(),
-            &accessible_connectors,
-        )
-        .await
-        .map(|discoverable_tools| {
-            filter_request_plugin_install_discoverable_tools_for_client(
-                discoverable_tools,
-                turn.app_server_client_name.as_deref(),
-            )
-        })
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "plugin install requests are unavailable right now: {err}"
-            ))
-        })?;
 
         let tool = discoverable_tools
             .into_iter()
             .find(|tool| tool.tool_type() == args.tool_type && tool.id() == args.tool_id)
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(format!(
-                    "tool_id must match one of the discoverable tools exposed by {REQUEST_PLUGIN_INSTALL_TOOL_NAME}"
+                    "tool_id must match one of the discoverable tools returned by {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}"
                 ))
             })?;
 
         let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
         let params = build_request_plugin_install_elicitation_request(
             CODEX_APPS_MCP_SERVER_NAME,
-            session.conversation_id.to_string(),
+            session.thread_id.to_string(),
             turn.sub_id.clone(),
             &args,
             suggest_reason,
             &tool,
         );
-        let response = session
+        let elicitation = session
             .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
             .await;
+        let response = elicitation.response;
         if let Some(response) = response.as_ref() {
             maybe_persist_disabled_install_request(&session, &turn, &tool, response).await;
         }
@@ -166,6 +143,7 @@ impl ToolHandler for RequestPluginInstallHandler {
             .as_ref()
             .is_some_and(|response| response.action == ElicitationAction::Accept);
 
+        let auth = session.services.auth_manager.auth().await;
         let completed = if user_confirmed {
             verify_request_plugin_install_completed(&session, &turn, &tool, auth.as_ref()).await
         } else {
@@ -176,6 +154,27 @@ impl ToolHandler for RequestPluginInstallHandler {
             session
                 .merge_connector_selection(HashSet::from([connector.id.clone()]))
                 .await;
+        }
+
+        if elicitation.sent {
+            let tool_type = match args.tool_type {
+                DiscoverableToolType::Connector => "connector",
+                DiscoverableToolType::Plugin => "plugin",
+            };
+            let response_action = match response.as_ref().map(|response| &response.action) {
+                Some(ElicitationAction::Accept) => "accept",
+                Some(ElicitationAction::Decline) => "decline",
+                Some(ElicitationAction::Cancel) => "cancel",
+                None => "unavailable",
+            };
+            turn.session_telemetry.record_plugin_install_suggestion(
+                tool_type,
+                tool.id(),
+                tool.name(),
+                response_action,
+                user_confirmed,
+                completed,
+            );
         }
 
         let content = serde_json::to_string(&RequestPluginInstallResult {
@@ -193,9 +192,14 @@ impl ToolHandler for RequestPluginInstallHandler {
             ))
         })?;
 
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            content,
+            Some(true),
+        )))
     }
 }
+
+impl CoreToolRuntime for RequestPluginInstallHandler {}
 
 async fn maybe_persist_disabled_install_request(
     session: &crate::session::session::Session,
@@ -275,6 +279,10 @@ async fn verify_request_plugin_install_completed(
             verified_connector_install_completed(connector.id.as_str(), &accessible_connectors)
         }),
         DiscoverableTool::Plugin(plugin) => {
+            if is_remote_plugin_install_suggestion(&plugin.id) {
+                return true;
+            }
+
             session.reload_user_config_layer().await;
             let config = session.get_config().await;
             let completed = verified_plugin_install_completed(
@@ -295,10 +303,12 @@ async fn verify_request_plugin_install_completed(
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "connector cache refresh reads through the session-owned manager guard"
-)]
+fn is_remote_plugin_install_suggestion(plugin_id: &str) -> bool {
+    plugin_id
+        .rsplit_once('@')
+        .is_some_and(|(_, marketplace_name)| marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME)
+}
+
 async fn refresh_missing_requested_connectors(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
@@ -310,7 +320,7 @@ async fn refresh_missing_requested_connectors(
         return Some(Vec::new());
     }
 
-    let manager = session.services.mcp_connection_manager.read().await;
+    let manager = session.services.mcp_connection_manager.load_full();
     let mcp_tools = manager.list_all_tools().await;
     let accessible_connectors = connectors::with_app_enabled_state(
         connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
@@ -349,7 +359,7 @@ fn verified_plugin_install_completed(
 ) -> bool {
     let plugins_input = config.plugins_config_input();
     plugins_manager
-        .list_marketplaces_for_config(&plugins_input, &[])
+        .list_marketplaces_for_config(&plugins_input, &[], /*include_openai_curated*/ true)
         .ok()
         .into_iter()
         .flat_map(|outcome| outcome.marketplaces)

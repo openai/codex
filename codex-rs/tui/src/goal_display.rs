@@ -2,6 +2,8 @@ use crate::status::format_tokens_compact;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus;
 
+pub(crate) const GOAL_USAGE: &str = "Usage: /goal [<objective>|clear|edit|pause|resume]";
+
 pub(crate) fn format_goal_elapsed_seconds(seconds: i64) -> String {
     let seconds = seconds.max(0) as u64;
     if seconds < 60 {
@@ -32,6 +34,8 @@ pub(crate) fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
     match status {
         ThreadGoalStatus::Active => "active",
         ThreadGoalStatus::Paused => "paused",
+        ThreadGoalStatus::Blocked => "blocked",
+        ThreadGoalStatus::UsageLimited => "usage limited",
         ThreadGoalStatus::BudgetLimited => "limited by budget",
         ThreadGoalStatus::Complete => "complete",
     }

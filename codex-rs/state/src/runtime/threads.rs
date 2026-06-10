@@ -51,38 +51,27 @@ WHERE threads.id = ?
         Ok(row.and_then(|row| row.try_get("memory_mode").ok()))
     }
 
-    /// Get dynamic tools for a thread, if present.
-    pub async fn get_dynamic_tools(
+    pub async fn set_thread_preview_if_empty(
         &self,
         thread_id: ThreadId,
-    ) -> anyhow::Result<Option<Vec<DynamicToolSpec>>> {
-        let rows = sqlx::query(
+        preview: &str,
+    ) -> anyhow::Result<bool> {
+        let preview = preview.trim();
+        if preview.is_empty() {
+            return Ok(false);
+        }
+        let result = sqlx::query(
             r#"
-SELECT namespace, name, description, input_schema, defer_loading
-FROM thread_dynamic_tools
-WHERE thread_id = ?
-ORDER BY position ASC
+UPDATE threads
+SET preview = ?
+WHERE id = ? AND preview = ''
             "#,
         )
+        .bind(preview)
         .bind(thread_id.to_string())
-        .fetch_all(self.pool.as_ref())
+        .execute(self.pool.as_ref())
         .await?;
-        if rows.is_empty() {
-            return Ok(None);
-        }
-        let mut tools = Vec::with_capacity(rows.len());
-        for row in rows {
-            let input_schema: String = row.try_get("input_schema")?;
-            let input_schema = serde_json::from_str::<Value>(input_schema.as_str())?;
-            tools.push(DynamicToolSpec {
-                namespace: row.try_get("namespace")?,
-                name: row.try_get("name")?,
-                description: row.try_get("description")?,
-                input_schema,
-                defer_loading: row.try_get("defer_loading")?,
-            });
-        }
-        Ok(Some(tools))
+        Ok(result.rows_affected() > 0)
     }
 
     /// Persist or replace the directional parent-child edge for a spawned thread.
@@ -229,20 +218,16 @@ LIMIT 2
         parent_thread_id: ThreadId,
         status: Option<crate::DirectionalThreadSpawnEdgeStatus>,
     ) -> anyhow::Result<Vec<ThreadId>> {
-        let mut query = String::from(
-            "SELECT child_thread_id FROM thread_spawn_edges WHERE parent_thread_id = ?",
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT child_thread_id FROM thread_spawn_edges WHERE parent_thread_id = ",
         );
-        if status.is_some() {
-            query.push_str(" AND status = ?");
-        }
-        query.push_str(" ORDER BY child_thread_id");
-
-        let mut sql = sqlx::query(query.as_str()).bind(parent_thread_id.to_string());
+        builder.push_bind(parent_thread_id.to_string());
         if let Some(status) = status {
-            sql = sql.bind(status.to_string());
+            builder.push(" AND status = ").push_bind(status.to_string());
         }
+        builder.push(" ORDER BY child_thread_id");
 
-        let rows = sql.fetch_all(self.pool.as_ref()).await?;
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         rows.into_iter()
             .map(|row| {
                 ThreadId::try_from(row.try_get::<String, _>("child_thread_id")?).map_err(Into::into)
@@ -255,36 +240,48 @@ LIMIT 2
         root_thread_id: ThreadId,
         status: Option<crate::DirectionalThreadSpawnEdgeStatus>,
     ) -> anyhow::Result<Vec<ThreadId>> {
-        let status_filter = if status.is_some() {
-            " AND status = ?"
-        } else {
-            ""
-        };
-        let query = format!(
+        let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
 WITH RECURSIVE subtree(child_thread_id, depth) AS (
     SELECT child_thread_id, 1
     FROM thread_spawn_edges
-    WHERE parent_thread_id = ?{status_filter}
+    WHERE parent_thread_id =
+            "#,
+        );
+        builder.push_bind(root_thread_id.to_string());
+        if let Some(status) = status {
+            let status = status.to_string();
+            builder.push(" AND status = ").push_bind(status.clone());
+            builder.push(
+                r#"
     UNION ALL
     SELECT edge.child_thread_id, subtree.depth + 1
     FROM thread_spawn_edges AS edge
     JOIN subtree ON edge.parent_thread_id = subtree.child_thread_id
-    WHERE 1 = 1{status_filter}
+    WHERE status =
+                "#,
+            );
+            builder.push_bind(status);
+        } else {
+            builder.push(
+                r#"
+    UNION ALL
+    SELECT edge.child_thread_id, subtree.depth + 1
+    FROM thread_spawn_edges AS edge
+    JOIN subtree ON edge.parent_thread_id = subtree.child_thread_id
+                "#,
+            );
+        }
+        builder.push(
+            r#"
 )
 SELECT child_thread_id
 FROM subtree
 ORDER BY depth ASC, child_thread_id ASC
-            "#
+            "#,
         );
 
-        let mut sql = sqlx::query(query.as_str()).bind(root_thread_id.to_string());
-        if let Some(status) = status {
-            let status = status.to_string();
-            sql = sql.bind(status.clone()).bind(status);
-        }
-
-        let rows = sql.fetch_all(self.pool.as_ref()).await?;
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         rows.into_iter()
             .map(|row| {
                 ThreadId::try_from(row.try_get::<String, _>("child_thread_id")?).map_err(Into::into)
@@ -387,6 +384,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
             &mut builder,
             crate::SortKey::UpdatedAt,
             SortDirection::Desc,
+            OrderByIndex::Enabled,
             /*limit*/ 1,
         );
 
@@ -402,14 +400,9 @@ ON CONFLICT(child_thread_id) DO NOTHING
         filters: ThreadFilterOptions<'_>,
     ) -> anyhow::Result<crate::ThreadsPage> {
         let limit = page_size.saturating_add(1);
-        let sort_key = filters.sort_key;
-        let sort_direction = filters.sort_direction;
 
         let mut builder = QueryBuilder::<Sqlite>::new("");
-        push_thread_select_columns(&mut builder);
-        builder.push(" FROM threads");
-        push_thread_filters(&mut builder, filters);
-        push_thread_order_and_limit(&mut builder, sort_key, sort_direction, limit);
+        push_list_threads_query(&mut builder, filters, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         let mut items = rows
@@ -421,7 +414,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
             items.pop();
             items
                 .last()
-                .and_then(|item| anchor_from_item(item, sort_key))
+                .and_then(|item| anchor_from_item(item, filters.sort_key))
         } else {
             None
         };
@@ -456,7 +449,13 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 search_term: None,
             },
         );
-        push_thread_order_and_limit(&mut builder, sort_key, SortDirection::Desc, limit);
+        push_thread_order_and_limit(
+            &mut builder,
+            sort_key,
+            SortDirection::Desc,
+            OrderByIndex::Enabled,
+            limit,
+        );
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         rows.into_iter()
@@ -524,6 +523,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(
             metadata
                 .thread_source
+                .as_ref()
                 .map(codex_protocol::protocol::ThreadSource::as_str),
         )
         .bind(metadata.agent_nickname.as_deref())
@@ -756,6 +756,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(
             metadata
                 .thread_source
+                .as_ref()
                 .map(codex_protocol::protocol::ThreadSource::as_str),
         )
         .bind(metadata.agent_nickname.as_deref())
@@ -790,54 +791,6 @@ ON CONFLICT(id) DO UPDATE SET
         Ok(())
     }
 
-    /// Persist dynamic tools for a thread if none have been stored yet.
-    ///
-    /// Dynamic tools are defined at thread start and should not change afterward.
-    /// This only writes the first time we see tools for a given thread.
-    pub async fn persist_dynamic_tools(
-        &self,
-        thread_id: ThreadId,
-        tools: Option<&[DynamicToolSpec]>,
-    ) -> anyhow::Result<()> {
-        let Some(tools) = tools else {
-            return Ok(());
-        };
-        if tools.is_empty() {
-            return Ok(());
-        }
-        let thread_id = thread_id.to_string();
-        let mut tx = self.pool.begin().await?;
-        for (idx, tool) in tools.iter().enumerate() {
-            let position = i64::try_from(idx).unwrap_or(i64::MAX);
-            let input_schema = serde_json::to_string(&tool.input_schema)?;
-            sqlx::query(
-                r#"
-INSERT INTO thread_dynamic_tools (
-    thread_id,
-    position,
-    namespace,
-    name,
-    description,
-    input_schema,
-    defer_loading
-) VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(thread_id, position) DO NOTHING
-                "#,
-            )
-            .bind(thread_id.as_str())
-            .bind(position)
-            .bind(tool.namespace.as_deref())
-            .bind(tool.name.as_str())
-            .bind(tool.description.as_str())
-            .bind(input_schema)
-            .bind(tool.defer_loading)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(())
-    }
-
     /// Apply rollout items incrementally using the underlying database.
     pub async fn apply_rollout_items(
         &self,
@@ -867,8 +820,6 @@ ON CONFLICT(thread_id, position) DO NOTHING
         if let Some(updated_at) = updated_at {
             metadata.updated_at = updated_at;
         }
-        // Keep the thread upsert before dynamic tools to satisfy the foreign key constraint:
-        // thread_dynamic_tools.thread_id -> threads.id.
         let upsert_result = if existing_metadata.is_none() {
             self.upsert_thread_with_creation_memory_mode(&metadata, new_thread_memory_mode)
                 .await
@@ -879,14 +830,6 @@ ON CONFLICT(thread_id, position) DO NOTHING
         if let Some(memory_mode) = extract_memory_mode(items)
             && let Err(err) = self
                 .set_thread_memory_mode(builder.id, memory_mode.as_str())
-                .await
-        {
-            return Err(err);
-        }
-        let dynamic_tools = extract_dynamic_tools(items);
-        if let Some(dynamic_tools) = dynamic_tools
-            && let Err(err) = self
-                .persist_dynamic_tools(builder.id, dynamic_tools.as_deref())
                 .await
         {
             return Err(err);
@@ -941,13 +884,118 @@ ON CONFLICT(thread_id, position) DO NOTHING
         self.upsert_thread(&metadata).await
     }
 
-    /// Delete a thread metadata row by id.
+    /// Delete a thread and all associated state by id.
     pub async fn delete_thread(&self, thread_id: ThreadId) -> anyhow::Result<u64> {
-        let result = sqlx::query("DELETE FROM threads WHERE id = ?")
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
+        self.delete_threads_strict(&[thread_id]).await
+    }
+
+    /// Delete a set of threads and all associated state.
+    ///
+    /// Spawn edges and thread rows are deleted last so a failed delete can be retried with enough
+    /// state left to rediscover the same spawned subtree.
+    pub async fn delete_threads_strict(&self, thread_ids: &[ThreadId]) -> anyhow::Result<u64> {
+        if thread_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let thread_id_strings = thread_ids
+            .iter()
+            .map(ThreadId::to_string)
+            .collect::<Vec<_>>();
+        for (thread_id, thread_id_string) in thread_ids.iter().zip(&thread_id_strings) {
+            sqlx::query("DELETE FROM logs WHERE thread_id = ?")
+                .bind(thread_id_string)
+                .execute(self.logs_pool.as_ref())
+                .await?;
+            self.memories.delete_thread_memory(*thread_id).await?;
+            self.thread_goals.delete_thread_goal(*thread_id).await?;
+        }
+
+        let now = Utc::now().timestamp();
+        let mut tx = self.pool.begin().await?;
+        for thread_id_string in &thread_id_strings {
+            for parent_thread_id_string in &thread_id_strings {
+                // If both the job runner and worker are being deleted, requeueing
+                // the worker item would leave a running job with no loop to consume it.
+                sqlx::query(
+                    r#"
+UPDATE agent_jobs
+SET status = ?, updated_at = ?, completed_at = ?, last_error = ?
+WHERE status IN (?, ?)
+  AND id IN (
+    SELECT item.job_id
+    FROM agent_job_items AS item
+    JOIN thread_spawn_edges AS edge ON edge.child_thread_id = item.assigned_thread_id
+    WHERE item.status = ? AND item.assigned_thread_id = ? AND edge.parent_thread_id = ?
+  )
+                    "#,
+                )
+                .bind(AgentJobStatus::Cancelled.as_str())
+                .bind(now)
+                .bind(now)
+                .bind("agent job runner thread was deleted")
+                .bind(AgentJobStatus::Pending.as_str())
+                .bind(AgentJobStatus::Running.as_str())
+                .bind(AgentJobItemStatus::Running.as_str())
+                .bind(thread_id_string)
+                .bind(parent_thread_id_string)
+                .execute(&mut *tx)
+                .await?;
+            }
+            sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
+                .bind(thread_id_string)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                r#"
+UPDATE agent_job_items
+SET
+    status = ?,
+    assigned_thread_id = NULL,
+    updated_at = ?,
+    last_error = ?
+WHERE assigned_thread_id = ? AND status = ?
+            "#,
+            )
+            .bind(AgentJobItemStatus::Pending.as_str())
+            .bind(now)
+            .bind("assigned thread was deleted")
+            .bind(thread_id_string)
+            .bind(AgentJobItemStatus::Running.as_str())
+            .execute(&mut *tx)
             .await?;
-        Ok(result.rows_affected())
+            sqlx::query(
+                r#"
+UPDATE agent_job_items
+SET assigned_thread_id = NULL, updated_at = ?
+WHERE assigned_thread_id = ?
+            "#,
+            )
+            .bind(now)
+            .bind(thread_id_string)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for thread_id_string in &thread_id_strings {
+            sqlx::query(
+                "DELETE FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?",
+            )
+            .bind(thread_id_string)
+            .bind(thread_id_string)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let mut rows_affected = 0;
+        for thread_id_string in &thread_id_strings {
+            rows_affected += sqlx::query("DELETE FROM threads WHERE id = ?")
+                .bind(thread_id_string)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        }
+        tx.commit().await?;
+
+        Ok(rows_affected)
     }
 }
 
@@ -971,7 +1019,30 @@ fn one_thread_id_from_rows(
     }
 }
 
-pub(super) fn push_thread_select_columns(builder: &mut QueryBuilder<'_, Sqlite>) {
+fn push_list_threads_query(
+    builder: &mut QueryBuilder<Sqlite>,
+    filters: ThreadFilterOptions<'_>,
+    limit: usize,
+) {
+    push_thread_select_columns(builder);
+    builder.push(" FROM threads");
+    push_thread_filters(builder, filters);
+    let order_by_index = match filters.cwd_filters {
+        // Multi-cwd listing is supported but at the time of writing has no current use in production.
+        // Preserve its query plan so the global timestamp index does not regress cwd filtering into a scan.
+        Some(cwd_filters) if cwd_filters.len() > 1 => OrderByIndex::Disabled,
+        Some(_) | None => OrderByIndex::Enabled,
+    };
+    push_thread_order_and_limit(
+        builder,
+        filters.sort_key,
+        filters.sort_direction,
+        order_by_index,
+        limit,
+    );
+}
+
+pub(super) fn push_thread_select_columns(builder: &mut QueryBuilder<Sqlite>) {
     builder.push(
         r#"
 SELECT
@@ -1003,16 +1074,6 @@ SELECT
     );
 }
 
-pub(super) fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<DynamicToolSpec>>> {
-    items.iter().find_map(|item| match item {
-        RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.dynamic_tools.clone()),
-        RolloutItem::ResponseItem(_)
-        | RolloutItem::Compacted(_)
-        | RolloutItem::TurnContext(_)
-        | RolloutItem::EventMsg(_) => None,
-    })
-}
-
 pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
     items.iter().rev().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
@@ -1026,13 +1087,7 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
 fn thread_spawn_parent_thread_id_from_source_str(source: &str) -> Option<ThreadId> {
     let parsed_source = serde_json::from_str(source)
         .or_else(|_| serde_json::from_value::<SessionSource>(Value::String(source.to_string())));
-    match parsed_source.ok() {
-        Some(SessionSource::SubAgent(codex_protocol::protocol::SubAgentSource::ThreadSpawn {
-            parent_thread_id,
-            ..
-        })) => Some(parent_thread_id),
-        _ => None,
-    }
+    parsed_source.ok()?.parent_thread_id()
 }
 
 #[derive(Clone, Copy)]
@@ -1048,7 +1103,7 @@ pub struct ThreadFilterOptions<'a> {
 }
 
 pub(super) fn push_thread_filters<'a>(
-    builder: &mut QueryBuilder<'a, Sqlite>,
+    builder: &mut QueryBuilder<Sqlite>,
     options: ThreadFilterOptions<'a>,
 ) {
     let ThreadFilterOptions {
@@ -1127,10 +1182,21 @@ pub(super) fn push_thread_filters<'a>(
     }
 }
 
+/// Controls whether SQLite may use the ordered column to satisfy `ORDER BY` from an index.
+///
+/// Disabling it adds a unary `+` to the ordered column. This preserves the sort semantics while
+/// preventing a timestamp-only index from winning over a more selective filtering index.
+#[derive(Clone, Copy)]
+pub(super) enum OrderByIndex {
+    Enabled,
+    Disabled,
+}
+
 pub(super) fn push_thread_order_and_limit(
-    builder: &mut QueryBuilder<'_, Sqlite>,
+    builder: &mut QueryBuilder<Sqlite>,
     sort_key: SortKey,
     sort_direction: SortDirection,
+    order_by_index: OrderByIndex,
     limit: usize,
 ) {
     let order_column = match sort_key {
@@ -1142,6 +1208,12 @@ pub(super) fn push_thread_order_and_limit(
         SortDirection::Desc => "DESC",
     };
     builder.push(" ORDER BY ");
+    match order_by_index {
+        OrderByIndex::Enabled => {}
+        OrderByIndex::Disabled => {
+            builder.push("+");
+        }
+    }
     builder.push(order_column);
     builder.push(" ");
     builder.push(order_direction);
@@ -1164,12 +1236,14 @@ mod tests {
     use crate::DirectionalThreadSpawnEdgeStatus;
     use crate::runtime::test_support::test_thread_metadata;
     use crate::runtime::test_support::unique_temp_dir;
+    use anyhow::Result;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::GitInfo;
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::path::PathBuf;
 
     #[tokio::test]
@@ -1208,6 +1282,180 @@ mod tests {
                 .await
                 .expect("memory mode should remain readable");
         assert_eq!(memory_mode, "disabled");
+    }
+
+    #[tokio::test]
+    async fn delete_thread_cleans_associated_state() -> Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string()).await?;
+        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000401")?;
+        let child_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000402")?;
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.clone(),
+            ))
+            .await?;
+        seed_thread_cleanup_state(&runtime, thread_id, child_thread_id).await?;
+        sqlx::query("INSERT INTO thread_dynamic_tools (thread_id, position, name, description, input_schema) VALUES (?, ?, ?, ?, ?)")
+        .bind(thread_id.to_string())
+        .bind(0_i64)
+        .bind("test_tool")
+        .bind("test dynamic tool")
+        .bind("{}")
+        .execute(runtime.pool.as_ref())
+        .await?;
+        runtime
+            .create_agent_job(
+                &AgentJobCreateParams {
+                    id: "job-1".to_string(),
+                    name: "test-job".to_string(),
+                    instruction: "Return a result".to_string(),
+                    auto_export: true,
+                    max_runtime_seconds: None,
+                    output_schema_json: None,
+                    input_headers: vec!["path".to_string()],
+                    input_csv_path: "/tmp/in.csv".to_string(),
+                    output_csv_path: "/tmp/out.csv".to_string(),
+                },
+                &[AgentJobItemCreateParams {
+                    item_id: "item-1".to_string(),
+                    row_index: 0,
+                    source_id: None,
+                    row_json: json!({"path": "file-1"}),
+                }],
+            )
+            .await?;
+        runtime.mark_agent_job_running("job-1").await?;
+        runtime
+            .mark_agent_job_item_running_with_thread(
+                "job-1",
+                "item-1",
+                &child_thread_id.to_string(),
+            )
+            .await?;
+
+        let rows = runtime
+            .delete_threads_strict(&[thread_id, child_thread_id])
+            .await?;
+
+        assert_eq!(rows, 1);
+        assert!(runtime.get_thread(thread_id).await?.is_none());
+        let dynamic_tool_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM thread_dynamic_tools WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await?;
+        assert_eq!(dynamic_tool_count, 0);
+        assert_thread_cleanup_state(&runtime, thread_id).await?;
+        let job_item = runtime
+            .get_agent_job_item("job-1", "item-1")
+            .await?
+            .expect("job item should exist");
+        assert_eq!(job_item.status, AgentJobItemStatus::Pending);
+        assert_eq!(job_item.assigned_thread_id, None);
+        assert_eq!(
+            job_item.last_error,
+            Some("assigned thread was deleted".to_string())
+        );
+        let job = runtime
+            .get_agent_job("job-1")
+            .await?
+            .expect("job should exist");
+        assert_eq!(job.status, AgentJobStatus::Cancelled);
+
+        let missing_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000403")?;
+        let missing_child_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000404")?;
+        seed_thread_cleanup_state(&runtime, missing_thread_id, missing_child_thread_id).await?;
+
+        assert_eq!(runtime.delete_thread(missing_thread_id).await?, 0);
+        assert_thread_cleanup_state(&runtime, missing_thread_id).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_thread_keeps_retry_graph_on_cleanup_failure() -> Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string()).await?;
+        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000405")?;
+        let child_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000406")?;
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.clone(),
+            ))
+            .await?;
+        seed_thread_cleanup_state(&runtime, thread_id, child_thread_id).await?;
+
+        runtime.logs_pool.close().await;
+        runtime
+            .delete_thread(thread_id)
+            .await
+            .expect_err("closed log db should fail deletion");
+
+        assert!(runtime.get_thread(thread_id).await?.is_some());
+        assert_eq!(
+            runtime.list_thread_spawn_descendants(thread_id).await?,
+            vec![child_thread_id]
+        );
+        Ok(())
+    }
+
+    async fn seed_thread_cleanup_state(
+        runtime: &StateRuntime,
+        thread_id: ThreadId,
+        child_thread_id: ThreadId,
+    ) -> Result<()> {
+        runtime
+            .upsert_thread_spawn_edge(
+                thread_id,
+                child_thread_id,
+                DirectionalThreadSpawnEdgeStatus::Closed,
+            )
+            .await?;
+        runtime
+            .thread_goals()
+            .replace_thread_goal(
+                thread_id,
+                "test goal",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await?;
+        sqlx::query("INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES (1, 0, 'INFO', 'test', 'feedback log', ?)")
+            .bind(thread_id.to_string())
+            .execute(runtime.logs_pool.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn assert_thread_cleanup_state(
+        runtime: &StateRuntime,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        let spawn_edge_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?",
+        )
+        .bind(thread_id.to_string())
+        .bind(thread_id.to_string())
+        .fetch_one(runtime.pool.as_ref())
+        .await?;
+        assert_eq!(spawn_edge_count, 0);
+        assert_eq!(
+            runtime.thread_goals().get_thread_goal(thread_id).await?,
+            None
+        );
+        let logs = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec![thread_id.to_string()],
+                ..Default::default()
+            })
+            .await?;
+        assert!(logs.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
@@ -1325,9 +1573,9 @@ mod tests {
         }
 
         let cwd_filters = vec![first_cwd, second_cwd];
-        let page = runtime
+        let first_page = runtime
             .list_threads(
-                /*page_size*/ 10,
+                /*page_size*/ 1,
                 ThreadFilterOptions {
                     archived_only: false,
                     allowed_sources: &[],
@@ -1342,8 +1590,44 @@ mod tests {
             .await
             .expect("list should succeed");
 
-        let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
-        assert_eq!(ids, vec![second_id, first_id]);
+        let ids = first_page
+            .items
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![second_id]);
+        assert_eq!(
+            first_page.next_anchor,
+            Some(Anchor {
+                ts: DateTime::<Utc>::from_timestamp_millis(1_700_000_300_000)
+                    .expect("valid timestamp"),
+            })
+        );
+
+        let second_page = runtime
+            .list_threads(
+                /*page_size*/ 1,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: Some(cwd_filters.as_slice()),
+                    anchor: first_page.next_anchor.as_ref(),
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("second page should succeed");
+
+        let ids = second_page
+            .items
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![first_id]);
+        assert_eq!(second_page.next_anchor, None);
 
         let page = runtime
             .list_threads(
@@ -1363,6 +1647,85 @@ mod tests {
             .expect("list with empty cwd filters should succeed");
 
         assert_eq!(page.items, Vec::new());
+    }
+
+    #[tokio::test]
+    async fn list_threads_uses_indexes_matching_cwd_filters() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home, "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+
+        let model_providers = ["test-provider".to_string()];
+        let cwd_filters = [
+            PathBuf::from("/workspace/one"),
+            PathBuf::from("/workspace/two"),
+        ];
+        let anchor = Anchor {
+            ts: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("valid timestamp"),
+        };
+        for (sort_key, visible_index, cwd_index) in [
+            (
+                SortKey::CreatedAt,
+                "idx_threads_visible_created_at_ms",
+                "idx_threads_archived_cwd_created_at_ms",
+            ),
+            (
+                SortKey::UpdatedAt,
+                "idx_threads_visible_updated_at_ms",
+                "idx_threads_archived_cwd_updated_at_ms",
+            ),
+        ] {
+            for (cwd_filters, anchor, expected_index, expect_temp_sort) in [
+                (None, None, visible_index, false),
+                (Some(&cwd_filters[..1]), None, cwd_index, false),
+                (
+                    Some(&cwd_filters[..]),
+                    None,
+                    "idx_threads_archived_cwd_",
+                    true,
+                ),
+                (Some(&cwd_filters[..]), Some(&anchor), cwd_index, true),
+            ] {
+                let mut builder = QueryBuilder::<Sqlite>::new("EXPLAIN QUERY PLAN ");
+                push_list_threads_query(
+                    &mut builder,
+                    ThreadFilterOptions {
+                        archived_only: false,
+                        allowed_sources: &[],
+                        model_providers: Some(&model_providers),
+                        cwd_filters,
+                        anchor,
+                        sort_key,
+                        sort_direction: SortDirection::Desc,
+                        search_term: None,
+                    },
+                    /*limit*/ 201,
+                );
+                let plan_details = builder
+                    .build()
+                    .fetch_all(runtime.pool.as_ref())
+                    .await
+                    .expect("query plan should load")
+                    .into_iter()
+                    .map(|row| row.get::<String, _>("detail"))
+                    .collect::<Vec<_>>();
+
+                assert!(
+                    plan_details
+                        .iter()
+                        .any(|detail| detail.contains(expected_index)),
+                    "query plan did not use {expected_index}: {plan_details:?}"
+                );
+                assert_eq!(
+                    plan_details
+                        .iter()
+                        .any(|detail| detail.contains("TEMP B-TREE")),
+                    expect_temp_sort,
+                    "unexpected sorting plan: {plan_details:?}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -1390,6 +1753,7 @@ mod tests {
             meta: SessionMeta {
                 id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 timestamp: metadata.created_at.to_rfc3339(),
                 cwd: PathBuf::new(),
                 originator: String::new(),
@@ -1403,6 +1767,7 @@ mod tests {
                 base_instructions: None,
                 dynamic_tools: None,
                 memory_mode: Some("polluted".to_string()),
+                multi_agent_version: None,
             },
             git: None,
         })];
@@ -1449,6 +1814,7 @@ mod tests {
             meta: SessionMeta {
                 id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 timestamp: created_at,
                 cwd: PathBuf::new(),
                 originator: String::new(),
@@ -1462,6 +1828,7 @@ mod tests {
                 base_instructions: None,
                 dynamic_tools: None,
                 memory_mode: None,
+                multi_agent_version: None,
             },
             git: Some(GitInfo {
                 commit_hash: Some(codex_git_utils::GitSha::new("rollout-sha")),
@@ -1563,6 +1930,47 @@ mod tests {
             .expect("thread should load")
             .expect("thread should exist");
         assert_eq!(persisted.preview.as_deref(), Some("migrated goal preview"));
+    }
+
+    #[tokio::test]
+    async fn set_thread_preview_if_empty_only_fills_blank_preview() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000460").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        metadata.first_user_message = None;
+        metadata.preview = None;
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial upsert should succeed");
+
+        let empty_updated = runtime
+            .set_thread_preview_if_empty(thread_id, "  ")
+            .await
+            .expect("empty preview update should succeed");
+        assert!(!empty_updated);
+        let goal_updated = runtime
+            .set_thread_preview_if_empty(thread_id, "  goal preview  ")
+            .await
+            .expect("goal preview update should succeed");
+        assert!(goal_updated);
+        let overwrite_updated = runtime
+            .set_thread_preview_if_empty(thread_id, "new preview")
+            .await
+            .expect("overwrite preview update should succeed");
+        assert!(!overwrite_updated);
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.preview.as_deref(), Some("goal preview"));
     }
 
     #[tokio::test]

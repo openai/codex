@@ -1,10 +1,17 @@
+[CmdletBinding()]
 param(
-    [string]$Release = "latest"
+    [string]$Release = $env:CODEX_RELEASE
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+if ([string]::IsNullOrWhiteSpace($Release)) {
+    $Release = "latest"
+}
+
+$NonInteractive = $env:CODEX_NON_INTERACTIVE -match "^(?i:1|true|yes)$"
 
 function Write-Step {
     param(
@@ -26,6 +33,10 @@ function Prompt-YesNo {
     param(
         [string]$Prompt
     )
+
+    if ($NonInteractive) {
+        return $false
+    }
 
     if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
         return $false
@@ -55,7 +66,17 @@ function Normalize-Version {
     return $RawVersion
 }
 
-function Get-ReleaseAssetMetadata {
+function Assert-ValidReleaseVersion {
+    param(
+        [string]$Version
+    )
+
+    if ($Version -cne "latest" -and $Version -cnotmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)(?:\.[0-9]+)?)?$") {
+        throw "Invalid Codex release version: $Version. Expected latest or x.y.z[-alpha[.N]|-beta[.N]]."
+    }
+}
+
+function Find-ReleaseAssetMetadata {
     param(
         [string]$AssetName,
         [string]$ResolvedVersion
@@ -64,7 +85,7 @@ function Get-ReleaseAssetMetadata {
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/openai/codex/releases/tags/rust-v$ResolvedVersion"
     $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
     if ($null -eq $asset) {
-        throw "Could not find release asset $AssetName for Codex $ResolvedVersion."
+        return $null
     }
 
     $digestMatch = [regex]::Match([string]$asset.digest, "^sha256:([0-9a-fA-F]{64})$")
@@ -78,6 +99,20 @@ function Get-ReleaseAssetMetadata {
     }
 }
 
+function Get-ReleaseAssetMetadata {
+    param(
+        [string]$AssetName,
+        [string]$ResolvedVersion
+    )
+
+    $metadata = Find-ReleaseAssetMetadata -AssetName $AssetName -ResolvedVersion $ResolvedVersion
+    if ($null -eq $metadata) {
+        throw "Could not find release asset $AssetName for Codex $ResolvedVersion."
+    }
+
+    return $metadata
+}
+
 function Test-ArchiveDigest {
     param(
         [string]$ArchivePath,
@@ -86,8 +121,25 @@ function Test-ArchiveDigest {
 
     $actualDigest = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualDigest -ne $ExpectedDigest) {
-        throw "Downloaded Codex archive checksum did not match release metadata. Expected $ExpectedDigest but got $actualDigest."
+        throw "Downloaded Codex archive checksum did not match expected digest. Expected $ExpectedDigest but got $actualDigest."
     }
+}
+
+function Get-PackageArchiveDigest {
+    param(
+        [string]$ManifestPath,
+        [string]$AssetName
+    )
+
+    $escapedAssetName = [regex]::Escape($AssetName)
+    foreach ($line in Get-Content -LiteralPath $ManifestPath) {
+        $match = [regex]::Match($line, "^\s*([0-9a-fA-F]{64})\s+$escapedAssetName\s*$")
+        if ($match.Success) {
+            return $match.Groups[1].Value.ToLowerInvariant()
+        }
+    }
+
+    throw "Could not find SHA-256 digest for $AssetName in codex-package_SHA256SUMS."
 }
 
 function Path-Contains {
@@ -108,6 +160,22 @@ function Path-Contains {
     }
 
     return $false
+}
+
+function Prepend-PathEntry {
+    param(
+        [string]$PathValue,
+        [string]$Entry
+    )
+
+    $needle = $Entry.TrimEnd("\")
+    $segments = @($Entry)
+    if (-not [string]::IsNullOrWhiteSpace($PathValue)) {
+        $segments += $PathValue.Split(";", [System.StringSplitOptions]::RemoveEmptyEntries) |
+            Where-Object { $_.TrimEnd("\") -ine $needle }
+    }
+
+    return ($segments -join ";")
 }
 
 function Invoke-WithInstallLock {
@@ -150,6 +218,7 @@ function Remove-StaleInstallArtifacts {
 
 function Resolve-Version {
     $normalizedVersion = Normalize-Version -RawVersion $Release
+    Assert-ValidReleaseVersion -Version $normalizedVersion
     if ($normalizedVersion -ne "latest") {
         return $normalizedVersion
     }
@@ -160,7 +229,9 @@ function Resolve-Version {
         exit 1
     }
 
-    return (Normalize-Version -RawVersion $release.tag_name)
+    $resolvedVersion = Normalize-Version -RawVersion $release.tag_name
+    Assert-ValidReleaseVersion -Version $resolvedVersion
+    return $resolvedVersion
 }
 
 function Get-VersionFromBinary {
@@ -189,6 +260,11 @@ function Get-CurrentInstalledVersion {
     param(
         [string]$StandaloneCurrentDir
     )
+
+    $standaloneVersion = Get-VersionFromBinary -CodexPath (Join-Path $StandaloneCurrentDir "bin\codex.exe")
+    if (-not [string]::IsNullOrWhiteSpace($standaloneVersion)) {
+        return $standaloneVersion
+    }
 
     $standaloneVersion = Get-VersionFromBinary -CodexPath (Join-Path $StandaloneCurrentDir "codex.exe")
     if (-not [string]::IsNullOrWhiteSpace($standaloneVersion)) {
@@ -449,14 +525,37 @@ function Ensure-Junction {
     throw "Refusing to replace file at $LinkPath with a junction."
 }
 
-function Test-ReleaseIsComplete {
+function Test-PackageContentsAreComplete {
     param(
-        [string]$ReleaseDir,
-        [string]$ExpectedVersion,
-        [string]$ExpectedTarget
+        [string]$PackageDir
     )
 
-    if (-not (Test-Path -LiteralPath $ReleaseDir -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $PackageDir -PathType Container)) {
+        return $false
+    }
+
+    $expectedFiles = @(
+        "codex-package.json",
+        "bin\codex.exe",
+        "codex-path\rg.exe",
+        "codex-resources\codex-command-runner.exe",
+        "codex-resources\codex-windows-sandbox-setup.exe"
+    )
+    foreach ($name in $expectedFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $name) -PathType Leaf)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-LegacyPlatformNpmContentsAreComplete {
+    param(
+        [string]$PackageDir
+    )
+
+    if (-not (Test-Path -LiteralPath $PackageDir -PathType Container)) {
         return $false
     }
 
@@ -467,8 +566,35 @@ function Test-ReleaseIsComplete {
         "codex-resources\rg.exe"
     )
     foreach ($name in $expectedFiles) {
-        if (-not (Test-Path -LiteralPath (Join-Path $ReleaseDir $name) -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $name) -PathType Leaf)) {
             return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-ReleaseIsComplete {
+    param(
+        [string]$ReleaseDir,
+        [string]$ExpectedVersion,
+        [string]$ExpectedTarget,
+        [string]$Layout
+    )
+
+    switch ($Layout) {
+        "Package" {
+            if (-not (Test-PackageContentsAreComplete -PackageDir $ReleaseDir)) {
+                return $false
+            }
+        }
+        "LegacyPlatformNpm" {
+            if (-not (Test-LegacyPlatformNpmContentsAreComplete -PackageDir $ReleaseDir)) {
+                return $false
+            }
+        }
+        default {
+            throw "Unknown Codex installer layout: $Layout"
         }
     }
 
@@ -637,7 +763,21 @@ Write-Step "Resolved version: $resolvedVersion"
 $conflictingInstall = Get-ConflictingInstall -VisibleBinDir $visibleBinDir
 $oldStandaloneBackup = $null
 
-$packageAsset = "codex-npm-$npmTag-$resolvedVersion.tgz"
+$packageAsset = "codex-package-$target.tar.gz"
+$checksumAsset = "codex-package_SHA256SUMS"
+$packageMetadata = Find-ReleaseAssetMetadata -AssetName $packageAsset -ResolvedVersion $resolvedVersion
+$checksumMetadata = Find-ReleaseAssetMetadata -AssetName $checksumAsset -ResolvedVersion $resolvedVersion
+$installLayout = "Package"
+if ($null -eq $packageMetadata -or $null -eq $checksumMetadata) {
+    $packageAsset = "codex-npm-$npmTag-$resolvedVersion.tgz"
+    $packageMetadata = Find-ReleaseAssetMetadata -AssetName $packageAsset -ResolvedVersion $resolvedVersion
+    if ($null -ne $packageMetadata) {
+        $installLayout = "LegacyPlatformNpm"
+    } else {
+        throw "Could not find Codex package or platform npm release assets for Codex $resolvedVersion."
+    }
+    $checksumMetadata = $null
+}
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-install-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
@@ -645,40 +785,58 @@ try {
     Invoke-WithInstallLock -LockPath $lockPath -Script {
         Remove-StaleInstallArtifacts -ReleasesDir $releasesDir
 
-        if (-not (Test-ReleaseIsComplete -ReleaseDir $releaseDir -ExpectedVersion $resolvedVersion -ExpectedTarget $target)) {
+        if (-not (Test-ReleaseIsComplete -ReleaseDir $releaseDir -ExpectedVersion $resolvedVersion -ExpectedTarget $target -Layout $installLayout)) {
             if (Test-Path -LiteralPath $releaseDir) {
                 Write-WarningStep "Found incomplete existing release at $releaseDir. Reinstalling."
             }
 
             $archivePath = Join-Path $tempDir $packageAsset
-            $extractDir = Join-Path $tempDir "extract"
+            $checksumPath = Join-Path $tempDir $checksumAsset
             $stagingDir = Join-Path $releasesDir ".staging.$releaseName.$PID"
-            $assetMetadata = Get-ReleaseAssetMetadata -AssetName $packageAsset -ResolvedVersion $resolvedVersion
 
             Write-Step "Downloading Codex CLI"
-            Invoke-WebRequest -Uri $assetMetadata.Url -OutFile $archivePath
-            Test-ArchiveDigest -ArchivePath $archivePath -ExpectedDigest $assetMetadata.Sha256
+            if ($installLayout -eq "Package") {
+                Invoke-WebRequest -Uri $checksumMetadata.Url -OutFile $checksumPath
+                Test-ArchiveDigest -ArchivePath $checksumPath -ExpectedDigest $checksumMetadata.Sha256
+                $expectedPackageDigest = Get-PackageArchiveDigest -ManifestPath $checksumPath -AssetName $packageAsset
+            } else {
+                $expectedPackageDigest = $packageMetadata.Sha256
+            }
+            Invoke-WebRequest -Uri $packageMetadata.Url -OutFile $archivePath
+            Test-ArchiveDigest -ArchivePath $archivePath -ExpectedDigest $expectedPackageDigest
 
-            New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
             New-Item -ItemType Directory -Force -Path $releasesDir | Out-Null
             if (Test-Path -LiteralPath $stagingDir) {
                 Remove-Item -LiteralPath $stagingDir -Recurse -Force
             }
             New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
-            tar -xzf $archivePath -C $extractDir
+            if ($installLayout -eq "Package") {
+                tar -xzf $archivePath -C $stagingDir
+                if (-not (Test-PackageContentsAreComplete -PackageDir $stagingDir)) {
+                    throw "Downloaded Codex package archive did not contain the expected package layout."
+                }
+            } else {
+                $extractDir = Join-Path $tempDir "extract"
+                New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+                tar -xzf $archivePath -C $extractDir
 
-            $vendorRoot = Join-Path $extractDir "package/vendor/$target"
-            $resourcesDir = Join-Path $stagingDir "codex-resources"
-            New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
-            $copyMap = @{
-                "codex/codex.exe" = "codex.exe"
-                "codex/codex-command-runner.exe" = "codex-resources\codex-command-runner.exe"
-                "codex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
-                "path/rg.exe" = "codex-resources\rg.exe"
-            }
+                $vendorRoot = Join-Path $extractDir "package/vendor/$target"
+                $resourcesDir = Join-Path $stagingDir "codex-resources"
+                New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
+                $copyMap = @{
+                    "codex/codex.exe" = "codex.exe"
+                    "codex/codex-command-runner.exe" = "codex-resources\codex-command-runner.exe"
+                    "codex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
+                    "path/rg.exe" = "codex-resources\rg.exe"
+                }
 
-            foreach ($relativeSource in $copyMap.Keys) {
-                Copy-Item -LiteralPath (Join-Path $vendorRoot $relativeSource) -Destination (Join-Path $stagingDir $copyMap[$relativeSource])
+                foreach ($relativeSource in $copyMap.Keys) {
+                    Copy-Item -LiteralPath (Join-Path $vendorRoot $relativeSource) -Destination (Join-Path $stagingDir $copyMap[$relativeSource])
+                }
+
+                if (-not (Test-LegacyPlatformNpmContentsAreComplete -PackageDir $stagingDir)) {
+                    throw "Downloaded Codex npm archive did not contain the expected legacy platform package layout."
+                }
             }
 
             if (Test-Path -LiteralPath $releaseDir) {
@@ -691,10 +849,15 @@ try {
         Ensure-Junction -LinkPath $currentDir -TargetPath $releaseDir -InstallerOwnedTargetPrefix $releasesDir
 
         $visibleParent = Split-Path -Parent $visibleBinDir
+        $currentBinDir = if ($installLayout -eq "Package") {
+            Join-Path $currentDir "bin"
+        } else {
+            $currentDir
+        }
         New-Item -ItemType Directory -Force -Path $visibleParent | Out-Null
         $oldStandaloneBackup = Move-OldStandaloneBinIfApproved -VisibleBinDir $visibleBinDir -DefaultVisibleBinDir $defaultVisibleBinDir
         try {
-            Ensure-Junction -LinkPath $visibleBinDir -TargetPath $currentDir -InstallerOwnedTargetPrefix $standaloneRoot
+            Ensure-Junction -LinkPath $visibleBinDir -TargetPath $currentBinDir -InstallerOwnedTargetPrefix $standaloneRoot
             Test-VisibleCodexCommand -VisibleBinDir $visibleBinDir
         } catch {
             if ($null -ne $oldStandaloneBackup -and (Test-Path -LiteralPath $oldStandaloneBackup)) {
@@ -716,7 +879,16 @@ try {
 Maybe-HandleConflictingInstall -Conflict $conflictingInstall
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
+$prioritizeVisibleBin = $null -ne $conflictingInstall
+if ($prioritizeVisibleBin) {
+    $newUserPath = Prepend-PathEntry -PathValue $userPath -Entry $visibleBinDir
+    if ($newUserPath -cne $userPath) {
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+        Write-Step "PATH updated for future PowerShell sessions."
+    } else {
+        Write-Step "$visibleBinDir is already first on PATH."
+    }
+} elseif (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
     if ([string]::IsNullOrWhiteSpace($userPath)) {
         $newUserPath = $visibleBinDir
     } else {
@@ -731,7 +903,9 @@ if (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
     Write-Step "PATH is already configured for future PowerShell sessions."
 }
 
-if (-not (Path-Contains -PathValue $env:Path -Entry $visibleBinDir)) {
+if ($prioritizeVisibleBin) {
+    $env:Path = Prepend-PathEntry -PathValue $env:Path -Entry $visibleBinDir
+} elseif (-not (Path-Contains -PathValue $env:Path -Entry $visibleBinDir)) {
     if ([string]::IsNullOrWhiteSpace($env:Path)) {
         $env:Path = $visibleBinDir
     } else {

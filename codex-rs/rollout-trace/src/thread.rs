@@ -22,11 +22,13 @@ use crate::CodexTurnId;
 use crate::CompactionId;
 use crate::CompactionTraceContext;
 use crate::InferenceTraceContext;
+use crate::McpCallTraceContext;
 use crate::RawPayloadKind;
 use crate::RawPayloadRef;
 use crate::RawTraceEventContext;
 use crate::RawTraceEventPayload;
 use crate::RolloutStatus;
+use crate::ToolCallId;
 use crate::ToolDispatchInvocation;
 use crate::ToolDispatchTraceContext;
 use crate::TraceWriter;
@@ -394,6 +396,24 @@ impl ThreadTraceContext {
             model.into(),
             provider_name.into(),
         )
+    }
+
+    /// Starts bridge correlation for one concrete MCP backend request.
+    ///
+    /// Dispatch-level tool IDs remain compact and UI-friendly. This UUID is
+    /// deliberately separate: it is only for cross-process log joins where a
+    /// rollout-local counter would collide across samples.
+    pub fn start_mcp_call_trace(&self, tool_call_id: impl Into<ToolCallId>) -> McpCallTraceContext {
+        let ThreadTraceContextState::Enabled(context) = &self.state else {
+            return McpCallTraceContext::disabled();
+        };
+        let mcp_call_id = Uuid::new_v4().to_string();
+        let trace = McpCallTraceContext::enabled(mcp_call_id.clone());
+        context.append_best_effort(RawTraceEventPayload::McpToolCallCorrelationAssigned {
+            tool_call_id: tool_call_id.into(),
+            mcp_call_id,
+        });
+        trace
     }
 }
 

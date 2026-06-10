@@ -489,6 +489,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     item_id: "perm-1".to_string(),
+                    environment_id: None,
                     started_at_ms: 0,
                     cwd: absolute_path(if cfg!(windows) { r"C:\tmp" } else { "/tmp" }),
                     reason: None,

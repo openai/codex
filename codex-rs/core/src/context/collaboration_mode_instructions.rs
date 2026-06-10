@@ -22,9 +22,17 @@ impl CollaborationModeInstructions {
 }
 
 impl ContextualUserFragment for CollaborationModeInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = COLLABORATION_MODE_OPEN_TAG;
-    const END_MARKER: &'static str = COLLABORATION_MODE_CLOSE_TAG;
+    fn role(&self) -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (COLLABORATION_MODE_OPEN_TAG, COLLABORATION_MODE_CLOSE_TAG)
+    }
 
     fn body(&self) -> String {
         self.instructions.clone()

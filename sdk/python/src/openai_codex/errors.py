@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 
-class AppServerError(Exception):
+class CodexError(Exception):
     """Base exception for SDK errors."""
 
 
-class JsonRpcError(AppServerError):
+class JsonRpcError(CodexError):
     """Raw JSON-RPC error wrapper from the server."""
 
     def __init__(self, code: int, message: str, data: Any = None):
@@ -17,35 +17,35 @@ class JsonRpcError(AppServerError):
         self.data = data
 
 
-class TransportClosedError(AppServerError):
-    """Raised when the app-server transport closes unexpectedly."""
+class TransportClosedError(CodexError):
+    """Raised when the Codex transport closes unexpectedly."""
 
 
-class AppServerRpcError(JsonRpcError):
+class CodexRpcError(JsonRpcError):
     """Base typed error for JSON-RPC failures."""
 
 
-class ParseError(AppServerRpcError):
-    pass
+class ParseError(CodexRpcError):
+    """Raised when a request or response cannot be parsed."""
 
 
-class InvalidRequestError(AppServerRpcError):
-    pass
+class InvalidRequestError(CodexRpcError):
+    """Raised when the runtime rejects the request shape."""
 
 
-class MethodNotFoundError(AppServerRpcError):
-    pass
+class MethodNotFoundError(CodexRpcError):
+    """Raised when the requested operation is unavailable."""
 
 
-class InvalidParamsError(AppServerRpcError):
-    pass
+class InvalidParamsError(CodexRpcError):
+    """Raised when an operation receives invalid parameters."""
 
 
-class InternalRpcError(AppServerRpcError):
-    pass
+class InternalRpcError(CodexRpcError):
+    """Raised when the runtime reports an internal RPC failure."""
 
 
-class ServerBusyError(AppServerRpcError):
+class ServerBusyError(CodexRpcError):
     """Server is overloaded / unavailable and caller should retry."""
 
 
@@ -66,11 +66,7 @@ def _is_server_overloaded(data: Any) -> bool:
         return data.lower() == "server_overloaded"
 
     if isinstance(data, dict):
-        direct = (
-            data.get("codex_error_info")
-            or data.get("codexErrorInfo")
-            or data.get("errorInfo")
-        )
+        direct = data.get("codex_error_info") or data.get("codexErrorInfo") or data.get("errorInfo")
         if isinstance(direct, str) and direct.lower() == "server_overloaded":
             return True
         if isinstance(direct, dict):
@@ -108,7 +104,7 @@ def map_jsonrpc_error(code: int, message: str, data: Any = None) -> JsonRpcError
             return ServerBusyError(code, message, data)
         if _contains_retry_limit_text(message):
             return RetryLimitExceededError(code, message, data)
-        return AppServerRpcError(code, message, data)
+        return CodexRpcError(code, message, data)
 
     return JsonRpcError(code, message, data)
 

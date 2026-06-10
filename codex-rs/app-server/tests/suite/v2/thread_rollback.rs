@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
@@ -35,7 +35,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread.
@@ -57,6 +57,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     let turn1_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: first_text.to_string(),
                 text_elements: Vec::new(),
@@ -78,6 +79,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     let turn2_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Second".to_string(),
                 text_elements: Vec::new(),

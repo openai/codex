@@ -17,9 +17,17 @@ impl TurnAborted {
 }
 
 impl ContextualUserFragment for TurnAborted {
-    const ROLE: &'static str = "user";
-    const START_MARKER: &'static str = "<turn_aborted>";
-    const END_MARKER: &'static str = "</turn_aborted>";
+    fn role(&self) -> &'static str {
+        "user"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<turn_aborted>", "</turn_aborted>")
+    }
 
     fn body(&self) -> String {
         format!("\n{}\n", self.guidance)

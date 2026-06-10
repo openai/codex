@@ -21,12 +21,12 @@ use anyhow::Error;
 use anyhow::Result;
 use codex_config::types::OAuthCredentialsStoreMode;
 use oauth2::AccessToken;
-use oauth2::EmptyExtraTokenFields;
 use oauth2::RefreshToken;
 use oauth2::Scope;
 use oauth2::TokenResponse;
 use oauth2::basic::BasicTokenType;
 use rmcp::transport::auth::OAuthTokenResponse;
+use rmcp::transport::auth::VendorExtraTokenFields;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -76,6 +76,13 @@ impl PartialEq for WrappedOAuthTokenResponse {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StoredOAuthTokenStatus {
+    Missing,
+    Usable,
+    AuthorizationRequired,
+}
+
 pub(crate) fn load_oauth_tokens(
     server_name: &str,
     url: &str,
@@ -94,12 +101,33 @@ pub(crate) fn load_oauth_tokens(
     }
 }
 
-pub(crate) fn has_oauth_tokens(
+pub(crate) fn oauth_token_status(
     server_name: &str,
     url: &str,
     store_mode: OAuthCredentialsStoreMode,
-) -> Result<bool> {
-    Ok(load_oauth_tokens(server_name, url, store_mode)?.is_some())
+) -> Result<StoredOAuthTokenStatus> {
+    Ok(
+        match load_oauth_tokens(server_name, url, store_mode)?.as_ref() {
+            None => StoredOAuthTokenStatus::Missing,
+            Some(tokens) if oauth_tokens_are_usable(tokens) => StoredOAuthTokenStatus::Usable,
+            Some(_) => StoredOAuthTokenStatus::AuthorizationRequired,
+        },
+    )
+}
+
+fn oauth_tokens_are_usable(tokens: &StoredOAuthTokens) -> bool {
+    if tokens.client_id.trim().is_empty() {
+        return false;
+    }
+
+    let token_response = &tokens.token_response.0;
+    if token_needs_refresh(tokens.expires_at) {
+        return token_response
+            .refresh_token()
+            .is_some_and(|token| !token.secret().trim().is_empty());
+    }
+
+    !token_response.access_token().secret().trim().is_empty()
 }
 
 fn refresh_expires_in_from_timestamp(tokens: &mut StoredOAuthTokens) {
@@ -113,7 +141,13 @@ fn refresh_expires_in_from_timestamp(tokens: &mut StoredOAuthTokens) {
             tokens.token_response.0.set_expires_in(Some(&duration));
         }
         None => {
-            tokens.token_response.0.set_expires_in(None);
+            // RMCP treats a missing expiry as unknown and uses the access token
+            // as-is. Treat a known-expired timestamp as an explicit zero so
+            // startup refreshes the token before the first request.
+            tokens
+                .token_response
+                .0
+                .set_expires_in(Some(&Duration::ZERO));
         }
     }
 }
@@ -403,7 +437,7 @@ fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<St
         let mut token_response = OAuthTokenResponse::new(
             AccessToken::new(entry.access_token.clone()),
             BasicTokenType::Bearer,
-            EmptyExtraTokenFields {},
+            VendorExtraTokenFields::default(),
         );
 
         if let Some(refresh) = entry.refresh_token.clone() {
@@ -830,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_expires_in_from_timestamp_clears_expired_tokens() {
+    fn refresh_expires_in_from_timestamp_marks_expired_tokens() {
         let mut tokens = sample_tokens();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -843,7 +877,85 @@ mod tests {
 
         super::refresh_expires_in_from_timestamp(&mut tokens);
 
-        assert!(tokens.token_response.0.expires_in().is_none());
+        assert_eq!(tokens.token_response.0.expires_in(), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn oauth_tokens_are_usable_when_expiry_is_unknown() {
+        let mut tokens = sample_tokens();
+        tokens.expires_at = None;
+        tokens.token_response.0.set_refresh_token(None);
+
+        assert!(super::oauth_tokens_are_usable(&tokens));
+    }
+
+    #[test]
+    fn oauth_tokens_are_usable_when_unexpired_without_refresh_token() {
+        let mut tokens = sample_tokens();
+        tokens.token_response.0.set_refresh_token(None);
+
+        assert!(super::oauth_tokens_are_usable(&tokens));
+    }
+
+    #[test]
+    fn oauth_tokens_are_usable_when_expired_but_refreshable() {
+        let mut tokens = sample_tokens();
+        tokens.expires_at = Some(0);
+
+        assert!(super::oauth_tokens_are_usable(&tokens));
+    }
+
+    #[test]
+    fn oauth_tokens_are_not_usable_when_expired_and_unrefreshable() {
+        let mut tokens = sample_tokens();
+        tokens.expires_at = Some(0);
+        tokens.token_response.0.set_refresh_token(None);
+
+        assert!(!super::oauth_tokens_are_usable(&tokens));
+    }
+
+    #[test]
+    fn oauth_tokens_are_not_usable_when_near_expiry_and_unrefreshable() {
+        let mut tokens = sample_tokens();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_millis() as u64;
+        tokens.expires_at = Some(now.saturating_add(REFRESH_SKEW_MILLIS - 1));
+        tokens.token_response.0.set_refresh_token(None);
+
+        assert!(!super::oauth_tokens_are_usable(&tokens));
+    }
+
+    #[test]
+    fn oauth_tokens_are_not_usable_when_client_id_is_blank() {
+        let mut tokens = sample_tokens();
+        tokens.client_id = " ".to_string();
+
+        assert!(!super::oauth_tokens_are_usable(&tokens));
+    }
+
+    #[test]
+    fn oauth_tokens_are_not_usable_when_access_token_is_blank() {
+        let mut tokens = sample_tokens();
+        tokens
+            .token_response
+            .0
+            .set_access_token(AccessToken::new(" ".to_string()));
+
+        assert!(!super::oauth_tokens_are_usable(&tokens));
+    }
+
+    #[test]
+    fn oauth_tokens_are_not_usable_when_required_refresh_token_is_blank() {
+        let mut tokens = sample_tokens();
+        tokens.expires_at = Some(0);
+        tokens
+            .token_response
+            .0
+            .set_refresh_token(Some(RefreshToken::new(" ".to_string())));
+
+        assert!(!super::oauth_tokens_are_usable(&tokens));
     }
 
     fn assert_tokens_match_without_expiry(
@@ -878,8 +990,8 @@ mod tests {
         );
         assert_eq!(actual_response.scopes(), expected_response.scopes());
         assert_eq!(
-            actual_response.extra_fields(),
-            expected_response.extra_fields()
+            actual_response.extra_fields().0,
+            expected_response.extra_fields().0
         );
         assert_eq!(
             actual_response.expires_in().is_some(),
@@ -891,7 +1003,7 @@ mod tests {
         let mut response = OAuthTokenResponse::new(
             AccessToken::new("access-token".to_string()),
             BasicTokenType::Bearer,
-            EmptyExtraTokenFields {},
+            VendorExtraTokenFields::default(),
         );
         response.set_refresh_token(Some(RefreshToken::new("refresh-token".to_string())));
         response.set_scopes(Some(vec![

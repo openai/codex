@@ -11,8 +11,10 @@ workspace = true
 anyhow = "1"
 axum = { workspace = true, default-features = false, features = [
     "http1",
+    "json",
     "tokio",
 ] }
+base64 = { workspace = true }
 codex-api = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
@@ -24,11 +26,12 @@ codex-utils-home-dir = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = ["crypto-rust"] }
+memchr = { workspace = true }
 oauth2 = "5"
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
     "json",
     "stream",
-    "rustls-tls",
+    "rustls",
 ] }
 rmcp = { workspace = true, default-features = false, features = [
     "auth",
@@ -67,6 +70,7 @@ codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+wiremock = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["linux-native-async-persistent"] }
 

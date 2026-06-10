@@ -18,4 +18,4 @@ expression: "render_lines(&view, 84)"
   [ ] context-remaining  Percentage of context window remaining (omitted when unk…  
                                                                                     
   [ ! ] Action Required | my-project | Working | thread title                       
-  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.
+  Press space to toggle; ←/→ to move; enter to confirm and close; esc to close

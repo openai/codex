@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_tools::JsonSchemaPrimitiveType;
@@ -20,7 +21,12 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
         }],
         supports_personality: false,
         additional_speed_tiers: Vec::new(),
-        service_tiers: Vec::new(),
+        service_tiers: vec![ModelServiceTier {
+            id: "priority".to_string(),
+            name: "Fast".to_string(),
+            description: "1.5x speed, increased usage".to_string(),
+        }],
+        default_service_tier: None,
         is_default: false,
         upgrade: None,
         show_in_picker,
@@ -69,10 +75,18 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         description
             .contains("Available model overrides (optional; inherited parent model is preferred):")
     );
-    assert!(description.contains("visible display (`visible-model`)"));
-    assert!(!description.contains("hidden display (`hidden-model`)"));
+    assert!(description.contains(
+        "- `visible-model`: visible description Reasoning efforts: medium (default). Service tiers: priority."
+    ));
+    assert!(!description.contains("hidden-model"));
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
     assert!(properties.contains_key("fork_turns"));
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
@@ -85,6 +99,12 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
             .get("model")
             .and_then(|schema| schema.description.as_deref()),
         Some(SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION)
+    );
+    assert_eq!(
+        properties
+            .get("service_tier")
+            .and_then(|schema| schema.description.as_deref()),
+        Some(SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION)
     );
     assert_eq!(
         parameters.required.as_ref(),
@@ -107,11 +127,17 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         max_concurrent_threads_per_session: None,
     });
 
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
-        panic!("spawn_agent should be a function tool");
+    let ToolSpec::Namespace(namespace) = tool else {
+        panic!("spawn_agent v1 should be a namespace tool");
+    };
+    assert_eq!(namespace.name, MULTI_AGENT_V1_NAMESPACE);
+    let Some(ResponsesApiNamespaceTool::Function(ResponsesApiTool { parameters, .. })) =
+        namespace.tools.first()
+    else {
+        panic!("spawn_agent should be a namespace function tool");
     };
     assert_eq!(
-        parameters.schema_type,
+        parameters.schema_type.clone(),
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
     );
     let properties = parameters
@@ -123,10 +149,106 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
     assert!(!properties.contains_key("fork_turns"));
     assert_eq!(
         properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        None
+    );
+    assert_eq!(
+        properties
             .get("model")
             .and_then(|schema| schema.description.as_deref()),
         Some(SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION)
     );
+    assert_eq!(
+        properties
+            .get("service_tier")
+            .and_then(|schema| schema.description.as_deref()),
+        Some(SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION)
+    );
+}
+
+#[test]
+fn spawn_agent_tool_caps_visible_model_summaries() {
+    let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+        available_models: vec![
+            model_preset("first", /*show_in_picker*/ true),
+            model_preset("second", /*show_in_picker*/ true),
+            model_preset("third", /*show_in_picker*/ true),
+            model_preset("fourth", /*show_in_picker*/ true),
+            model_preset("fifth", /*show_in_picker*/ true),
+            model_preset("sixth", /*show_in_picker*/ true),
+        ],
+        agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: false,
+        include_usage_hint: true,
+        usage_hint_text: None,
+        max_concurrent_threads_per_session: Some(4),
+    });
+
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = tool else {
+        panic!("spawn_agent should be a function tool");
+    };
+
+    for model in ["first", "second", "third", "fourth", "fifth"] {
+        assert!(
+            description.contains(&format!("`{model}-model`")),
+            "expected {model} model summary in spawn_agent description: {description:?}"
+        );
+    }
+    assert!(!description.contains("`sixth-model`"));
+}
+
+#[test]
+fn spawn_agent_tool_caps_reasoning_effort_value_length() {
+    let mut model = model_preset("visible", /*show_in_picker*/ true);
+    let custom_effort = ReasoningEffort::Custom(
+        "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION + 1),
+    );
+    model.default_reasoning_effort = custom_effort.clone();
+    model.supported_reasoning_efforts = vec![ReasoningEffortPreset {
+        effort: custom_effort,
+        description: "Model-defined".to_string(),
+    }];
+
+    assert_eq!(
+        spawn_agent_models_description(&[model]),
+        format!(
+            "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: {} (default). Service tiers: priority.",
+            "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
+        )
+    );
+}
+
+#[test]
+fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
+    let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+        available_models: vec![model_preset("visible", /*show_in_picker*/ true)],
+        agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: true,
+        include_usage_hint: true,
+        usage_hint_text: None,
+        max_concurrent_threads_per_session: Some(4),
+    });
+
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        parameters,
+        ..
+    }) = tool
+    else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let properties = parameters
+        .properties
+        .as_ref()
+        .expect("spawn_agent should use object params");
+
+    assert!(!properties.contains_key("agent_type"));
+    assert!(!properties.contains_key("model"));
+    assert!(!properties.contains_key("reasoning_effort"));
+    assert!(!properties.contains_key("service_tier"));
+    assert!(!description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
+    assert!(!description.contains("Available model overrides"));
 }
 
 #[test]
@@ -149,6 +271,12 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
         .expect("send_message should use object params");
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
     assert!(!properties.contains_key("interrupt"));
     assert!(!properties.contains_key("items"));
     assert_eq!(
@@ -167,6 +295,8 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
 #[test]
 fn followup_task_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
+        name,
+        description,
         parameters,
         output_schema,
         ..
@@ -174,6 +304,11 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
     else {
         panic!("followup_task should be a function tool");
     };
+    assert_eq!(name, "followup_task");
+    assert_eq!(
+        description,
+        "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
+    );
     assert_eq!(
         parameters.schema_type,
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
@@ -184,6 +319,12 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         .expect("followup_task should use object params");
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
+    assert_eq!(
+        properties
+            .get("message")
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
     assert!(!properties.contains_key("items"));
     assert_eq!(
         parameters.required.as_ref(),
@@ -224,7 +365,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
         properties
             .get("timeout_ms")
             .and_then(|schema| schema.description.as_deref()),
-        Some("Optional timeout in milliseconds. Defaults to 30000, min 10000, max 3600000.")
+        Some("Timeout in milliseconds. Defaults to 30000, min 10000, max 3600000.")
     );
     assert_eq!(parameters.required.as_ref(), None);
     assert_eq!(
@@ -256,9 +397,7 @@ fn list_agents_tool_includes_path_prefix_and_agent_fields() {
         properties
             .get("path_prefix")
             .and_then(|schema| schema.description.as_deref()),
-        Some(
-            "Optional task-path prefix (not ending with trailing slash). Accepts the same relative or absolute task-path syntax."
-        )
+        Some("Task-path prefix filter without a trailing slash. Omit to list all live agents.")
     );
     assert_eq!(
         output_schema.expect("list_agents output schema")["properties"]["agents"]["items"]["required"],

@@ -1,11 +1,14 @@
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::context::boxed_tool_output;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
+use crate::tools::registry::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
@@ -41,22 +44,25 @@ where
     })
 }
 
-impl ToolHandler for CodeModeWaitHandler {
-    type Output = FunctionToolOutput;
-
+impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(WAIT_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_wait_tool())
+    fn spec(&self) -> ToolSpec {
+        create_wait_tool()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
     }
+}
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+impl CodeModeWaitHandler {
+    async fn handle_call(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -72,17 +78,24 @@ impl ToolHandler for CodeModeWaitHandler {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
-                let wait_response = exec
-                    .session
-                    .services
-                    .code_mode_service
-                    .wait(codex_code_mode::WaitRequest {
-                        cell_id: args.cell_id,
-                        yield_time_ms: args.yield_time_ms,
-                        terminate: args.terminate,
-                    })
-                    .await
-                    .map_err(FunctionCallError::RespondToModel)?;
+                let cell_id = codex_code_mode::CellId::new(args.cell_id);
+                let wait_response = if args.terminate {
+                    exec.session
+                        .services
+                        .code_mode_service
+                        .terminate(cell_id)
+                        .await
+                } else {
+                    exec.session
+                        .services
+                        .code_mode_service
+                        .wait(codex_code_mode::WaitRequest {
+                            cell_id,
+                            yield_time_ms: args.yield_time_ms,
+                        })
+                        .await
+                }
+                .map_err(FunctionCallError::RespondToModel)?;
                 if let codex_code_mode::WaitOutcome::LiveCell(response) = &wait_response
                     && !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. })
                 {
@@ -97,16 +110,44 @@ impl ToolHandler for CodeModeWaitHandler {
                     exec.session
                         .services
                         .rollout_thread_trace
-                        .code_cell_trace_context(exec.turn.sub_id.as_str(), runtime_cell_id)
+                        .code_cell_trace_context(
+                            exec.turn.sub_id.as_str(),
+                            runtime_cell_id.as_str(),
+                        )
                         .record_ended(response);
+                    exec.session
+                        .services
+                        .code_mode_service
+                        .finish_cell_dispatch(runtime_cell_id);
                 }
                 handle_runtime_response(&exec, wait_response.into(), args.max_tokens, started_at)
                     .await
+                    .map(boxed_tool_output)
                     .map_err(FunctionCallError::RespondToModel)
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{WAIT_TOOL_NAME} expects JSON arguments"
             ))),
         }
+    }
+}
+
+impl CoreToolRuntime for CodeModeWaitHandler {
+    fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        // Code-mode `wait` is runtime control for an existing code cell, not a
+        // standalone user action. Tool calls made from code mode still flow
+        // through normal dispatch, but hooks should not block or rewrite the
+        // wait loop itself.
+        None
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        _invocation: &ToolInvocation,
+        _result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        // The wait result feeds code-mode control flow, so do not let
+        // PostToolUse replace it with model-facing hook feedback.
+        None
     }
 }

@@ -7,9 +7,6 @@ use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use sha1::Digest;
 use std::path::Path;
 
-const ACCEPTED_LINE_FINGERPRINT_EVENT_TARGET_BYTES: usize = 2 * 1024 * 1024;
-const ACCEPTED_LINE_FINGERPRINT_EVENT_FIXED_BYTES: usize = 1024;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AcceptedLineFingerprintSummary {
     pub accepted_added_lines: u64,
@@ -97,39 +94,38 @@ pub fn fingerprint_hash(domain: &str, value: &str) -> String {
 pub(crate) fn accepted_line_fingerprint_event_requests(
     input: AcceptedLineFingerprintEventInput,
 ) -> Vec<TrackEventRequest> {
-    let chunks = accepted_line_fingerprint_chunks(input.line_fingerprints);
-    chunks
-        .into_iter()
-        .enumerate()
-        .map(|(index, line_fingerprints)| {
-            let is_first_chunk = index == 0;
-            TrackEventRequest::AcceptedLineFingerprints(Box::new(
-                CodexAcceptedLineFingerprintsEventRequest {
-                    event_type: "codex_accepted_line_fingerprints",
-                    event_params: CodexAcceptedLineFingerprintsEventParams {
-                        event_type: input.event_type,
-                        turn_id: input.turn_id.clone(),
-                        thread_id: input.thread_id.clone(),
-                        product_surface: input.product_surface.clone(),
-                        model_slug: input.model_slug.clone(),
-                        completed_at: input.completed_at,
-                        repo_hash: input.repo_hash.clone(),
-                        accepted_added_lines: if is_first_chunk {
-                            input.accepted_added_lines
-                        } else {
-                            0
-                        },
-                        accepted_deleted_lines: if is_first_chunk {
-                            input.accepted_deleted_lines
-                        } else {
-                            0
-                        },
-                        line_fingerprints,
-                    },
-                },
-            ))
-        })
-        .collect()
+    let AcceptedLineFingerprintEventInput {
+        event_type,
+        turn_id,
+        thread_id,
+        product_surface,
+        model_slug,
+        completed_at,
+        repo_hash,
+        accepted_added_lines,
+        accepted_deleted_lines,
+        line_fingerprints: _line_fingerprints,
+    } = input;
+
+    vec![TrackEventRequest::AcceptedLineFingerprints(Box::new(
+        CodexAcceptedLineFingerprintsEventRequest {
+            event_type: "codex_accepted_line_fingerprints",
+            event_params: CodexAcceptedLineFingerprintsEventParams {
+                event_type,
+                turn_id,
+                thread_id,
+                product_surface,
+                model_slug,
+                completed_at,
+                repo_hash,
+                accepted_added_lines,
+                accepted_deleted_lines,
+                // Keep computing local fingerprints for parsing tests and future attribution,
+                // but do not upload path/line hashes in the analytics event payload.
+                line_fingerprints: Vec::new(),
+            },
+        },
+    ))]
 }
 
 pub async fn accepted_line_repo_hash_for_cwd(cwd: &Path) -> Option<String> {
@@ -170,44 +166,6 @@ fn normalize_effective_line(line: &str) -> Option<String> {
         return None;
     }
     Some(normalized)
-}
-
-fn accepted_line_fingerprint_chunks(
-    line_fingerprints: Vec<AcceptedLineFingerprint>,
-) -> Vec<Vec<AcceptedLineFingerprint>> {
-    if line_fingerprints.is_empty() {
-        return vec![Vec::new()];
-    }
-
-    let mut chunks = Vec::new();
-    let mut current = Vec::new();
-    let mut current_bytes = ACCEPTED_LINE_FINGERPRINT_EVENT_FIXED_BYTES;
-
-    for fingerprint in line_fingerprints {
-        let item_bytes = accepted_line_fingerprint_json_bytes(&fingerprint);
-        let separator_bytes = usize::from(!current.is_empty());
-        if !current.is_empty()
-            && current_bytes + separator_bytes + item_bytes
-                > ACCEPTED_LINE_FINGERPRINT_EVENT_TARGET_BYTES
-        {
-            chunks.push(current);
-            current = Vec::new();
-            current_bytes = ACCEPTED_LINE_FINGERPRINT_EVENT_FIXED_BYTES;
-        }
-        current_bytes += usize::from(!current.is_empty()) + item_bytes;
-        current.push(fingerprint);
-    }
-
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
-}
-
-fn accepted_line_fingerprint_json_bytes(fingerprint: &AcceptedLineFingerprint) -> usize {
-    // {"path_hash":"...","line_hash":"..."} plus one byte of array comma
-    // accounted for by the caller when needed.
-    32 + fingerprint.path_hash.len() + fingerprint.line_hash.len()
 }
 
 #[cfg(test)]

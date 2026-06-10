@@ -115,7 +115,7 @@ fn print_login_server_start(actual_port: u16, auth_url: &str) {
 
 pub async fn login_with_chatgpt(
     codex_home: PathBuf,
-    forced_chatgpt_workspace_id: Option<String>,
+    forced_chatgpt_workspace_id: Option<Vec<String>>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
     let opts = ServerOptions::new(
@@ -389,6 +389,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             }
             AuthMode::AgentIdentity => {
                 eprintln!("Logged in using access token");
+                std::process::exit(0);
+            }
+            AuthMode::PersonalAccessToken => {
+                eprintln!("Logged in using personal access token");
                 std::process::exit(0);
             }
         },

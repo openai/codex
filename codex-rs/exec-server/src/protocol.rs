@@ -15,14 +15,19 @@ pub const INITIALIZED_METHOD: &str = "initialized";
 pub const EXEC_METHOD: &str = "process/start";
 pub const EXEC_READ_METHOD: &str = "process/read";
 pub const EXEC_WRITE_METHOD: &str = "process/write";
+pub const EXEC_SIGNAL_METHOD: &str = "process/signal";
 pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
 pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
+pub const ENVIRONMENT_INFO_METHOD: &str = "environment/info";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
+pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
+pub const FS_JOIN_METHOD: &str = "fs/join";
+pub const FS_PARENT_METHOD: &str = "fs/parent";
 pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
 pub const FS_REMOVE_METHOD: &str = "fs/remove";
 pub const FS_COPY_METHOD: &str = "fs/copy";
@@ -59,6 +64,23 @@ pub struct InitializeParams {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub session_id: String,
+}
+
+/// Information about an execution/filesystem environment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentInfo {
+    pub shell: ShellInfo,
+}
+
+/// Shell detected for an execution/filesystem environment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellInfo {
+    /// Stable shell name, for example `zsh`, `bash`, `powershell`, `sh`, or `cmd`.
+    pub name: String,
+    /// Path the exec server would use for that shell.
+    pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +167,23 @@ pub struct WriteResponse {
     pub status: WriteStatus,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProcessSignal {
+    Interrupt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalParams {
+    pub process_id: ProcessId,
+    pub signal: ProcessSignal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalResponse {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminateParams {
@@ -209,6 +248,44 @@ pub struct FsGetMetadataResponse {
     pub is_symlink: bool,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCanonicalizeParams {
+    pub path: AbsolutePathBuf,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCanonicalizeResponse {
+    pub path: AbsolutePathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsJoinParams {
+    pub base_path: AbsolutePathBuf,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsJoinResponse {
+    pub path: AbsolutePathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsParentParams {
+    pub path: AbsolutePathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsParentResponse {
+    pub path: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

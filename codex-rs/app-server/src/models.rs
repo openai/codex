@@ -53,6 +53,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
                 description: service_tier.description,
             })
             .collect(),
+        default_service_tier: preset.default_service_tier,
         is_default: preset.is_default,
     }
 }
@@ -61,10 +62,10 @@ fn reasoning_efforts_from_preset(
     efforts: Vec<ReasoningEffortPreset>,
 ) -> Vec<ReasoningEffortOption> {
     efforts
-        .iter()
+        .into_iter()
         .map(|preset| ReasoningEffortOption {
             reasoning_effort: preset.effort,
-            description: preset.description.to_string(),
+            description: preset.description,
         })
         .collect()
 }

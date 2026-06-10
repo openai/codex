@@ -3,6 +3,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::models::ImageDetail;
+
 /// Conservative cap so one user message cannot monopolize a large context window.
 pub const MAX_USER_INPUT_TEXT_CHARS: usize = 1 << 20;
 
@@ -21,11 +23,21 @@ pub enum UserInput {
         text_elements: Vec<TextElement>,
     },
     /// Pre‑encoded data: URI image.
-    Image { image_url: String },
+    Image {
+        image_url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        detail: Option<ImageDetail>,
+    },
 
     /// Local image path provided by the user.  This will be converted to an
     /// `Image` variant (base64 data URL) during request serialization.
-    LocalImage { path: std::path::PathBuf },
+    LocalImage {
+        path: std::path::PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        detail: Option<ImageDetail>,
+    },
 
     /// Skill selected by the user (name + path to SKILL.md).
     Skill {

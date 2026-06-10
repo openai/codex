@@ -1217,8 +1217,11 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -1241,6 +1244,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         remote_image_urls: Vec::new(),
         text_elements: Vec::new(),
         mention_bindings: vec![MentionBinding {
+            sigil: '$',
             mention: "sample".to_string(),
             path: "plugin://sample@test".to_string(),
         }],
@@ -1368,63 +1372,6 @@ async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_sam
 }
 
 #[tokio::test]
-async fn collab_slash_command_opens_picker_and_updates_mode() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-
-    chat.dispatch_command(SlashCommand::Collab);
-    let popup = render_bottom_popup(&chat, /*width*/ 80);
-    assert!(
-        popup.contains("Select Collaboration Mode"),
-        "expected collaboration picker: {popup}"
-    );
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    let selected_mask = match rx.try_recv() {
-        Ok(AppEvent::UpdateCollaborationMode(mask)) => mask,
-        other => panic!("expected UpdateCollaborationMode event, got {other:?}"),
-    };
-    chat.set_collaboration_mask(selected_mask);
-
-    chat.bottom_pane
-        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    ..
-                }),
-            personality: Some(Personality::Pragmatic),
-            ..
-        } => {}
-        other => {
-            panic!("expected Op::UserTurn with code collab mode, got {other:?}")
-        }
-    }
-
-    chat.bottom_pane
-        .set_composer_text("follow up".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    ..
-                }),
-            personality: Some(Personality::Pragmatic),
-            ..
-        } => {}
-        other => {
-            panic!("expected Op::UserTurn with code collab mode, got {other:?}")
-        }
-    }
-}
-
-#[tokio::test]
 async fn plan_slash_command_switches_to_plan_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
@@ -1460,8 +1407,11 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: None,
@@ -1536,7 +1486,6 @@ async fn make_startup_chat_with_cli_overrides(
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         workspace_command_runner: None,

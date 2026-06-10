@@ -1,3 +1,4 @@
+mod delegate;
 mod execute_handler;
 pub(crate) mod execute_spec;
 mod response_adapter;
@@ -7,12 +8,12 @@ pub(crate) mod wait_spec;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
-use codex_code_mode::CodeModeTurnHost;
+use codex_code_mode::CodeModeSession;
+use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
 use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
 
@@ -28,17 +29,15 @@ use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
-use crate::tools::router::ToolRouterParams;
-use crate::tools::router::extension_tool_bundles;
 use crate::unified_exec::resolve_max_tokens;
-use codex_features::Feature;
+use codex_protocol::openai_models::ToolMode;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
-use codex_tools::collect_code_mode_tool_definitions;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 
+use delegate::CodeModeDispatchBroker;
+use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
 use response_adapter::into_function_call_output_content_items;
 pub(crate) use wait_handler::CodeModeWaitHandler;
@@ -59,53 +58,67 @@ pub(crate) struct ExecContext {
 }
 
 pub(crate) struct CodeModeService {
-    inner: codex_code_mode::CodeModeService,
+    session: Option<Arc<dyn CodeModeSession>>,
+    dispatch_broker: Arc<CodeModeDispatchBroker>,
 }
 
 impl CodeModeService {
     pub(crate) fn new() -> Self {
+        let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            inner: codex_code_mode::CodeModeService::new(),
+            session: Some(Arc::new(codex_code_mode::CodeModeService::with_delegate(
+                dispatch_broker.clone(),
+            ))),
+            dispatch_broker,
         }
-    }
-
-    pub(crate) async fn stored_values(&self) -> std::collections::HashMap<String, JsonValue> {
-        self.inner.stored_values().await
-    }
-
-    pub(crate) async fn replace_stored_values(
-        &self,
-        values: std::collections::HashMap<String, JsonValue>,
-    ) {
-        self.inner.replace_stored_values(values).await;
-    }
-
-    pub(crate) fn allocate_cell_id(&self) -> String {
-        self.inner.allocate_cell_id()
     }
 
     pub(crate) async fn execute(
         &self,
         request: codex_code_mode::ExecuteRequest,
-    ) -> Result<RuntimeResponse, String> {
-        self.inner.execute(request).await
+    ) -> Result<codex_code_mode::StartedCell, String> {
+        self.session()?.execute(request).await
     }
 
     pub(crate) async fn wait(
         &self,
         request: codex_code_mode::WaitRequest,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.inner.wait(request).await
+        self.session()?.wait(request).await
     }
 
-    pub(crate) async fn start_turn_worker(
+    pub(crate) async fn terminate(
+        &self,
+        cell_id: CellId,
+    ) -> Result<codex_code_mode::WaitOutcome, String> {
+        self.session()?.terminate(cell_id).await
+    }
+
+    pub(crate) async fn shutdown(&self) -> Result<(), String> {
+        match &self.session {
+            Some(session) => session.shutdown().await,
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode::CellId) {
+        self.dispatch_broker.mark_cell_ready_for_dispatch(cell_id);
+    }
+
+    pub(crate) fn finish_cell_dispatch(&self, cell_id: &CellId) {
+        self.dispatch_broker.close_cell(cell_id);
+    }
+
+    pub(crate) fn start_turn_worker(
         &self,
         session: &Arc<Session>,
         turn: &Arc<TurnContext>,
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
-    ) -> Option<codex_code_mode::CodeModeTurnWorker> {
-        if !turn.features.enabled(Feature::CodeMode) {
+    ) -> Option<CodeModeDispatchWorker> {
+        if !matches!(turn.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
+            || self.session.is_none()
+        {
             return None;
         }
 
@@ -113,50 +126,16 @@ impl CodeModeService {
             session: Arc::clone(session),
             turn: Arc::clone(turn),
         };
-        let tool_runtime =
-            ToolCallRuntime::new(router, Arc::clone(session), Arc::clone(turn), tracker);
-        let host = Arc::new(CoreTurnHost { exec, tool_runtime });
-        Some(self.inner.start_turn_worker(host))
-    }
-}
-
-struct CoreTurnHost {
-    exec: ExecContext,
-    tool_runtime: ToolCallRuntime,
-}
-
-#[async_trait::async_trait]
-impl CodeModeTurnHost for CoreTurnHost {
-    async fn invoke_tool(
-        &self,
-        invocation: CodeModeNestedToolCall,
-        cancellation_token: CancellationToken,
-    ) -> Result<JsonValue, String> {
-        call_nested_tool(
-            self.exec.clone(),
-            self.tool_runtime.clone(),
-            invocation,
-            cancellation_token,
+        Some(
+            self.dispatch_broker
+                .start_turn_worker(exec, router, tracker),
         )
-        .await
-        .map_err(|error| error.to_string())
     }
 
-    async fn notify(&self, call_id: String, cell_id: String, text: String) -> Result<(), String> {
-        if text.trim().is_empty() {
-            return Ok(());
-        }
-        self.exec
-            .session
-            .inject_response_items(vec![ResponseInputItem::CustomToolCallOutput {
-                call_id,
-                name: Some(PUBLIC_TOOL_NAME.to_string()),
-                output: FunctionCallOutputPayload::from_text(text),
-            }])
-            .await
-            .map_err(|_| {
-                format!("failed to inject exec notify message for cell {cell_id}: no active turn")
-            })
+    fn session(&self) -> Result<&Arc<dyn CodeModeSession>, String> {
+        self.session
+            .as_ref()
+            .ok_or_else(|| "code mode is unavailable".to_string())
     }
 }
 
@@ -185,17 +164,11 @@ pub(super) async fn handle_runtime_response(
         }
         RuntimeResponse::Result {
             content_items,
-            stored_values,
             error_text,
             ..
         } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
-            exec.session
-                .services
-                .code_mode_service
-                .replace_stored_values(stored_values)
-                .await;
             let success = error_text.is_none();
             if let Some(error_text) = error_text {
                 content_items.push(FunctionCallOutputContentItem::InputText {
@@ -260,40 +233,8 @@ fn truncate_code_mode_result(
     truncate_function_output_items_with_policy(&items, policy)
 }
 
-pub(super) async fn build_enabled_tools(
-    exec: &ExecContext,
-) -> Vec<codex_code_mode::ToolDefinition> {
-    let router = build_nested_router(exec).await;
-    let specs = router.specs();
-    collect_code_mode_tool_definitions(&specs)
-}
-
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "nested tool router construction reads through the session-owned manager guard"
-)]
-async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
-    let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let mcp_connection_manager = exec.session.services.mcp_connection_manager.read().await;
-    let listed_mcp_tools = mcp_connection_manager.list_all_tools().await;
-    let parallel_mcp_server_names = mcp_connection_manager.parallel_tool_call_server_names();
-
-    ToolRouter::from_config(
-        &nested_tools_config,
-        ToolRouterParams {
-            deferred_mcp_tools: None,
-            mcp_tools: Some(listed_mcp_tools),
-            unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names,
-            discoverable_tools: None,
-            extension_tool_bundles: extension_tool_bundles(exec.session.as_ref()),
-            dynamic_tools: exec.turn.dynamic_tools.as_slice(),
-        },
-    )
-}
-
 async fn call_nested_tool(
-    exec: ExecContext,
+    _exec: ExecContext,
     tool_runtime: ToolCallRuntime,
     invocation: CodeModeNestedToolCall,
     cancellation_token: CancellationToken,
@@ -302,6 +243,7 @@ async fn call_nested_tool(
         cell_id,
         runtime_tool_call_id,
         tool_name,
+        tool_kind,
         input,
     } = invocation;
     if is_exec_tool_name(&tool_name) {
@@ -310,29 +252,13 @@ async fn call_nested_tool(
         )));
     }
 
-    let (tool_call_name, payload) =
-        if let Some(tool_info) = exec.session.resolve_mcp_tool_info(&tool_name).await {
-            let raw_arguments = match serialize_function_tool_arguments(&tool_name, input) {
-                Ok(raw_arguments) => raw_arguments,
-                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-            };
-            (
-                tool_info.canonical_tool_name(),
-                ToolPayload::Mcp {
-                    server: tool_info.server_name,
-                    tool: tool_info.tool.name.to_string(),
-                    raw_arguments,
-                },
-            )
-        } else {
-            match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
-                Ok(payload) => (tool_name, payload),
-                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-            }
-        };
+    let payload = match build_nested_tool_payload(tool_kind, &tool_name, input) {
+        Ok(payload) => payload,
+        Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+    };
 
     let call = ToolCall {
-        tool_name: tool_call_name,
+        tool_name,
         call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
         payload,
     };
@@ -340,7 +266,7 @@ async fn call_nested_tool(
         .handle_tool_call_with_source(
             call,
             ToolCallSource::CodeMode {
-                cell_id,
+                cell_id: cell_id.to_string(),
                 runtime_tool_call_id,
             },
             cancellation_token,
@@ -349,36 +275,14 @@ async fn call_nested_tool(
     Ok(result.code_mode_result())
 }
 
-fn tool_kind_for_spec(spec: &ToolSpec) -> codex_code_mode::CodeModeToolKind {
-    if matches!(spec, ToolSpec::Freeform(_)) {
-        codex_code_mode::CodeModeToolKind::Freeform
-    } else {
-        codex_code_mode::CodeModeToolKind::Function
-    }
-}
-
-fn tool_kind_for_name(
-    spec: Option<ToolSpec>,
-    tool_name: &ToolName,
-) -> Result<codex_code_mode::CodeModeToolKind, String> {
-    spec.as_ref()
-        .map(tool_kind_for_spec)
-        .ok_or_else(|| format!("tool `{tool_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
-}
-
 fn build_nested_tool_payload(
-    spec: Option<ToolSpec>,
+    tool_kind: CodeModeToolKind,
     tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let actual_kind = tool_kind_for_name(spec, tool_name)?;
-    match actual_kind {
-        codex_code_mode::CodeModeToolKind::Function => {
-            build_function_tool_payload(tool_name, input)
-        }
-        codex_code_mode::CodeModeToolKind::Freeform => {
-            build_freeform_tool_payload(tool_name, input)
-        }
+    match tool_kind {
+        CodeModeToolKind::Function => build_function_tool_payload(tool_name, input),
+        CodeModeToolKind::Freeform => build_freeform_tool_payload(tool_name, input),
     }
 }
 
@@ -411,5 +315,48 @@ fn build_freeform_tool_payload(
     match input {
         Some(JsonValue::String(input)) => Ok(ToolPayload::Custom { input }),
         _ => Err(format!("tool `{tool_name}` expects a string input")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_nested_tool_payload;
+    use crate::tools::context::ToolPayload;
+    use codex_code_mode::CodeModeToolKind;
+    use codex_tools::ToolName;
+    use serde_json::json;
+
+    #[test]
+    fn build_nested_tool_payload_uses_function_kind() {
+        let payload = build_nested_tool_payload(
+            CodeModeToolKind::Function,
+            &ToolName::plain("example"),
+            Some(json!({ "value": 1 })),
+        )
+        .expect("function payload should serialize");
+
+        match payload {
+            ToolPayload::Function { arguments } => {
+                assert_eq!(arguments, r#"{"value":1}"#.to_string());
+            }
+            other => panic!("expected function payload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_nested_tool_payload_uses_freeform_kind() {
+        let payload = build_nested_tool_payload(
+            CodeModeToolKind::Freeform,
+            &ToolName::plain("example"),
+            Some(json!("hello")),
+        )
+        .expect("freeform payload should preserve string input");
+
+        match payload {
+            ToolPayload::Custom { input } => {
+                assert_eq!(input, "hello".to_string());
+            }
+            other => panic!("expected freeform payload, got {other:?}"),
+        }
     }
 }

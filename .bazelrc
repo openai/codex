@@ -38,24 +38,50 @@ common:windows --test_env=WINDIR
 common --test_env=RUST_MIN_STACK=8388608 # 8 MiB
 
 common --test_output=errors
-common --bes_results_url=https://app.buildbuddy.io/invocation/
-common --bes_backend=grpcs://remote.buildbuddy.io
-common --remote_cache=grpcs://remote.buildbuddy.io
-common --remote_download_toplevel
 common --nobuild_runfile_links
+# These settings tune BuildBuddy/RBE behavior but do not contact a remote
+# service unless a `buildbuddy-*` configuration below supplies an endpoint.
+common --remote_download_toplevel
 common --remote_timeout=3600
 common --noexperimental_throttle_remote_action_building
 common --experimental_remote_execution_keepalive
 common --grpc_keepalive_time=30s
-common --experimental_remote_downloader=grpcs://remote.buildbuddy.io
+
+# Opt-in remote configurations selected by
+# `.github/scripts/run_bazel_with_buildbuddy.py`. Plain Bazel commands do not
+# contact BuildBuddy unless a user selects one of these configurations.
+# Use the generic host for cache, BES, and downloads without remote execution.
+common:buildbuddy-generic --bes_backend=grpcs://remote.buildbuddy.io
+common:buildbuddy-generic --bes_results_url=https://app.buildbuddy.io/invocation/
+common:buildbuddy-generic --remote_cache=grpcs://remote.buildbuddy.io
+common:buildbuddy-generic --experimental_remote_downloader=grpcs://remote.buildbuddy.io
+
+# Add remote execution on the generic host.
+common:buildbuddy-generic-rbe --config=buildbuddy-generic
+common:buildbuddy-generic-rbe --config=remote
+common:buildbuddy-generic-rbe --remote_executor=grpcs://remote.buildbuddy.io
+
+# Use the OpenAI tenant for cache, BES, and downloads without remote execution.
+common:buildbuddy-openai --bes_backend=grpcs://openai.buildbuddy.io
+common:buildbuddy-openai --bes_results_url=https://openai.buildbuddy.io/invocation/
+common:buildbuddy-openai --remote_cache=grpcs://openai.buildbuddy.io
+common:buildbuddy-openai --experimental_remote_downloader=grpcs://openai.buildbuddy.io
+
+# Add remote execution on the OpenAI tenant.
+common:buildbuddy-openai-rbe --config=buildbuddy-openai
+common:buildbuddy-openai-rbe --config=remote
+common:buildbuddy-openai-rbe --remote_executor=grpcs://openai.buildbuddy.io
 
 # This limits both in-flight executions and concurrent downloads. Even with high number
 # of jobs execution will still be limited by CPU cores, so this just pays a bit of
 # memory in exchange for higher download concurrency.
 common --jobs=30
 
+# Shared remote execution policy. The endpoint-bearing `buildbuddy-*-rbe`
+# configurations include this group; CI configs override TestRunner below
+# when tests must remain local on their runner.
+common:remote --strategy=remote
 common:remote --extra_execution_platforms=//:rbe
-common:remote --remote_executor=grpcs://remote.buildbuddy.io
 common:remote --jobs=800
 # TODO(team): Evaluate if this actually helps, zbarsky is not sure, everything seems bottlenecked on `core` either way.
 # Enable pipelined compilation since we are not bound by local CPU count.
@@ -79,9 +105,9 @@ common:ci --disk_cache=
 # Shared config for the main Bazel CI workflow.
 common:ci-bazel --config=ci
 common:ci-bazel --build_metadata=TAG_workflow=bazel
-# Bazel CI cross-compiles in several legs, and the V8-backed code-mode tests
-# are not stable in that setup yet. Keep running the rest of the Rust
-# integration suites through the workspace-root launcher.
+# Keep code-mode integration cases out of ordinary Bazel legs. The
+# Windows-cross config below re-enables them after generating its Windows V8
+# snapshot on the Windows runner.
 common:ci-bazel --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::
 
 # Shared config for Bazel-backed Rust linting.
@@ -146,15 +172,11 @@ common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
 # Linux crossbuilds don't work until we untangle the libc constraint mess.
 common:ci-linux --config=ci-bazel
 common:ci-linux --build_metadata=TAG_os=linux
-common:ci-linux --config=remote
-common:ci-linux --strategy=remote
 common:ci-linux --platforms=//:rbe
 
 # On mac, we can run all the build actions remotely but test actions locally.
 common:ci-macos --config=ci-bazel
 common:ci-macos --build_metadata=TAG_os=macos
-common:ci-macos --config=remote
-common:ci-macos --strategy=remote
 common:ci-macos --strategy=TestRunner=darwin-sandbox,local
 
 # On Windows, use Linux remote execution for build actions but keep test actions
@@ -162,16 +184,18 @@ common:ci-macos --strategy=TestRunner=darwin-sandbox,local
 # still run against Windows binaries.
 common:ci-windows-cross --config=ci-windows
 common:ci-windows-cross --build_metadata=TAG_windows_cross_compile=true
-common:ci-windows-cross --config=remote
 common:ci-windows-cross --host_platform=//:rbe
-common:ci-windows-cross --strategy=remote
 common:ci-windows-cross --strategy=TestRunner=local
+# V8 embeds IsolateData offsets in snapshot builtins; Windows snapshots must be
+# generated by a Windows mksnapshot binary rather than the Linux RBE host tool.
+common:ci-windows-cross --strategy=V8Mksnapshot=local
 common:ci-windows-cross --local_test_jobs=4
 common:ci-windows-cross --test_env=RUST_TEST_THREADS=1
 # Native Windows CI still covers the PowerShell tests. The cross-built gnullvm
 # binaries currently hang in PowerShell AST parser tests when those binaries are
-# run on the Windows runner.
-common:ci-windows-cross --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::,powershell
+# run on the Windows runner. Keep V8-backed code-mode tests enabled except for
+# the hidden dynamic-tool callback test, which currently times out on Windows.
+common:ci-windows-cross --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=powershell,suite::code_mode::code_mode_can_call_hidden_dynamic_tools
 common:ci-windows-cross --platforms=//:windows_x86_64_gnullvm
 common:ci-windows-cross --extra_execution_platforms=//:rbe,//:windows_x86_64_msvc
 common:ci-windows-cross --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain
@@ -180,8 +204,6 @@ common:ci-windows-cross --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host
 common:ci-v8 --config=ci
 common:ci-v8 --build_metadata=TAG_workflow=v8
 common:ci-v8 --build_metadata=TAG_os=linux
-common:ci-v8 --config=remote
-common:ci-v8 --strategy=remote
 
 # Source-built Bazel V8 artifacts use the in-process sandbox by default. This
 # does not affect Cargo's default prebuilt rusty_v8 path.
@@ -192,6 +214,13 @@ common --@v8//:v8_enable_sandbox=True
 # artifact migration ships matching Rust feature selection for Cargo consumers.
 common:v8-release-compat --@v8//:v8_enable_pointer_compression=False
 common:v8-release-compat --@v8//:v8_enable_sandbox=False
+common:v8-target-x64 --@v8//bazel/config:v8_target_cpu=x64
+common:v8-target-arm64 --@v8//bazel/config:v8_target_cpu=arm64
+
+# Match rusty_v8's upstream GN release contract for published artifacts: every
+# target object uses Chromium's custom libc++ headers and the archive folds in
+# the matching runtime objects.
+common:rusty-v8-upstream-libcxx --@v8//:v8_use_rusty_v8_custom_libcxx=True
 
 # Optional per-user local overrides.
 try-import %workspace%/user.bazelrc

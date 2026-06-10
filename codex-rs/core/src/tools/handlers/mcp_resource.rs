@@ -7,6 +7,8 @@ use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::protocol::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::ReadResourceResult;
@@ -202,6 +204,7 @@ async fn emit_tool_call_begin(
         tool,
         arguments: arguments.unwrap_or(Value::Null),
         mcp_app_resource_uri: None,
+        plugin_id: None,
         status: McpToolCallStatus::InProgress,
         result: None,
         error: None,
@@ -240,6 +243,7 @@ async fn emit_tool_call_end(
         tool,
         arguments: arguments.unwrap_or(Value::Null),
         mcp_app_resource_uri: None,
+        plugin_id: None,
         status,
         result,
         error,
@@ -268,7 +272,10 @@ fn normalize_required_string(field: &str, value: String) -> Result<String, Funct
     }
 }
 
-fn serialize_function_output<T>(payload: T) -> Result<FunctionToolOutput, FunctionCallError>
+fn serialize_function_output<T>(
+    payload: T,
+    truncation_policy: TruncationPolicy,
+) -> Result<FunctionToolOutput, FunctionCallError>
 where
     T: Serialize,
 {
@@ -277,6 +284,9 @@ where
             "failed to serialize MCP resource response: {err}"
         ))
     })?;
+    // Match regular MCP tool outputs by bounding the copy persisted to the
+    // rollout and injected into model context.
+    let content = truncate_text(&content, truncation_policy * 1.2);
 
     Ok(FunctionToolOutput::from_text(content, Some(true)))
 }

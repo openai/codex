@@ -94,7 +94,11 @@ impl ChatWidget {
             })
             .collect();
 
-        let view = SkillsToggleView::new(items, self.app_event_tx.clone());
+        let view = SkillsToggleView::new(
+            items,
+            self.app_event_tx.clone(),
+            self.bottom_pane.list_keymap(),
+        );
         self.bottom_pane.show_view(Box::new(view));
     }
 
@@ -311,12 +315,12 @@ pub(crate) fn find_app_mentions(
     }
 
     let mut slug_counts: HashMap<String, usize> = HashMap::new();
-    for app in apps.iter().filter(|app| app.is_enabled) {
+    for app in apps.iter().filter(|app| is_app_mentionable(app)) {
         let slug = codex_connectors::metadata::connector_mention_slug(app);
         *slug_counts.entry(slug).or_insert(0) += 1;
     }
 
-    for app in apps.iter().filter(|app| app.is_enabled) {
+    for app in apps.iter().filter(|app| is_app_mentionable(app)) {
         let slug = codex_connectors::metadata::connector_mention_slug(app);
         let slug_count = slug_counts.get(&slug).copied().unwrap_or(0);
         if mentions.names.contains(&slug)
@@ -329,9 +333,13 @@ pub(crate) fn find_app_mentions(
     }
 
     apps.iter()
-        .filter(|app| app.is_enabled && selected_ids.contains(&app.id))
+        .filter(|app| is_app_mentionable(app) && selected_ids.contains(&app.id))
         .cloned()
         .collect()
+}
+
+pub(crate) fn is_app_mentionable(app: &AppInfo) -> bool {
+    app.is_accessible && app.is_enabled
 }
 
 pub(crate) struct ToolMentions {
@@ -492,4 +500,75 @@ fn normalize_skill_path(path: &str) -> &str {
 fn app_id_from_path(path: &str) -> Option<&str> {
     path.strip_prefix("app://")
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn app(id: &str, name: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: true,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn find_app_mentions_requires_accessible_enabled_apps_for_slugs() {
+        let apps = vec![
+            app("google_drive", "Google Drive"),
+            AppInfo {
+                is_accessible: false,
+                ..app("arabica_uae", "% Arabica UAE")
+            },
+            AppInfo {
+                is_enabled: false,
+                ..app("linear", "Linear")
+            },
+        ];
+        let mentions = collect_tool_mentions("$google-drive $arabica-uae $linear", &HashMap::new());
+
+        assert_eq!(
+            find_app_mentions(&mentions, &apps, &HashSet::new()),
+            vec![apps[0].clone()]
+        );
+    }
+
+    #[test]
+    fn find_app_mentions_requires_accessible_enabled_apps_for_bound_paths() {
+        let apps = vec![
+            app("google_drive", "Google Drive"),
+            AppInfo {
+                is_accessible: false,
+                ..app("arabica_uae", "% Arabica UAE")
+            },
+            AppInfo {
+                is_enabled: false,
+                ..app("linear", "Linear")
+            },
+        ];
+        let mention_paths = HashMap::from([
+            ("google-drive".to_string(), "app://google_drive".to_string()),
+            ("arabica-uae".to_string(), "app://arabica_uae".to_string()),
+            ("linear".to_string(), "app://linear".to_string()),
+        ]);
+        let mentions = collect_tool_mentions("$google-drive $arabica-uae $linear", &mention_paths);
+
+        assert_eq!(
+            find_app_mentions(&mentions, &apps, &HashSet::new()),
+            vec![apps[0].clone()]
+        );
+    }
 }

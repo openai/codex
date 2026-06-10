@@ -1,10 +1,10 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::info;
 use tracing::warn;
 
@@ -20,7 +20,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 
 pub(crate) struct SessionStartupPrewarmHandle {
-    task: JoinHandle<CodexResult<ModelClientSession>>,
+    task: AbortOnDropHandle<CodexResult<ModelClientSession>>,
     started_at: Instant,
     timeout: Duration,
 }
@@ -41,10 +41,15 @@ impl SessionStartupPrewarmHandle {
         timeout: Duration,
     ) -> Self {
         Self {
-            task,
+            task: AbortOnDropHandle::new(task),
             started_at,
             timeout,
         }
+    }
+
+    pub(crate) async fn abort(self) {
+        self.task.abort();
+        let _ = self.task.await;
     }
 
     async fn resolve(
@@ -52,6 +57,7 @@ impl SessionStartupPrewarmHandle {
         session_telemetry: &SessionTelemetry,
         cancellation_token: &CancellationToken,
     ) -> SessionStartupPrewarmResolution {
+        let resolve_started_at = Instant::now();
         let Self {
             mut task,
             started_at,
@@ -78,6 +84,11 @@ impl SessionStartupPrewarmHandle {
                 }
                 None => {
                     task.abort();
+                    session_telemetry.record_startup_phase(
+                        "startup_prewarm_resolve",
+                        resolve_started_at.elapsed(),
+                        Some("cancelled"),
+                    );
                     session_telemetry.record_duration(
                         STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC,
                         age_at_first_turn,
@@ -92,6 +103,16 @@ impl SessionStartupPrewarmHandle {
                 }
             }
         };
+        let status = match &resolution {
+            SessionStartupPrewarmResolution::Cancelled => "cancelled",
+            SessionStartupPrewarmResolution::Ready(_) => "ready",
+            SessionStartupPrewarmResolution::Unavailable { status, .. } => status,
+        };
+        session_telemetry.record_startup_phase(
+            "startup_prewarm_resolve",
+            resolve_started_at.elapsed(),
+            Some(status),
+        );
 
         match resolution {
             SessionStartupPrewarmResolution::Cancelled => {
@@ -157,6 +178,10 @@ impl SessionStartupPrewarmHandle {
 
 impl Session {
     pub(crate) async fn schedule_startup_prewarm(self: &Arc<Self>, base_instructions: String) {
+        if !self.services.model_client.responses_websocket_enabled() {
+            return;
+        }
+
         let session_telemetry = self.services.session_telemetry.clone();
         let websocket_connect_timeout = self.provider().await.websocket_connect_timeout();
         let started_at = Instant::now();
@@ -165,6 +190,11 @@ impl Session {
             let result =
                 schedule_startup_prewarm_inner(startup_prewarm_session, base_instructions).await;
             let status = if result.is_ok() { "ready" } else { "failed" };
+            session_telemetry.record_startup_phase(
+                "startup_prewarm_total",
+                started_at.elapsed(),
+                Some(status),
+            );
             session_telemetry.record_duration(
                 STARTUP_PREWARM_DURATION_METRIC,
                 started_at.elapsed(),
@@ -200,19 +230,29 @@ async fn schedule_startup_prewarm_inner(
     session: Arc<Session>,
     base_instructions: String,
 ) -> CodexResult<ModelClientSession> {
+    let prewarm_started_at = Instant::now();
     let startup_turn_context = session
-        .new_default_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
+        .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
         .await;
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_create_turn_context",
+        prewarm_started_at.elapsed(),
+        /*status*/ None,
+    );
     let startup_cancellation_token = CancellationToken::new();
+    let built_tools_started_at = Instant::now();
     let startup_router = built_tools(
         session.as_ref(),
         startup_turn_context.as_ref(),
-        &[],
-        &HashSet::new(),
-        /*skills_outcome*/ None,
         &startup_cancellation_token,
     )
     .await?;
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_build_tools",
+        built_tools_started_at.elapsed(),
+        /*status*/ None,
+    );
+    let build_prompt_started_at = Instant::now();
     let startup_prompt = build_prompt(
         Vec::new(),
         startup_router.as_ref(),
@@ -221,21 +261,34 @@ async fn schedule_startup_prewarm_inner(
             text: base_instructions,
         },
     );
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_build_prompt",
+        build_prompt_started_at.elapsed(),
+        /*status*/ None,
+    );
+    let window_id = session.current_window_id().await;
     let startup_turn_metadata_header = startup_turn_context
         .turn_metadata_state
-        .current_header_value();
+        .current_header_value_for_prewarm(&window_id);
     let mut client_session = session.services.model_client.new_session();
+    let websocket_warmup_started_at = Instant::now();
     client_session
         .prewarm_websocket(
+            &window_id,
             &startup_prompt,
             &startup_turn_context.model_info,
             &startup_turn_context.session_telemetry,
-            startup_turn_context.reasoning_effort,
+            startup_turn_context.reasoning_effort.clone(),
             startup_turn_context.reasoning_summary,
             startup_turn_context.config.service_tier.clone(),
             startup_turn_metadata_header.as_deref(),
         )
         .await?;
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_websocket_warmup",
+        websocket_warmup_started_at.elapsed(),
+        /*status*/ None,
+    );
 
     Ok(client_session)
 }

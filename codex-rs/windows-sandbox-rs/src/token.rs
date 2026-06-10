@@ -139,6 +139,33 @@ pub unsafe fn convert_string_sid_to_sid(s: &str) -> Option<*mut c_void> {
     if ok != 0 { Some(psid) } else { None }
 }
 
+/// Owns a SID allocated by `ConvertStringSidToSidW` and releases it with `LocalFree`.
+pub struct LocalSid {
+    psid: *mut c_void,
+}
+
+impl LocalSid {
+    pub fn from_string(sid: &str) -> Result<Self> {
+        let psid = unsafe { convert_string_sid_to_sid(sid) }
+            .ok_or_else(|| anyhow!("invalid SID string: {sid}"))?;
+        Ok(Self { psid })
+    }
+
+    pub fn as_ptr(&self) -> *mut c_void {
+        self.psid
+    }
+}
+
+impl Drop for LocalSid {
+    fn drop(&mut self) {
+        if !self.psid.is_null() {
+            unsafe {
+                LocalFree(self.psid as HLOCAL);
+            }
+        }
+    }
+}
+
 /// # Safety
 /// Caller must close the returned token handle.
 pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {

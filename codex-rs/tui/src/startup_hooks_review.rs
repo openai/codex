@@ -5,7 +5,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_stream::StreamExt;
 
@@ -17,6 +19,7 @@ use crate::bottom_pane::ListSelectionView;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line_for_keymap;
+use crate::config_update::format_config_error;
 use crate::hooks_rpc::HookTrustUpdate;
 use crate::hooks_rpc::fetch_hooks_list;
 use crate::hooks_rpc::hook_needs_review;
@@ -28,7 +31,9 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::HooksListEntry;
+use std::path::PathBuf;
 
 pub(crate) enum StartupHooksReviewOutcome {
     Continue,
@@ -42,21 +47,33 @@ enum StartupHooksReviewSelection {
     ContinueWithoutTrusting,
 }
 
+pub(crate) async fn load_startup_hooks_review_entry(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+) -> HooksListEntry {
+    let response = match fetch_hooks_list(request_handle, cwd.clone()).await {
+        Ok(response) => response,
+        Err(err) => {
+            tracing::warn!("failed to load startup hook review state: {err:#}");
+            return HooksListEntry {
+                cwd,
+                hooks: Vec::new(),
+                warnings: Vec::new(),
+                errors: Vec::new(),
+            };
+        }
+    };
+    hooks_list_entry_for_cwd(response, &cwd)
+}
+
 pub(crate) async fn maybe_run_startup_hooks_review(
     app_server: &mut AppServerSession,
     tui: &mut Tui,
     config: &Config,
+    bypass_hook_trust: bool,
+    entry: HooksListEntry,
 ) -> Result<StartupHooksReviewOutcome> {
-    let cwd = config.cwd.to_path_buf();
-    let response = match fetch_hooks_list(app_server.request_handle(), cwd.clone()).await {
-        Ok(response) => response,
-        Err(err) => {
-            tracing::warn!("failed to load startup hook review state: {err:#}");
-            return Ok(StartupHooksReviewOutcome::Continue);
-        }
-    };
-    let entry = hooks_list_entry_for_cwd(response, &cwd);
-    if review_needed_count(&entry) == 0 {
+    if !review_is_needed(bypass_hook_trust, &entry) {
         return Ok(StartupHooksReviewOutcome::Continue);
     }
 
@@ -129,7 +146,9 @@ async fn run_startup_hooks_review_app(
                         )
                         .await
                         .map(|_| ())
-                        .map_err(|err| format!("Failed to trust hooks: {err}"));
+                        .map_err(|err| {
+                            format!("Failed to trust hooks: {}", format_config_error(&err))
+                        });
                         match result {
                             Ok(()) => return Ok(StartupHooksReviewOutcome::Continue),
                             Err(err) => {
@@ -198,7 +217,7 @@ fn selection_view_params(
         "Hooks can run outside the sandbox after you trust them.".dim(),
     ));
     if let Some(error) = trust_all_error {
-        header.push(Line::from(error.to_string()).red());
+        header.push(Paragraph::new(Line::from(error.to_string()).red()).wrap(Wrap { trim: false }));
     } else if trusting_all {
         header.push(Line::from("Trusting hooks...".dim()));
     }
@@ -221,6 +240,10 @@ fn review_needed_count(entry: &HooksListEntry) -> usize {
         .iter()
         .filter(|hook| hook_needs_review(hook))
         .count()
+}
+
+fn review_is_needed(bypass_hook_trust: bool, entry: &HooksListEntry) -> bool {
+    !bypass_hook_trust && review_needed_count(entry) > 0
 }
 
 fn selection_item(name: &str, is_disabled: bool) -> SelectionItem {
@@ -259,6 +282,7 @@ impl WidgetRef for &StandaloneSelectionView<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::review_is_needed;
     use super::selection_view;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
@@ -327,10 +351,20 @@ mod tests {
                         }
                     })
                     .collect::<String>();
-                format!("{rendered:width$}", width = area.width as usize)
+                rendered.trim_end().to_string()
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn bypass_hook_trust_suppresses_startup_review() {
+        assert!(!review_is_needed(/*bypass_hook_trust*/ true, &entry()));
+    }
+
+    #[test]
+    fn untrusted_hooks_need_review_without_bypass() {
+        assert!(review_is_needed(/*bypass_hook_trust*/ false, &entry()));
     }
 
     #[test]
@@ -357,7 +391,9 @@ mod tests {
         let keymap = RuntimeKeymap::defaults();
         let view = selection_view(
             &entry(),
-            Some("Failed to trust hooks: disk full"),
+            Some(
+                "Failed to trust hooks: config/batchWrite failed in TUI: Invalid configuration: features.fast_mode=true is not supported; allowed set [fast_mode=false]",
+            ),
             /*trusting_all*/ false,
             AppEventSender::new(tx_raw),
             &keymap,
@@ -365,7 +401,7 @@ mod tests {
 
         assert_snapshot!(
             "startup_hooks_review_prompt_with_trust_error",
-            render_lines(&view, /*width*/ 80)
+            render_lines(&view, /*width*/ 62)
         );
     }
 }

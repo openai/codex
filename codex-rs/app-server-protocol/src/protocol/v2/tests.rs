@@ -11,11 +11,13 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
-use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
@@ -56,6 +58,30 @@ fn test_absolute_path() -> AbsolutePathBuf {
 }
 
 #[test]
+fn thread_sources_round_trip_as_scalar_labels() {
+    for (source, label) in [
+        (ThreadSource::User, "user"),
+        (ThreadSource::Subagent, "subagent"),
+        (
+            ThreadSource::Feature("automation".to_string()),
+            "automation",
+        ),
+        (ThreadSource::MemoryConsolidation, "memory_consolidation"),
+    ] {
+        let value = serde_json::to_value(&source).expect("serialize thread source");
+
+        assert_eq!(value, json!(label));
+        assert_eq!(
+            serde_json::from_value::<ThreadSource>(value).expect("deserialize thread source"),
+            source
+        );
+
+        let core_source: codex_protocol::protocol::ThreadSource = source.clone().into();
+        assert_eq!(ThreadSource::from(core_source), source);
+    }
+}
+
+#[test]
 fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent() {
     assert_eq!(
         serde_json::to_string(&ApprovalsReviewer::User).expect("serialize reviewer"),
@@ -63,7 +89,7 @@ fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagen
     );
     assert_eq!(
         serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
-        "\"guardian_subagent\""
+        "\"auto_review\""
     );
 
     for value in ["user", "auto_review", "guardian_subagent"] {
@@ -108,6 +134,86 @@ fn thread_turns_list_params_accepts_items_view() {
 
     assert_eq!(params.thread_id, "thr_123");
     assert_eq!(params.items_view, Some(TurnItemsView::NotLoaded));
+}
+
+#[test]
+fn thread_resume_params_accept_turns_page_bootstrap() {
+    let params = serde_json::from_value::<ThreadResumeParams>(json!({
+        "threadId": "thr_123",
+        "initialTurnsPage": {
+            "limit": 25,
+            "sortDirection": "asc",
+            "itemsView": "full",
+        },
+    }))
+    .expect("thread resume params should deserialize");
+
+    assert_eq!(params.thread_id, "thr_123");
+    assert_eq!(
+        params.initial_turns_page,
+        Some(ThreadResumeInitialTurnsPageParams {
+            limit: Some(25),
+            sort_direction: Some(SortDirection::Asc),
+            items_view: Some(TurnItemsView::Full),
+        })
+    );
+}
+
+#[test]
+fn thread_resume_response_round_trips_initial_turns_page() {
+    let response = ThreadResumeResponse {
+        thread: Thread {
+            id: "thr_123".to_string(),
+            session_id: "thr_123".to_string(),
+            forked_from_id: None,
+            parent_thread_id: None,
+            preview: String::new(),
+            ephemeral: false,
+            model_provider: "openai".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            status: ThreadStatus::Idle,
+            path: None,
+            cwd: absolute_path("tmp"),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::Exec,
+            thread_source: None,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: Vec::new(),
+        },
+        model: "gpt-5".to_string(),
+        model_provider: "openai".to_string(),
+        service_tier: None,
+        cwd: absolute_path("tmp"),
+        runtime_workspace_roots: Vec::new(),
+        instruction_sources: Vec::new(),
+        approval_policy: AskForApproval::OnFailure,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox: SandboxPolicy::DangerFullAccess,
+        active_permission_profile: None,
+        reasoning_effort: None,
+        initial_turns_page: Some(TurnsPage {
+            data: Vec::new(),
+            next_cursor: Some("cursor_next".to_string()),
+            backwards_cursor: Some("cursor_back".to_string()),
+        }),
+    };
+
+    let value = serde_json::to_value(&response).expect("serialize thread resume response");
+    assert_eq!(
+        value.get("initialTurnsPage"),
+        Some(&json!({
+            "data": [],
+            "nextCursor": "cursor_next",
+            "backwardsCursor": "cursor_back",
+        }))
+    );
+    let decoded = serde_json::from_value::<ThreadResumeResponse>(value)
+        .expect("deserialize thread resume response");
+    assert_eq!(decoded, response);
 }
 
 #[test]
@@ -318,6 +424,7 @@ fn permissions_request_approval_uses_request_permission_profile() {
         "threadId": "thr_123",
         "turnId": "turn_123",
         "itemId": "call_123",
+        "environmentId": "remote",
         "startedAtMs": 1,
         "cwd": absolute_path_string("repo"),
         "reason": "Select a workspace root",
@@ -334,6 +441,7 @@ fn permissions_request_approval_uses_request_permission_profile() {
     .expect("permissions request should deserialize");
 
     assert_eq!(params.cwd, absolute_path("repo"));
+    assert_eq!(params.environment_id.as_deref(), Some("remote"));
     assert_eq!(
         params.permissions,
         RequestPermissionProfile {
@@ -420,7 +528,7 @@ fn additional_file_system_permissions_preserves_canonical_entries() {
                 path: CoreFileSystemPath::GlobPattern {
                     pattern: "**/*.env".to_string(),
                 },
-                access: CoreFileSystemAccessMode::None,
+                access: CoreFileSystemAccessMode::Deny,
             },
         ],
         glob_scan_max_depth: NonZeroUsize::new(2),
@@ -444,7 +552,7 @@ fn additional_file_system_permissions_preserves_canonical_entries() {
                     path: FileSystemPath::GlobPattern {
                         pattern: "**/*.env".to_string(),
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                 },
             ]),
         }
@@ -501,48 +609,6 @@ fn additional_file_system_permissions_rejects_zero_glob_scan_depth() {
         "write": null,
         "globScanMaxDepth": 0,
         "entries": [],
-    }))
-    .expect_err("zero glob scan depth should fail deserialization");
-}
-
-#[test]
-fn permission_profile_file_system_permissions_preserves_glob_scan_depth() {
-    let core_permissions = CoreManagedFileSystemPermissions::Restricted {
-        entries: vec![CoreFileSystemSandboxEntry {
-            path: CoreFileSystemPath::GlobPattern {
-                pattern: "**/*.env".to_string(),
-            },
-            access: CoreFileSystemAccessMode::None,
-        }],
-        glob_scan_max_depth: NonZeroUsize::new(2),
-    };
-
-    let permissions = PermissionProfileFileSystemPermissions::from(core_permissions.clone());
-
-    assert_eq!(
-        permissions,
-        PermissionProfileFileSystemPermissions::Restricted {
-            entries: vec![FileSystemSandboxEntry {
-                path: FileSystemPath::GlobPattern {
-                    pattern: "**/*.env".to_string(),
-                },
-                access: FileSystemAccessMode::None,
-            }],
-            glob_scan_max_depth: NonZeroUsize::new(2),
-        }
-    );
-    assert_eq!(
-        CoreManagedFileSystemPermissions::from(permissions),
-        core_permissions
-    );
-}
-
-#[test]
-fn permission_profile_file_system_permissions_rejects_zero_glob_scan_depth() {
-    serde_json::from_value::<PermissionProfileFileSystemPermissions>(json!({
-        "type": "restricted",
-        "entries": [],
-        "globScanMaxDepth": 0,
     }))
     .expect_err("zero glob scan depth should fail deserialization");
 }
@@ -653,6 +719,80 @@ fn permissions_request_approval_response_accepts_strict_auto_review() {
     .expect("response should deserialize");
 
     assert_eq!(response.strict_auto_review, Some(true));
+}
+
+#[test]
+fn permission_profile_selection_uses_id_string() {
+    let start: ThreadStartParams = serde_json::from_value(json!({
+        "permissions": BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+    }))
+    .expect("thread/start params deserialize");
+    assert_eq!(
+        start.permissions,
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
+    );
+
+    let turn: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "input": [],
+        "permissions": "dev",
+    }))
+    .expect("turn/start params deserialize");
+    assert_eq!(turn.permissions, Some("dev".to_string()));
+
+    let command: CommandExecParams = serde_json::from_value(json!({
+        "command": ["echo", "hello"],
+        "permissionProfile": "dev",
+    }))
+    .expect("command/exec params deserialize");
+    assert_eq!(command.permission_profile, Some("dev".to_string()));
+
+    let resume: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "permissions": BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+    }))
+    .expect("thread/resume params deserialize");
+    assert_eq!(
+        resume.permissions,
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
+    );
+
+    let fork: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "permissions": BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+    }))
+    .expect("thread/fork params deserialize");
+    assert_eq!(
+        fork.permissions,
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
+    );
+}
+
+#[test]
+fn thread_path_params_deserialize_empty_path_as_none() {
+    let resume: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "path": "",
+    }))
+    .expect("thread/resume params deserialize");
+    assert_eq!(resume.path, None);
+
+    let fork: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "path": "",
+    }))
+    .expect("thread/fork params deserialize");
+    assert_eq!(fork.path, None);
+
+    let resume_with_path: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "path": "/tmp/resume-thread.jsonl",
+    }))
+    .expect("thread/resume params deserialize");
+    assert_eq!(
+        resume_with_path.path,
+        Some(PathBuf::from("/tmp/resume-thread.jsonl"))
+    );
 }
 
 #[test]
@@ -1473,38 +1613,13 @@ fn ask_for_approval_granular_is_marked_experimental() {
 }
 
 #[test]
-fn profile_v2_granular_approval_policy_is_marked_experimental() {
-    let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&ProfileV2 {
-        model: None,
-        model_provider: None,
-        approval_policy: Some(AskForApproval::Granular {
-            sandbox_approval: true,
-            rules: false,
-            skill_approval: false,
-            request_permissions: true,
-            mcp_elicitations: false,
-        }),
-        approvals_reviewer: None,
-        service_tier: None,
-        model_reasoning_effort: None,
-        model_reasoning_summary: None,
-        model_verbosity: None,
-        web_search: None,
-        tools: None,
-        chatgpt_base_url: None,
-        additional: HashMap::new(),
-    });
-
-    assert_eq!(reason, Some("askForApproval.granular"));
-}
-
-#[test]
 fn config_granular_approval_policy_is_marked_experimental() {
     let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
         model: None,
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: None,
         model_provider: None,
         approval_policy: Some(AskForApproval::Granular {
             sandbox_approval: false,
@@ -1520,8 +1635,6 @@ fn config_granular_approval_policy_is_marked_experimental() {
         forced_login_method: None,
         web_search: None,
         tools: None,
-        profile: None,
-        profiles: HashMap::new(),
         instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -1531,6 +1644,7 @@ fn config_granular_approval_policy_is_marked_experimental() {
         service_tier: None,
         analytics: None,
         apps: None,
+        desktop: None,
         additional: HashMap::new(),
     });
 
@@ -1544,6 +1658,7 @@ fn config_approvals_reviewer_is_marked_experimental() {
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: None,
         model_provider: None,
         approval_policy: None,
         approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
@@ -1553,8 +1668,6 @@ fn config_approvals_reviewer_is_marked_experimental() {
         forced_login_method: None,
         web_search: None,
         tools: None,
-        profile: None,
-        profiles: HashMap::new(),
         instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -1564,110 +1677,7 @@ fn config_approvals_reviewer_is_marked_experimental() {
         service_tier: None,
         analytics: None,
         apps: None,
-        additional: HashMap::new(),
-    });
-
-    assert_eq!(reason, Some("config/read.approvalsReviewer"));
-}
-
-#[test]
-fn config_nested_profile_granular_approval_policy_is_marked_experimental() {
-    let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
-        model: None,
-        review_model: None,
-        model_context_window: None,
-        model_auto_compact_token_limit: None,
-        model_provider: None,
-        approval_policy: None,
-        approvals_reviewer: None,
-        sandbox_mode: None,
-        sandbox_workspace_write: None,
-        forced_chatgpt_workspace_id: None,
-        forced_login_method: None,
-        web_search: None,
-        tools: None,
-        profile: None,
-        profiles: HashMap::from([(
-            "default".to_string(),
-            ProfileV2 {
-                model: None,
-                model_provider: None,
-                approval_policy: Some(AskForApproval::Granular {
-                    sandbox_approval: true,
-                    rules: false,
-                    skill_approval: false,
-                    request_permissions: false,
-                    mcp_elicitations: true,
-                }),
-                approvals_reviewer: None,
-                service_tier: None,
-                model_reasoning_effort: None,
-                model_reasoning_summary: None,
-                model_verbosity: None,
-                web_search: None,
-                tools: None,
-                chatgpt_base_url: None,
-                additional: HashMap::new(),
-            },
-        )]),
-        instructions: None,
-        developer_instructions: None,
-        compact_prompt: None,
-        model_reasoning_effort: None,
-        model_reasoning_summary: None,
-        model_verbosity: None,
-        service_tier: None,
-        analytics: None,
-        apps: None,
-        additional: HashMap::new(),
-    });
-
-    assert_eq!(reason, Some("askForApproval.granular"));
-}
-
-#[test]
-fn config_nested_profile_approvals_reviewer_is_marked_experimental() {
-    let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
-        model: None,
-        review_model: None,
-        model_context_window: None,
-        model_auto_compact_token_limit: None,
-        model_provider: None,
-        approval_policy: None,
-        approvals_reviewer: None,
-        sandbox_mode: None,
-        sandbox_workspace_write: None,
-        forced_chatgpt_workspace_id: None,
-        forced_login_method: None,
-        web_search: None,
-        tools: None,
-        profile: None,
-        profiles: HashMap::from([(
-            "default".to_string(),
-            ProfileV2 {
-                model: None,
-                model_provider: None,
-                approval_policy: None,
-                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-                service_tier: None,
-                model_reasoning_effort: None,
-                model_reasoning_summary: None,
-                model_verbosity: None,
-                web_search: None,
-                tools: None,
-                chatgpt_base_url: None,
-                additional: HashMap::new(),
-            },
-        )]),
-        instructions: None,
-        developer_instructions: None,
-        compact_prompt: None,
-        model_reasoning_effort: None,
-        model_reasoning_summary: None,
-        model_verbosity: None,
-        service_tier: None,
-        analytics: None,
-        apps: None,
+        desktop: None,
         additional: HashMap::new(),
     });
 
@@ -1687,7 +1697,13 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             }]),
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            allowed_windows_sandbox_implementations: None,
+            allowed_permission_profiles: None,
+            default_permissions: None,
             allowed_web_search_modes: None,
+            allow_managed_hooks_only: None,
+            allow_appshots: None,
+            computer_use: None,
             feature_requirements: None,
             hooks: None,
             enforce_residency: None,
@@ -1769,6 +1785,7 @@ fn client_request_turn_start_granular_approval_policy_is_marked_experimental() {
             request_id: crate::RequestId::Integer(4),
             params: TurnStartParams {
                 thread_id: "thr_123".to_string(),
+                client_user_message_id: None,
                 input: Vec::new(),
                 approval_policy: Some(AskForApproval::Granular {
                     sandbox_approval: false,
@@ -1792,6 +1809,7 @@ fn mcp_server_elicitation_response_round_trips_rmcp_result() {
         content: Some(json!({
             "confirmed": true,
         })),
+        meta: None,
     };
 
     let v2_response = McpServerElicitationRequestResponse::from(rmcp_result.clone());
@@ -2017,6 +2035,107 @@ fn mcp_server_elicitation_response_serializes_nullable_content() {
 }
 
 #[test]
+fn mcp_server_status_serializes_absent_server_info_as_null() {
+    let response = ListMcpServerStatusResponse {
+        data: vec![McpServerStatus {
+            name: "not-ready".to_string(),
+            server_info: None,
+            tools: HashMap::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: McpAuthStatus::Unsupported,
+        }],
+        next_cursor: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(response).expect("response should serialize"),
+        json!({
+            "data": [{
+                "name": "not-ready",
+                "serverInfo": null,
+                "tools": {},
+                "resources": [],
+                "resourceTemplates": [],
+                "authStatus": "unsupported",
+            }],
+            "nextCursor": null,
+        })
+    );
+}
+
+#[test]
+fn mcp_server_status_updated_accepts_missing_thread_id() {
+    let notification: McpServerStatusUpdatedNotification = serde_json::from_value(json!({
+        "name": "optional_broken",
+        "status": "failed",
+        "error": "handshake failed",
+    }))
+    .expect("notification without threadId should deserialize");
+
+    let expected = McpServerStatusUpdatedNotification {
+        thread_id: None,
+        name: "optional_broken".to_string(),
+        status: McpServerStartupState::Failed,
+        error: Some("handshake failed".to_string()),
+    };
+    assert_eq!(notification, expected);
+    assert_eq!(
+        serde_json::to_value(notification).expect("notification should serialize"),
+        json!({
+            "threadId": null,
+            "name": "optional_broken",
+            "status": "failed",
+            "error": "handshake failed",
+        })
+    );
+}
+
+#[test]
+fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
+    let response = ListMcpServerStatusResponse {
+        data: vec![McpServerStatus {
+            name: "initialized".to_string(),
+            server_info: Some(McpServerInfo {
+                name: "lookup-server".to_string(),
+                title: None,
+                version: "1.0.0".to_string(),
+                description: None,
+                icons: None,
+                website_url: None,
+            }),
+            tools: HashMap::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: McpAuthStatus::Unsupported,
+        }],
+        next_cursor: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(response).expect("response should serialize"),
+        json!({
+            "data": [{
+                "name": "initialized",
+                "serverInfo": {
+                    "name": "lookup-server",
+                    "title": null,
+                    "version": "1.0.0",
+                    "description": null,
+                    "icons": null,
+                    "websiteUrl": null,
+                },
+                "tools": {},
+                "resources": [],
+                "resourceTemplates": [],
+                "authStatus": "unsupported",
+            }],
+            "nextCursor": null,
+        })
+    );
+}
+
+#[test]
 fn sandbox_policy_round_trips_workspace_write_access() {
     let v2_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
@@ -2215,7 +2334,7 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
             ),
             (
                 "/tmp/ignored.sock".to_string(),
-                NetworkUnixSocketPermission::None,
+                NetworkUnixSocketPermission::Deny,
             ),
         ])),
         allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
@@ -2239,7 +2358,7 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
             "allowedDomains": ["api.openai.com"],
             "deniedDomains": ["blocked.example.com"],
             "unixSockets": {
-                "/tmp/ignored.sock": "none",
+                "/tmp/ignored.sock": "deny",
                 "/tmp/proxy.sock": "allow"
             },
             "allowUnixSockets": ["/tmp/proxy.sock"],
@@ -2252,6 +2371,7 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
 fn core_turn_item_into_thread_item_converts_supported_variants() {
     let user_item = TurnItem::UserMessage(UserMessageItem {
         id: "user-1".to_string(),
+        client_id: Some("client-message-1".to_string()),
         content: vec![
             CoreUserInput::Text {
                 text: "hello".to_string(),
@@ -2259,9 +2379,11 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             },
             CoreUserInput::Image {
                 image_url: "https://example.com/image.png".to_string(),
+                detail: Some(ImageDetail::Original),
             },
             CoreUserInput::LocalImage {
                 path: PathBuf::from("local/image.png"),
+                detail: Some(ImageDetail::Original),
             },
             CoreUserInput::Skill {
                 name: "skill-creator".to_string(),
@@ -2278,6 +2400,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         ThreadItem::from(user_item),
         ThreadItem::UserMessage {
             id: "user-1".to_string(),
+            client_id: Some("client-message-1".to_string()),
             content: vec![
                 UserInput::Text {
                     text: "hello".to_string(),
@@ -2285,9 +2408,11 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 },
                 UserInput::Image {
                     url: "https://example.com/image.png".to_string(),
+                    detail: Some(ImageDetail::Original),
                 },
                 UserInput::LocalImage {
                     path: PathBuf::from("local/image.png"),
+                    detail: Some(ImageDetail::Original),
                 },
                 UserInput::Skill {
                     name: "skill-creator".to_string(),
@@ -2444,6 +2569,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         tool: "tool".to_string(),
         arguments: json!({"arg": "value"}),
         mcp_app_resource_uri: Some("app://connector".to_string()),
+        plugin_id: Some("sample@test".to_string()),
         status: CoreMcpToolCallStatus::InProgress,
         result: None,
         error: None,
@@ -2459,6 +2585,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             status: McpToolCallStatus::InProgress,
             arguments: json!({"arg": "value"}),
             mcp_app_resource_uri: Some("app://connector".to_string()),
+            plugin_id: Some("sample@test".to_string()),
             result: None,
             error: None,
             duration_ms: None,
@@ -2471,6 +2598,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         tool: "tool".to_string(),
         arguments: JsonValue::Null,
         mcp_app_resource_uri: None,
+        plugin_id: None,
         status: CoreMcpToolCallStatus::Completed,
         result: Some(CallToolResult {
             content: vec![json!({"type": "text", "text": "ok"})],
@@ -2491,6 +2619,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             status: McpToolCallStatus::Completed,
             arguments: JsonValue::Null,
             mcp_app_resource_uri: None,
+            plugin_id: None,
             result: Some(Box::new(McpToolCallResult {
                 content: vec![json!({"type": "text", "text": "ok"})],
                 structured_content: Some(json!({"ok": true})),
@@ -2498,6 +2627,33 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             })),
             error: None,
             duration_ms: Some(42),
+        }
+    );
+}
+
+#[test]
+fn user_input_into_core_preserves_image_detail() {
+    assert_eq!(
+        UserInput::Image {
+            url: "https://example.com/image.png".to_string(),
+            detail: Some(ImageDetail::Original),
+        }
+        .into_core(),
+        CoreUserInput::Image {
+            image_url: "https://example.com/image.png".to_string(),
+            detail: Some(ImageDetail::Original),
+        }
+    );
+
+    assert_eq!(
+        UserInput::LocalImage {
+            path: PathBuf::from("local/image.png"),
+            detail: Some(ImageDetail::Original),
+        }
+        .into_core(),
+        CoreUserInput::LocalImage {
+            path: PathBuf::from("local/image.png"),
+            detail: Some(ImageDetail::Original),
         }
     );
 }
@@ -2524,6 +2680,27 @@ fn skills_list_params_serialization_uses_force_reload() {
             "forceReload": true,
         }),
     );
+}
+
+#[test]
+fn skills_extra_roots_set_params_serialization_uses_extra_roots() {
+    assert_eq!(
+        serde_json::to_value(SkillsExtraRootsSetParams {
+            extra_roots: vec![absolute_path("tmp/skills")],
+        })
+        .unwrap(),
+        json!({
+            "extraRoots": [absolute_path_string("tmp/skills")],
+        }),
+    );
+}
+
+#[test]
+fn skills_extra_roots_set_params_rejects_relative_roots() {
+    let result = serde_json::from_value::<SkillsExtraRootsSetParams>(json!({
+        "extraRoots": ["relative/path"],
+    }));
+    assert!(result.is_err());
 }
 
 #[test]
@@ -2634,14 +2811,14 @@ fn marketplace_upgrade_params_serialization_uses_optional_marketplace_name() {
 fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
     assert_eq!(
         serde_json::to_value(PluginMarketplaceEntry {
-            name: "openai-curated".to_string(),
+            name: "openai-curated-remote".to_string(),
             path: None,
             interface: None,
             plugins: Vec::new(),
         })
         .unwrap(),
         json!({
-            "name": "openai-curated",
+            "name": "openai-curated-remote",
             "path": null,
             "interface": null,
             "plugins": [],
@@ -2725,6 +2902,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
             cwds: None,
             marketplace_kinds: Some(vec![
                 PluginListMarketplaceKind::Local,
+                PluginListMarketplaceKind::Vertical,
                 PluginListMarketplaceKind::WorkspaceDirectory,
                 PluginListMarketplaceKind::SharedWithMe,
             ]),
@@ -2734,8 +2912,30 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
             "cwds": null,
             "marketplaceKinds": [
                 "local",
+                "vertical",
                 "workspace-directory",
                 "shared-with-me",
+            ],
+        }),
+    );
+}
+
+#[test]
+fn plugin_installed_params_serializes_install_suggestion_names() {
+    assert_eq!(
+        serde_json::to_value(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: Some(vec![
+                "computer-use".to_string(),
+                "chrome".to_string(),
+            ]),
+        })
+        .unwrap(),
+        json!({
+            "cwds": null,
+            "installSuggestionPluginNames": [
+                "computer-use",
+                "chrome",
             ],
         }),
     );
@@ -2780,13 +2980,13 @@ fn plugin_read_params_serialization_uses_install_source_fields() {
 
     assert_eq!(
         serde_json::from_value::<PluginReadParams>(json!({
-            "remoteMarketplaceName": "openai-curated",
+            "remoteMarketplaceName": "openai-curated-remote",
             "pluginName": "gmail",
         }))
         .unwrap(),
         PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "gmail".to_string(),
         },
     );
@@ -2831,14 +3031,14 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
 
     assert_eq!(
         serde_json::from_value::<PluginInstallParams>(json!({
-            "remoteMarketplaceName": "openai-curated",
+            "remoteMarketplaceName": "openai-curated-remote",
             "pluginName": "gmail",
             "forceRemoteSync": true,
         }))
         .unwrap(),
         PluginInstallParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "gmail".to_string(),
         },
     );
@@ -2848,13 +3048,13 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
 fn plugin_skill_read_params_serialization_uses_remote_plugin_id() {
     assert_eq!(
         serde_json::to_value(PluginSkillReadParams {
-            remote_marketplace_name: "chatgpt-global".to_string(),
+            remote_marketplace_name: "openai-curated-remote".to_string(),
             remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
             skill_name: "plan-work".to_string(),
         })
         .unwrap(),
         json!({
-            "remoteMarketplaceName": "chatgpt-global",
+            "remoteMarketplaceName": "openai-curated-remote",
             "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
             "skillName": "plan-work",
         }),
@@ -2987,6 +3187,52 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
     );
 
     assert_eq!(
+        serde_json::to_value(PluginShareCheckoutParams {
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+        }),
+    );
+
+    let plugin_path = if cfg!(windows) {
+        r"C:\Users\me\plugins\gmail"
+    } else {
+        "/Users/me/plugins/gmail"
+    };
+    let plugin_path = AbsolutePathBuf::try_from(PathBuf::from(plugin_path)).unwrap();
+    let plugin_path_json = plugin_path.as_path().display().to_string();
+    let marketplace_path = if cfg!(windows) {
+        r"C:\Users\me\.agents\plugins\marketplace.json"
+    } else {
+        "/Users/me/.agents/plugins/marketplace.json"
+    };
+    let marketplace_path = AbsolutePathBuf::try_from(PathBuf::from(marketplace_path)).unwrap();
+    let marketplace_path_json = marketplace_path.as_path().display().to_string();
+    assert_eq!(
+        serde_json::to_value(PluginShareCheckoutResponse {
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            plugin_id: "gmail@codex-curated".to_string(),
+            plugin_name: "gmail".to_string(),
+            plugin_path,
+            marketplace_name: "codex-curated".to_string(),
+            marketplace_path,
+            remote_version: Some("1.2.3".to_string()),
+        })
+        .unwrap(),
+        json!({
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            "pluginId": "gmail@codex-curated",
+            "pluginName": "gmail",
+            "pluginPath": plugin_path_json,
+            "marketplaceName": "codex-curated",
+            "marketplacePath": marketplace_path_json,
+            "remoteVersion": "1.2.3",
+        }),
+    );
+
+    assert_eq!(
         serde_json::to_value(PluginShareDeleteParams {
             remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
         })
@@ -3003,7 +3249,11 @@ fn plugin_share_list_response_serializes_share_items() {
         serde_json::to_value(PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    id: "gmail@openai-curated-remote".to_string(),
+                    remote_plugin_id: Some(
+                        "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    ),
+                    local_version: None,
                     name: "gmail".to_string(),
                     share_context: None,
                     source: PluginSource::Remote,
@@ -3022,7 +3272,9 @@ fn plugin_share_list_response_serializes_share_items() {
         json!({
             "data": [{
                 "plugin": {
-                    "id": "plugins~Plugin_00000000000000000000000000000000",
+                    "id": "gmail@openai-curated-remote",
+                    "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                    "localVersion": null,
                     "name": "gmail",
                     "shareContext": null,
                     "source": { "type": "remote" },
@@ -3055,6 +3307,7 @@ fn plugin_summary_defaults_missing_availability_to_available() {
     .unwrap();
 
     assert_eq!(summary.availability, PluginAvailability::Available);
+    assert_eq!(summary.local_version, None);
     assert_eq!(summary.share_context, None);
 }
 
@@ -3383,13 +3636,12 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     let fork: ThreadForkResponse = serde_json::from_value(response).expect("thread/fork response");
 
     assert_eq!(start.instruction_sources, Vec::<AbsolutePathBuf>::new());
+    assert_eq!(start.thread.parent_thread_id, None);
     assert_eq!(resume.instruction_sources, Vec::<AbsolutePathBuf>::new());
     assert_eq!(fork.instruction_sources, Vec::<AbsolutePathBuf>::new());
-    assert_eq!(start.permission_profile, None);
-    assert_eq!(resume.permission_profile, None);
-    assert_eq!(fork.permission_profile, None);
     assert_eq!(start.active_permission_profile, None);
     assert_eq!(resume.active_permission_profile, None);
+    assert_eq!(resume.initial_turns_page, None);
     assert_eq!(fork.active_permission_profile, None);
 }
 
@@ -3411,10 +3663,13 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
 
     let without_override = TurnStartParams {
         thread_id: "thread_123".to_string(),
+        client_user_message_id: None,
         input: vec![],
         responsesapi_client_metadata: None,
+        additional_context: None,
         environments: None,
         cwd: None,
+        runtime_workspace_roots: None,
         approval_policy: None,
         approvals_reviewer: None,
         sandbox_policy: None,
@@ -3430,6 +3685,77 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     let serialized_without_override =
         serde_json::to_value(&without_override).expect("params should serialize");
     assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn thread_settings_update_params_preserve_explicit_null_service_tier() {
+    let params: ThreadSettingsUpdateParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "serviceTier": null
+    }))
+    .expect("params should deserialize");
+    assert_eq!(params.service_tier, Some(None));
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("serviceTier"),
+        Some(&serde_json::Value::Null)
+    );
+
+    let without_override = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        service_tier: None,
+        ..Default::default()
+    };
+    let serialized_without_override =
+        serde_json::to_value(&without_override).expect("params should serialize");
+    assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn thread_settings_update_params_preserve_field_level_experimental_gates() {
+    let permissions = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        permissions: Some(":workspace".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&permissions),
+        Some("thread/settings/update.permissions")
+    );
+
+    let granular_approval = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        approval_policy: Some(AskForApproval::Granular {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: false,
+            request_permissions: false,
+            mcp_elicitations: true,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&granular_approval),
+        Some("askForApproval.granular")
+    );
+
+    let collaboration_mode = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+            mode: codex_protocol::config_types::ModeKind::Plan,
+            settings: codex_protocol::config_types::Settings {
+                model: "mock-model".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&collaboration_mode),
+        Some("thread/settings/update.collaborationMode")
+    );
 }
 
 #[test]

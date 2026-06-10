@@ -24,8 +24,6 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
-use codex_app_server_protocol::PermissionProfileModificationParams;
-use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
@@ -41,6 +39,7 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSortKey;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -52,8 +51,10 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_cloud_config::cloud_config_bundle_loader_for_storage;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadError;
+use codex_config::ConfigLoadOptions;
 use codex_config::LoaderOverrides;
 use codex_config::format_config_error_with_source;
 use codex_core::StateDbHandle;
@@ -62,8 +63,9 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_and_loader_overrides;
+use codex_core::config::load_config_as_toml_with_cli_and_load_options;
 use codex_core::config::resolve_oss_provider;
+use codex_core::config::resolve_profile_v2_config_path;
 use codex_core::find_thread_meta_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
@@ -79,9 +81,9 @@ use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewRequest;
@@ -134,7 +136,7 @@ pub use exec_events::TurnStartedEvent;
 pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::Path;
@@ -242,6 +244,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     let Cli {
         command,
+        strict_config,
         shared,
         skip_git_repo_check,
         ephemeral,
@@ -261,9 +264,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         model: model_cli_arg,
         oss,
         oss_provider,
-        config_profile,
+        config_profile_v2,
         sandbox_mode: sandbox_mode_cli_arg,
         dangerously_bypass_approvals_and_sandbox,
+        bypass_hook_trust,
         cwd,
         add_dir,
     } = shared;
@@ -316,62 +320,65 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     };
-
-    #[allow(clippy::print_stderr)]
+    let user_config_path = config_profile_v2
+        .as_ref()
+        .map(|profile_v2| resolve_profile_v2_config_path(&codex_home, profile_v2));
     let loader_overrides = LoaderOverrides {
+        user_config_path,
+        user_config_profile: config_profile_v2,
         ignore_user_config,
         ignore_user_and_project_exec_policy_rules: ignore_rules,
         ..Default::default()
     };
 
-    let config_toml = match load_config_as_toml_with_cli_and_loader_overrides(
+    let bootstrap_config_toml = load_config_toml_or_exit(
         &codex_home,
         Some(&config_cwd),
         cli_kv_overrides.clone(),
         loader_overrides.clone(),
+        strict_config,
+        CloudConfigBundleLoader::default(),
     )
-    .await
-    {
-        Ok(config_toml) => config_toml,
-        Err(err) => {
-            let config_error = err
-                .get_ref()
-                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
-                .map(ConfigLoadError::config_error);
-            if let Some(config_error) = config_error {
-                eprintln!(
-                    "Error loading config.toml:\n{}",
-                    format_config_error_with_source(config_error)
-                );
-            } else {
-                eprintln!("Error loading config.toml: {err}");
-            }
-            std::process::exit(1);
-        }
-    };
+    .await;
 
-    let chatgpt_base_url = config_toml
+    let chatgpt_base_url = bootstrap_config_toml
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
-    let cloud_requirements = cloud_requirements_loader_for_storage(
+    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
-        config_toml.cli_auth_credentials_store.unwrap_or_default(),
+        bootstrap_config_toml
+            .cli_auth_credentials_store
+            .unwrap_or_default(),
         chatgpt_base_url,
     )
     .await;
     let run_cli_overrides = cli_kv_overrides.clone();
     let run_loader_overrides = loader_overrides.clone();
-    let run_cloud_requirements = cloud_requirements.clone();
+    let run_cloud_config_bundle = cloud_config_bundle.clone();
 
     let model_provider = if oss {
-        let resolved = resolve_oss_provider(
-            oss_provider.as_deref(),
-            &config_toml,
-            config_profile.clone(),
-        );
+        let config_toml_with_cloud_config;
+        let config_toml_for_oss = if oss_provider.is_none() {
+            // The first load intentionally skips cloud config so we can read
+            // auth/base-url settings needed to fetch the bundle. If OSS mode
+            // needs a default provider from config, reload with the bundle.
+            config_toml_with_cloud_config = load_config_toml_or_exit(
+                &codex_home,
+                Some(&config_cwd),
+                cli_kv_overrides.clone(),
+                loader_overrides.clone(),
+                strict_config,
+                cloud_config_bundle.clone(),
+            )
+            .await;
+            &config_toml_with_cloud_config
+        } else {
+            &bootstrap_config_toml
+        };
+
+        let resolved = resolve_oss_provider(oss_provider.as_deref(), config_toml_for_oss);
 
         if let Some(provider) = resolved {
             Some(provider)
@@ -396,42 +403,51 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         None // No model specified, will use the default.
     };
 
-    // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
         model,
         review_model: None,
-        config_profile,
-        // Default to never ask for approvals in headless mode. Feature flags can override.
+        // Default to never ask for approvals in headless mode. Rebuild below if
+        // the fully resolved reviewer is AutoReview.
         approval_policy: Some(AskForApproval::Never),
         approvals_reviewer: None,
         sandbox_mode,
         permission_profile: None,
         default_permissions: None,
         cwd: resolved_cwd,
+        workspace_roots: None,
         model_provider: model_provider.clone(),
         service_tier: None,
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
-        zsh_path: None,
+        default_zsh_path: None,
         base_instructions: None,
         developer_instructions: None,
         personality: None,
         compact_prompt: None,
-        include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
         ephemeral: ephemeral.then_some(true),
+        bypass_hook_trust: bypass_hook_trust.then_some(true),
         additional_writable_roots: add_dir,
     };
 
-    let config = ConfigBuilder::default()
-        .cli_overrides(cli_kv_overrides)
-        .harness_overrides(overrides)
-        .loader_overrides(loader_overrides)
-        .cloud_requirements(cloud_requirements)
-        .build()
-        .await?;
+    let build_config = |overrides| {
+        ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .cli_overrides(cli_kv_overrides.clone())
+            .harness_overrides(overrides)
+            .loader_overrides(loader_overrides.clone())
+            .strict_config(strict_config)
+            .cloud_config_bundle(cloud_config_bundle.clone())
+            .build()
+    };
+    let config = build_exec_config(
+        overrides,
+        dangerously_bypass_approvals_and_sandbox || removed_full_auto,
+        build_config,
+    )
+    .await?;
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -511,16 +527,18 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     )?;
     let state_db = codex_core::init_state_db(&config).await;
     let environment_manager = if run_loader_overrides.ignore_user_config {
-        EnvironmentManager::from_env(local_runtime_paths).await?
+        EnvironmentManager::from_env(Some(local_runtime_paths)).await?
     } else {
-        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), Some(local_runtime_paths))
+            .await?
     };
     let in_process_start_args = InProcessClientStartArgs {
         arg0_paths,
         config: std::sync::Arc::new(config.clone()),
         cli_overrides: run_cli_overrides,
         loader_overrides: run_loader_overrides,
-        cloud_requirements: run_cloud_requirements,
+        strict_config,
+        cloud_config_bundle: run_cloud_config_bundle,
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: state_db.clone(),
@@ -553,6 +571,81 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     })
     .instrument(exec_span)
     .await
+}
+
+async fn build_exec_config<BuildConfig, BuildFuture>(
+    overrides: ConfigOverrides,
+    preserve_headless_approval_policy: bool,
+    build_config: BuildConfig,
+) -> std::io::Result<Config>
+where
+    BuildConfig: Fn(ConfigOverrides) -> BuildFuture,
+    BuildFuture: Future<Output = std::io::Result<Config>>,
+{
+    let build_without_headless_approval_policy = || {
+        build_config(ConfigOverrides {
+            approval_policy: None,
+            ..overrides.clone()
+        })
+    };
+    match build_config(overrides.clone()).await {
+        Ok(config)
+            if config.approvals_reviewer == ApprovalsReviewer::AutoReview
+                && !preserve_headless_approval_policy =>
+        {
+            build_without_headless_approval_policy().await
+        }
+        Ok(config) => Ok(config),
+        Err(headless_error) if !preserve_headless_approval_policy => {
+            match build_without_headless_approval_policy().await {
+                Ok(config) if config.approvals_reviewer == ApprovalsReviewer::AutoReview => {
+                    Ok(config)
+                }
+                Ok(_) | Err(_) => Err(headless_error),
+            }
+        }
+        Err(headless_error) => Err(headless_error),
+    }
+}
+
+#[allow(clippy::print_stderr)]
+async fn load_config_toml_or_exit(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_kv_overrides: Vec<(String, codex_config::TomlValue)>,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
+    cloud_config_bundle: CloudConfigBundleLoader,
+) -> codex_config::config_toml::ConfigToml {
+    match load_config_as_toml_with_cli_and_load_options(
+        codex_home,
+        cwd,
+        cli_kv_overrides,
+        ConfigLoadOptions {
+            loader_overrides,
+            strict_config,
+            cloud_config_bundle,
+        },
+    )
+    .await
+    {
+        Ok(config_toml) => config_toml,
+        Err(err) => {
+            let config_error = err
+                .get_ref()
+                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
+                .map(ConfigLoadError::config_error);
+            if let Some(config_error) = config_error {
+                eprintln!(
+                    "Error loading config.toml:\n{}",
+                    format_config_error_with_source(config_error)
+                );
+            } else {
+                eprintln!("Error loading config.toml: {err}");
+            }
+            std::process::exit(1);
+        }
+    }
 }
 
 async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
@@ -601,7 +694,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     let default_cwd = config.cwd.to_path_buf();
     let default_approval_policy = config.permissions.approval_policy.value();
-    let default_effort = config.model_reasoning_effort;
+    let default_effort = config.model_reasoning_effort.clone();
 
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
@@ -625,7 +718,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .chain(args.images.iter().cloned())
-                .map(|path| UserInput::LocalImage { path })
+                .map(|path| UserInput::LocalImage { path, detail: None })
                 .collect();
             items.push(UserInput::Text {
                 text: prompt_text.clone(),
@@ -645,7 +738,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let prompt_text = resolve_root_prompt(root_prompt);
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
-                .map(|path| UserInput::LocalImage { path })
+                .map(|path| UserInput::LocalImage { path, detail: None })
                 .collect();
             items.push(UserInput::Text {
                 text: prompt_text.clone(),
@@ -747,7 +840,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
     if !json_mode
         && let Some(message) =
-            codex_core::config::system_bwrap_warning(config.permissions.permission_profile.get())
+            codex_core::config::system_bwrap_warning(config.permissions.permission_profile())
     {
         event_processor.process_warning(message);
     }
@@ -773,10 +866,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     request_id: request_ids.next(),
                     params: TurnStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
+                        client_user_message_id: None,
                         input: items.into_iter().map(Into::into).collect(),
                         responsesapi_client_metadata: None,
+                        additional_context: None,
                         environments: None,
                         cwd: Some(default_cwd),
+                        runtime_workspace_roots: None,
                         approval_policy: Some(default_approval_policy.into()),
                         approvals_reviewer: None,
                         sandbox_policy: None,
@@ -940,7 +1036,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
     let permissions = permissions_selection_from_config(config);
     let sandbox = permissions.is_none().then(|| {
         sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         )
     });
@@ -948,12 +1044,14 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
+        runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
         permissions,
-        config: config_request_overrides_from_config(config),
+        config: None,
         ephemeral: Some(config.ephemeral),
+        thread_source: Some(ThreadSource::User),
         ..ThreadStartParams::default()
     }
 }
@@ -962,7 +1060,7 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
     let permissions = permissions_selection_from_config(config);
     let sandbox = permissions.is_none().then(|| {
         sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         )
     });
@@ -971,38 +1069,25 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
+        runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
         permissions,
-        config: config_request_overrides_from_config(config),
+        config: None,
         ..ThreadResumeParams::default()
     }
 }
 
-fn permissions_selection_from_config(config: &Config) -> Option<PermissionProfileSelectionParams> {
+fn permissions_selection_from_config(config: &Config) -> Option<String> {
     config
         .permissions
         .active_permission_profile()
-        .map(permissions_selection_from_active_profile)
+        .map(permission_profile_id_from_active_profile)
 }
 
-fn permissions_selection_from_active_profile(
-    active: ActivePermissionProfile,
-) -> PermissionProfileSelectionParams {
-    let modifications = active
-        .modifications
-        .into_iter()
-        .map(|modification| match modification {
-            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                PermissionProfileModificationParams::AdditionalWritableRoot { path }
-            }
-        })
-        .collect::<Vec<_>>();
-    PermissionProfileSelectionParams::Profile {
-        id: active.id,
-        modifications: (!modifications.is_empty()).then_some(modifications),
-    }
+fn permission_profile_id_from_active_profile(active: ActivePermissionProfile) -> String {
+    active.id
 }
 
 fn sandbox_mode_from_permission_profile(
@@ -1028,13 +1113,6 @@ fn sandbox_mode_from_permission_profile(
             }
         }
     }
-}
-
-fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {
-    config
-        .active_profile
-        .as_ref()
-        .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
 }
 
 fn approvals_reviewer_override_from_config(
@@ -1067,6 +1145,8 @@ fn session_configured_from_thread_start_response(
     session_configured_from_thread_response(
         &response.thread.session_id,
         &response.thread.id,
+        response.thread.parent_thread_id.as_deref(),
+        response.thread.thread_source.clone().map(Into::into),
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -1074,14 +1154,10 @@ fn session_configured_from_thread_start_response(
         response.service_tier.clone(),
         response.approval_policy.to_core(),
         response.approvals_reviewer.to_core(),
-        response
-            .permission_profile
-            .clone()
-            .map(Into::into)
-            .unwrap_or_else(|| config.permissions.permission_profile()),
+        config.permissions.effective_permission_profile(),
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
-        response.reasoning_effort,
+        response.reasoning_effort.clone(),
     )
 }
 
@@ -1092,6 +1168,8 @@ fn session_configured_from_thread_resume_response(
     session_configured_from_thread_response(
         &response.thread.session_id,
         &response.thread.id,
+        response.thread.parent_thread_id.as_deref(),
+        response.thread.thread_source.clone().map(Into::into),
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -1099,14 +1177,10 @@ fn session_configured_from_thread_resume_response(
         response.service_tier.clone(),
         response.approval_policy.to_core(),
         response.approvals_reviewer.to_core(),
-        response
-            .permission_profile
-            .clone()
-            .map(Into::into)
-            .unwrap_or_else(|| config.permissions.permission_profile()),
+        config.permissions.effective_permission_profile(),
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
-        response.reasoning_effort,
+        response.reasoning_effort.clone(),
     )
 }
 
@@ -1126,6 +1200,8 @@ fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
 fn session_configured_from_thread_response(
     session_id: &str,
     thread_id: &str,
+    parent_thread_id: Option<&str>,
+    thread_source: Option<codex_protocol::protocol::ThreadSource>,
     thread_name: Option<String>,
     rollout_path: Option<PathBuf>,
     model: String,
@@ -1142,12 +1218,17 @@ fn session_configured_from_thread_response(
         .map_err(|err| format!("session id `{session_id}` is invalid: {err}"))?;
     let thread_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
+    let parent_thread_id = parent_thread_id
+        .map(ThreadId::from_string)
+        .transpose()
+        .map_err(|err| format!("parent thread id is invalid: {err}"))?;
 
     Ok(SessionConfiguredEvent {
         session_id,
         thread_id,
         forked_from_id: None,
-        thread_source: None,
+        parent_thread_id,
+        thread_source,
         thread_name,
         model,
         model_provider_id,

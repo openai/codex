@@ -5,20 +5,17 @@ use codex_config::AppRequirementToml;
 use codex_config::AppToolRequirementToml;
 use codex_config::AppToolsRequirementsToml;
 use codex_config::AppsRequirementsToml;
-use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::AppConfig;
 use codex_config::types::AppToolConfig;
 use codex_config::types::AppToolsConfig;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsDefaultConfig;
-use codex_connectors::filter::filter_disallowed_connectors;
-use codex_connectors::filter::filter_tool_suggest_discoverable_connectors;
-use codex_connectors::merge::merge_connectors;
 use codex_connectors::merge::plugin_connector_to_app_info;
 use codex_connectors::metadata::connector_install_url;
-use codex_connectors::metadata::connector_mention_slug;
 use codex_connectors::metadata::sanitize_name;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -35,13 +32,13 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 fn annotations(destructive_hint: Option<bool>, open_world_hint: Option<bool>) -> ToolAnnotations {
-    ToolAnnotations {
+    ToolAnnotations::from_raw(
+        /*title*/ None,
+        /*read_only_hint*/ None,
         destructive_hint,
-        idempotent_hint: None,
+        /*idempotent_hint*/ None,
         open_world_hint,
-        read_only_hint: None,
-        title: None,
-    }
+    )
 }
 
 fn app(id: &str) -> AppInfo {
@@ -62,49 +59,12 @@ fn app(id: &str) -> AppInfo {
     }
 }
 
-fn named_app(id: &str, name: &str) -> AppInfo {
-    AppInfo {
-        id: id.to_string(),
-        name: name.to_string(),
-        install_url: Some(connector_install_url(name, id)),
-        ..app(id)
-    }
-}
-
 fn plugin_names(names: &[&str]) -> Vec<String> {
     names.iter().map(ToString::to_string).collect()
 }
 
 fn test_tool_definition(tool_name: &str) -> Tool {
-    Tool {
-        name: tool_name.to_string().into(),
-        title: None,
-        description: None,
-        input_schema: Arc::new(JsonObject::default()),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    }
-}
-
-fn google_calendar_accessible_connector(plugin_display_names: &[&str]) -> AppInfo {
-    AppInfo {
-        id: "calendar".to_string(),
-        name: "Google Calendar".to_string(),
-        description: Some("Plan events".to_string()),
-        logo_url: Some("https://example.com/logo.png".to_string()),
-        logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
-        distribution_channel: Some("workspace".to_string()),
-        branding: None,
-        app_metadata: None,
-        labels: None,
-        install_url: None,
-        is_accessible: true,
-        is_enabled: true,
-        plugin_display_names: plugin_names(plugin_display_names),
-    }
+    Tool::new_with_raw(tool_name.to_string(), None, Arc::new(JsonObject::default()))
 }
 
 fn codex_app_tool(
@@ -120,6 +80,8 @@ fn codex_app_tool(
 
     ToolInfo {
         server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name: tool_name.to_string(),
         callable_namespace: tool_namespace,
         namespace_description: None,
@@ -146,34 +108,6 @@ fn with_accessible_connectors_cache_cleared<R>(f: impl FnOnce() -> R) -> R {
 }
 
 #[test]
-fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
-    let plugin = plugin_connector_to_app_info("calendar".to_string());
-    let accessible = google_calendar_accessible_connector(&[]);
-
-    let merged = merge_connectors(vec![plugin], vec![accessible]);
-
-    assert_eq!(
-        merged,
-        vec![AppInfo {
-            id: "calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: Some("Plan events".to_string()),
-            logo_url: Some("https://example.com/logo.png".to_string()),
-            logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
-            distribution_channel: Some("workspace".to_string()),
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: Some(connector_install_url("calendar", "calendar")),
-            is_accessible: true,
-            is_enabled: true,
-            plugin_display_names: Vec::new(),
-        }]
-    );
-    assert_eq!(connector_mention_slug(&merged[0]), "google-calendar");
-}
-
-#[test]
 fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
     let tools = vec![
         codex_app_tool(
@@ -190,6 +124,8 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
         ),
         ToolInfo {
             server_name: "sample".to_string(),
+            supports_parallel_tool_calls: false,
+            server_origin: None,
             callable_name: "echo".to_string(),
             callable_namespace: "sample".to_string(),
             namespace_description: None,
@@ -254,50 +190,38 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
 
     assert_eq!(
         cached,
-        vec![AppInfo {
-            id: "calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: None,
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: Some(connector_install_url("Google Calendar", "calendar")),
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            is_accessible: true,
-            is_enabled: true,
-            plugin_display_names: plugin_names(&["calendar-plugin"]),
-        }]
-    );
-}
-
-#[test]
-fn merge_connectors_unions_and_dedupes_plugin_display_names() {
-    let mut plugin = plugin_connector_to_app_info("calendar".to_string());
-    plugin.plugin_display_names = plugin_names(&["sample", "alpha", "sample"]);
-
-    let accessible = google_calendar_accessible_connector(&["beta", "alpha"]);
-
-    let merged = merge_connectors(vec![plugin], vec![accessible]);
-
-    assert_eq!(
-        merged,
-        vec![AppInfo {
-            id: "calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: Some("Plan events".to_string()),
-            logo_url: Some("https://example.com/logo.png".to_string()),
-            logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
-            distribution_channel: Some("workspace".to_string()),
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: Some(connector_install_url("calendar", "calendar")),
-            is_accessible: true,
-            is_enabled: true,
-            plugin_display_names: plugin_names(&["alpha", "beta", "sample"]),
-        }]
+        vec![
+            AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Google Calendar", "calendar")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["calendar-plugin"]),
+            },
+            AppInfo {
+                id: "connector_openai_hidden".to_string(),
+                name: "Hidden".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Hidden", "connector_openai_hidden")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }
+        ]
     );
 }
 
@@ -305,20 +229,16 @@ fn merge_connectors_unions_and_dedupes_plugin_display_names() {
 fn accessible_connectors_from_mcp_tools_preserves_description() {
     let mcp_tools = vec![ToolInfo {
         server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name: "calendar_create_event".to_string(),
         callable_namespace: "mcp__codex_apps__calendar".to_string(),
         namespace_description: Some("Plan events".to_string()),
-        tool: Tool {
-            name: "calendar_create_event".to_string().into(),
-            title: None,
-            description: Some("Create a calendar event".into()),
-            input_schema: Arc::new(JsonObject::default()),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: None,
-        },
+        tool: Tool::new(
+            "calendar_create_event",
+            "Create a calendar event",
+            Arc::new(JsonObject::default()),
+        ),
         connector_id: Some("calendar".to_string()),
         connector_name: Some("Calendar".to_string()),
         plugin_display_names: Vec::new(),
@@ -458,6 +378,7 @@ fn app_is_enabled_prefers_per_app_override_over_default() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: None,
                 open_world_enabled: None,
                 default_tools_approval_mode: None,
@@ -469,6 +390,86 @@ fn app_is_enabled_prefers_per_app_override_over_default() {
 
     assert!(app_is_enabled(&apps_config, Some("calendar")));
     assert!(!app_is_enabled(&apps_config, Some("drive")));
+}
+
+#[tokio::test]
+async fn app_approvals_reviewer_overrides_global_reviewer() {
+    for (global, app, expected_global, expected_app) in [
+        (
+            "user",
+            "auto_review",
+            ApprovalsReviewer::User,
+            ApprovalsReviewer::AutoReview,
+        ),
+        (
+            "auto_review",
+            "user",
+            ApprovalsReviewer::AutoReview,
+            ApprovalsReviewer::User,
+        ),
+    ] {
+        let codex_home = tempdir().expect("tempdir should succeed");
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"
+approvals_reviewer = "{global}"
+
+[apps.calendar]
+approvals_reviewer = "{app}"
+"#
+            ),
+        )
+        .expect("write config");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config should build");
+
+        assert_eq!(
+            mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+            expected_app
+        );
+        assert_eq!(
+            mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
+            expected_global
+        );
+        assert_eq!(
+            mcp_approvals_reviewer(&config, "custom_server", Some("calendar")),
+            expected_global
+        );
+    }
+}
+
+#[tokio::test]
+async fn app_approvals_reviewer_respects_global_reviewer_requirements() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+approvals_reviewer = "auto_review"
+
+[apps.calendar]
+approvals_reviewer = "user"
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approvals_reviewers = ["auto_review"]"#,
+            ),
+        )
+        .build()
+        .await
+        .expect("config should build");
+
+    assert_eq!(
+        mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+        ApprovalsReviewer::AutoReview
+    );
 }
 
 #[test]
@@ -538,7 +539,7 @@ fn requirements_enabled_does_not_override_disabled_connector() {
 }
 
 #[tokio::test]
-async fn cloud_requirements_disable_connector_overrides_user_apps_config() {
+async fn cloud_config_bundle_disable_connector_overrides_user_apps_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -549,25 +550,17 @@ enabled = true
     )
     .expect("write config");
 
-    let requirements = ConfigRequirementsToml {
-        apps: Some(AppsRequirementsToml {
-            apps: BTreeMap::from([(
-                "connector_123123".to_string(),
-                AppRequirementToml {
-                    enabled: Some(false),
-                    tools: None,
-                },
-            )]),
-        }),
-        ..Default::default()
-    };
-
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[apps.connector_123123]
+enabled = false
+"#,
+            ),
+        )
         .build()
         .await
         .expect("config should build");
@@ -589,29 +582,21 @@ enabled = true
 }
 
 #[tokio::test]
-async fn cloud_requirements_disable_connector_applies_without_user_apps_table() {
+async fn cloud_config_bundle_disable_connector_applies_without_user_apps_table() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), "").expect("write config");
-
-    let requirements = ConfigRequirementsToml {
-        apps: Some(AppsRequirementsToml {
-            apps: BTreeMap::from([(
-                "connector_123123".to_string(),
-                AppRequirementToml {
-                    enabled: Some(false),
-                    tools: None,
-                },
-            )]),
-        }),
-        ..Default::default()
-    };
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[apps.connector_123123]
+enabled = false
+"#,
+            ),
+        )
         .build()
         .await
         .expect("config should build");
@@ -867,7 +852,7 @@ fn managed_app_tool_approval_uses_raw_tool_name() {
 }
 
 #[tokio::test]
-async fn cloud_requirements_tool_approval_overrides_user_apps_config() {
+async fn cloud_config_bundle_tool_approval_overrides_user_apps_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -878,21 +863,17 @@ approval_mode = "prompt"
     )
     .expect("write config");
 
-    let requirements = ConfigRequirementsToml {
-        apps: Some(app_tool_requirements(
-            "connector_123123",
-            "calendar/list_events",
-            AppToolApproval::Approve,
-        )),
-        ..Default::default()
-    };
-
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[apps.connector_123123.tools."calendar/list_events"]
+approval_mode = "approve"
+"#,
+            ),
+        )
         .build()
         .await
         .expect("config should build");
@@ -1013,6 +994,7 @@ fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: None,
                 open_world_enabled: None,
                 default_tools_approval_mode: None,
@@ -1050,6 +1032,7 @@ fn app_tool_policy_per_tool_enabled_true_overrides_app_level_disable_flags() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: Some(false),
                 open_world_enabled: Some(false),
                 default_tools_approval_mode: None,
@@ -1093,6 +1076,7 @@ fn app_tool_policy_default_tools_enabled_true_overrides_app_level_tool_hints() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: Some(false),
                 open_world_enabled: Some(false),
                 default_tools_approval_mode: None,
@@ -1128,6 +1112,7 @@ fn app_tool_policy_default_tools_enabled_false_overrides_app_level_tool_hints() 
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: Some(true),
                 open_world_enabled: Some(true),
                 default_tools_approval_mode: Some(AppToolApproval::Approve),
@@ -1165,6 +1150,7 @@ fn app_tool_policy_uses_default_tools_approval_mode() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: None,
                 open_world_enabled: None,
                 default_tools_approval_mode: Some(AppToolApproval::Prompt),
@@ -1204,6 +1190,7 @@ fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: Some(false),
                 open_world_enabled: Some(false),
                 default_tools_approval_mode: Some(AppToolApproval::Auto),
@@ -1239,55 +1226,6 @@ fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
     );
 }
 
-#[test]
-fn filter_disallowed_connectors_allows_non_disallowed_connectors() {
-    let filtered =
-        filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")], "codex_cli");
-    assert_eq!(filtered, vec![app("asdk_app_hidden"), app("alpha")]);
-}
-
-#[test]
-fn filter_disallowed_connectors_filters_openai_prefix() {
-    let filtered = filter_disallowed_connectors(
-        vec![
-            app("connector_openai_foo"),
-            app("connector_openai_bar"),
-            app("gamma"),
-        ],
-        "codex_cli",
-    );
-    assert_eq!(filtered, vec![app("gamma")]);
-}
-
-#[test]
-fn filter_disallowed_connectors_filters_disallowed_connector_ids() {
-    let filtered = filter_disallowed_connectors(
-        vec![
-            app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
-            app("connector_3f8d1a79f27c4c7ba1a897ab13bf37dc"),
-            app("delta"),
-        ],
-        "codex_cli",
-    );
-    assert_eq!(filtered, vec![app("delta")]);
-}
-
-#[test]
-fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
-    let filtered = filter_disallowed_connectors(
-        vec![
-            app("connector_openai_foo"),
-            app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
-            app("connector_0f9c9d4592e54d0a9a12b3f44a1e2010"),
-        ],
-        "codex_atlas",
-    );
-    assert_eq!(
-        filtered,
-        vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c")]
-    );
-}
-
 #[tokio::test]
 async fn tool_suggest_connector_ids_include_configured_tool_suggest_discoverables() {
     let codex_home = tempdir().expect("tempdir should succeed");
@@ -1310,7 +1248,7 @@ discoverables = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config).await,
+        tool_suggest_connector_ids(&config, &[]),
         HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
     );
 }
@@ -1339,7 +1277,7 @@ disabled_tools = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config).await,
+        tool_suggest_connector_ids(&config, &[]),
         HashSet::from(["connector_gmail".to_string()])
     );
 }
@@ -1366,11 +1304,17 @@ discoverables = [
         .await
         .expect("config should load");
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
 
-    let discoverable_tools =
-        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[])
-            .await
-            .expect("discoverable tools should load");
+    let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
+        &config,
+        &plugins_manager,
+        Some(&auth),
+        &[],
+        &[],
+    )
+    .await
+    .expect("discoverable tools should load");
 
     assert_eq!(
         discoverable_tools,
@@ -1380,70 +1324,40 @@ discoverables = [
     );
 }
 
-#[test]
-fn filter_tool_suggest_discoverable_connectors_keeps_only_plugin_backed_uninstalled_apps() {
-    let filtered = filter_tool_suggest_discoverable_connectors(
-        vec![
-            named_app(
-                "connector_2128aebfecb84f64a069897515042a44",
-                "Google Calendar",
-            ),
-            named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail"),
-            named_app("connector_other", "Other"),
-        ],
-        &[AppInfo {
-            is_accessible: true,
-            ..named_app(
-                "connector_2128aebfecb84f64a069897515042a44",
-                "Google Calendar",
-            )
-        }],
-        &HashSet::from([
-            "connector_2128aebfecb84f64a069897515042a44".to_string(),
-            "connector_68df038e0ba48191908c8434991bbac2".to_string(),
-        ]),
-        "codex_cli",
-    );
+#[tokio::test]
+async fn tool_suggest_includes_connectors_from_loaded_plugin_apps() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+apps = true
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let loaded_plugin_app_connector_ids = vec!["asdk_app_databricks_workspace".to_string()];
+    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
+
+    let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
+        &config,
+        &plugins_manager,
+        Some(&auth),
+        &[],
+        &loaded_plugin_app_connector_ids,
+    )
+    .await
+    .expect("discoverable tools should load");
 
     assert_eq!(
-        filtered,
-        vec![named_app(
-            "connector_68df038e0ba48191908c8434991bbac2",
-            "Gmail",
-        )]
+        discoverable_tools,
+        vec![DiscoverableTool::from(plugin_connector_to_app_info(
+            "asdk_app_databricks_workspace".to_string(),
+        ))]
     );
-}
-
-#[test]
-fn filter_tool_suggest_discoverable_connectors_excludes_accessible_apps_even_when_disabled() {
-    let filtered = filter_tool_suggest_discoverable_connectors(
-        vec![
-            named_app(
-                "connector_2128aebfecb84f64a069897515042a44",
-                "Google Calendar",
-            ),
-            named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail"),
-        ],
-        &[
-            AppInfo {
-                is_accessible: true,
-                ..named_app(
-                    "connector_2128aebfecb84f64a069897515042a44",
-                    "Google Calendar",
-                )
-            },
-            AppInfo {
-                is_accessible: true,
-                is_enabled: false,
-                ..named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail")
-            },
-        ],
-        &HashSet::from([
-            "connector_2128aebfecb84f64a069897515042a44".to_string(),
-            "connector_68df038e0ba48191908c8434991bbac2".to_string(),
-        ]),
-        "codex_cli",
-    );
-
-    assert_eq!(filtered, Vec::<AppInfo>::new());
 }

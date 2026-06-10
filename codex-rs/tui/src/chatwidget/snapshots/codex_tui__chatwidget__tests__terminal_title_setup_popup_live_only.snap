@@ -17,4 +17,4 @@ expression: terminal_title_popup_snapshot(&mut chat)
   [ ] run-state      Compact session run-state text (Ready, Working, Thinking)
 
   preview-live-root | Live preview thread | feature/live-preview-branch | Tasks 2/5
-  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.
+  Press space to toggle; ←/→ to move; enter to confirm and close; esc to close

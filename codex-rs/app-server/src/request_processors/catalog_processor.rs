@@ -1,8 +1,11 @@
 use super::*;
+use codex_config::config_toml::ConfigToml;
 use futures::StreamExt;
 
 #[derive(Clone)]
 pub(crate) struct CatalogRequestProcessor {
+    pub(super) outgoing: Arc<OutgoingMessageSender>,
+    pub(super) skills_watcher: Arc<SkillsWatcher>,
     pub(super) auth_manager: Arc<AuthManager>,
     pub(super) thread_manager: Arc<ThreadManager>,
     pub(super) config: Arc<Config>,
@@ -95,6 +98,8 @@ fn errors_to_info(
 
 impl CatalogRequestProcessor {
     pub(crate) fn new(
+        outgoing: Arc<OutgoingMessageSender>,
+        skills_watcher: Arc<SkillsWatcher>,
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
         config: Arc<Config>,
@@ -102,6 +107,8 @@ impl CatalogRequestProcessor {
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
     ) -> Self {
         Self {
+            outgoing,
+            skills_watcher,
             auth_manager,
             thread_manager,
             config,
@@ -137,6 +144,15 @@ impl CatalogRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn skills_extra_roots_set(
+        &self,
+        params: SkillsExtraRootsSetParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.skills_extra_roots_set_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn model_list(
         &self,
         params: ModelListParams,
@@ -151,6 +167,15 @@ impl CatalogRequestProcessor {
         params: ExperimentalFeatureListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.experimental_feature_list_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn permission_profile_list(
+        &self,
+        params: PermissionProfileListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.permission_profile_list_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -285,8 +310,28 @@ impl CatalogRequestProcessor {
         &self,
         params: ExperimentalFeatureListParams,
     ) -> Result<ExperimentalFeatureListResponse, JSONRPCErrorError> {
-        let ExperimentalFeatureListParams { cursor, limit } = params;
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let ExperimentalFeatureListParams {
+            cursor,
+            limit,
+            thread_id,
+        } = params;
+        let config = match thread_id.as_deref() {
+            Some(thread_id) => {
+                let thread_id = ThreadId::from_string(thread_id)
+                    .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+                let thread = self
+                    .thread_manager
+                    .get_thread(thread_id)
+                    .await
+                    .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
+                let thread_config = thread.config().await;
+                self.config_manager
+                    .load_latest_config_for_thread(thread_config.as_ref())
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?
+            }
+            None => self.load_latest_config(/*fallback_cwd*/ None).await?,
+        };
         let auth = self.auth_manager.auth().await;
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
@@ -367,6 +412,78 @@ impl CatalogRequestProcessor {
         };
 
         Ok(ExperimentalFeatureListResponse { data, next_cursor })
+    }
+
+    async fn permission_profile_list_response(
+        &self,
+        params: PermissionProfileListParams,
+    ) -> Result<PermissionProfileListResponse, JSONRPCErrorError> {
+        let PermissionProfileListParams { cursor, limit, cwd } = params;
+        let config_layer_stack = match cwd {
+            Some(cwd) => {
+                let cwd = PathBuf::from(cwd);
+                let (_, config_layer_stack) = self
+                    .resolve_cwd_config(&cwd)
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+                config_layer_stack
+            }
+            None => self
+                .config_manager
+                .load_config_layers(/*cwd*/ None)
+                .await
+                .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
+        };
+        let effective_config: ConfigToml = config_layer_stack
+            .effective_config()
+            .try_into()
+            .map_err(|err| internal_error(format!("failed to read effective config: {err}")))?;
+        let mut profiles = vec![
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
+                description: None,
+            },
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+                description: None,
+            },
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
+                description: None,
+            },
+        ];
+        let mut configured_profiles = effective_config
+            .permissions
+            .into_iter()
+            .flat_map(|permissions| permissions.entries)
+            .map(|(id, profile)| PermissionProfileSummary {
+                id,
+                description: profile.description,
+            })
+            .collect::<Vec<_>>();
+        configured_profiles.sort_by(|left, right| left.id.cmp(&right.id));
+        profiles.extend(configured_profiles);
+        let total = profiles.len();
+        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = effective_limit.min(total);
+        let start = match cursor {
+            Some(cursor) => cursor
+                .parse::<usize>()
+                .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?,
+            None => 0,
+        };
+
+        if start > total {
+            return Err(invalid_request(format!(
+                "cursor {start} exceeds total permission profiles {total}"
+            )));
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+        let data = profiles[start..end].to_vec();
+        let next_cursor = (end < total).then_some(end.to_string());
+
+        Ok(PermissionProfileListResponse { data, next_cursor })
     }
 
     async fn mock_experimental_method_inner(
@@ -465,6 +582,24 @@ impl CatalogRequestProcessor {
         Ok(SkillsListResponse { data })
     }
 
+    async fn skills_extra_roots_set_response(
+        &self,
+        params: SkillsExtraRootsSetParams,
+    ) -> Result<SkillsExtraRootsSetResponse, JSONRPCErrorError> {
+        let SkillsExtraRootsSetParams { extra_roots } = params;
+        self.skills_watcher
+            .register_runtime_extra_roots(&extra_roots);
+        self.thread_manager
+            .skills_manager()
+            .set_extra_roots(extra_roots);
+        self.outgoing
+            .send_server_notification(ServerNotification::SkillsChanged(
+                codex_app_server_protocol::SkillsChangedNotification {},
+            ))
+            .await;
+        Ok(SkillsExtraRootsSetResponse {})
+    }
+
     /// Handle `hooks/list` by resolving hooks for each requested cwd.
     async fn hooks_list_response(
         &self,
@@ -510,24 +645,22 @@ impl CatalogRequestProcessor {
                 .await;
             let plugins_enabled =
                 config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
-            let plugin_outcome = if plugins_enabled && config.features.enabled(Feature::PluginHooks)
-            {
+            let plugin_hooks = if plugins_enabled {
                 let plugins_input = config.plugins_config_input();
-                plugins_manager
-                    .plugins_for_layer_stack(
-                        &config.config_layer_stack,
-                        &plugins_input,
-                        /*plugin_hooks_feature_enabled*/ true,
-                    )
-                    .await
+                let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
+                codex_core_plugins::PluginHookLoadOutcome {
+                    hook_sources: plugin_outcome.effective_plugin_hook_sources(),
+                    hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
+                }
             } else {
-                PluginLoadOutcome::default()
+                codex_core_plugins::PluginHookLoadOutcome::default()
             };
             let hooks = codex_hooks::list_hooks(codex_hooks::HooksConfig {
                 feature_enabled: config.features.enabled(Feature::CodexHooks),
+                bypass_hook_trust: config.bypass_hook_trust,
                 config_layer_stack: Some(config.config_layer_stack),
-                plugin_hook_sources: plugin_outcome.effective_plugin_hook_sources(),
-                plugin_hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
+                plugin_hook_sources: plugin_hooks.hook_sources,
+                plugin_hook_load_warnings: plugin_hooks.hook_load_warnings,
                 ..Default::default()
             });
             data.push(codex_app_server_protocol::HooksListEntry {

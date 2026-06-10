@@ -21,9 +21,17 @@ impl From<AvailableSkills> for AvailableSkillsInstructions {
 }
 
 impl ContextualUserFragment for AvailableSkillsInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = SKILLS_INSTRUCTIONS_OPEN_TAG;
-    const END_MARKER: &'static str = SKILLS_INSTRUCTIONS_CLOSE_TAG;
+    fn role(&self) -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG)
+    }
 
     fn body(&self) -> String {
         render_available_skills_body(&self.skill_root_lines, &self.skill_lines)

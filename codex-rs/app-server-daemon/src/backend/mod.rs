@@ -1,5 +1,6 @@
 mod pid;
 
+use std::path::Path;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -30,4 +31,16 @@ pub(crate) fn pid_backend(paths: BackendPaths) -> PidBackend {
 
 pub(crate) fn pid_update_loop_backend(paths: BackendPaths) -> PidBackend {
     PidBackend::new_update_loop(paths.codex_bin, paths.update_pid_file)
+}
+
+pub(crate) async fn append_stderr_log_tail_context(pid_file: &Path, context: &mut String) {
+    match pid::read_stderr_log_tail(pid_file).await {
+        Ok(Some(tail)) => tail.append_to_context(context),
+        Ok(None) => {}
+        Err(err) => {
+            context.push_str(&format!(
+                "\n\nFailed to read managed app-server stderr log: {err:#}"
+            ));
+        }
+    }
 }

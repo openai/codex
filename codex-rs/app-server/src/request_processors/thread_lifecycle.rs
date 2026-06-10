@@ -237,12 +237,29 @@ pub(super) async fn ensure_listener_task_running(
             &environments,
         )
         .await;
+    let thread_settings_baseline =
+        thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
     let (mut listener_command_rx, listener_generation) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {
             return Ok(());
         }
-        thread_state.set_listener(cancel_tx, &conversation, watch_registration)
+        let (listener_command_rx, listener_generation) = thread_state.set_listener(
+            cancel_tx,
+            &conversation,
+            watch_registration,
+            thread_settings_baseline,
+        );
+        let Some(listener_command_tx) = thread_state.listener_command_tx() else {
+            tracing::warn!(
+                "thread listener command sender missing immediately after listener registration"
+            );
+            return Ok(());
+        };
+        listener_task_context
+            .thread_state_manager
+            .register_listener_command_tx(conversation_id, listener_command_tx);
+        (listener_command_rx, listener_generation)
     };
     let ListenerTaskContext {
         outgoing,
@@ -371,6 +388,7 @@ pub(super) async fn ensure_listener_task_running(
 
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_generation == listener_generation {
+            thread_state_manager.unregister_listener_command_tx(conversation_id);
             thread_state.clear_listener();
         }
     });
@@ -464,12 +482,12 @@ pub(super) async fn handle_thread_listener_command(
             )
             .await;
         }
-        ThreadListenerCommand::EmitThreadGoalUpdated { goal } => {
+        ThreadListenerCommand::EmitThreadGoalUpdated { turn_id, goal } => {
             outgoing
                 .send_server_notification(ServerNotification::ThreadGoalUpdated(
                     ThreadGoalUpdatedNotification {
                         thread_id: conversation_id.to_string(),
-                        turn_id: None,
+                        turn_id,
                         goal,
                     },
                 ))
@@ -558,8 +576,28 @@ pub(super) async fn handle_pending_thread_resume_request(
         has_live_in_progress_turn,
     );
     let token_usage_thread = pending.include_turns.then(|| thread.clone());
+    let mut initial_turns_page = if let Some(params) = pending.initial_turns_page.as_ref() {
+        match super::thread_processor::build_thread_resume_initial_turns_page(
+            &pending.history_items,
+            thread.status.clone(),
+            has_live_in_progress_turn,
+            active_turn,
+            params,
+        ) {
+            Ok(page) => Some(page),
+            Err(error) => {
+                outgoing.send_error(request_id, error).await;
+                return;
+            }
+        }
+    } else {
+        None
+    };
     if pending.redact_resume_payloads {
-        redact_thread_resume_payloads(&mut thread);
+        redact_thread_resume_payloads(&mut thread.turns);
+        if let Some(initial_turns_page) = initial_turns_page.as_mut() {
+            redact_thread_resume_payloads(&mut initial_turns_page.data);
+        }
     }
 
     {
@@ -589,12 +627,8 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     }
 
-    if pending.emit_thread_goal_update
-        && let Err(err) = conversation.apply_goal_resume_runtime_effects().await
-    {
-        tracing::warn!("failed to apply goal resume runtime effects: {err}");
-    }
-
+    let config_snapshot = pending.config_snapshot;
+    let cwd = config_snapshot.cwd().clone();
     let ThreadConfigSnapshot {
         model,
         model_provider_id,
@@ -603,10 +637,10 @@ pub(super) async fn handle_pending_thread_resume_request(
         approvals_reviewer,
         permission_profile,
         active_permission_profile,
-        cwd,
+        workspace_roots,
         reasoning_effort,
         ..
-    } = pending.config_snapshot;
+    } = config_snapshot;
     let instruction_sources = pending.instruction_sources;
     let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     let active_permission_profile =
@@ -620,13 +654,14 @@ pub(super) async fn handle_pending_thread_resume_request(
         model_provider: model_provider_id,
         service_tier,
         cwd,
+        runtime_workspace_roots: workspace_roots,
         instruction_sources,
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox,
-        permission_profile: Some(permission_profile.into()),
         active_permission_profile,
         reasoning_effort,
+        initial_turns_page,
     };
     outgoing.send_response(request_id, response).await;
     // Match cold resume: metadata-only resume should attach the listener without
@@ -662,11 +697,9 @@ pub(super) async fn handle_pending_thread_resume_request(
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
     // App-server owns resume response and snapshot ordering, so wait until
-    // replay completes before letting core start goal continuation.
-    if pending.emit_thread_goal_update
-        && let Err(err) = conversation.continue_active_goal_if_idle().await
-    {
-        tracing::warn!("failed to continue active goal after running-thread resume: {err}");
+    // replay completes before letting extensions react to the idle thread.
+    if pending.emit_thread_goal_update {
+        conversation.emit_thread_idle_lifecycle_if_idle().await;
     }
 }
 
@@ -675,7 +708,7 @@ pub(super) async fn send_thread_goal_snapshot_notification(
     thread_id: ThreadId,
     state_db: &StateDbHandle,
 ) {
-    match state_db.get_thread_goal(thread_id).await {
+    match state_db.thread_goals().get_thread_goal(thread_id).await {
         Ok(Some(goal)) => {
             outgoing
                 .send_server_notification(ServerNotification::ThreadGoalUpdated(

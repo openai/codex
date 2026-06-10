@@ -19,15 +19,64 @@ use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
 use crate::mcp_types::AppToolApproval;
+use crate::permissions_toml::PermissionProfileToml;
+use crate::types::WindowsSandboxModeToml;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequirementSource {
     Unknown,
-    MdmManagedPreferences { domain: String, key: String },
-    CloudRequirements,
-    SystemRequirementsToml { file: AbsolutePathBuf },
-    LegacyManagedConfigTomlFromFile { file: AbsolutePathBuf },
+    MdmManagedPreferences {
+        domain: String,
+        key: String,
+    },
+    /// Multiple requirements layers contributed to the final value. Sources are
+    /// stored highest-priority first, matching the order surfaced in errors.
+    Composite {
+        sources: Vec<RequirementSource>,
+    },
+    /// A backend-delivered enterprise-managed layer. `id` is the stable backend
+    /// identifier; `name` is the admin-facing display name.
+    EnterpriseManaged {
+        id: String,
+        name: String,
+    },
+    SystemRequirementsToml {
+        file: AbsolutePathBuf,
+    },
+    LegacyManagedConfigTomlFromFile {
+        file: AbsolutePathBuf,
+    },
     LegacyManagedConfigTomlFromMdm,
+}
+
+impl RequirementSource {
+    pub fn composite(sources: impl IntoIterator<Item = RequirementSource>) -> Self {
+        let mut flattened = Vec::new();
+        for source in sources {
+            source.append_to_composite(&mut flattened);
+        }
+
+        match flattened.len() {
+            0 => RequirementSource::Unknown,
+            1 => flattened.remove(0),
+            _ => RequirementSource::Composite { sources: flattened },
+        }
+    }
+
+    fn append_to_composite(self, flattened: &mut Vec<RequirementSource>) {
+        match self {
+            RequirementSource::Composite { sources } => {
+                for source in sources {
+                    source.append_to_composite(flattened);
+                }
+            }
+            source => {
+                if !flattened.contains(&source) {
+                    flattened.push(source);
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for RequirementSource {
@@ -37,8 +86,18 @@ impl fmt::Display for RequirementSource {
             RequirementSource::MdmManagedPreferences { domain, key } => {
                 write!(f, "MDM {domain}:{key}")
             }
-            RequirementSource::CloudRequirements => {
-                write!(f, "cloud requirements")
+            RequirementSource::Composite { sources } => {
+                write!(f, "requirements layers: ")?;
+                for (index, source) in sources.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{source}")?;
+                }
+                Ok(())
+            }
+            RequirementSource::EnterpriseManaged { id, name } => {
+                write!(f, "enterprise-managed requirements {name} ({id})")
             }
             RequirementSource::SystemRequirementsToml { file } => {
                 write!(f, "{}", file.as_path().display())
@@ -86,7 +145,11 @@ pub struct ConfigRequirements {
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
+    pub windows_sandbox_mode: ConstrainedWithSource<Option<WindowsSandboxModeToml>>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
+    pub allow_managed_hooks_only: Option<Sourced<bool>>,
+    pub allow_appshots: Option<Sourced<bool>>,
+    pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -116,10 +179,17 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any(PermissionProfile::read_only()),
                 /*source*/ None,
             ),
+            windows_sandbox_mode: ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
+                /*source*/ None,
+            ),
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Cached),
                 /*source*/ None,
             ),
+            allow_managed_hooks_only: None,
+            allow_appshots: None,
+            computer_use: None,
             feature_requirements: None,
             managed_hooks: None,
             mcp_servers: None,
@@ -238,14 +308,14 @@ impl NetworkUnixSocketPermissionsToml {
 #[serde(rename_all = "lowercase")]
 pub enum NetworkUnixSocketPermissionToml {
     Allow,
-    None,
+    Deny,
 }
 
 impl std::fmt::Display for NetworkUnixSocketPermissionToml {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let permission = match self {
             Self::Allow => "allow",
-            Self::None => "none",
+            Self::Deny => "deny",
         };
         f.write_str(permission)
     }
@@ -428,14 +498,58 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilesystemRequirementsToml {
     pub deny_read: Option<Vec<FilesystemDenyReadPattern>>,
+}
+
+#[derive(Deserialize)]
+struct RawFilesystemRequirementsToml {
+    deny_read: Option<Vec<FilesystemDenyReadPattern>>,
+    description: Option<serde::de::IgnoredAny>,
+    extends: Option<serde::de::IgnoredAny>,
+    workspace_roots: Option<serde::de::IgnoredAny>,
+    filesystem: Option<serde::de::IgnoredAny>,
+    network: Option<serde::de::IgnoredAny>,
+}
+
+impl<'de> Deserialize<'de> for FilesystemRequirementsToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawFilesystemRequirementsToml::deserialize(deserializer)?;
+        let RawFilesystemRequirementsToml {
+            deny_read,
+            description,
+            extends,
+            workspace_roots,
+            filesystem,
+            network,
+        } = raw;
+
+        if description.is_some()
+            || extends.is_some()
+            || workspace_roots.is_some()
+            || filesystem.is_some()
+            || network.is_some()
+        {
+            return Err(D::Error::custom(
+                "`permissions.filesystem` is reserved for requirements-level filesystem constraints and cannot define a profile",
+            ));
+        }
+
+        Ok(Self { deny_read })
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PermissionsRequirementsToml {
     pub filesystem: Option<FilesystemRequirementsToml>,
+    // For legacy reasons, `filesystem` stays reserved for requirements-level
+    // filesystem constraints and cannot name a profile.
+    #[serde(default, flatten)]
+    pub profiles: BTreeMap<String, PermissionProfileToml>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -587,6 +701,28 @@ impl fmt::Display for WebSearchModeRequirement {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComputerUseRequirementsToml {
+    pub allow_locked_computer_use: Option<bool>,
+}
+
+impl ComputerUseRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.allow_locked_computer_use.is_none()
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct WindowsRequirementsToml {
+    pub allowed_sandbox_implementations: Option<Vec<WindowsSandboxModeToml>>,
+}
+
+impl WindowsRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.allowed_sandbox_implementations.is_none()
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeatureRequirementsToml {
     #[serde(flatten)]
     pub entries: BTreeMap<String, bool>,
@@ -686,8 +822,14 @@ pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
+    pub allowed_permission_profiles: Option<BTreeMap<String, bool>>,
+    pub default_permissions: Option<String>,
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
+    pub allow_managed_hooks_only: Option<bool>,
+    pub allow_appshots: Option<bool>,
+    pub computer_use: Option<ComputerUseRequirementsToml>,
+    pub windows: Option<WindowsRequirementsToml>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
@@ -735,7 +877,13 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
+    pub allowed_permission_profiles: Option<Sourced<BTreeMap<String, bool>>>,
+    pub default_permissions: Option<Sourced<String>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
+    pub allow_managed_hooks_only: Option<Sourced<bool>>,
+    pub allow_appshots: Option<Sourced<bool>>,
+    pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
+    pub windows: Option<Sourced<WindowsRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -770,8 +918,14 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: _,
             allowed_approvals_reviewers: _,
             allowed_sandbox_modes: _,
+            allowed_permission_profiles: _,
+            default_permissions: _,
             remote_sandbox_config: _,
             allowed_web_search_modes: _,
+            allow_managed_hooks_only: _,
+            allow_appshots: _,
+            computer_use: _,
+            windows: _,
             feature_requirements: _,
             hooks: _,
             mcp_servers: _,
@@ -800,7 +954,13 @@ impl ConfigRequirementsWithSources {
                 allowed_approval_policies,
                 allowed_approvals_reviewers,
                 allowed_sandbox_modes,
+                allowed_permission_profiles,
+                default_permissions,
                 allowed_web_search_modes,
+                allow_managed_hooks_only,
+                allow_appshots,
+                computer_use,
+                windows,
                 feature_requirements,
                 hooks,
                 mcp_servers,
@@ -827,7 +987,13 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
+            allowed_permission_profiles,
+            default_permissions,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
+            allow_appshots,
+            computer_use,
+            windows,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -843,8 +1009,14 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_approvals_reviewers: allowed_approvals_reviewers.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
+            allowed_permission_profiles: allowed_permission_profiles.map(|sourced| sourced.value),
+            default_permissions: default_permissions.map(|sourced| sourced.value),
             remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
+            allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
+            allow_appshots: allow_appshots.map(|sourced| sourced.value),
+            computer_use: computer_use.map(|sourced| sourced.value),
+            windows: windows.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
@@ -874,7 +1046,7 @@ fn hostname_matches_any_pattern(hostname: &str, patterns: &[String]) -> bool {
 
 /// Currently, `external-sandbox` is not supported in config.toml, but it is
 /// supported through programmatic use.
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum SandboxModeRequirement {
     #[serde(rename = "read-only")]
     ReadOnly,
@@ -926,8 +1098,20 @@ impl ConfigRequirementsToml {
         self.allowed_approval_policies.is_none()
             && self.allowed_approvals_reviewers.is_none()
             && self.allowed_sandbox_modes.is_none()
+            && self.allowed_permission_profiles.is_none()
+            && self.default_permissions.is_none()
             && self.remote_sandbox_config.is_none()
             && self.allowed_web_search_modes.is_none()
+            && self.allow_managed_hooks_only.is_none()
+            && self.allow_appshots.is_none()
+            && self
+                .computer_use
+                .as_ref()
+                .is_none_or(ComputerUseRequirementsToml::is_empty)
+            && self
+                .windows
+                .as_ref()
+                .is_none_or(WindowsRequirementsToml::is_empty)
             && self
                 .feature_requirements
                 .as_ref()
@@ -960,11 +1144,20 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
     type Error = ConstraintError;
 
     fn try_from(toml: ConfigRequirementsWithSources) -> Result<Self, Self::Error> {
+        // Profile catalog selection remains on ConfigRequirementsToml for
+        // config loading and requirements API projection. The normalized
+        // constraints below only need the compiled PermissionProfile envelope.
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
+            allowed_permission_profiles: _,
+            default_permissions: _,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
+            allow_appshots,
+            computer_use,
+            windows,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1071,6 +1264,44 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
             None => ConstrainedWithSource::new(
                 Constrained::allow_any(default_permission_profile),
+                /*source*/ None,
+            ),
+        };
+        let windows_sandbox_mode = match windows {
+            Some(Sourced {
+                value:
+                    WindowsRequirementsToml {
+                        allowed_sandbox_implementations: Some(implementations),
+                    },
+                source: requirement_source,
+            }) => {
+                if implementations.is_empty() {
+                    return Err(ConstraintError::empty_field(
+                        "windows.allowed_sandbox_implementations",
+                    ));
+                }
+                // Prefer elevated when both Windows sandbox implementations are allowed.
+                let initial_value = if implementations.contains(&WindowsSandboxModeToml::Elevated) {
+                    WindowsSandboxModeToml::Elevated
+                } else {
+                    WindowsSandboxModeToml::Unelevated
+                };
+
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained =
+                    Constrained::new(Some(initial_value), move |candidate| match candidate {
+                        Some(candidate) if implementations.contains(candidate) => Ok(()),
+                        _ => Err(ConstraintError::InvalidValue {
+                            field_name: "windows.sandbox",
+                            candidate: format!("{candidate:?}"),
+                            allowed: format!("{implementations:?}"),
+                            requirement_source: requirement_source_for_error.clone(),
+                        }),
+                    })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
+            }
+            Some(_) | None => ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
                 /*source*/ None,
             ),
         };
@@ -1199,7 +1430,11 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             approval_policy,
             approvals_reviewer,
             permission_profile,
+            windows_sandbox_mode,
             web_search_mode,
+            allow_managed_hooks_only,
+            allow_appshots,
+            computer_use,
             feature_requirements,
             managed_hooks,
             mcp_servers,
@@ -1244,8 +1479,7 @@ mod tests {
     use codex_execpolicy::Decision;
     use codex_execpolicy::Evaluation;
     use codex_execpolicy::RuleMatch;
-    use codex_protocol::protocol::NetworkAccess;
-    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::AbsolutePathBufGuard;
     use pretty_assertions::assert_eq;
@@ -1261,8 +1495,23 @@ mod tests {
         )?)
     }
 
-    fn profile_from_sandbox_policy(sandbox_policy: &SandboxPolicy) -> PermissionProfile {
-        PermissionProfile::from_legacy_sandbox_policy(sandbox_policy)
+    #[test]
+    fn composite_requirement_source_flattens_and_deduplicates_sources() {
+        let mdm_source = RequirementSource::MdmManagedPreferences {
+            domain: "com.openai.codex".to_string(),
+            key: "requirements_toml_base64".to_string(),
+        };
+        let legacy_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+
+        assert_eq!(
+            RequirementSource::composite([
+                mdm_source.clone(),
+                RequirementSource::composite([legacy_source.clone(), mdm_source.clone()]),
+            ]),
+            RequirementSource::Composite {
+                sources: vec![mdm_source, legacy_source],
+            }
+        );
     }
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
@@ -1270,8 +1519,14 @@ mod tests {
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
+            allowed_permission_profiles,
+            default_permissions,
             remote_sandbox_config: _,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
+            allow_appshots,
+            computer_use,
+            windows,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1290,8 +1545,18 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allowed_permission_profiles: allowed_permission_profiles
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            default_permissions: default_permissions
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_web_search_modes: allowed_web_search_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_managed_hooks_only: allow_managed_hooks_only
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_appshots: allow_appshots
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            windows: windows.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1306,6 +1571,140 @@ mod tests {
             guardian_policy_config: guardian_policy_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
+    }
+
+    #[test]
+    fn deserialize_allow_managed_hooks_only() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_managed_hooks_only = true
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_managed_hooks_only, Some(true));
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn allow_managed_hooks_only_false_is_still_configured() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_managed_hooks_only = false
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_managed_hooks_only, Some(false));
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_managed_permission_profiles() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                default_permissions = "managed-standard"
+
+                [allowed_permission_profiles]
+                managed-standard = true
+                managed-build = true
+
+                [permissions.managed-standard]
+                extends = ":workspace"
+
+                [permissions.managed-build]
+                extends = "managed-standard"
+            "#,
+        )?;
+
+        assert_eq!(
+            requirements.allowed_permission_profiles,
+            Some(BTreeMap::from([
+                ("managed-build".to_string(), true),
+                ("managed-standard".to_string(), true),
+            ]))
+        );
+        assert_eq!(
+            requirements.default_permissions,
+            Some("managed-standard".to_string())
+        );
+        let permissions = requirements
+            .permissions
+            .as_ref()
+            .expect("managed permission profiles");
+        assert!(permissions.profiles.contains_key("managed-standard"));
+        assert!(
+            permissions
+                .profiles
+                .get("managed-build")
+                .and_then(|profile| profile.extends.as_deref())
+                .is_some()
+        );
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_allow_appshots() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_appshots = true
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_appshots, Some(true));
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn filesystem_requirements_table_cannot_define_a_permission_profile() {
+        let err = from_str::<ConfigRequirementsToml>(
+            r#"
+                [permissions.filesystem]
+                extends = ":workspace"
+            "#,
+        )
+        .expect_err("filesystem requirements cannot define a permission profile");
+
+        assert!(
+            err.to_string().contains(
+                "`permissions.filesystem` is reserved for requirements-level filesystem constraints and cannot define a profile"
+            ),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn allow_appshots_false_is_still_configured() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_appshots = false
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_appshots, Some(false));
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_computer_use_requirements() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                [computer_use]
+                allow_locked_computer_use = false
+            "#,
+        )?;
+
+        assert_eq!(
+            requirements.computer_use,
+            Some(ComputerUseRequirementsToml {
+                allow_locked_computer_use: Some(false),
+            })
+        );
+        assert!(!requirements.is_empty());
+        Ok(())
     }
 
     #[test]
@@ -1327,6 +1726,9 @@ mod tests {
         let feature_requirements = FeatureRequirementsToml {
             entries: BTreeMap::from([("personality".to_string(), true)]),
         };
+        let computer_use = ComputerUseRequirementsToml {
+            allow_locked_computer_use: Some(false),
+        };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
         let guardian_policy_config = "Use the company-managed guardian policy.".to_string();
@@ -1337,8 +1739,14 @@ mod tests {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
+            allowed_permission_profiles: Some(BTreeMap::from([("managed".to_string(), true)])),
+            default_permissions: Some("managed".to_string()),
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
+            allow_managed_hooks_only: Some(true),
+            allow_appshots: Some(false),
+            computer_use: Some(computer_use.clone()),
+            windows: None,
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
             mcp_servers: None,
@@ -1365,10 +1773,22 @@ mod tests {
                     source.clone(),
                 )),
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
+                allowed_permission_profiles: Some(Sourced::new(
+                    BTreeMap::from([("managed".to_string(), true)]),
+                    source.clone(),
+                )),
+                default_permissions: Some(Sourced::new("managed".to_string(), source.clone(),)),
                 allowed_web_search_modes: Some(Sourced::new(
                     allowed_web_search_modes,
                     enforce_source.clone(),
                 )),
+                allow_managed_hooks_only: Some(Sourced::new(
+                    /*value*/ true,
+                    enforce_source.clone(),
+                )),
+                allow_appshots: Some(Sourced::new(/*value*/ false, enforce_source.clone(),)),
+                computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
+                windows: None,
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
                     enforce_source.clone(),
@@ -1410,7 +1830,13 @@ mod tests {
                 )),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permission_profiles: None,
+                default_permissions: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -1457,7 +1883,13 @@ mod tests {
                 )),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permission_profiles: None,
+                default_permissions: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -1477,7 +1909,7 @@ mod tests {
     fn merge_unset_fields_ignores_blank_guardian_override() {
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             ConfigRequirementsToml {
                 guardian_policy_config: Some("   \n\t".to_string()),
                 ..Default::default()
@@ -1823,8 +2255,11 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn merge_unset_fields_merges_apps_across_sources_with_enabled_evaluation() {
-        let higher_source = RequirementSource::CloudRequirements;
-        let lower_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let higher_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let lower_source = RequirementSource::MdmManagedPreferences {
+            domain: "com.openai.codex".to_string(),
+            key: "requirements_toml_base64".to_string(),
+        };
         let mut target = ConfigRequirementsWithSources::default();
 
         target.merge_unset_fields(
@@ -1865,7 +2300,7 @@ allowed_approvals_reviewers = ["user"]
         let mut target = ConfigRequirementsWithSources::default();
 
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             ConfigRequirementsToml {
                 apps: Some(apps_requirements(&[])),
                 ..Default::default()
@@ -1916,9 +2351,7 @@ allowed_approvals_reviewers = ["user"]
         assert_eq!(
             requirements
                 .permission_profile
-                .can_set(&profile_from_sandbox_policy(
-                    &SandboxPolicy::DangerFullAccess,
-                )),
+                .can_set(&PermissionProfile::Disabled),
             Err(ConstraintError::InvalidValue {
                 field_name: "sandbox_mode",
                 candidate: "DangerFullAccess".into(),
@@ -1942,14 +2375,20 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn constraint_error_includes_cloud_requirements_source() -> Result<()> {
+    fn constraint_error_includes_composite_requirement_source() -> Result<()> {
         let source: ConfigRequirementsToml = from_str(
             r#"
                 allowed_approval_policies = ["on-request"]
             "#,
         )?;
 
-        let source_location = RequirementSource::CloudRequirements;
+        let source_location = RequirementSource::composite([
+            RequirementSource::MdmManagedPreferences {
+                domain: "com.openai.codex".to_string(),
+                key: "requirements_toml_base64".to_string(),
+            },
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
+        ]);
 
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(source_location.clone(), source);
@@ -1982,7 +2421,7 @@ allowed_approvals_reviewers = ["user"]
             "#,
         )?;
 
-        let source_location = RequirementSource::CloudRequirements;
+        let source_location = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(source_location.clone(), source);
         let requirements = ConfigRequirements::try_from(target)?;
@@ -2063,9 +2502,7 @@ allowed_approvals_reviewers = ["user"]
         assert!(
             requirements
                 .permission_profile
-                .can_set(&profile_from_sandbox_policy(
-                    &SandboxPolicy::new_read_only_policy()
-                ))
+                .can_set(&PermissionProfile::read_only())
                 .is_ok()
         );
 
@@ -2096,6 +2533,71 @@ allowed_approvals_reviewers = ["user"]
                 .approvals_reviewer
                 .can_set(&ApprovalsReviewer::User)
                 .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_allowed_windows_sandbox_implementations() -> Result<()> {
+        let toml_str = r#"
+            [windows]
+            allowed_sandbox_implementations = ["elevated"]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.windows_sandbox_mode.value(),
+            Some(WindowsSandboxModeToml::Elevated)
+        );
+        assert!(
+            requirements
+                .windows_sandbox_mode
+                .can_set(&Some(WindowsSandboxModeToml::Elevated))
+                .is_ok()
+        );
+        assert!(
+            requirements
+                .windows_sandbox_mode
+                .can_set(&Some(WindowsSandboxModeToml::Unelevated))
+                .is_err()
+        );
+        assert!(requirements.windows_sandbox_mode.can_set(&None).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_allowed_windows_sandbox_implementations_is_rejected() -> Result<()> {
+        let toml_str = r#"
+            [windows]
+            allowed_sandbox_implementations = []
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            ConfigRequirements::try_from(with_unknown_source(config)),
+            Err(ConstraintError::EmptyField {
+                field_name: "windows.allowed_sandbox_implementations".to_string(),
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_windows_sandbox_implementations_prefer_elevated_fallback() -> Result<()> {
+        let toml_str = r#"
+            [windows]
+            allowed_sandbox_implementations = ["unelevated", "elevated"]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.windows_sandbox_mode.value(),
+            Some(WindowsSandboxModeToml::Elevated)
         );
 
         Ok(())
@@ -2148,29 +2650,25 @@ allowed_approvals_reviewers = ["user"]
         assert!(
             requirements
                 .permission_profile
-                .can_set(&profile_from_sandbox_policy(
-                    &SandboxPolicy::new_read_only_policy()
-                ))
+                .can_set(&PermissionProfile::read_only())
                 .is_ok()
         );
-        let workspace_write_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![AbsolutePathBuf::from_absolute_path(root)?],
-            network_access: false,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
-        };
+        let workspace_write_profile = PermissionProfile::workspace_write_with(
+            &[AbsolutePathBuf::from_absolute_path(root)?],
+            NetworkSandboxPolicy::Restricted,
+            /*exclude_tmpdir_env_var*/ false,
+            /*exclude_slash_tmp*/ false,
+        );
         assert!(
             requirements
                 .permission_profile
-                .can_set(&profile_from_sandbox_policy(&workspace_write_policy))
+                .can_set(&workspace_write_profile)
                 .is_ok()
         );
         assert_eq!(
             requirements
                 .permission_profile
-                .can_set(&profile_from_sandbox_policy(
-                    &SandboxPolicy::DangerFullAccess,
-                )),
+                .can_set(&PermissionProfile::Disabled),
             Err(ConstraintError::InvalidValue {
                 field_name: "sandbox_mode",
                 candidate: "DangerFullAccess".into(),
@@ -2181,11 +2679,9 @@ allowed_approvals_reviewers = ["user"]
         assert_eq!(
             requirements
                 .permission_profile
-                .can_set(&profile_from_sandbox_policy(
-                    &SandboxPolicy::ExternalSandbox {
-                        network_access: NetworkAccess::Restricted,
-                    }
-                )),
+                .can_set(&PermissionProfile::External {
+                    network: NetworkSandboxPolicy::Restricted,
+                }),
             Err(ConstraintError::InvalidValue {
                 field_name: "sandbox_mode",
                 candidate: "ExternalSandbox".into(),
@@ -2235,7 +2731,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_first_match_overrides_top_level() -> Result<()> {
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_toml: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
@@ -2266,24 +2762,22 @@ allowed_approvals_reviewers = ["user"]
 
         let requirements = ConfigRequirements::try_from(requirements_with_sources)?;
         let root = if cfg!(windows) { "C:\\repo" } else { "/repo" };
-        let workspace_write_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![AbsolutePathBuf::from_absolute_path(root)?],
-            network_access: false,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
-        };
+        let workspace_write_profile = PermissionProfile::workspace_write_with(
+            &[AbsolutePathBuf::from_absolute_path(root)?],
+            NetworkSandboxPolicy::Restricted,
+            /*exclude_tmpdir_env_var*/ false,
+            /*exclude_slash_tmp*/ false,
+        );
         assert!(
             requirements
                 .permission_profile
-                .can_set(&profile_from_sandbox_policy(&workspace_write_policy))
+                .can_set(&workspace_write_profile)
                 .is_ok()
         );
         assert_eq!(
             requirements
                 .permission_profile
-                .can_set(&profile_from_sandbox_policy(
-                    &SandboxPolicy::DangerFullAccess,
-                )),
+                .can_set(&PermissionProfile::Disabled),
             Err(ConstraintError::InvalidValue {
                 field_name: "sandbox_mode",
                 candidate: "DangerFullAccess".into(),
@@ -2314,9 +2808,7 @@ allowed_approvals_reviewers = ["user"]
         assert_eq!(
             requirements
                 .permission_profile
-                .can_set(&profile_from_sandbox_policy(
-                    &SandboxPolicy::DangerFullAccess,
-                )),
+                .can_set(&PermissionProfile::Disabled),
             Err(ConstraintError::InvalidValue {
                 field_name: "sandbox_mode",
                 candidate: "DangerFullAccess".into(),
@@ -2330,7 +2822,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_does_not_override_higher_precedence_sandbox_modes() -> Result<()> {
-        let high_source = RequirementSource::CloudRequirements;
+        let high_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut high_precedence: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
@@ -2355,9 +2847,7 @@ allowed_approvals_reviewers = ["user"]
         assert_eq!(
             requirements
                 .permission_profile
-                .can_set(&profile_from_sandbox_policy(
-                    &SandboxPolicy::new_workspace_write_policy(),
-                )),
+                .can_set(&PermissionProfile::workspace_write()),
             Err(ConstraintError::InvalidValue {
                 field_name: "sandbox_mode",
                 candidate: "WorkspaceWrite".into(),
@@ -2519,7 +3009,7 @@ statusMessage = "checking"
     fn merge_unset_fields_does_not_overwrite_existing_hooks() -> Result<()> {
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             from_str::<ConfigRequirementsToml>(
                 r#"
 [hooks]
@@ -2563,7 +3053,7 @@ command = "python3 /system/hooks/pre.py"
         );
         assert_eq!(
             target.hooks.as_ref().map(|hooks| hooks.source.clone()),
-            Some(RequirementSource::CloudRequirements)
+            Some(RequirementSource::LegacyManagedConfigTomlFromMdm)
         );
         Ok(())
     }
@@ -2624,9 +3114,10 @@ command = "python3 /enterprise/hooks/pre.py"
 
             [experimental_network.unix_sockets]
             "/tmp/example.sock" = "allow"
+            "/tmp/blocked.sock" = "deny"
         "#;
 
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
 
@@ -2668,10 +3159,16 @@ command = "python3 /enterprise/hooks/pre.py"
         assert_eq!(
             sourced_network.value.unix_sockets.as_ref(),
             Some(&NetworkUnixSocketPermissionsToml {
-                entries: BTreeMap::from([(
-                    "/tmp/example.sock".to_string(),
-                    NetworkUnixSocketPermissionToml::Allow,
-                )]),
+                entries: BTreeMap::from([
+                    (
+                        "/tmp/blocked.sock".to_string(),
+                        NetworkUnixSocketPermissionToml::Deny,
+                    ),
+                    (
+                        "/tmp/example.sock".to_string(),
+                        NetworkUnixSocketPermissionToml::Allow,
+                    ),
+                ]),
             })
         );
         assert_eq!(sourced_network.value.allow_local_binding, Some(false));
@@ -2693,7 +3190,7 @@ command = "python3 /enterprise/hooks/pre.py"
             allow_local_binding = false
         "#;
 
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
 
@@ -2809,7 +3306,7 @@ command = "python3 /enterprise/hooks/pre.py"
                 ),
                 (
                     "/tmp/ignored.sock".to_string(),
-                    NetworkUnixSocketPermissionToml::None,
+                    NetworkUnixSocketPermissionToml::Deny,
                 ),
             ]),
         };

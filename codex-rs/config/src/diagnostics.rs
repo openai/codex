@@ -4,6 +4,7 @@
 use crate::ConfigLayerEntry;
 use crate::ConfigLayerStack;
 use crate::ConfigLayerStackOrdering;
+use crate::format_config_layer_source;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::de::DeserializeOwned;
@@ -86,6 +87,21 @@ impl std::error::Error for ConfigLoadError {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ConfigDiagnosticSource<'a> {
+    Path(&'a Path),
+    DisplayName(&'a str),
+}
+
+impl ConfigDiagnosticSource<'_> {
+    pub(crate) fn to_path_buf(self) -> PathBuf {
+        match self {
+            ConfigDiagnosticSource::Path(path) => path.to_path_buf(),
+            ConfigDiagnosticSource::DisplayName(name) => PathBuf::from(name),
+        }
+    }
+}
+
 pub fn io_error_from_config_error(
     kind: io::ErrorKind,
     error: ConfigError,
@@ -99,20 +115,38 @@ pub fn config_error_from_toml(
     contents: &str,
     err: toml::de::Error,
 ) -> ConfigError {
+    config_error_from_toml_for_source(ConfigDiagnosticSource::Path(path.as_ref()), contents, err)
+}
+
+pub(crate) fn config_error_from_toml_for_source(
+    source: ConfigDiagnosticSource<'_>,
+    contents: &str,
+    err: toml::de::Error,
+) -> ConfigError {
     let range = err
         .span()
         .map(|span| text_range_from_span(contents, span))
         .unwrap_or_else(default_range);
-    ConfigError::new(path.as_ref().to_path_buf(), range, err.message())
+    ConfigError::new(source.to_path_buf(), range, err.message())
 }
 
 pub fn config_error_from_typed_toml<T: DeserializeOwned>(
     path: impl AsRef<Path>,
     contents: &str,
 ) -> Option<ConfigError> {
+    config_error_from_typed_toml_for_source::<T>(
+        ConfigDiagnosticSource::Path(path.as_ref()),
+        contents,
+    )
+}
+
+fn config_error_from_typed_toml_for_source<T: DeserializeOwned>(
+    source: ConfigDiagnosticSource<'_>,
+    contents: &str,
+) -> Option<ConfigError> {
     let deserializer = match toml::de::Deserializer::parse(contents) {
         Ok(deserializer) => deserializer,
-        Err(err) => return Some(config_error_from_toml(path, contents, err)),
+        Err(err) => return Some(config_error_from_toml_for_source(source, contents, err)),
     };
 
     let result: Result<T, _> = serde_path_to_error::deserialize(deserializer);
@@ -126,7 +160,7 @@ pub fn config_error_from_typed_toml<T: DeserializeOwned>(
                 .map(|span| text_range_from_span(contents, span))
                 .unwrap_or_else(default_range);
             Some(ConfigError::new(
-                path.as_ref().to_path_buf(),
+                source.to_path_buf(),
                 range,
                 toml_err.message(),
             ))
@@ -166,6 +200,27 @@ where
     I: IntoIterator<Item = &'a ConfigLayerEntry>,
 {
     for layer in layers {
+        if let Some(contents) = layer.raw_toml() {
+            let source_name = format_config_layer_source(&layer.name, config_toml_file);
+            let Some(base_dir) = layer.raw_toml_base_dir() else {
+                tracing::debug!(
+                    "Skipping raw TOML diagnostics for {source_name} because it has no base directory"
+                );
+                continue;
+            };
+            // Match the base directory used when the raw non-file layer was
+            // parsed into the runtime layer so diagnostics resolve relative
+            // path fields with the same semantics.
+            let _absolute_path_base = AbsolutePathBufGuard::new(base_dir.as_path());
+            if let Some(error) = config_error_from_typed_toml_for_source::<T>(
+                ConfigDiagnosticSource::DisplayName(&source_name),
+                contents,
+            ) {
+                return Some(error);
+            }
+            continue;
+        }
+
         let Some(path) = config_path_for_layer(layer, config_toml_file) else {
             continue;
         };
@@ -194,18 +249,19 @@ where
 fn config_path_for_layer(layer: &ConfigLayerEntry, config_toml_file: &str) -> Option<PathBuf> {
     match &layer.name {
         ConfigLayerSource::System { file } => Some(file.to_path_buf()),
-        ConfigLayerSource::User { file } => Some(file.to_path_buf()),
+        ConfigLayerSource::User { file, .. } => Some(file.to_path_buf()),
         ConfigLayerSource::Project { dot_codex_folder } => {
             Some(dot_codex_folder.as_path().join(config_toml_file))
         }
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => Some(file.to_path_buf()),
         ConfigLayerSource::Mdm { .. }
+        | ConfigLayerSource::EnterpriseManaged { .. }
         | ConfigLayerSource::SessionFlags
         | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
     }
 }
 
-fn text_range_from_span(contents: &str, span: std::ops::Range<usize>) -> TextRange {
+pub(crate) fn text_range_from_span(contents: &str, span: std::ops::Range<usize>) -> TextRange {
     let start = position_for_offset(contents, span.start);
     let end_index = if span.end > span.start {
         span.end - 1
@@ -290,7 +346,7 @@ fn position_for_offset(contents: &str, index: usize) -> TextPosition {
     }
 }
 
-fn default_range() -> TextRange {
+pub(crate) fn default_range() -> TextRange {
     let position = TextPosition { line: 1, column: 1 };
     TextRange {
         start: position,
@@ -314,13 +370,58 @@ fn span_for_path(contents: &str, path: &SerdePath) -> Option<std::ops::Range<usi
     }
 }
 
-fn span_for_config_path(contents: &str, path: &SerdePath) -> Option<std::ops::Range<usize>> {
+pub(crate) fn span_for_config_path(
+    contents: &str,
+    path: &SerdePath,
+) -> Option<std::ops::Range<usize>> {
     if is_features_table_path(path)
         && let Some(span) = span_for_features_value(contents)
     {
         return Some(span);
     }
     span_for_path(contents, path)
+}
+
+pub(crate) fn span_for_toml_key_path(
+    contents: &str,
+    path: &[String],
+) -> Option<std::ops::Range<usize>> {
+    let doc = contents.parse::<Document<String>>().ok()?;
+    let mut node = TomlNode::Item(doc.as_item());
+    for (index, segment) in path.iter().enumerate() {
+        if index + 1 == path.len() {
+            let key_span = match &node {
+                TomlNode::Item(item) => item
+                    .as_table_like()
+                    .and_then(|table| table.get_key_value(segment))
+                    .and_then(|(key, _)| key.span()),
+                TomlNode::Table(table) => {
+                    table.get_key_value(segment).and_then(|(key, _)| key.span())
+                }
+                TomlNode::Value(Value::InlineTable(table)) => {
+                    table.get_key_value(segment).and_then(|(key, _)| key.span())
+                }
+                _ => None,
+            };
+            if key_span.is_some() {
+                return key_span;
+            }
+        }
+
+        if let Some(next) = map_child(&node, segment) {
+            node = next;
+            continue;
+        }
+
+        let index = segment.parse::<usize>().ok()?;
+        node = seq_child(&node, index)?;
+    }
+
+    match node {
+        TomlNode::Item(item) => item.span(),
+        TomlNode::Table(table) => table.span(),
+        TomlNode::Value(value) => value.span(),
+    }
 }
 
 fn is_features_table_path(path: &SerdePath) -> bool {

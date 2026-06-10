@@ -20,7 +20,11 @@ use crate::shell::ShellType;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use crate::tools::runtimes::RuntimePathPrepends;
+#[cfg(unix)]
+use crate::tools::runtimes::apply_zsh_fork_path_prepend;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
@@ -33,6 +37,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
+use crate::tools::sandboxing::sandbox_permissions_preserving_denied_reads;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -43,13 +48,16 @@ use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
     pub command: Vec<String>,
+    pub shell_type: Option<ShellType>,
     pub hook_command: String,
     pub cwd: AbsolutePathBuf,
     pub timeout_ms: Option<u64>,
+    pub cancellation_token: CancellationToken,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
@@ -62,19 +70,8 @@ pub struct ShellRequest {
 }
 
 /// Selects `ShellRuntime` behavior for different callers.
-///
-/// Note: `Generic` is not the same as `ShellCommandClassic`.
-/// `Generic` means "no `shell_command`-specific backend behavior" (used by the
-/// generic `shell` tool path). The `ShellCommand*` variants are only for the
-/// `shell_command` tool family.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShellRuntimeBackend {
-    /// Tool-agnostic/default runtime path.
-    ///
-    /// Uses the normal `ShellRuntime` execution flow without enabling any
-    /// `shell_command`-specific backend selection.
-    #[default]
-    Generic,
     /// Legacy backend for the `shell_command` tool.
     ///
     /// Keeps `shell_command` on the standard shell runtime flow without the
@@ -88,7 +85,6 @@ pub(crate) enum ShellRuntimeBackend {
     ShellCommandZshFork,
 }
 
-#[derive(Default)]
 pub struct ShellRuntime {
     backend: ShellRuntimeBackend,
 }
@@ -102,12 +98,6 @@ pub(crate) struct ApprovalKey {
 }
 
 impl ShellRuntime {
-    pub fn new() -> Self {
-        Self {
-            backend: ShellRuntimeBackend::Generic,
-        }
-    }
-
     pub(crate) fn for_shell_command(backend: ShellRuntimeBackend) -> Self {
         Self { backend }
     }
@@ -219,8 +209,13 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         req: &ShellRequest,
         ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
+        let file_system_sandbox_policy = ctx.turn.file_system_sandbox_policy();
+        let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
+            req.sandbox_permissions,
+            &file_system_sandbox_policy,
+        );
         let network =
-            managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions)?;
+            managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions)?;
         Some(NetworkApprovalSpec {
             network: Some(network.clone()),
             mode: NetworkApprovalMode::Immediate,
@@ -245,15 +240,45 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
+        let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
+        let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
+            req.sandbox_permissions,
+            &file_system_sandbox_policy,
+        );
         let managed_network =
-            managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
-        let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+            managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions);
+        let env = exec_env_for_sandbox_permissions(&req.env, sandbox_permissions);
+        let explicit_env_overrides = req.explicit_env_overrides.clone();
+        #[cfg(unix)]
+        let (env, runtime_path_prepends) = {
+            let mut env = env;
+            let mut runtime_path_prepends = RuntimePathPrepends::default();
+            crate::tools::runtimes::apply_package_path_prepend(
+                &mut env,
+                &mut runtime_path_prepends,
+            );
+            if self.backend == ShellRuntimeBackend::ShellCommandZshFork
+                && let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_deref()
+            {
+                apply_zsh_fork_path_prepend(&mut env, &mut runtime_path_prepends, shell_zsh_path);
+            }
+            (env, runtime_path_prepends)
+        };
+        #[cfg(not(unix))]
+        let runtime_path_prepends = RuntimePathPrepends::default();
         let command = maybe_wrap_shell_lc_with_snapshot(
             &req.command,
             session_shell.as_ref(),
             &req.cwd,
-            &req.explicit_env_overrides,
+            &explicit_env_overrides,
             &env,
+            &runtime_path_prepends,
+        );
+        let command = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            req.shell_type.as_ref(),
+            attempt.sandbox,
+            attempt.windows_sandbox_level,
         );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
@@ -275,6 +300,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let command =
             build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())?;
         let mut expiration: crate::exec::ExecExpiration = req.timeout_ms.into();
+        expiration = expiration.with_cancellation(req.cancellation_token.clone());
         if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
             expiration = expiration.with_cancellation(cancellation);
         }

@@ -13,8 +13,13 @@ import type { SandboxMode } from "./SandboxMode";
  * 2. By history: instantiate the thread from memory and resume it.
  * 3. By path: load the thread from disk by path and resume it.
  *
- * The precedence is: history > path > thread_id.
- * If using history or path, the thread_id param will be ignored.
+ * For non-running threads, the precedence is: history > non-empty path > thread_id.
+ * If using history or a non-empty path for a non-running thread, the thread_id
+ * param will be ignored.
+ *
+ * If thread_id identifies a running thread, app-server rejoins that thread and
+ * treats a non-empty path as a consistency check against the active rollout path.
+ * Empty string path values are treated as absent.
  *
  * Prefer using thread_id whenever possible.
  */

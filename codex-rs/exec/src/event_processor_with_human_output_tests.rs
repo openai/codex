@@ -2,24 +2,29 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
+use codex_core::config::ConfigBuilder;
+use codex_protocol::SessionId;
+use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use codex_utils_sandbox_summary::summarize_permission_profile;
 use owo_colors::Style;
 use pretty_assertions::assert_eq;
 
 use super::EventProcessorWithHumanOutput;
+use super::config_summary_entries;
 use super::final_message_from_turn_items;
-use super::paths_match_after_canonicalization;
 use super::reasoning_text;
 use super::should_print_final_message_to_stdout;
 use super::should_print_final_message_to_tty;
-use super::summarize_permission_profile;
 use crate::event_processor::EventProcessor;
 
 #[test]
@@ -101,10 +106,13 @@ fn reasoning_text_uses_raw_content_when_enabled() {
 
 #[test]
 fn summarizes_disabled_permission_profile_as_danger_full_access() {
+    let cwd = test_path_buf("/tmp").abs();
+
     assert_eq!(
         summarize_permission_profile(
             &PermissionProfile::Disabled,
-            test_path_buf("/tmp").as_path()
+            &cwd,
+            std::slice::from_ref(&cwd),
         ),
         "danger-full-access"
     );
@@ -112,12 +120,15 @@ fn summarizes_disabled_permission_profile_as_danger_full_access() {
 
 #[test]
 fn summarizes_external_permission_profile() {
+    let cwd = test_path_buf("/tmp").abs();
+
     assert_eq!(
         summarize_permission_profile(
             &PermissionProfile::External {
                 network: NetworkSandboxPolicy::Enabled,
             },
-            test_path_buf("/tmp").as_path(),
+            &cwd,
+            std::slice::from_ref(&cwd),
         ),
         "external-sandbox (network access enabled)"
     );
@@ -144,30 +155,89 @@ fn summarizes_managed_workspace_write_permission_profile() {
     );
 
     assert_eq!(
-        summarize_permission_profile(&profile, cwd.as_path()),
+        summarize_permission_profile(&profile, &cwd, &[cwd.clone(), cache_root.clone()]),
         format!("workspace-write [workdir, {}]", cache_root.display())
     );
 }
 
 #[test]
 fn summarizes_managed_read_only_permission_profile() {
+    let cwd = test_path_buf("/tmp/project").abs();
     let profile = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(Vec::new()),
         NetworkSandboxPolicy::Restricted,
     );
 
     assert_eq!(
-        summarize_permission_profile(&profile, test_path_buf("/tmp/project").as_path()),
+        summarize_permission_profile(&profile, &cwd, std::slice::from_ref(&cwd)),
         "read-only"
     );
 }
 
-#[test]
-fn distinct_missing_paths_do_not_match_after_canonicalization() {
-    assert!(!paths_match_after_canonicalization(
-        test_path_buf("/tmp/codex-missing-left").as_path(),
-        test_path_buf("/tmp/codex-missing-right").as_path(),
-    ));
+#[tokio::test]
+async fn config_summary_entries_include_runtime_workspace_roots() {
+    let codex_home = tempfile::tempdir().expect("create codex home");
+    let cwd = tempfile::tempdir().expect("create cwd");
+    let extra_root = tempfile::tempdir().expect("create extra root");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build default config");
+    let cwd = cwd.path().to_path_buf().abs();
+    let extra_root = extra_root.path().to_path_buf().abs();
+    let expected_extra_root_name = extra_root
+        .file_name()
+        .expect("extra root should have file name")
+        .to_string_lossy()
+        .to_string();
+    config.cwd = cwd.clone();
+    config.workspace_roots = vec![cwd.clone(), extra_root];
+    config
+        .permissions
+        .set_workspace_roots(config.workspace_roots.clone());
+    config
+        .permissions
+        .set_permission_profile(PermissionProfile::workspace_write_with(
+            &[],
+            NetworkSandboxPolicy::Restricted,
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        ))
+        .expect("set permission profile");
+
+    let session_configured_event = SessionConfiguredEvent {
+        session_id: SessionId::new(),
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        parent_thread_id: None,
+        thread_source: None,
+        thread_name: None,
+        model: "gpt-5.4".to_string(),
+        model_provider_id: config.model_provider_id.clone(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: config.approvals_reviewer,
+        permission_profile: config.permissions.effective_permission_profile(),
+        active_permission_profile: None,
+        cwd,
+        reasoning_effort: None,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+
+    let summary_entries = config_summary_entries(&config, &session_configured_event);
+    let sandbox_summary = summary_entries
+        .iter()
+        .find_map(|(key, value)| (*key == "sandbox").then_some(value))
+        .expect("sandbox summary entry");
+    assert!(
+        sandbox_summary.starts_with("workspace-write [workdir, ")
+            && sandbox_summary.contains(&expected_extra_root_name),
+        "expected runtime workspace root in sandbox summary: {summary_entries:?}"
+    );
 }
 
 #[test]

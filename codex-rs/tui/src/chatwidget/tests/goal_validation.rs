@@ -120,7 +120,12 @@ async fn goal_slash_command_rejects_oversized_objective() {
         "oversized goal should not emit a SetThreadGoalObjective event: {events:?}"
     );
     let rendered = rendered_insert_history(&events);
-    assert_chatwidget_snapshot!("goal_slash_command_oversized_objective_error", rendered);
+    assert!(rendered.contains("Goal objective is too long"));
+    assert!(rendered.contains("Put longer instructions in a file"));
+    assert!(
+        !rendered.contains("Message exceeds the maximum length"),
+        "expected goal-specific length error, got {rendered:?}"
+    );
     assert_no_submit_op(&mut op_rx);
 }
 

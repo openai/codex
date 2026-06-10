@@ -1,24 +1,24 @@
 use super::*;
+use crate::plugin_bundle_archive::PluginBundlePackError;
+use crate::plugin_bundle_archive::pack_plugin_bundle_tar_gz;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use reqwest::RequestBuilder;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::fmt;
-use std::fs;
 use std::io;
-use std::io::Write;
 use std::path::Path;
 use tracing::warn;
 
+mod checkout;
 mod local_paths;
 
 const REMOTE_PLUGIN_SHARE_MAX_ARCHIVE_BYTES: usize = 50 * 1024 * 1024;
+
+pub use checkout::checkout_remote_plugin_share;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginShareSaveResult {
@@ -474,139 +474,19 @@ fn archive_plugin_for_upload_with_limit(
     plugin_path: &Path,
     max_bytes: usize,
 ) -> Result<Vec<u8>, RemotePluginCatalogError> {
-    if !plugin_path.is_dir() {
-        return Err(RemotePluginCatalogError::InvalidPluginPath {
+    pack_plugin_bundle_tar_gz(plugin_path, max_bytes).map_err(|err| match err {
+        PluginBundlePackError::InvalidPluginPath { path, reason } => {
+            RemotePluginCatalogError::InvalidPluginPath { path, reason }
+        }
+        PluginBundlePackError::ArchiveTooLarge { bytes, max_bytes } => {
+            RemotePluginCatalogError::ArchiveTooLarge { bytes, max_bytes }
+        }
+        PluginBundlePackError::Io { source } => RemotePluginCatalogError::Archive {
             path: plugin_path.to_path_buf(),
-            reason: "expected a plugin directory".to_string(),
-        });
-    }
-    if !plugin_path.join(".codex-plugin/plugin.json").is_file() {
-        return Err(RemotePluginCatalogError::InvalidPluginPath {
-            path: plugin_path.to_path_buf(),
-            reason: "missing .codex-plugin/plugin.json".to_string(),
-        });
-    }
-
-    let encoder = GzEncoder::new(SizeLimitedBuffer::new(max_bytes), Compression::default());
-    let mut archive = tar::Builder::new(encoder);
-    append_plugin_tree(&mut archive, plugin_path, plugin_path)
-        .map_err(|source| archive_error(plugin_path, source))?;
-    let encoder = archive
-        .into_inner()
-        .map_err(|source| archive_error(plugin_path, source))?;
-    encoder
-        .finish()
-        .map(SizeLimitedBuffer::into_inner)
-        .map_err(|source| archive_error(plugin_path, source))
+            source,
+        },
+    })
 }
-
-fn append_plugin_tree<W: Write>(
-    archive: &mut tar::Builder<W>,
-    plugin_root: &Path,
-    current: &Path,
-) -> io::Result<()> {
-    let mut entries = fs::read_dir(current)?.collect::<Result<Vec<_>, io::Error>>()?;
-    entries.sort_by_key(fs::DirEntry::file_name);
-    for entry in entries {
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        let relative_path = path.strip_prefix(plugin_root).map_err(|err| {
-            io::Error::other(format!(
-                "failed to compute plugin archive path for `{}`: {err}",
-                path.display()
-            ))
-        })?;
-        if file_type.is_dir() {
-            archive.append_dir(relative_path, &path)?;
-            append_plugin_tree(archive, plugin_root, &path)?;
-        } else if file_type.is_file() {
-            archive.append_path_with_name(&path, relative_path)?;
-        } else {
-            return Err(io::Error::other(format!(
-                "unsupported plugin archive entry type: {}",
-                path.display()
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn archive_error(plugin_path: &Path, source: io::Error) -> RemotePluginCatalogError {
-    if let Some(limit) = source
-        .get_ref()
-        .and_then(|err| err.downcast_ref::<ArchiveSizeLimitExceeded>())
-    {
-        return RemotePluginCatalogError::ArchiveTooLarge {
-            bytes: limit.bytes,
-            max_bytes: limit.max_bytes,
-        };
-    }
-
-    RemotePluginCatalogError::Archive {
-        path: plugin_path.to_path_buf(),
-        source,
-    }
-}
-
-struct SizeLimitedBuffer {
-    bytes: Vec<u8>,
-    max_bytes: usize,
-}
-
-impl SizeLimitedBuffer {
-    fn new(max_bytes: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            max_bytes,
-        }
-    }
-
-    fn into_inner(self) -> Vec<u8> {
-        self.bytes
-    }
-}
-
-impl Write for SizeLimitedBuffer {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let next_len = self.bytes.len().checked_add(buf.len()).ok_or_else(|| {
-            io::Error::other(ArchiveSizeLimitExceeded {
-                bytes: usize::MAX,
-                max_bytes: self.max_bytes,
-            })
-        })?;
-        if next_len > self.max_bytes {
-            return Err(io::Error::other(ArchiveSizeLimitExceeded {
-                bytes: next_len,
-                max_bytes: self.max_bytes,
-            }));
-        }
-
-        self.bytes.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct ArchiveSizeLimitExceeded {
-    bytes: usize,
-    max_bytes: usize,
-}
-
-impl fmt::Display for ArchiveSizeLimitExceeded {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "archive would be {} bytes, exceeding maximum size of {} bytes",
-            self.bytes, self.max_bytes
-        )
-    }
-}
-
-impl std::error::Error for ArchiveSizeLimitExceeded {}
 
 async fn send_and_expect_status(
     request: RequestBuilder,

@@ -10,6 +10,7 @@ use crate::ExecServerError;
 use crate::ProcessId;
 use crate::protocol::ExecParams;
 use crate::protocol::ProcessOutputChunk;
+use crate::protocol::ProcessSignal;
 use crate::protocol::ReadResponse;
 use crate::protocol::WriteResponse;
 
@@ -24,7 +25,7 @@ pub struct StartedExecProcess {
 /// stdout, stderr, or pty bytes. `Exited` reports the process exit status, while
 /// `Closed` means all output streams have ended and no more output events will
 /// arrive. `Failed` is used when the process session cannot continue, for
-/// example because the remote executor connection disconnected.
+/// example because the remote environment connection disconnected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecProcessEvent {
     Output(ProcessOutputChunk),
@@ -177,6 +178,8 @@ pub trait ExecProcess: Send + Sync {
     ) -> Result<ReadResponse, ExecServerError>;
 
     async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError>;
+
+    async fn signal(&self, signal: ProcessSignal) -> Result<(), ExecServerError>;
 
     async fn terminate(&self) -> Result<(), ExecServerError>;
 }

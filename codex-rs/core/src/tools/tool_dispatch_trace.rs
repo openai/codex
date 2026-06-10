@@ -74,7 +74,7 @@ fn tool_dispatch_invocation(invocation: &ToolInvocation) -> Option<ToolDispatchI
     };
 
     Some(ToolDispatchInvocation {
-        thread_id: invocation.session.conversation_id.to_string(),
+        thread_id: invocation.session.thread_id.to_string(),
         codex_turn_id: invocation.turn.sub_id.clone(),
         tool_call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.name.clone(),
@@ -110,24 +110,6 @@ fn tool_dispatch_payload(payload: &ToolPayload) -> ToolDispatchPayload {
         },
         ToolPayload::Custom { input } => ToolDispatchPayload::Custom {
             input: input.clone(),
-        },
-        ToolPayload::LocalShell { params } => ToolDispatchPayload::LocalShell {
-            command: params.command.clone(),
-            workdir: params.workdir.clone(),
-            timeout_ms: params.timeout_ms,
-            sandbox_permissions: params.sandbox_permissions,
-            prefix_rule: params.prefix_rule.clone(),
-            additional_permissions: params.additional_permissions.clone(),
-            justification: params.justification.clone(),
-        },
-        ToolPayload::Mcp {
-            server,
-            tool,
-            raw_arguments,
-        } => ToolDispatchPayload::Mcp {
-            server: server.clone(),
-            tool: tool.clone(),
-            raw_arguments: raw_arguments.clone(),
         },
     }
 }

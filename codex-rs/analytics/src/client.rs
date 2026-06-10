@@ -9,6 +9,7 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
@@ -18,6 +19,8 @@ use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnCodexErrorFact;
+use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
@@ -33,6 +36,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -172,9 +176,10 @@ impl AnalyticsEventsClient {
         &self,
         tracking: &GuardianReviewTrackContext,
         result: GuardianReviewAnalyticsResult,
+        completed_at_ms: u64,
     ) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(
-            Box::new(tracking.event_params(result)),
+            Box::new(tracking.event_params(result, completed_at_ms)),
         )));
     }
 
@@ -242,6 +247,12 @@ impl AnalyticsEventsClient {
         )));
     }
 
+    pub fn track_goal_event(&self, event: CodexGoalEvent) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Goal(Box::new(
+            event,
+        ))));
+    }
+
     pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::TurnResolvedConfig(Box::new(fact)),
@@ -250,6 +261,18 @@ impl AnalyticsEventsClient {
 
     pub fn track_turn_token_usage(&self, fact: TurnTokenUsageFact) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnTokenUsage(
+            Box::new(fact),
+        )));
+    }
+
+    pub fn track_turn_profile(&self, fact: TurnProfileFact) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnProfile(
+            Box::new(fact),
+        )));
+    }
+
+    pub fn track_turn_codex_error(&self, fact: TurnCodexErrorFact) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnCodexError(
             Box::new(fact),
         )));
     }
@@ -345,6 +368,26 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::ServerResponse {
             completed_at_ms,
             response: Box::new(response),
+        });
+    }
+
+    pub fn track_effective_permissions_approval_response(
+        &self,
+        completed_at_ms: u64,
+        request_id: RequestId,
+        response: RequestPermissionsResponse,
+    ) {
+        self.record_fact(AnalyticsFact::EffectivePermissionsApprovalResponse {
+            completed_at_ms,
+            request_id,
+            response: Box::new(response),
+        });
+    }
+
+    pub fn track_server_request_aborted(&self, completed_at_ms: u64, request_id: RequestId) {
+        self.record_fact(AnalyticsFact::ServerRequestAborted {
+            completed_at_ms,
+            request_id,
         });
     }
 

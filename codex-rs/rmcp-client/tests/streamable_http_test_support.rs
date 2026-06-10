@@ -20,6 +20,7 @@ use anyhow::Context as _;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecServerClient;
+use codex_exec_server::HttpClient;
 use codex_exec_server::RemoteExecServerConnectArgs;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
@@ -44,52 +45,47 @@ use tokio::process::Command;
 use tokio::time::sleep;
 
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
+const INITIALIZE_POST_FAILURE_CONTROL_PATH: &str = "/test/control/initialize-post-failure";
+const INITIALIZED_NOTIFICATION_POST_FAILURE_CONTROL_PATH: &str =
+    "/test/control/initialized-notification-post-failure";
 
 fn streamable_http_server_bin() -> Result<PathBuf, CargoBinError> {
     codex_utils_cargo_bin::cargo_bin("test_streamable_http_server")
 }
 
 fn init_params() -> InitializeRequestParams {
-    InitializeRequestParams {
-        meta: None,
-        capabilities: ClientCapabilities {
-            experimental: None,
-            extensions: None,
-            roots: None,
-            sampling: None,
-            elicitation: Some(ElicitationCapability {
-                form: Some(FormElicitationCapability {
-                    schema_validation: None,
-                }),
-                url: None,
-            }),
-            tasks: None,
-        },
-        client_info: Implementation {
-            name: "codex-test".into(),
-            version: "0.0.0-test".into(),
-            title: Some("Codex rmcp recovery test".into()),
-            description: None,
-            icons: None,
-            website_url: None,
-        },
-        protocol_version: ProtocolVersion::V_2025_06_18,
-    }
+    let mut capabilities = ClientCapabilities::default();
+    capabilities.elicitation = Some(ElicitationCapability {
+        form: Some(FormElicitationCapability {
+            schema_validation: None,
+        }),
+        url: None,
+    });
+    InitializeRequestParams::new(
+        capabilities,
+        Implementation::new("codex-test", "0.0.0-test").with_title("Codex rmcp recovery test"),
+    )
+    .with_protocol_version(ProtocolVersion::V_2025_06_18)
 }
 
 pub(crate) fn expected_echo_result(message: &str) -> CallToolResult {
-    CallToolResult {
-        content: Vec::new(),
-        structured_content: Some(json!({
-            "echo": format!("ECHOING: {message}"),
-            "env": null,
-        })),
-        is_error: Some(false),
-        meta: None,
-    }
+    let mut result = CallToolResult::success(Vec::new());
+    result.structured_content = Some(json!({
+        "echo": format!("ECHOING: {message}"),
+        "env": null,
+    }));
+    result
 }
 
 pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> {
+    create_client_with_http_client(base_url, Environment::default_for_tests().get_http_client())
+        .await
+}
+
+pub(crate) async fn create_client_with_http_client(
+    base_url: &str,
+    http_client: Arc<dyn HttpClient>,
+) -> anyhow::Result<RmcpClient> {
     let client = RmcpClient::new_streamable_http_client(
         "test-streamable-http",
         &format!("{base_url}/mcp"),
@@ -97,11 +93,17 @@ pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> 
         /*http_headers*/ None,
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
-        Environment::default_for_tests().get_http_client(),
+        http_client,
         /*auth_provider*/ None,
     )
     .await?;
 
+    initialize_client(&client).await?;
+
+    Ok(client)
+}
+
+pub(crate) async fn initialize_client(client: &RmcpClient) -> anyhow::Result<()> {
     client
         .initialize(
             init_params(),
@@ -118,8 +120,7 @@ pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> 
             }),
         )
         .await?;
-
-    Ok(client)
+    Ok(())
 }
 
 /// Creates a Streamable HTTP RMCP client that sends traffic through the remote
@@ -178,12 +179,115 @@ pub(crate) async fn arm_session_post_failure(
     base_url: &str,
     status: u16,
     remaining: usize,
+    www_authenticate_headers: &[&str],
 ) -> anyhow::Result<()> {
     let response = reqwest::Client::new()
         .post(format!("{base_url}{SESSION_POST_FAILURE_CONTROL_PATH}"))
         .json(&json!({
             "status": status,
             "remaining": remaining,
+            "www_authenticate_headers": www_authenticate_headers,
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    Ok(())
+}
+
+pub(crate) async fn arm_session_post_json_rpc_failure(
+    base_url: &str,
+    status: u16,
+    remaining: usize,
+) -> anyhow::Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!("{base_url}{SESSION_POST_FAILURE_CONTROL_PATH}"))
+        .json(&json!({
+            "status": status,
+            "remaining": remaining,
+            "content_type": "application/json",
+            "body": json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32000,
+                    "message": "transient session failure",
+                },
+            }).to_string(),
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    Ok(())
+}
+
+pub(crate) async fn arm_initialized_notification_post_json_rpc_failure(
+    base_url: &str,
+    status: u16,
+    remaining: usize,
+) -> anyhow::Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{base_url}{INITIALIZED_NOTIFICATION_POST_FAILURE_CONTROL_PATH}"
+        ))
+        .json(&json!({
+            "status": status,
+            "remaining": remaining,
+            "content_type": "application/json",
+            "body": json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32000,
+                    "message": "transient session failure",
+                },
+            }).to_string(),
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    Ok(())
+}
+
+pub(crate) async fn arm_initialize_post_failure(
+    base_url: &str,
+    status: u16,
+    remaining: usize,
+) -> anyhow::Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!("{base_url}{INITIALIZE_POST_FAILURE_CONTROL_PATH}"))
+        .json(&json!({
+            "status": status,
+            "remaining": remaining,
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    Ok(())
+}
+
+pub(crate) async fn arm_initialize_post_json_rpc_failure(
+    base_url: &str,
+    status: u16,
+    remaining: usize,
+) -> anyhow::Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!("{base_url}{INITIALIZE_POST_FAILURE_CONTROL_PATH}"))
+        .json(&json!({
+            "status": status,
+            "remaining": remaining,
+            "content_type": "application/json",
+            "body": json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32000,
+                    "message": "transient initialize failure",
+                },
+            }).to_string(),
         }))
         .send()
         .await?;

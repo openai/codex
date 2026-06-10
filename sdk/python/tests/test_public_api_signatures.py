@@ -2,44 +2,57 @@ from __future__ import annotations
 
 import importlib.resources as resources
 import inspect
-import tomllib
 from pathlib import Path
 from typing import Any
+
+import tomllib
 
 import openai_codex
 import openai_codex.types as public_types
 from openai_codex import (
-    AppServerConfig,
+    ApprovalMode,
     AsyncCodex,
     AsyncThread,
+    AsyncTurnHandle,
     Codex,
-    RunResult,
+    CodexConfig,
+    Sandbox,
     Thread,
+    TurnHandle,
+    TurnResult,
 )
+from openai_codex._initialize_metadata import validate_initialize_metadata
 from openai_codex.types import InitializeResponse
 
 EXPECTED_ROOT_EXPORTS = [
     "__version__",
-    "AppServerConfig",
+    "CodexConfig",
     "Codex",
     "AsyncCodex",
+    "ApprovalMode",
+    "Sandbox",
+    "ChatgptLoginHandle",
+    "DeviceCodeLoginHandle",
+    "AsyncChatgptLoginHandle",
+    "AsyncDeviceCodeLoginHandle",
     "Thread",
     "AsyncThread",
     "TurnHandle",
     "AsyncTurnHandle",
-    "RunResult",
+    "TurnResult",
     "Input",
     "InputItem",
+    "RunInput",
     "TextInput",
     "ImageInput",
     "LocalImageInput",
     "SkillInput",
     "MentionInput",
     "retry_on_overload",
-    "AppServerError",
+    "CodexError",
     "TransportClosedError",
     "JsonRpcError",
-    "AppServerRpcError",
+    "CodexRpcError",
     "ParseError",
     "InvalidRequestError",
     "MethodNotFoundError",
@@ -51,8 +64,13 @@ EXPECTED_ROOT_EXPORTS = [
 ]
 
 EXPECTED_TYPES_EXPORTS = [
+    "Account",
+    "AccountLoginCompletedNotification",
     "ApprovalsReviewer",
     "AskForApproval",
+    "CancelLoginAccountResponse",
+    "CancelLoginAccountStatus",
+    "GetAccountResponse",
     "InitializeResponse",
     "JsonObject",
     "ModelListResponse",
@@ -79,6 +97,7 @@ EXPECTED_TYPES_EXPORTS = [
     "ThreadTokenUsageUpdatedNotification",
     "Turn",
     "TurnCompletedNotification",
+    "TurnError",
     "TurnInterruptResponse",
     "TurnStatus",
     "TurnSteerResponse",
@@ -95,26 +114,92 @@ def _keyword_only_names(fn: object) -> list[str]:
     ]
 
 
+def _keyword_default(fn: object, name: str) -> object:
+    """Return the default value for one keyword parameter on a public method."""
+    return inspect.signature(fn).parameters[name].default
+
+
 def _assert_no_any_annotations(fn: object) -> None:
     """Reject loose annotations on public wrapper methods."""
     signature = inspect.signature(fn)
     for param in signature.parameters.values():
         if param.annotation is Any:
-            raise AssertionError(
-                f"{fn} has public parameter typed as Any: {param.name}"
-            )
+            raise AssertionError(f"{fn} has public parameter typed as Any: {param.name}")
     if signature.return_annotation is Any:
         raise AssertionError(f"{fn} has public return annotation typed as Any")
 
 
-def test_root_exports_app_server_config() -> None:
+def test_root_exports_codex_config() -> None:
     """The root package should expose the process configuration object."""
-    assert AppServerConfig.__name__ == "AppServerConfig"
+    assert CodexConfig.__name__ == "CodexConfig"
 
 
-def test_root_exports_run_result() -> None:
-    """The root package should expose the common-case run result wrapper."""
-    assert RunResult.__name__ == "RunResult"
+def test_root_exports_turn_result() -> None:
+    """The root package should expose the collected turn result wrapper."""
+    assert {
+        "name": TurnResult.__name__,
+        "fields": list(TurnResult.__dataclass_fields__),
+    } == {
+        "name": "TurnResult",
+        "fields": [
+            "id",
+            "status",
+            "error",
+            "started_at",
+            "completed_at",
+            "duration_ms",
+            "final_response",
+            "items",
+            "usage",
+        ],
+    }
+
+
+def test_turn_run_methods_return_turn_result() -> None:
+    """Both convenience and handle-based run APIs return the same result shape."""
+    funcs = [
+        Thread.run,
+        TurnHandle.run,
+        AsyncThread.run,
+        AsyncTurnHandle.run,
+    ]
+
+    assert {fn: inspect.signature(fn).return_annotation for fn in funcs} == dict.fromkeys(
+        funcs, "TurnResult"
+    )
+
+
+def test_turn_input_methods_accept_string_shortcut() -> None:
+    """Every public turn-input method should accept strings and typed inputs."""
+    funcs = [
+        Thread.run,
+        Thread.turn,
+        AsyncThread.run,
+        AsyncThread.turn,
+        TurnHandle.steer,
+        AsyncTurnHandle.steer,
+    ]
+
+    assert {fn: inspect.signature(fn).parameters["input"].annotation for fn in funcs} == (
+        dict.fromkeys(funcs, "RunInput")
+    )
+
+
+def test_root_exports_approval_mode() -> None:
+    """The root package should expose the high-level approval mode enum."""
+    assert [(mode.name, mode.value) for mode in ApprovalMode] == [
+        ("deny_all", "deny_all"),
+        ("auto_review", "auto_review"),
+    ]
+
+
+def test_root_exports_sandbox_presets() -> None:
+    """The friendly sandbox API should expose only obvious named presets."""
+    assert [(sandbox.name, sandbox.value) for sandbox in Sandbox] == [
+        ("read_only", "read-only"),
+        ("workspace_write", "workspace-write"),
+        ("full_access", "full-access"),
+    ]
 
 
 def test_package_and_default_client_versions_follow_project_version() -> None:
@@ -123,7 +208,31 @@ def test_package_and_default_client_versions_follow_project_version() -> None:
     pyproject = tomllib.loads(pyproject_path.read_text())
 
     assert openai_codex.__version__ == pyproject["project"]["version"]
-    assert AppServerConfig().client_version == openai_codex.__version__
+    assert CodexConfig().client_version == openai_codex.__version__
+
+
+def test_curated_public_api_has_builtin_help_documentation() -> None:
+    """The package's normal ``help()`` surface should explain common first-use APIs."""
+    documented = {
+        "module": openai_codex,
+        "Codex": Codex,
+        "AsyncCodex": AsyncCodex,
+        "CodexConfig": CodexConfig,
+        "Thread": Thread,
+        "AsyncThread": AsyncThread,
+        "TurnHandle": TurnHandle,
+        "AsyncTurnHandle": AsyncTurnHandle,
+        "TurnResult": TurnResult,
+        "Sandbox": Sandbox,
+        "thread_start": Codex.thread_start,
+        "thread_resume": Codex.thread_resume,
+        "thread_run": Thread.run,
+        "thread_turn": Thread.turn,
+    }
+
+    assert {name: inspect.getdoc(value) is not None for name, value in documented.items()} == (
+        dict.fromkeys(documented, True)
+    )
 
 
 def test_package_includes_py_typed_marker() -> None:
@@ -135,22 +244,20 @@ def test_package_includes_py_typed_marker() -> None:
 def test_package_root_exports_only_public_api() -> None:
     """The package root should expose the supported SDK surface, not internals."""
     assert openai_codex.__all__ == EXPECTED_ROOT_EXPORTS
+    assert {name: hasattr(openai_codex, name) for name in EXPECTED_ROOT_EXPORTS} == dict.fromkeys(
+        EXPECTED_ROOT_EXPORTS, True
+    )
     assert {
-        name: hasattr(openai_codex, name) for name in EXPECTED_ROOT_EXPORTS
-    } == {name: True for name in EXPECTED_ROOT_EXPORTS}
-    assert {
-        "AppServerClient": hasattr(openai_codex, "AppServerClient"),
-        "AsyncAppServerClient": hasattr(openai_codex, "AsyncAppServerClient"),
+        "CodexClient": hasattr(openai_codex, "CodexClient"),
+        "AsyncCodexClient": hasattr(openai_codex, "AsyncCodexClient"),
         "InitializeResponse": hasattr(openai_codex, "InitializeResponse"),
         "ThreadStartParams": hasattr(openai_codex, "ThreadStartParams"),
         "TurnStartParams": hasattr(openai_codex, "TurnStartParams"),
-        "TurnCompletedNotification": hasattr(
-            openai_codex, "TurnCompletedNotification"
-        ),
+        "TurnCompletedNotification": hasattr(openai_codex, "TurnCompletedNotification"),
         "TurnStatus": hasattr(openai_codex, "TurnStatus"),
     } == {
-        "AppServerClient": False,
-        "AsyncAppServerClient": False,
+        "CodexClient": False,
+        "AsyncCodexClient": False,
         "InitializeResponse": False,
         "ThreadStartParams": False,
         "TurnStartParams": False,
@@ -169,11 +276,11 @@ def test_package_star_import_matches_public_api() -> None:
 
 
 def test_types_module_exports_curated_public_types() -> None:
-    """The public type module should be the supported place for app-server models."""
+    """The public type module should expose Codex protocol models."""
     assert public_types.__all__ == EXPECTED_TYPES_EXPORTS
-    assert {name: hasattr(public_types, name) for name in EXPECTED_TYPES_EXPORTS} == {
-        name: True for name in EXPECTED_TYPES_EXPORTS
-    }
+    assert {name: hasattr(public_types, name) for name in EXPECTED_TYPES_EXPORTS} == dict.fromkeys(
+        EXPECTED_TYPES_EXPORTS, True
+    )
 
 
 def test_types_star_import_matches_public_types() -> None:
@@ -210,8 +317,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
     """Generated convenience methods should expose typed Pythonic keyword names."""
     expected = {
         Codex.thread_start: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -239,8 +345,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "use_state_db_only",
         ],
         Codex.thread_resume: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -252,8 +357,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "service_tier",
         ],
         Codex.thread_fork: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -266,32 +370,29 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "thread_source",
         ],
         Thread.turn: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "cwd",
             "effort",
             "model",
             "output_schema",
             "personality",
-            "sandbox_policy",
+            "sandbox",
             "service_tier",
             "summary",
         ],
         Thread.run: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "cwd",
             "effort",
             "model",
             "output_schema",
             "personality",
-            "sandbox_policy",
+            "sandbox",
             "service_tier",
             "summary",
         ],
         AsyncCodex.thread_start: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -319,8 +420,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "use_state_db_only",
         ],
         AsyncCodex.thread_resume: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -332,8 +432,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "service_tier",
         ],
         AsyncCodex.thread_fork: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -346,26 +445,24 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "thread_source",
         ],
         AsyncThread.turn: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "cwd",
             "effort",
             "model",
             "output_schema",
             "personality",
-            "sandbox_policy",
+            "sandbox",
             "service_tier",
             "summary",
         ],
         AsyncThread.run: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "cwd",
             "effort",
             "model",
             "output_schema",
             "personality",
-            "sandbox_policy",
+            "sandbox",
             "service_tier",
             "summary",
         ],
@@ -378,6 +475,34 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             f"non snake_case kwargs in {fn}: {actual}"
         )
         _assert_no_any_annotations(fn)
+
+
+def test_new_thread_methods_default_to_auto_review() -> None:
+    """New threads should start with auto-review unless callers opt out."""
+    funcs = [
+        Codex.thread_start,
+        AsyncCodex.thread_start,
+    ]
+
+    assert {fn: _keyword_default(fn, "approval_mode") for fn in funcs} == dict.fromkeys(
+        funcs, ApprovalMode.auto_review
+    )
+
+
+def test_existing_thread_methods_default_to_preserving_approval_settings() -> None:
+    """Existing thread operations should not serialize approval overrides by default."""
+    funcs = [
+        Codex.thread_resume,
+        Codex.thread_fork,
+        Thread.turn,
+        Thread.run,
+        AsyncCodex.thread_resume,
+        AsyncCodex.thread_fork,
+        AsyncThread.turn,
+        AsyncThread.run,
+    ]
+
+    assert {fn: _keyword_default(fn, "approval_mode") for fn in funcs} == dict.fromkeys(funcs)
 
 
 def test_lifecycle_methods_are_codex_scoped() -> None:
@@ -414,7 +539,7 @@ def test_lifecycle_methods_are_codex_scoped() -> None:
 def test_initialize_metadata_parses_user_agent_shape() -> None:
     """Initialize metadata should accept the legacy user-agent-only payload shape."""
     payload = InitializeResponse.model_validate({"userAgent": "codex-cli/1.2.3"})
-    parsed = Codex._validate_initialize(payload)
+    parsed = validate_initialize_metadata(payload)
     assert parsed is payload
     assert parsed.userAgent == "codex-cli/1.2.3"
     assert parsed.serverInfo is not None
@@ -425,10 +550,8 @@ def test_initialize_metadata_parses_user_agent_shape() -> None:
 def test_initialize_metadata_requires_non_empty_information() -> None:
     """Initialize metadata should fail when the runtime gives no identity signal."""
     try:
-        Codex._validate_initialize(InitializeResponse.model_validate({}))
+        validate_initialize_metadata(InitializeResponse.model_validate({}))
     except RuntimeError as exc:
         assert "missing required metadata" in str(exc)
     else:
-        raise AssertionError(
-            "expected RuntimeError when initialize metadata is missing"
-        )
+        raise AssertionError("expected RuntimeError when initialize metadata is missing")

@@ -7,16 +7,56 @@ use std::sync::PoisonError;
 
 type ErasedData = Arc<dyn Any + Send + Sync>;
 
+/// Typed values supplied before an [`ExtensionData`] scope is created.
+///
+/// Hosts consume this value once to seed a scope before lifecycle contributors
+/// run. It does not install extensions or provide persistence.
+#[derive(Debug, Default)]
+pub struct ExtensionDataInit {
+    entries: HashMap<TypeId, ErasedData>,
+}
+
+impl ExtensionDataInit {
+    /// Creates an empty extension data initializer.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Stores `value` as the initial attachment of type `T`.
+    pub fn insert<T>(&mut self, value: T) -> Option<Arc<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        self.entries
+            .insert(TypeId::of::<T>(), Arc::new(value))
+            .map(downcast_data)
+    }
+}
+
 /// Typed extension-owned data attached to one host object.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct ExtensionData {
+    level_id: String,
     entries: Mutex<HashMap<TypeId, ErasedData>>,
 }
 
 impl ExtensionData {
-    /// Creates an empty attachment map.
-    pub fn new() -> Self {
-        Self::default()
+    /// Creates an empty attachment map for one host-owned scope.
+    pub fn new(level_id: impl Into<String>) -> Self {
+        Self::new_with_init(level_id, ExtensionDataInit::default())
+    }
+
+    /// Creates an attachment map seeded with host-supplied initial data.
+    pub fn new_with_init(level_id: impl Into<String>, init: ExtensionDataInit) -> Self {
+        Self {
+            level_id: level_id.into(),
+            entries: Mutex::new(init.entries),
+        }
+    }
+
+    /// Returns the host identity for the scope this data is attached to.
+    pub fn level_id(&self) -> &str {
+        &self.level_id
     }
 
     /// Returns the attached value of type `T`, if one exists.

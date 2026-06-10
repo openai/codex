@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
@@ -53,6 +53,7 @@ fn command_hook_hash(
             matcher: matcher.map(ToOwned::to_owned),
             hooks: vec![codex_config::HookHandlerConfig::Command {
                 command: command.to_string(),
+                command_windows: None,
                 timeout_sec: Some(timeout_sec),
                 r#async: false,
                 status_message: status_message.map(ToOwned::to_owned),
@@ -96,12 +97,34 @@ fn write_plugin_hook_config(codex_home: &std::path::Path, hooks_json: &str) -> R
         codex_home.join("config.toml"),
         r#"[features]
 plugins = true
-plugin_hooks = true
 hooks = true
 
 [plugins."demo@test"]
 enabled = true
 "#,
+    )?;
+    Ok(())
+}
+
+fn write_project_hook_config(dot_codex_folder: &std::path::Path, command: &str) -> Result<()> {
+    std::fs::create_dir_all(dot_codex_folder)?;
+    std::fs::write(
+        dot_codex_folder.join("config.toml"),
+        format!(
+            r#"[features]
+hooks = true
+
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "{command}"
+timeout = 5
+"#
+        ),
     )?;
     Ok(())
 }
@@ -112,7 +135,7 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
     let cwd = TempDir::new()?;
     write_user_hook_config(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -188,7 +211,7 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
 }"#,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -242,12 +265,90 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
 }
 
 #[tokio::test]
+async fn hooks_list_warms_plugin_capabilities_for_thread_start() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    write_plugin_hook_config(
+        codex_home.path(),
+        r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo plugin hook"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    )?;
+    let plugin_mcp_path = codex_home
+        .path()
+        .join("plugins/cache/test/demo/local/.mcp.json");
+    std::fs::write(
+        &plugin_mcp_path,
+        r#"{
+  "mcpServers": {
+    "plugin-server": {
+      "url": "http://127.0.0.1:1/mcp"
+    }
+  }
+}"#,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let hooks_list_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+        })
+        .await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(hooks_list_id)),
+    )
+    .await??;
+
+    std::fs::remove_file(plugin_mcp_path)?;
+
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let _: ThreadStartResponse = to_response(
+        timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+        )
+        .await??,
+    )?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_matching_notification("plugin MCP server starting", |notification| {
+            notification.method == "mcpServer/startupStatus/updated"
+                && notification
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("plugin-server")
+        }),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn hooks_list_shows_plugin_hook_load_warnings() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     write_plugin_hook_config(codex_home.path(), "{ not-json")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -303,7 +404,7 @@ timeout = 5
     )?;
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -368,12 +469,94 @@ timeout = 5
 }
 
 #[tokio::test]
+async fn hooks_list_uses_root_repo_hooks_for_linked_worktrees() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let repo_root = workspace.path().join("repo");
+    let worktree_root = workspace.path().join("worktree");
+    let worktree_git_dir = repo_root.join(".git/worktrees/feature-x");
+
+    std::fs::create_dir_all(&worktree_git_dir)?;
+    std::fs::create_dir_all(&worktree_root)?;
+    std::fs::write(
+        worktree_root.join(".git"),
+        format!("gitdir: {}\n", worktree_git_dir.display()),
+    )?;
+    write_project_hook_config(&repo_root.join(".codex"), "echo root hook")?;
+    write_project_hook_config(&worktree_root.join(".codex"), "echo worktree hook")?;
+    set_project_trust_level(codex_home.path(), &repo_root, TrustLevel::Trusted)?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let list_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![repo_root.clone(), worktree_root.clone()],
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let HooksListResponse { data } = to_response(response)?;
+    let repo_hook = data[0].hooks[0].clone();
+    let worktree_hook = data[1].hooks[0].clone();
+    let repo_config_path =
+        AbsolutePathBuf::from_absolute_path(repo_root.join(".codex/config.toml"))?;
+
+    assert_eq!(repo_hook.command.as_deref(), Some("echo root hook"));
+    assert_eq!(worktree_hook.command.as_deref(), Some("echo root hook"));
+    assert_eq!(repo_hook.key, worktree_hook.key);
+    assert_eq!(repo_hook.source_path, repo_config_path);
+    assert_eq!(worktree_hook.source_path, repo_config_path);
+
+    let write_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            edits: vec![ConfigEdit {
+                key_path: "hooks.state".to_string(),
+                value: serde_json::json!({
+                    repo_hook.key.clone(): {
+                        "trusted_hash": repo_hook.current_hash.clone()
+                    }
+                }),
+                merge_strategy: MergeStrategy::Upsert,
+            }],
+            file_path: None,
+            expected_version: None,
+            reload_user_config: true,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(write_id)),
+    )
+    .await??;
+    let _: codex_app_server_protocol::ConfigWriteResponse = to_response(response)?;
+
+    let list_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![worktree_root],
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let HooksListResponse { data } = to_response(response)?;
+    assert_eq!(data[0].hooks[0].trust_status, HookTrustStatus::Trusted);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn config_batch_write_toggles_user_hook() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     write_user_hook_config(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -524,7 +707,7 @@ command = "python3 {hook_script_path}"
         ),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let hook_list_id = mcp
@@ -557,6 +740,7 @@ command = "python3 {hook_script_path}"
     let first_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
@@ -618,6 +802,7 @@ command = "python3 {hook_script_path}"
     let second_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
@@ -687,6 +872,7 @@ command = "python3 {hook_script_path}"
     let third_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "third turn".to_string(),
                 text_elements: Vec::new(),
@@ -771,7 +957,7 @@ command = "python3 {hook_script_path}"
         ),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let hook_list_id = mcp
@@ -827,6 +1013,7 @@ command = "python3 {hook_script_path}"
     let first_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
@@ -878,6 +1065,7 @@ command = "python3 {hook_script_path}"
     let second_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),

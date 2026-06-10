@@ -92,6 +92,10 @@ JSON-RPC initialize handshake on the Unix control socket.
 for future starts. If a managed app-server is already running, they restart it
 so the new setting takes effect immediately.
 
+Top-level `codex remote-control` bootstraps with `--remote-control` when the
+updater loop is not running. Otherwise it enables remote control and starts the
+daemon normally.
+
 `stop` sends a graceful termination request first, then sends a second
 termination signal after the grace window if the process is still alive.
 

@@ -1,6 +1,8 @@
 #[cfg(any(not(debug_assertions), test))]
 use codex_install_context::InstallContext;
 #[cfg(any(not(debug_assertions), test))]
+use codex_install_context::InstallMethod;
+#[cfg(any(not(debug_assertions), test))]
 use codex_install_context::StandalonePlatform;
 
 /// Update action the CLI should perform after the TUI exits.
@@ -12,24 +14,24 @@ pub enum UpdateAction {
     BunGlobalLatest,
     /// Update via `brew upgrade codex`.
     BrewUpgrade,
-    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | sh`.
+    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh`.
     StandaloneUnix,
-    /// Update via `irm https://chatgpt.com/codex/install.ps1|iex`.
+    /// Update via `$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex`.
     StandaloneWindows,
 }
 
 impl UpdateAction {
     #[cfg(any(not(debug_assertions), test))]
     pub(crate) fn from_install_context(context: &InstallContext) -> Option<Self> {
-        match context {
-            InstallContext::Npm => Some(UpdateAction::NpmGlobalLatest),
-            InstallContext::Bun => Some(UpdateAction::BunGlobalLatest),
-            InstallContext::Brew => Some(UpdateAction::BrewUpgrade),
-            InstallContext::Standalone { platform, .. } => Some(match platform {
+        match &context.method {
+            InstallMethod::Npm => Some(UpdateAction::NpmGlobalLatest),
+            InstallMethod::Bun => Some(UpdateAction::BunGlobalLatest),
+            InstallMethod::Brew => Some(UpdateAction::BrewUpgrade),
+            InstallMethod::Standalone { platform, .. } => Some(match platform {
                 StandalonePlatform::Unix => UpdateAction::StandaloneUnix,
                 StandalonePlatform::Windows => UpdateAction::StandaloneWindows,
             }),
-            InstallContext::Other => None,
+            InstallMethod::Other => None,
         }
     }
 
@@ -41,11 +43,19 @@ impl UpdateAction {
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
             UpdateAction::StandaloneUnix => (
                 "sh",
-                &["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
+                &[
+                    "-c",
+                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+                ],
             ),
             UpdateAction::StandaloneWindows => (
                 "powershell",
-                &["-c", "irm https://chatgpt.com/codex/install.ps1|iex"],
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
+                ],
             ),
         }
     }
@@ -66,42 +76,62 @@ pub fn get_update_action() -> Option<UpdateAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
 
     #[test]
     fn maps_install_context_to_update_action() {
-        let native_release_dir = PathBuf::from("/tmp/native-release");
+        let native_release_dir =
+            AbsolutePathBuf::from_absolute_path(std::env::temp_dir().join("native-release"))
+                .expect("temp dir path should be absolute");
 
         assert_eq!(
-            UpdateAction::from_install_context(&InstallContext::Other),
+            UpdateAction::from_install_context(&InstallContext {
+                method: InstallMethod::Other,
+                package_layout: None,
+            }),
             None
         );
         assert_eq!(
-            UpdateAction::from_install_context(&InstallContext::Npm),
+            UpdateAction::from_install_context(&InstallContext {
+                method: InstallMethod::Npm,
+                package_layout: None,
+            }),
             Some(UpdateAction::NpmGlobalLatest)
         );
         assert_eq!(
-            UpdateAction::from_install_context(&InstallContext::Bun),
+            UpdateAction::from_install_context(&InstallContext {
+                method: InstallMethod::Bun,
+                package_layout: None,
+            }),
             Some(UpdateAction::BunGlobalLatest)
         );
         assert_eq!(
-            UpdateAction::from_install_context(&InstallContext::Brew),
+            UpdateAction::from_install_context(&InstallContext {
+                method: InstallMethod::Brew,
+                package_layout: None,
+            }),
             Some(UpdateAction::BrewUpgrade)
         );
         assert_eq!(
-            UpdateAction::from_install_context(&InstallContext::Standalone {
-                platform: StandalonePlatform::Unix,
-                release_dir: native_release_dir.clone(),
-                resources_dir: Some(native_release_dir.join("codex-resources")),
+            UpdateAction::from_install_context(&InstallContext {
+                method: InstallMethod::Standalone {
+                    platform: StandalonePlatform::Unix,
+                    release_dir: native_release_dir.clone(),
+                    resources_dir: Some(native_release_dir.join("codex-resources")),
+                },
+                package_layout: None,
             }),
             Some(UpdateAction::StandaloneUnix)
         );
         assert_eq!(
-            UpdateAction::from_install_context(&InstallContext::Standalone {
-                platform: StandalonePlatform::Windows,
-                release_dir: native_release_dir.clone(),
-                resources_dir: Some(native_release_dir.join("codex-resources")),
+            UpdateAction::from_install_context(&InstallContext {
+                method: InstallMethod::Standalone {
+                    platform: StandalonePlatform::Windows,
+                    release_dir: native_release_dir.clone(),
+                    resources_dir: Some(native_release_dir.join("codex-resources")),
+                },
+                package_layout: None,
             }),
             Some(UpdateAction::StandaloneWindows)
         );
@@ -113,14 +143,22 @@ mod tests {
             UpdateAction::StandaloneUnix.command_args(),
             (
                 "sh",
-                &["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"][..],
+                &[
+                    "-c",
+                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+                ][..],
             )
         );
         assert_eq!(
             UpdateAction::StandaloneWindows.command_args(),
             (
                 "powershell",
-                &["-c", "irm https://chatgpt.com/codex/install.ps1|iex"][..],
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"
+                ][..],
             )
         );
     }

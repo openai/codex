@@ -84,6 +84,7 @@ pub(crate) fn lock_layer_from_config(
     Ok(ConfigLayerEntry::new(
         ConfigLayerSource::User {
             file: lock_path.clone(),
+            profile: None,
         },
         value,
     ))
@@ -124,6 +125,9 @@ fn config_lock_for_comparison(
 ) -> ConfigLockfileToml {
     let mut lockfile = lockfile.clone();
     clear_config_lock_debug_controls(&mut lockfile.config);
+    if let Some(features) = lockfile.config.features.as_mut() {
+        features.clear_removed_compatibility_entries();
+    }
     if options.allow_codex_version_mismatch {
         lockfile.codex_version.clear();
     }

@@ -8,9 +8,24 @@ export type ConfigLayerSource = { "type": "mdm", domain: string, key: string, } 
  * This is the path to the system config.toml file, though it is not
  * guaranteed to exist.
  */
-file: AbsolutePathBuf, } | { "type": "user",
+file: AbsolutePathBuf, } | { "type": "enterpriseManaged",
+/**
+ * Stable identifier for the delivered layer.
+ */
+id: string,
+/**
+ * Admin-facing name for the delivered layer. This is surfaced in
+ * diagnostics so users know which cloud layer needs administrator
+ * attention.
+ */
+name: string, } | { "type": "user",
 /**
  * This is the path to the user's config.toml file, though it is not
  * guaranteed to exist.
  */
-file: AbsolutePathBuf, } | { "type": "project", dotCodexFolder: AbsolutePathBuf, } | { "type": "sessionFlags" } | { "type": "legacyManagedConfigTomlFromFile", file: AbsolutePathBuf, } | { "type": "legacyManagedConfigTomlFromMdm" };
+file: AbsolutePathBuf,
+/**
+ * Name of the selected profile-v2 config layered on top of the base
+ * user config, when this layer represents one.
+ */
+profile: string | null, } | { "type": "project", dotCodexFolder: AbsolutePathBuf, } | { "type": "sessionFlags" } | { "type": "legacyManagedConfigTomlFromFile", file: AbsolutePathBuf, } | { "type": "legacyManagedConfigTomlFromMdm" };

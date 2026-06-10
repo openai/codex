@@ -2,14 +2,16 @@ use crate::acl::add_deny_write_ace;
 use crate::acl::path_mask_allows;
 use crate::cap::cap_sid_file;
 use crate::cap::load_or_create_cap_sids;
+use crate::cap::workspace_write_cap_sid_for_root;
+use crate::cap::workspace_write_root_contains_path;
 use crate::logging::debug_log;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
-use crate::policy::SandboxPolicy;
-use crate::token::convert_string_sid_to_sid;
+use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+use crate::setup::effective_write_roots_for_permissions;
+use crate::token::LocalSid;
 use crate::token::world_sid;
 use anyhow::Result;
-use anyhow::anyhow;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::c_void;
@@ -215,22 +217,23 @@ pub fn audit_everyone_writable(
     Ok(Vec::new())
 }
 
-pub fn apply_world_writable_scan_and_denies(
+pub fn apply_world_writable_scan_and_denies_for_permissions(
     codex_home: &Path,
     cwd: &Path,
     env_map: &std::collections::HashMap<String, String>,
-    sandbox_policy: &SandboxPolicy,
+    permissions: &ResolvedWindowsSandboxPermissions,
     logs_base_dir: Option<&Path>,
 ) -> Result<()> {
     let flagged = audit_everyone_writable(cwd, env_map, logs_base_dir)?;
     if flagged.is_empty() {
         return Ok(());
     }
-    if let Err(err) = apply_capability_denies_for_world_writable(
+    if let Err(err) = apply_capability_denies_for_world_writable_for_permissions(
         codex_home,
         &flagged,
-        sandbox_policy,
+        permissions,
         cwd,
+        env_map,
         logs_base_dir,
     ) {
         log_note(
@@ -241,11 +244,12 @@ pub fn apply_world_writable_scan_and_denies(
     Ok(())
 }
 
-pub fn apply_capability_denies_for_world_writable(
+fn apply_capability_denies_for_world_writable_for_permissions(
     codex_home: &Path,
     flagged: &[PathBuf],
-    sandbox_policy: &SandboxPolicy,
+    permissions: &ResolvedWindowsSandboxPermissions,
     cwd: &Path,
+    env_map: &std::collections::HashMap<String, String>,
     logs_base_dir: Option<&Path>,
 ) -> Result<()> {
     if flagged.is_empty() {
@@ -255,46 +259,53 @@ pub fn apply_capability_denies_for_world_writable(
     let cap_path = cap_sid_file(codex_home);
     let caps = load_or_create_cap_sids(codex_home)?;
     std::fs::write(&cap_path, serde_json::to_string(&caps)?)?;
-    let (active_sid, workspace_roots): (*mut c_void, Vec<PathBuf>) = match sandbox_policy {
-        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-            let sid = unsafe { convert_string_sid_to_sid(&caps.workspace) }
-                .ok_or_else(|| anyhow!("ConvertStringSidToSidW failed for workspace capability"))?;
-            let mut roots: Vec<PathBuf> =
-                vec![dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())];
-            for root in writable_roots {
-                let candidate = root.as_path();
-                roots.push(dunce::canonicalize(candidate).unwrap_or_else(|_| root.to_path_buf()));
-            }
-            (sid, roots)
-        }
-        SandboxPolicy::ReadOnly { .. } => (
-            unsafe { convert_string_sid_to_sid(&caps.readonly) }
-                .ok_or_else(|| anyhow!("ConvertStringSidToSidW failed for readonly capability"))?,
-            Vec::new(),
-        ),
-        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-            return Ok(());
-        }
-    };
+    if !permissions.is_enforceable_by_windows_sandbox() {
+        return Ok(());
+    }
+    let (active_sids, workspace_roots): (Vec<LocalSid>, Vec<PathBuf>) =
+        if permissions.uses_write_capabilities_for_cwd(cwd, env_map) {
+            let roots = effective_write_roots_for_permissions(
+                permissions,
+                cwd,
+                env_map,
+                codex_home,
+                /*write_roots_override*/ None,
+            );
+            let active_sids = roots
+                .iter()
+                .map(|root| {
+                    workspace_write_cap_sid_for_root(codex_home, cwd, root)
+                        .and_then(|sid| LocalSid::from_string(&sid))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (active_sids, roots)
+        } else {
+            (vec![LocalSid::from_string(&caps.readonly)?], Vec::new())
+        };
     for path in flagged {
-        if workspace_roots.iter().any(|root| path.starts_with(root)) {
+        if workspace_roots
+            .iter()
+            .any(|root| workspace_write_root_contains_path(root, path))
+        {
             continue;
         }
-        let res = unsafe { add_deny_write_ace(path, active_sid) };
-        match res {
-            Ok(true) => log_note(
-                &format!("AUDIT: applied capability deny ACE to {}", path.display()),
-                logs_base_dir,
-            ),
-            Ok(false) => {}
-            Err(err) => log_note(
-                &format!(
-                    "AUDIT: failed to apply capability deny ACE to {}: {}",
-                    path.display(),
-                    err
+        for active_sid in &active_sids {
+            let res = unsafe { add_deny_write_ace(path, active_sid.as_ptr()) };
+            match res {
+                Ok(true) => log_note(
+                    &format!("AUDIT: applied capability deny ACE to {}", path.display()),
+                    logs_base_dir,
                 ),
-                logs_base_dir,
-            ),
+                Ok(false) => {}
+                Err(err) => log_note(
+                    &format!(
+                        "AUDIT: failed to apply capability deny ACE to {}: {}",
+                        path.display(),
+                        err
+                    ),
+                    logs_base_dir,
+                ),
+            }
         }
     }
     Ok(())

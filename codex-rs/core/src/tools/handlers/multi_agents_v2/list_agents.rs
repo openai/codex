@@ -5,26 +5,25 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-impl ToolHandler for Handler {
-    type Output = ListAgentsResult;
-
+impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("list_agents")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_list_agents_tool())
+    fn spec(&self) -> ToolSpec {
+        create_list_agents_tool()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
     }
+}
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+impl Handler {
+    async fn handle_call(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -36,7 +35,7 @@ impl ToolHandler for Handler {
         session
             .services
             .agent_control
-            .register_session_root(session.conversation_id, &turn.session_source);
+            .register_session_root(session.thread_id, turn.parent_thread_id);
         let agents = session
             .services
             .agent_control
@@ -44,7 +43,13 @@ impl ToolHandler for Handler {
             .await
             .map_err(collab_spawn_error)?;
 
-        Ok(ListAgentsResult { agents })
+        Ok(boxed_tool_output(ListAgentsResult { agents }))
+    }
+}
+
+impl CoreToolRuntime for Handler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

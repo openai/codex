@@ -50,6 +50,14 @@ impl ResolvedTurnEnvironments {
         self.primary()
             .map(|environment| environment.environment.get_filesystem())
     }
+
+    pub(crate) fn single_local_environment_cwd(&self) -> Option<&AbsolutePathBuf> {
+        let [environment] = self.turn_environments.as_slice() else {
+            return None;
+        };
+
+        (!environment.environment.is_remote()).then_some(&environment.cwd)
+    }
 }
 
 pub(crate) fn resolve_environment_selections(
@@ -106,7 +114,7 @@ mod tests {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let manager = EnvironmentManager::create_for_tests(
             Some("ws://127.0.0.1:8765".to_string()),
-            test_runtime_paths(),
+            Some(test_runtime_paths()),
         )
         .await;
 
@@ -132,9 +140,10 @@ url = "ws://127.0.0.1:8765"
         )
         .expect("write environments.toml");
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let manager = EnvironmentManager::from_codex_home(temp_dir.path(), test_runtime_paths())
-            .await
-            .expect("environment manager");
+        let manager =
+            EnvironmentManager::from_codex_home(temp_dir.path(), Some(test_runtime_paths()))
+                .await
+                .expect("environment manager");
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd),
@@ -154,7 +163,7 @@ url = "ws://127.0.0.1:8765"
     #[tokio::test]
     async fn default_thread_environment_selections_empty_when_default_disabled() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let manager = EnvironmentManager::disabled_for_tests(test_runtime_paths());
+        let manager = EnvironmentManager::without_environments();
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd),
@@ -208,5 +217,56 @@ url = "ws://127.0.0.1:8765"
             "local"
         );
         assert_eq!(resolved.primary().expect("primary environment").shell, None);
+    }
+
+    #[tokio::test]
+    async fn single_local_environment_cwd_requires_exactly_one_local_environment() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let local_manager = EnvironmentManager::default_for_tests();
+        let local = resolve_environment_selections(
+            &local_manager,
+            &[TurnEnvironmentSelection {
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                cwd: cwd.clone(),
+            }],
+        )
+        .expect("local environment should resolve");
+        let remote_manager = EnvironmentManager::create_for_tests(
+            Some("ws://127.0.0.1:8765".to_string()),
+            Some(test_runtime_paths()),
+        )
+        .await;
+        let remote = resolve_environment_selections(
+            &remote_manager,
+            &[TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: cwd.clone(),
+            }],
+        )
+        .expect("remote environment should resolve");
+        local_manager
+            .upsert_environment(
+                REMOTE_ENVIRONMENT_ID.to_string(),
+                "ws://127.0.0.1:8765".to_string(),
+            )
+            .expect("remote environment should register");
+        let multiple = resolve_environment_selections(
+            &local_manager,
+            &[
+                TurnEnvironmentSelection {
+                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: cwd.clone(),
+                },
+                TurnEnvironmentSelection {
+                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                    cwd: cwd.clone(),
+                },
+            ],
+        )
+        .expect("multiple environments should resolve");
+
+        assert_eq!(local.single_local_environment_cwd(), Some(&cwd));
+        assert_eq!(remote.single_local_environment_cwd(), None);
+        assert_eq!(multiple.single_local_environment_cwd(), None);
     }
 }

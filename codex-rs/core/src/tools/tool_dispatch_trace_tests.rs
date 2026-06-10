@@ -21,8 +21,8 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolRegistry;
 use crate::turn_diff_tracker::TurnDiffTracker;
 
@@ -30,21 +30,33 @@ struct TestHandler {
     tool_name: codex_tools::ToolName,
 }
 
-impl ToolHandler for TestHandler {
-    type Output = FunctionToolOutput;
-
+impl ToolExecutor<ToolInvocation> for TestHandler {
     fn tool_name(&self) -> codex_tools::ToolName {
         self.tool_name.clone()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> codex_tools::ToolSpec {
+        codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+            name: self.tool_name.name.clone(),
+            description: "Test tool.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: codex_tools::JsonSchema::default(),
+            output_schema: None,
+        })
     }
 
-    async fn handle(&self, _invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        Ok(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+    fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async {
+            Ok(
+                Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+                    as Box<dyn crate::tools::context::ToolOutput>,
+            )
+        })
     }
 }
+
+impl CoreToolRuntime for TestHandler {}
 
 #[tokio::test]
 async fn dispatch_lifecycle_trace_records_direct_and_code_mode_requesters() -> anyhow::Result<()> {
@@ -270,7 +282,7 @@ fn test_invocation_with_payload(
 }
 
 fn attach_test_trace(session: &mut Session, turn: &TurnContext, root: &Path) -> anyhow::Result<()> {
-    let thread_id = session.conversation_id;
+    let thread_id = session.thread_id;
     let rollout_thread_trace =
         codex_rollout_trace::ThreadTraceContext::start_root_in_root_for_test(
             root,

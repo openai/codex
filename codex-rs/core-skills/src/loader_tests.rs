@@ -99,6 +99,7 @@ async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> TestConfig {
         ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: config_file(user_config_path),
+                profile: None,
             },
             TomlValue::Table(toml::map::Map::new()),
         ),
@@ -164,7 +165,10 @@ async fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_sys
             TomlValue::Table(toml::map::Map::new()),
         ),
         ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: user_file },
+            ConfigLayerSource::User {
+                file: user_file,
+                profile: None,
+            },
             TomlValue::Table(toml::map::Map::new()),
         ),
     ];
@@ -222,7 +226,10 @@ async fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyh
 
     let layers = vec![
         ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: user_file },
+            ConfigLayerSource::User {
+                file: user_file,
+                profile: None,
+            },
             TomlValue::Table(toml::map::Map::new()),
         ),
         ConfigLayerEntry::new_disabled(
@@ -281,7 +288,10 @@ async fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()
 
     let user_file = user_folder.join("config.toml").abs();
     let layers = vec![ConfigLayerEntry::new(
-        ConfigLayerSource::User { file: user_file },
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None,
+        },
         TomlValue::Table(toml::map::Map::new()),
     )];
     let stack = ConfigLayerStack::new(
@@ -390,11 +400,6 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
   "dependencies": {
     "tools": [
       {
-        "type": "env_var",
-        "value": "GITHUB_TOKEN",
-        "description": "GitHub API token with repo scopes"
-      },
-      {
         "type": "mcp",
         "value": "github",
         "description": "GitHub MCP server",
@@ -436,14 +441,6 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
             interface: None,
             dependencies: Some(SkillDependencies {
                 tools: vec![
-                    SkillToolDependency {
-                        r#type: "env_var".to_string(),
-                        value: "GITHUB_TOKEN".to_string(),
-                        description: Some("GitHub API token with repo scopes".to_string()),
-                        transport: None,
-                        command: None,
-                        url: None,
-                    },
                     SkillToolDependency {
                         r#type: "mcp".to_string(),
                         value: "github".to_string(),
@@ -825,6 +822,116 @@ async fn drops_interface_when_icons_are_invalid() {
     );
 }
 
+#[tokio::test]
+async fn loads_plugin_skill_interface_icons_from_shared_plugin_assets() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_root = root.path().join("plugins/twilio-developer-kit");
+    let skill_path = write_skill_at(
+        &plugin_root.join("skills"),
+        "twilio-send-message",
+        "send-message",
+        "send messages",
+    );
+    let skill_dir = skill_path.parent().expect("skill dir");
+    fs::create_dir_all(plugin_root.join("assets")).unwrap();
+    fs::write(plugin_root.join("assets/logo.svg"), "<svg/>").unwrap();
+    write_skill_interface_at(
+        skill_dir,
+        r##"
+interface:
+  icon_small: "../../assets/logo.svg"
+  icon_large: "../../assets/logo.svg"
+"##,
+    );
+
+    let plugin_root_abs = plugin_root.abs();
+    let outcome = load_skills_from_roots([SkillRoot {
+        path: plugin_root.join("skills").abs(),
+        scope: SkillScope::User,
+        file_system: Arc::clone(&LOCAL_FS),
+        plugin_id: Some("twilio-developer-kit@test".to_string()),
+        plugin_root: Some(plugin_root_abs.clone()),
+    }])
+    .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    let expected_icon_path = normalized(&plugin_root.join("assets/logo.svg"));
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "send-message".to_string(),
+            description: "send messages".to_string(),
+            short_description: None,
+            interface: Some(SkillInterface {
+                display_name: None,
+                short_description: None,
+                icon_small: Some(expected_icon_path.clone()),
+                icon_large: Some(expected_icon_path),
+                brand_color: None,
+                default_prompt: None,
+            }),
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: Some("twilio-developer-kit@test".to_string()),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn drops_plugin_skill_interface_icons_that_escape_shared_plugin_assets() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_root = root.path().join("plugins/twilio-developer-kit");
+    let skill_path = write_skill_at(
+        &plugin_root.join("skills"),
+        "twilio-send-message",
+        "send-message",
+        "send messages",
+    );
+    let skill_dir = skill_path.parent().expect("skill dir");
+    write_skill_interface_at(
+        skill_dir,
+        r##"
+interface:
+  icon_small: "../../other/logo.svg"
+"##,
+    );
+
+    let outcome = load_skills_from_roots([SkillRoot {
+        path: plugin_root.join("skills").abs(),
+        scope: SkillScope::User,
+        file_system: Arc::clone(&LOCAL_FS),
+        plugin_id: Some("twilio-developer-kit@test".to_string()),
+        plugin_root: Some(plugin_root.abs()),
+    }])
+    .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "send-message".to_string(),
+            description: "send messages".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: Some("twilio-developer-kit@test".to_string()),
+        }]
+    );
+}
+
 #[cfg(unix)]
 fn symlink_dir(target: &Path, link: &Path) {
     std::os::unix::fs::symlink(target, link).unwrap();
@@ -946,6 +1053,7 @@ async fn loads_skills_via_symlinked_subdir_for_admin_scope() {
         scope: SkillScope::Admin,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_root: None,
     }])
     .await;
 
@@ -1027,6 +1135,7 @@ async fn system_scope_ignores_symlinked_subdir() {
         scope: SkillScope::System,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_root: None,
     }])
     .await;
     assert!(
@@ -1060,6 +1169,7 @@ async fn respects_max_scan_depth_for_user_scope() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_root: None,
     }])
     .await;
 
@@ -1166,6 +1276,7 @@ async fn namespaces_plugin_skills_using_plugin_name() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("sample@test".to_string()),
+        plugin_root: Some(plugin_root.abs()),
     }])
     .await;
 
@@ -1187,6 +1298,84 @@ async fn namespaces_plugin_skills_using_plugin_name() {
             scope: SkillScope::User,
             plugin_id: Some("sample@test".to_string()),
         }]
+    );
+}
+
+#[tokio::test]
+async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_name = "p".repeat(MAX_NAME_LEN - 1);
+    let skill_name = "s".repeat(MAX_NAME_LEN);
+    let plugin_root = root.path().join("plugins").join(&plugin_name);
+    let frontmatter = format!("name: {skill_name}\ndescription: search sample data");
+    let skill_path = write_raw_skill_at(&plugin_root.join("skills"), "sample-search", &frontmatter);
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"{plugin_name}"}}"#),
+    )
+    .unwrap();
+
+    let outcome = load_skills_from_roots([SkillRoot {
+        path: plugin_root.join("skills").abs(),
+        scope: SkillScope::User,
+        file_system: Arc::clone(&LOCAL_FS),
+        plugin_id: Some("sample@test".to_string()),
+        plugin_root: Some(plugin_root.abs()),
+    }])
+    .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: format!("{plugin_name}:{skill_name}"),
+            description: "search sample data".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: Some("sample@test".to_string()),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn plugin_skill_name_length_limit_rejects_overlong_qualified_name() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_name = "p".repeat(MAX_NAME_LEN);
+    let skill_name = "s".repeat(MAX_NAME_LEN);
+    let plugin_root = root.path().join("plugins").join(&plugin_name);
+    let frontmatter = format!("name: {skill_name}\ndescription: search sample data");
+    write_raw_skill_at(&plugin_root.join("skills"), "sample-search", &frontmatter);
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"{plugin_name}"}}"#),
+    )
+    .unwrap();
+
+    let outcome = load_skills_from_roots([SkillRoot {
+        path: plugin_root.join("skills").abs(),
+        scope: SkillScope::User,
+        file_system: Arc::clone(&LOCAL_FS),
+        plugin_id: Some("sample@test".to_string()),
+        plugin_root: Some(plugin_root.abs()),
+    }])
+    .await;
+
+    assert_eq!(outcome.skills, Vec::new());
+    assert_eq!(outcome.errors.len(), 1);
+    assert!(
+        outcome.errors[0].message.contains("invalid qualified name"),
+        "expected qualified name length error, got: {:?}",
+        outcome.errors
     );
 }
 
@@ -1488,12 +1677,14 @@ async fn deduplicates_by_path_preferring_first_root() {
             scope: SkillScope::Repo,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,
+            plugin_root: None,
         },
         SkillRoot {
             path: root.path().abs(),
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,
+            plugin_root: None,
         },
     ])
     .await;
@@ -1786,6 +1977,7 @@ async fn skill_roots_include_admin_with_lowest_priority() {
         Some(Arc::clone(&LOCAL_FS)),
         &cfg.config_layer_stack,
         &cfg.cwd,
+        Vec::new(),
         Vec::new(),
     )
     .await

@@ -11,6 +11,8 @@ body:
 
         Make sure you are running the [latest](https://npmjs.com/package/@openai/codex) version of Codex CLI. The bug you are experiencing may already have been fixed.
 
+        If your version supports it, please run `codex doctor --json` and paste the output in the "Codex doctor report" field below. This helps us diagnose install, config, auth, terminal, MCP, network, and local state issues.
+
   - type: input
     id: version
     attributes:
@@ -43,6 +45,16 @@ body:
       description: |
         Also note any multiplexer in use (screen / tmux / zellij).
         E.g., VS Code, Terminal.app, iTerm2, Ghostty, Windows Terminal (WSL / PowerShell)
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Codex doctor report
+      description: |
+        If available, run `codex doctor --json` and paste the full output here.
+
+        The report is designed to redact secrets, but please review it before submitting.
+        If your Codex version does not support `doctor`, write `not available`.
+      render: json
   - type: textarea
     id: actual
     attributes:

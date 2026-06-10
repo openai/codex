@@ -6,12 +6,15 @@ impl ChatWidget {
         notification: ServerNotification,
         replay_kind: Option<ReplayKind>,
     ) {
-        if self.active_side_conversation
-            && replay_kind.is_none()
-            && matches!(notification, ServerNotification::McpServerStatusUpdated(_))
+        // Reject misrouted child updates before shared notification handling mutates parent state.
+        if let ServerNotification::McpServerStatusUpdated(notification) = &notification
+            && let (Some(notification_thread_id), Some(thread_id)) =
+                (notification.thread_id.as_deref(), self.thread_id())
+            && notification_thread_id != thread_id.to_string()
         {
             return;
         }
+
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
@@ -50,6 +53,9 @@ impl ChatWidget {
             }
             ServerNotification::ThreadGoalCleared(notification) => {
                 self.on_thread_goal_cleared(notification.thread_id.as_str());
+            }
+            ServerNotification::ThreadSettingsUpdated(notification) => {
+                self.on_thread_settings_updated(notification);
             }
             ServerNotification::TurnStarted(notification) => {
                 self.turn_lifecycle.last_turn_id = Some(notification.turn.id);
@@ -218,6 +224,7 @@ impl ChatWidget {
             | ServerNotification::ThreadStarted(_)
             | ServerNotification::ThreadStatusChanged(_)
             | ServerNotification::ThreadArchived(_)
+            | ServerNotification::ThreadDeleted(_)
             | ServerNotification::ThreadUnarchived(_)
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
@@ -230,6 +237,7 @@ impl ChatWidget {
             | ServerNotification::RemoteControlStatusChanged(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::FsChanged(_)
+            | ServerNotification::TurnModerationMetadata(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
             | ServerNotification::ThreadRealtimeTranscriptDelta(_)
@@ -246,6 +254,10 @@ impl ChatWidget {
         notification: TurnCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        // User-message dedupe only suppresses the app-server echo of a prompt
+        // this TUI already rendered locally. Once that turn ends, another
+        // client can submit the same text and it still needs its own user cell.
+        self.last_rendered_user_message_display = None;
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;
@@ -325,10 +337,9 @@ impl ChatWidget {
                 reasoning_effort,
                 agents_states,
             }),
-            ThreadItem::EnteredReviewMode { review, .. } => {
-                if !from_replay {
-                    self.enter_review_mode_with_hint(review, /*from_replay*/ false);
-                }
+            item @ ThreadItem::SubAgentActivity { .. } => self.on_sub_agent_activity(item),
+            ThreadItem::EnteredReviewMode { review, .. } if !from_replay => {
+                self.enter_review_mode_with_hint(review, /*from_replay*/ false);
             }
             _ => {}
         }

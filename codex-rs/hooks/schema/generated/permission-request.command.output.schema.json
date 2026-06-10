@@ -2,19 +2,6 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
-    "HookEventNameWire": {
-      "enum": [
-        "PreToolUse",
-        "PermissionRequest",
-        "PostToolUse",
-        "PreCompact",
-        "PostCompact",
-        "SessionStart",
-        "UserPromptSubmit",
-        "Stop"
-      ],
-      "type": "string"
-    },
     "PermissionRequestBehaviorWire": {
       "enum": [
         "allow",
@@ -63,7 +50,8 @@
           "default": null
         },
         "hookEventName": {
-          "$ref": "#/definitions/HookEventNameWire"
+          "const": "PermissionRequest",
+          "type": "string"
         }
       },
       "required": [
