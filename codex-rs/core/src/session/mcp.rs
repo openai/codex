@@ -20,7 +20,6 @@ use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationAction;
 use rmcp::model::Meta;
 use serde_json::Map;
-use std::mem;
 
 const MCP_ELICITATION_DECLINE_MESSAGE_KEY: &str = "message";
 const TOOL_SUGGESTION_ACTION_INSTALL: &str = "install";
@@ -339,15 +338,21 @@ impl Session {
                 turn_context.cwd.to_path_buf(),
             ),
         };
-        let mcp_startup_cancellation_token = CancellationToken::new();
-        let refreshed_manager = match McpConnectionManager::new(
+        let mcp_startup_cancellation_token = {
+            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
+            guard.cancel();
+            let cancellation_token = CancellationToken::new();
+            *guard = cancellation_token.clone();
+            cancellation_token
+        };
+        let refreshed_manager = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
             auth_statuses,
             &turn_context.approval_policy,
             turn_context.sub_id.clone(),
             self.get_tx_event(),
-            mcp_startup_cancellation_token.clone(),
+            mcp_startup_cancellation_token,
             turn_context.permission_profile(),
             mcp_runtime_context,
             config.codex_home.to_path_buf(),
@@ -359,26 +364,14 @@ impl Session {
             auth.as_ref(),
             elicitation_reviewer,
         )
-        .await
-        .validate_required_servers()
-        .await
-        {
-            Ok(manager) => manager,
-            Err(err) => {
-                warn!("failed to refresh MCP servers: {err:#}");
-                return;
-            }
-        };
+        .await;
         {
             let current_manager = self.services.mcp_connection_manager.read().await;
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
         }
         let mut old_manager = {
-            let mut cancellation_token = self.services.mcp_startup_cancellation_token.lock().await;
-            cancellation_token.cancel();
-            *cancellation_token = mcp_startup_cancellation_token;
             let mut manager = self.services.mcp_connection_manager.write().await;
-            mem::replace(&mut *manager, refreshed_manager)
+            std::mem::replace(&mut *manager, refreshed_manager)
         };
         old_manager.shutdown().await;
     }
