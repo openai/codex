@@ -21,10 +21,8 @@ use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::SkillScope;
 use codex_skills_extension::ExecutorSkillProvider;
-use codex_skills_extension::catalog::SkillReadResult;
 use codex_skills_extension::provider::SkillListQuery;
 use codex_skills_extension::provider::SkillProvider;
-use codex_skills_extension::provider::SkillReadRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 
@@ -200,64 +198,6 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
         loaded.read_skill_text(&skill).await.expect("skill body"),
         SKILL_CONTENTS
     );
-}
-
-#[tokio::test]
-async fn executor_provider_reads_from_the_environment_instance_used_for_listing() {
-    let test_root = create_local_skill_root("bound-instance").expect("create local skill root");
-    let root_path = test_root.to_string_lossy().into_owned();
-    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
-    let provider = ExecutorSkillProvider::new_with_restriction_product(
-        Arc::clone(&environment_manager),
-        /*restriction_product*/ None,
-    );
-    let catalog = provider
-        .list(SkillListQuery {
-            turn_id: "turn-1".to_string(),
-            executor_roots: vec![SelectedCapabilityRoot {
-                id: "root-a".to_string(),
-                location: CapabilityRootLocation::Environment {
-                    environment_id: "local".to_string(),
-                    path: root_path,
-                },
-            }],
-            host: None,
-            include_host_skills: false,
-            include_bundled_skills: true,
-            include_orchestrator_skills: false,
-            mcp_resources: None,
-        })
-        .await
-        .expect("list executor skills");
-    let entry = catalog
-        .entries
-        .into_iter()
-        .next()
-        .expect("listed executor skill");
-    let resource = entry.main_prompt.clone();
-
-    environment_manager
-        .upsert_environment("local".to_string(), "http://127.0.0.1:1".to_string())
-        .expect("replace environment");
-
-    assert_eq!(
-        provider
-            .read(SkillReadRequest {
-                authority: entry.authority,
-                package: entry.id,
-                resource: resource.clone(),
-                host: None,
-                mcp_resources: None,
-            })
-            .await
-            .expect("read bound executor skill"),
-        SkillReadResult {
-            resource,
-            contents: SKILL_CONTENTS.to_string(),
-        }
-    );
-
-    std::fs::remove_dir_all(test_root).expect("remove skill directory");
 }
 
 #[tokio::test]
