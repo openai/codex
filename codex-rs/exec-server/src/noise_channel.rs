@@ -1,29 +1,14 @@
 //! Narrow, misuse-resistant wrapper around the Clatter primitives used by the
 //! remote exec-server relay.
 //!
-//! # Protocol overview
+//! The harness initiates hybrid IK and pins the exec-server static key returned
+//! by the registry. The first handshake message lets the exec-server authenticate
+//! the harness static key; the exec-server then asks the registry whether that
+//! key is authorized before completing the handshake.
 //!
-//! Noise is a framework for turning Diffie-Hellman operations into an
-//! authenticated handshake and then an encrypted byte channel. This module uses
-//! the `IK` handshake pattern: the harness is the initiator and already knows
-//! the exec-server's static public key, while the exec-server learns and
-//! authenticates the harness's static public key from the first handshake
-//! message. That lets the harness reject the wrong executor immediately and
-//! gives the executor a cryptographic identity it can authorize with the
-//! environment registry.
-//!
-//! The suite is "hybrid" because the handshake combines classical X25519 with
-//! post-quantum ML-KEM-768. Clatter runs the Noise state machine and mixes both
-//! key-agreement results into the session keys; AWS-LC supplies the ML-KEM
-//! operations. AES-GCM then protects ordered transport records after the two
-//! handshake messages complete.
-//!
-//! The handshake authenticates keys, not product permissions. The first message
-//! therefore carries a registry-issued harness authorization inside its
-//! encrypted payload. The exec-server pauses after authenticating that message,
-//! asks the registry whether the authenticated harness key is allowed, and only
-//! then sends the second handshake message and exposes JSON-RPC. Application
-//! data is never accepted before both checks pass.
+//! "Hybrid" means the session keys include both X25519 and ML-KEM-768 key
+//! agreement. Once the two-message handshake finishes, AES-GCM protects the
+//! ordered transport records carrying JSON-RPC.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -37,10 +22,7 @@ use serde::Serialize;
 
 use crate::aws_lc_ml_kem::AwsLcMlKem768;
 
-/// Stable identifier for the complete handshake and transport algorithm suite.
-///
-/// This value travels with public keys so configuration cannot silently combine
-/// key material generated for a different Noise pattern or algorithm set.
+/// Identifies the handshake pattern and algorithms used by this channel.
 pub const NOISE_CHANNEL_SUITE: &str = "Noise_hybridIK_X25519+MLKEM768_AESGCM_SHA256";
 
 type DhKeyPair = KeyPair<<X25519 as Dh>::PubKey, <X25519 as Dh>::PrivateKey>;
@@ -61,9 +43,6 @@ pub struct NoiseChannelPublicKey {
 
 impl std::fmt::Debug for NoiseChannelPublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Public keys are not secrets, but logging complete identities makes
-        // correlation across environments unnecessarily easy. Keep only the
-        // suite visible in routine diagnostics.
         f.debug_struct("NoiseChannelPublicKey")
             .field("suite", &self.suite)
             .field("x25519_public_key", &"<redacted>")
@@ -73,10 +52,7 @@ impl std::fmt::Debug for NoiseChannelPublicKey {
 }
 
 impl NoiseChannelPublicKey {
-    /// Serialize both public components as one suite-tagged registry value.
-    ///
-    /// Keeping the components together prevents callers from accidentally
-    /// pairing an X25519 key from one identity with an ML-KEM key from another.
+    /// Serialize both public components as one suite-tagged value.
     fn from_keypairs(dh: &DhKeyPair, kem: &KemKeyPair) -> Self {
         Self {
             suite: NOISE_CHANNEL_SUITE.to_string(),
@@ -98,9 +74,6 @@ pub struct NoiseChannelIdentity {
 
 impl std::fmt::Debug for NoiseChannelIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never delegate to the keypair debug implementations: this type owns
-        // both private keys. Its public projection is sufficient to identify
-        // which endpoint identity a log entry refers to.
         f.debug_struct("NoiseChannelIdentity")
             .field("public_key", &self.public_key())
             .finish_non_exhaustive()

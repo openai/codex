@@ -1,9 +1,4 @@
-//! Bridges AWS-LC's ML-KEM-768 implementation into Clatter's `Kem` trait.
-//!
-//! Clatter owns the hybrid Noise state machine, while AWS-LC owns the concrete
-//! post-quantum operations and their randomness. This module is intentionally
-//! limited to converting between the two libraries' fixed-size key, ciphertext,
-//! and shared-secret representations; it does not add protocol behavior.
+//! Clatter's ML-KEM-768 adapter, backed by AWS-LC.
 
 use aws_lc_rs::kem::Ciphertext;
 use aws_lc_rs::kem::DecapsulationKey;
@@ -40,10 +35,6 @@ impl Kem for AwsLcMlKem768 {
     type Ct = HeapArray<CIPHERTEXT_LEN>;
     type Ss = SensitiveByteArray<[u8; SHARED_SECRET_LEN]>;
 
-    // Generate the long-lived static KEM keypair used by hybrid IK. AWS-LC
-    // returns serialized key bytes; copying them into Clatter's fixed-size
-    // containers gives the handshake implementation the exact lengths encoded
-    // by this suite and keeps the secret half in a zeroizing container.
     fn genkey_rng<R: Rng>(_rng: &mut R) -> KemResult<KeyPair<Self::PubKey, Self::SecretKey>> {
         // AWS-LC owns ML-KEM key-generation randomness internally, so
         // Clatter's injectable RNG cannot be plumbed through this provider.
@@ -65,9 +56,6 @@ impl Kem for AwsLcMlKem768 {
         })
     }
 
-    // Parse the peer's serialized public key at the provider boundary, then
-    // return the ciphertext and shared secret in Clatter's fixed-size types.
-    // AWS-LC performs both public-key validation and encapsulation randomness.
     fn encapsulate<R: Rng>(pk: &[u8], _rng: &mut R) -> KemResult<(Self::Ct, Self::Ss)> {
         let encapsulation_key =
             EncapsulationKey::new(&ML_KEM_768, pk).map_err(|_| KemError::Input)?;
@@ -81,8 +69,6 @@ impl Kem for AwsLcMlKem768 {
         ))
     }
 
-    // Reconstruct the provider key from process-local secret bytes and recover
-    // the same shared secret the peer mixed into the hybrid handshake.
     fn decapsulate(ct: &[u8], sk: &[u8]) -> KemResult<Self::Ss> {
         // Reject the length before constructing AWS-LC's ciphertext wrapper.
         // This keeps malformed wire input classified as an input error rather
