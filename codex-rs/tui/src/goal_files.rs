@@ -178,16 +178,9 @@ fn append_section(objective: &mut String, heading: &str, lines: Vec<String>) {
     objective.push_str(&lines.join("\n"));
 }
 
-fn image_extension(path: &Path) -> String {
+fn image_extension(path: &Path) -> &str {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .map(|extension| {
-            extension
-                .chars()
-                .filter(char::is_ascii_alphanumeric)
-                .take(8)
-                .collect::<String>()
-        })
         .filter(|extension| !extension.is_empty())
-        .unwrap_or_else(|| "png".to_string())
+        .unwrap_or("png")
 }
