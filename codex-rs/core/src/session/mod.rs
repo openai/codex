@@ -2673,14 +2673,12 @@ impl Session {
         &self,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
-        mut compacted_item: CompactedItem,
+        compacted_item: CompactedItem,
     ) {
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
         }
-
-        compacted_item.window_id = Some(self.advance_auto_compact_window_id().await);
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
             .await;
@@ -3015,7 +3013,7 @@ impl Session {
         format!("{thread_id}:{window_id}")
     }
 
-    async fn advance_auto_compact_window_id(&self) -> u64 {
+    pub(crate) async fn advance_auto_compact_window_id(&self) -> u64 {
         let mut state = self.state.lock().await;
         state.advance_auto_compact_window_id()
     }

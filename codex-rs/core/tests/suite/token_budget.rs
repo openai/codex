@@ -1,7 +1,11 @@
 use anyhow::Result;
 use codex_features::Feature;
+use codex_model_provider_info::built_in_model_providers;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use core_test_support::PathBufExt;
 use core_test_support::responses::ResponsesRequest;
+use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_response_created;
@@ -11,6 +15,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 
 const CONFIGURED_CONTEXT_WINDOW: i64 = 128_000;
@@ -143,6 +148,63 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
     assert_eq!(
         token_budget_texts(&requests[4]),
         vec![full_context, threshold_25, threshold_50, threshold_75]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![
+                ev_response_created("resp-compact"),
+                ev_assistant_message("msg-compact", "compact summary"),
+                ev_completed("resp-compact"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+
+    let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    model_provider.name = "OpenAI-compatible test provider".to_string();
+    model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    model_provider.supports_websockets = false;
+
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("before compact").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("after compact").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+
+    assert_eq!(
+        token_budget_texts(&requests[2]),
+        vec![format!(
+            "<token_budget>\nCurrent context window 1, window size {EFFECTIVE_CONTEXT_WINDOW} tokens\n</token_budget>"
+        )]
     );
 
     Ok(())
