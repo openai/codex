@@ -18,6 +18,7 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
+use crate::DeleteThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
@@ -115,6 +116,7 @@ pub struct InMemoryThreadStoreCalls {
     pub update_thread_metadata: usize,
     pub archive_thread: usize,
     pub unarchive_thread: usize,
+    pub delete_thread: usize,
 }
 
 /// In-memory [`ThreadStore`] implementation for tests and debug configs.
@@ -177,7 +179,7 @@ impl ThreadStore for InMemoryThreadStore {
             agent_role: params.source.get_agent_role(),
             agent_path: params.source.get_agent_path().map(Into::into),
             source: params.source.clone(),
-            thread_source: params.thread_source,
+            thread_source: params.thread_source.clone(),
             model_provider: Some(params.metadata.model_provider.clone()),
             base_instructions: Some(params.base_instructions.clone()),
             dynamic_tools: (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone()),
@@ -333,6 +335,25 @@ impl ThreadStore for InMemoryThreadStore {
         state.calls.unarchive_thread += 1;
         stored_thread_from_state(&state, params.thread_id, /*include_history*/ false)
     }
+
+    async fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreResult<()> {
+        let mut state = self.state.lock().await;
+        state.calls.delete_thread += 1;
+        let existed = state.histories.remove(&params.thread_id).is_some();
+        state.created_threads.remove(&params.thread_id);
+        state.names.remove(&params.thread_id);
+        state.metadata_updates.remove(&params.thread_id);
+        state
+            .rollout_paths
+            .retain(|_, thread_id| *thread_id != params.thread_id);
+        if existed {
+            Ok(())
+        } else {
+            Err(ThreadStoreError::ThreadNotFound {
+                thread_id: params.thread_id,
+            })
+        }
+    }
 }
 
 fn stored_thread_from_state(
@@ -392,8 +413,8 @@ fn stored_thread_from_state(
             .and_then(|metadata| metadata.source.clone())
             .unwrap_or_else(|| created.source.clone()),
         thread_source: metadata
-            .and_then(|metadata| metadata.thread_source)
-            .unwrap_or(created.thread_source),
+            .and_then(|metadata| metadata.thread_source.clone())
+            .unwrap_or_else(|| created.thread_source.clone()),
         agent_nickname: metadata.and_then(|metadata| metadata.agent_nickname.clone().flatten()),
         agent_role: metadata.and_then(|metadata| metadata.agent_role.clone().flatten()),
         agent_path: metadata.and_then(|metadata| metadata.agent_path.clone().flatten()),

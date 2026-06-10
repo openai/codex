@@ -95,6 +95,7 @@ pub use tool_discovery::ToolSearchSourceInfo;
 pub use tool_discovery::collect_request_plugin_install_entries;
 pub use tool_discovery::filter_request_plugin_install_discoverable_tools_for_client;
 pub use tool_executor::ToolExecutor;
+pub use tool_executor::ToolExecutorFuture;
 pub use tool_executor::ToolExposure;
 pub use tool_output::JsonToolOutput;
 pub use tool_output::ToolOutput;

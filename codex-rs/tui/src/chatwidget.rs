@@ -58,7 +58,6 @@ use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
 use crate::diff_model::FileChange;
 use crate::git_action_directives::parse_assistant_markdown;
-use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
 use crate::legacy_core::config::ConstraintResult;
@@ -255,6 +254,11 @@ fn queued_message_edit_hint_binding(
         .contains(&terminal_binding)
         .then_some(terminal_binding)
         .or_else(|| bindings.first().copied())
+}
+
+fn normalize_thread_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 use crate::app_event::AppEvent;

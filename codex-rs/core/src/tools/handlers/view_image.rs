@@ -64,7 +64,6 @@ enum ViewImageDetail {
     Original,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ViewImageHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("view_image")
@@ -78,7 +77,13 @@ impl ToolExecutor<ToolInvocation> for ViewImageHandler {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ViewImageHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {

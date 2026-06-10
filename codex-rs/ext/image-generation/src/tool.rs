@@ -79,7 +79,6 @@ struct ImagegenArgs {
     num_last_images_to_include: Option<usize>,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolCall> for ImageGenerationTool {
     /// Keeps the tool in the existing image-generation Responses namespace.
     fn tool_name(&self) -> ToolName {
@@ -97,7 +96,13 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
     }
 
     /// Executes the selected image operation and returns the completed image result.
-    async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+    fn handle(&self, call: ToolCall) -> codex_extension_api::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(call))
+    }
+}
+
+impl ImageGenerationTool {
+    async fn handle_call(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
         let referenced_images = load_referenced_images(&args, call.file_reader.as_deref()).await?;
         let request =

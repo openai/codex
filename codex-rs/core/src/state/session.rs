@@ -140,12 +140,20 @@ impl SessionState {
         self.auto_compact_window.set_estimated_prefill(tokens);
     }
 
-    pub(crate) fn start_next_auto_compact_window(&mut self) {
-        self.auto_compact_window.start_next();
-    }
-
     pub(crate) fn auto_compact_window_snapshot(&self) -> AutoCompactWindowSnapshot {
         self.auto_compact_window.snapshot()
+    }
+
+    pub(crate) fn auto_compact_window_id(&self) -> u64 {
+        self.auto_compact_window.window_id()
+    }
+
+    pub(crate) fn set_auto_compact_window_id(&mut self, window_id: u64) {
+        self.auto_compact_window.set_window_id(window_id);
+    }
+
+    pub(crate) fn advance_auto_compact_window_id(&mut self) -> u64 {
+        self.auto_compact_window.advance_window_id()
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {

@@ -1374,7 +1374,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             },
             model: "gpt-5".to_string(),
             ephemeral: true,
-            thread_source: Some(ThreadSource::User),
+            thread_source: Some(ThreadSource::Feature("automation".to_string())),
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
@@ -1407,7 +1407,7 @@ fn thread_initialized_event_serializes_expected_shape() {
                 },
                 "model": "gpt-5",
                 "ephemeral": true,
-                "thread_source": "user",
+                "thread_source": "automation",
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
@@ -1937,6 +1937,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                     decision: GuardianReviewDecision::Denied,
                     terminal_status: GuardianReviewTerminalStatus::TimedOut,
                     failure_reason: Some(GuardianReviewFailureReason::Timeout),
+                    attempt_count: 1,
                     risk_level: None,
                     user_authorization: None,
                     outcome: None,
@@ -2008,6 +2009,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
     );
     assert_eq!(payload[0]["event_params"]["terminal_status"], "timed_out");
     assert_eq!(payload[0]["event_params"]["failure_reason"], "timeout");
+    assert_eq!(payload[0]["event_params"]["attempt_count"], 1);
     assert_eq!(payload[0]["event_params"]["review_timeout_ms"], 90_000);
 }
 

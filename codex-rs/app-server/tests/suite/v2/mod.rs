@@ -12,6 +12,7 @@ mod connection_handling_websocket;
 #[cfg(unix)]
 mod connection_handling_websocket_unix;
 mod dynamic_tools;
+mod executor_skills;
 mod experimental_api;
 mod experimental_feature_list;
 mod external_agent_config;
@@ -49,6 +50,7 @@ mod review;
 mod safety_check_downgrade;
 mod skills_list;
 mod thread_archive;
+mod thread_delete;
 mod thread_fork;
 mod thread_inject_items;
 mod thread_list;
