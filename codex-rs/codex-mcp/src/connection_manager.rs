@@ -348,6 +348,10 @@ impl McpConnectionManager {
         !self.clients.is_empty()
     }
 
+    pub(crate) fn contains_server(&self, server_name: &str) -> bool {
+        self.clients.contains_key(server_name)
+    }
+
     /// Drain all MCP clients from this manager and return a future that stops
     /// them and terminates their stdio server processes.
     pub fn begin_shutdown(&mut self) -> impl std::future::Future<Output = ()> + Send + 'static {

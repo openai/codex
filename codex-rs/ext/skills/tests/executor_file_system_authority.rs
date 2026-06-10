@@ -225,6 +225,7 @@ async fn executor_provider_reads_from_the_environment_instance_used_for_listing(
             include_host_skills: false,
             include_bundled_skills: true,
             include_remote_skills: false,
+            mcp_resources: None,
         })
         .await
         .expect("list executor skills");
@@ -246,6 +247,7 @@ async fn executor_provider_reads_from_the_environment_instance_used_for_listing(
                 package: entry.id,
                 resource: resource.clone(),
                 host: None,
+                mcp_resources: None,
             })
             .await
             .expect("read bound executor skill"),
@@ -272,7 +274,6 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
         Arc::new(EnvironmentManager::default_for_tests()),
         /*restriction_product*/ None,
     );
-
     let catalog = provider
         .list(SkillListQuery {
             turn_id: "turn-1".to_string(),
@@ -290,6 +291,7 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
             include_host_skills: false,
             include_bundled_skills: true,
             include_remote_skills: false,
+            mcp_resources: None,
         })
         .await
         .expect("list executor skills");

@@ -2,10 +2,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+mod backend;
 mod executor;
 mod host;
 
 use codex_core_skills::HostLoadedSkills;
+use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 use crate::catalog::SkillAuthority;
@@ -16,6 +18,7 @@ use crate::catalog::SkillReadResult;
 use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSearchResult;
 
+pub use backend::BackendSkillProvider;
 pub use executor::ExecutorSkillProvider;
 pub use host::HostSkillProvider;
 
@@ -27,6 +30,7 @@ pub struct SkillListQuery {
     pub include_host_skills: bool,
     pub include_bundled_skills: bool,
     pub include_remote_skills: bool,
+    pub mcp_resources: Option<Arc<McpResourceClient>>,
 }
 
 #[derive(Clone, Debug)]
@@ -35,6 +39,7 @@ pub struct SkillReadRequest {
     pub package: SkillPackageId,
     pub resource: SkillResourceId,
     pub host: Option<Arc<HostLoadedSkills>>,
+    pub mcp_resources: Option<Arc<McpResourceClient>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

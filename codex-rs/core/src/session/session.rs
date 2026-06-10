@@ -957,8 +957,20 @@ impl Session {
                     .effective_agent_max_threads(MultiAgentVersion::V2)
                     .unwrap_or(usize::MAX),
             );
+            // Keep one stable manager handle for the session so extension resource clients
+            // automatically observe the manager installed at startup and on later refreshes.
+            let mcp_connection_manager = Arc::new(RwLock::new(
+                McpConnectionManager::new_uninitialized_with_permission_profile(
+                    &config.permissions.approval_policy,
+                    config.permissions.permission_profile(),
+                    config.prefix_mcp_tool_names(),
+                ),
+            ));
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
+            session_extension_data.insert(McpResourceClient::new(Arc::clone(
+                &mcp_connection_manager,
+            )));
             let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
                 thread_id.to_string(),
                 thread_extension_init,
@@ -981,13 +993,7 @@ impl Session {
                 // before any MCP-related events. It is reasonable to consider
                 // changing this to use Option or OnceCell, though the current
                 // setup is straightforward enough and performs well.
-                mcp_connection_manager: Arc::new(RwLock::new(
-                    McpConnectionManager::new_uninitialized_with_permission_profile(
-                        &config.permissions.approval_policy,
-                        config.permissions.permission_profile(),
-                        config.prefix_mcp_tool_names(),
-                    ),
-                )),
+                mcp_connection_manager,
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,

@@ -17,6 +17,7 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
+use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -84,7 +85,7 @@ impl ConfigContributor<Config> for SkillsExtension {
 impl ContextContributor for SkillsExtension {
     fn contribute<'a>(
         &'a self,
-        _session_store: &'a ExtensionData,
+        session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
@@ -92,7 +93,7 @@ impl ContextContributor for SkillsExtension {
                 return Vec::new();
             };
             let config = thread_state.config();
-            if !config.include_instructions || thread_state.selected_roots().is_empty() {
+            if !config.include_instructions {
                 return Vec::new();
             }
             let catalog = self
@@ -103,7 +104,8 @@ impl ContextContributor for SkillsExtension {
                     host: None,
                     include_host_skills: false,
                     include_bundled_skills: config.bundled_skills_enabled,
-                    include_remote_skills: false,
+                    include_remote_skills: true,
+                    mcp_resources: session_store.get::<McpResourceClient>(),
                 })
                 .await;
             for warning in &catalog.warnings {
@@ -121,7 +123,7 @@ impl TurnInputContributor for SkillsExtension {
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext,
-        _session_store: &'a ExtensionData,
+        session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>> {
@@ -139,6 +141,7 @@ impl TurnInputContributor for SkillsExtension {
                 include_host_skills: true,
                 include_bundled_skills: config.bundled_skills_enabled,
                 include_remote_skills: true,
+                mcp_resources: session_store.get::<McpResourceClient>(),
             };
             let catalog = self.providers.list_for_turn(query).await;
             for warning in &catalog.warnings {
@@ -149,9 +152,10 @@ impl TurnInputContributor for SkillsExtension {
             let mut fragments: Vec<Box<dyn ContextualUserFragment + Send>> = Vec::new();
             if config.include_instructions {
                 let mut turn_catalog = catalog.clone();
-                turn_catalog
-                    .entries
-                    .retain(|entry| entry.authority.kind != SkillSourceKind::Executor);
+                turn_catalog.entries.retain(|entry| {
+                    entry.authority.kind != SkillSourceKind::Executor
+                        && entry.authority.kind != SkillSourceKind::Remote
+                });
                 if let Some(fragment) = available_skills_fragment(&turn_catalog) {
                     fragments.push(Box::new(fragment));
                 }
@@ -162,7 +166,7 @@ impl TurnInputContributor for SkillsExtension {
             let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
             for entry in &selected_entries {
                 match self
-                    .read_main_prompt(entry, host_loaded_skills.clone())
+                    .read_main_prompt(entry, host_loaded_skills.clone(), session_store)
                     .await
                 {
                     Ok(read_result) => {
@@ -236,6 +240,7 @@ impl SkillsExtension {
         &self,
         entry: &SkillCatalogEntry,
         host_loaded_skills: Option<Arc<HostLoadedSkills>>,
+        session_store: &ExtensionData,
     ) -> Result<SkillReadResult, String> {
         self.providers
             .read(SkillReadRequest {
@@ -243,6 +248,7 @@ impl SkillsExtension {
                 package: entry.id.clone(),
                 resource: entry.main_prompt.clone(),
                 host: host_loaded_skills,
+                mcp_resources: session_store.get::<McpResourceClient>(),
             })
             .await
             .map_err(|err| err.message)

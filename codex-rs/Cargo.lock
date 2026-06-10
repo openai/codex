@@ -3821,6 +3821,7 @@ dependencies = [
  "codex-core-skills",
  "codex-exec-server",
  "codex-extension-api",
+ "codex-mcp",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-string",
