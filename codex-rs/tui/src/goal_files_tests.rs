@@ -101,3 +101,23 @@ async fn plain_objective_does_not_need_codex_home() {
 
     assert_eq!(objective, "read src/lib.rs");
 }
+
+#[tokio::test]
+async fn deleted_paste_placeholder_does_not_materialize_or_need_codex_home() {
+    let mut store = RecordingStore::default();
+
+    let objective = materialize_goal_draft(
+        &mut store,
+        /*codex_home*/ None,
+        GoalDraft {
+            objective: "small goal".to_string(),
+            pending_pastes: vec![("[Pasted Content 5 chars]".to_string(), "hello".to_string())],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("materialize plain goal draft");
+
+    assert_eq!(objective, "small goal");
+    assert!(store.writes.is_empty());
+}

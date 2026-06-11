@@ -4,6 +4,7 @@
 //! server's Codex home directory. The persisted goal objective keeps references
 //! to those files so later continuations can read them by path.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -13,23 +14,9 @@ use crate::bottom_pane::LocalImageAttachment;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
-use codex_app_server_client::AppServerRequestHandle;
-use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::FsCreateDirectoryParams;
-use codex_app_server_protocol::FsCreateDirectoryResponse;
-use codex_app_server_protocol::FsReadFileParams;
-use codex_app_server_protocol::FsReadFileResponse;
-use codex_app_server_protocol::FsWriteFileParams;
-use codex_app_server_protocol::FsWriteFileResponse;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::RequestId;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use serde::de::DeserializeOwned;
-use serde_json::json;
 use uuid::Uuid;
 
 const GOAL_ATTACHMENT_DIR: &str = "attachments";
@@ -74,111 +61,22 @@ pub(crate) type GoalFilePath = String;
 
 impl GoalFileStore for AppServerSession {
     async fn create_directory(&mut self, path: GoalFilePath) -> Result<()> {
-        let _: FsCreateDirectoryResponse = request_goal_fs(
-            self,
-            "fs/createDirectory",
-            ClientRequest::FsCreateDirectory {
-                request_id: goal_request_id(),
-                params: FsCreateDirectoryParams {
-                    path: local_goal_file_path(&path)?,
-                    recursive: Some(true),
-                },
-            },
-            json!({
-                "path": path,
-                "recursive": true,
-            }),
-        )
-        .await?;
-        Ok(())
+        self.fs_create_directory_path(&path, /*recursive*/ true)
+            .await
+            .map_err(|err| anyhow::anyhow!("{err}"))
     }
 
     async fn write_file(&mut self, path: GoalFilePath, bytes: Vec<u8>) -> Result<()> {
-        let data_base64 = STANDARD.encode(bytes);
-        let _: FsWriteFileResponse = request_goal_fs(
-            self,
-            "fs/writeFile",
-            ClientRequest::FsWriteFile {
-                request_id: goal_request_id(),
-                params: FsWriteFileParams {
-                    path: local_goal_file_path(&path)?,
-                    data_base64: data_base64.clone(),
-                },
-            },
-            json!({
-                "path": path,
-                "dataBase64": data_base64,
-            }),
-        )
-        .await?;
-        Ok(())
+        self.fs_write_file_path(&path, bytes)
+            .await
+            .map_err(|err| anyhow::anyhow!("{err}"))
     }
 
     async fn read_file(&mut self, path: GoalFilePath) -> Result<Vec<u8>> {
-        let response: FsReadFileResponse = request_goal_fs(
-            self,
-            "fs/readFile",
-            ClientRequest::FsReadFile {
-                request_id: goal_request_id(),
-                params: FsReadFileParams {
-                    path: local_goal_file_path(&path)?,
-                },
-            },
-            json!({ "path": path }),
-        )
-        .await?;
-        STANDARD
-            .decode(response.data_base64)
-            .context("fs/readFile returned invalid base64 data")
+        self.fs_read_file_path(&path)
+            .await
+            .map_err(|err| anyhow::anyhow!("{err}"))
     }
-}
-
-async fn request_goal_fs<T>(
-    app_server: &AppServerSession,
-    method: &str,
-    local_request: ClientRequest,
-    remote_params: serde_json::Value,
-) -> Result<T>
-where
-    T: DeserializeOwned,
-{
-    if app_server.uses_remote_workspace() {
-        return remote_json_rpc_typed(app_server, method, remote_params).await;
-    }
-    app_server
-        .request_handle()
-        .request_typed(local_request)
-        .await
-        .with_context(|| format!("{method} failed in TUI"))
-}
-
-async fn remote_json_rpc_typed<T>(
-    app_server: &AppServerSession,
-    method: &str,
-    params: serde_json::Value,
-) -> Result<T>
-where
-    T: DeserializeOwned,
-{
-    let AppServerRequestHandle::Remote(handle) = app_server.request_handle() else {
-        bail!("raw JSON-RPC requests are only supported by the remote app-server client");
-    };
-    let response = handle
-        .request_json_rpc(JSONRPCRequest {
-            id: goal_request_id(),
-            method: method.to_string(),
-            params: Some(params),
-            trace: None,
-        })
-        .await
-        .with_context(|| format!("{method} failed in TUI"))?;
-    let result =
-        response.map_err(|source| anyhow::anyhow!("{method} failed in TUI: {}", source.message))?;
-    serde_json::from_value(result).with_context(|| format!("{method} returned invalid data"))
-}
-
-fn goal_request_id() -> RequestId {
-    RequestId::String(format!("goal-files-{}", Uuid::new_v4()))
 }
 
 pub(crate) fn codex_home_for_app_server(
@@ -190,11 +88,6 @@ pub(crate) fn codex_home_for_app_server(
     } else {
         Some(local_codex_home.display().to_string())
     }
-}
-
-fn local_goal_file_path(path: &GoalFilePath) -> Result<AbsolutePathBuf> {
-    AbsolutePathBuf::from_absolute_path_checked(path)
-        .with_context(|| format!("invalid local goal file path {path}"))
 }
 
 fn join_goal_path(path: &str, segment: impl AsRef<str>) -> GoalFilePath {
@@ -240,13 +133,20 @@ pub(crate) async fn materialize_goal_draft(
         bail!("Goal objective must not be empty.");
     }
     let text_elements = draft.text_elements;
+    let mut active_paste_placeholders =
+        active_paste_placeholder_counts(&objective, &text_elements, &draft.pending_pastes);
 
     let mut output_dir = None;
     let mut replacements = Vec::new();
-    for (idx, (placeholder, text)) in draft.pending_pastes.iter().enumerate() {
+    let mut paste_idx = 0;
+    for (placeholder, text) in draft.pending_pastes.iter() {
+        if !take_active_placeholder(&mut active_paste_placeholders, placeholder) {
+            continue;
+        }
+        paste_idx += 1;
         let path = join_goal_path(
             &ensure_output_dir(store, codex_home, &mut output_dir).await?,
-            format!("pasted-text-{}.txt", idx + 1),
+            format!("pasted-text-{paste_idx}.txt"),
         );
         write_file(store, path.clone(), text.as_bytes().to_vec()).await?;
 
@@ -296,6 +196,37 @@ pub(crate) async fn materialize_goal_draft(
     }
 
     Ok(objective)
+}
+
+fn active_paste_placeholder_counts(
+    objective: &str,
+    text_elements: &[TextElement],
+    pending_pastes: &[(String, String)],
+) -> HashMap<String, usize> {
+    let mut counts = pending_pastes
+        .iter()
+        .map(|(placeholder, _)| (placeholder.clone(), 0))
+        .collect::<HashMap<_, _>>();
+    for element in text_elements {
+        if let Some(count) = element
+            .placeholder(objective)
+            .and_then(|placeholder| counts.get_mut(placeholder))
+        {
+            *count += 1;
+        }
+    }
+    counts
+}
+
+fn take_active_placeholder(counts: &mut HashMap<String, usize>, placeholder: &str) -> bool {
+    let Some(count) = counts.get_mut(placeholder) else {
+        return false;
+    };
+    if *count == 0 {
+        return false;
+    }
+    *count -= 1;
+    true
 }
 
 pub(crate) async fn objective_text_for_edit(

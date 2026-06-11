@@ -88,6 +88,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -4146,6 +4147,51 @@ async fn make_test_app_with_channels() -> (
         rx,
         op_rx,
     )
+}
+
+#[tokio::test]
+async fn set_thread_goal_draft_materializes_long_objective_before_goal_set() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("thread/start should succeed");
+    let thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await
+        .expect("primary thread should be registered");
+    let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
+
+    app.set_thread_goal_draft(
+        &mut app_server,
+        thread_id,
+        crate::goal_files::GoalDraft {
+            objective: objective.clone(),
+            ..Default::default()
+        },
+        crate::app_event::ThreadGoalSetMode::ConfirmIfExists,
+    )
+    .await;
+
+    let goal = app_server
+        .thread_goal_get(thread_id)
+        .await?
+        .goal
+        .expect("goal should be set");
+    let path = crate::goal_files::objective_file_path(&goal.objective)
+        .expect("goal objective should be a managed file reference");
+    assert!(path.contains("attachments"));
+    assert_eq!(
+        crate::goal_files::objective_text_for_edit(&mut app_server, &goal.objective)
+            .await
+            .expect("managed goal file should be readable"),
+        objective
+    );
+    app_server.shutdown().await?;
+    Ok(())
 }
 
 fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
