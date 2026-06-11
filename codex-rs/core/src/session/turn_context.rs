@@ -1,5 +1,6 @@
 use super::*;
 use crate::SkillLoadOutcome;
+use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_core_skills::HostLoadedSkills;
@@ -525,12 +526,6 @@ impl Session {
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
         extension_data.insert(HostLoadedSkills::new(Arc::clone(&skills_outcome)));
-        // TODO(anp): Preserve the creation-time cwd here once dynamic environments can change a
-        // thread's cwd after its AGENTS.md instructions are loaded.
-        let user_instructions = session_configuration
-            .loaded_agents_md
-            .as_ref()
-            .map(|loaded_agents_md| loaded_agents_md.render(&cwd));
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),
@@ -555,7 +550,10 @@ impl Session {
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
-            user_instructions,
+            user_instructions: session_configuration
+                .loaded_agents_md
+                .as_ref()
+                .map(LoadedAgentsMd::render),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             multi_agent_version,
             personality: session_configuration.personality,

@@ -52,8 +52,12 @@ pub(crate) async fn load_project_instructions(
     environments: &ResolvedTurnEnvironments,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
+    loaded.cwd = Some(config.cwd.clone());
     let primary_environment = environments.primary();
     for turn_environment in &environments.turn_environments {
+        // Preserve whether each source belongs to the primary even when the primary contributes
+        // no instructions. Secondary-only instructions must still use the labeled layout rather
+        // than the legacy wrapper, which would falsely attribute them to the primary cwd.
         let is_primary =
             primary_environment.is_some_and(|primary| std::ptr::eq(primary, turn_environment));
         let project_environment = ProjectEnvironment {
@@ -291,6 +295,9 @@ pub struct LoadedAgentsMd {
 
     /// Ordered instructions and their provenance.
     entries: Vec<InstructionEntry>,
+
+    /// Creation-time cwd used by the legacy contextual wrapper.
+    cwd: Option<AbsolutePathBuf>,
 }
 
 impl LoadedAgentsMd {
@@ -305,6 +312,7 @@ impl LoadedAgentsMd {
                 source: path,
             }),
             entries: Vec::new(),
+            cwd: None,
         }
     }
 
@@ -313,6 +321,7 @@ impl LoadedAgentsMd {
             user_instructions: user_instructions
                 .filter(|instructions| !instructions.text.trim().is_empty()),
             entries: Vec::new(),
+            cwd: None,
         }
     }
 
@@ -331,6 +340,7 @@ impl LoadedAgentsMd {
                 contents,
                 provenance: InstructionProvenance::Internal,
             }],
+            cwd: None,
         }
     }
 
@@ -420,13 +430,15 @@ impl LoadedAgentsMd {
     }
 
     /// Returns the complete model-visible contextual user fragment.
-    pub(crate) fn render(&self, directory: &AbsolutePathBuf) -> String {
+    pub(crate) fn render(&self) -> String {
         // The legacy wrapper attributes the complete fragment to the primary cwd. Once a
         // non-primary environment contributes, the body labels every environment itself, so the
         // outer cwd must be omitted to avoid falsely attributing secondary instructions to it.
         ContextUserInstructions {
             directory: (!self.uses_environment_labels())
-                .then(|| directory.to_string_lossy().into_owned()),
+                .then_some(self.cwd.as_ref())
+                .flatten()
+                .map(|cwd| cwd.to_string_lossy().into_owned()),
             text: self.text(),
         }
         .render()

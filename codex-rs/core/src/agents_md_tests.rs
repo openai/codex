@@ -426,6 +426,7 @@ fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
             contents: String::new(),
             provenance: InstructionProvenance::Internal,
         }],
+        cwd: None,
     };
     let whitespace = LoadedAgentsMd {
         user_instructions: None,
@@ -433,6 +434,7 @@ fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
             contents: " \n\t".to_string(),
             provenance: InstructionProvenance::Internal,
         }],
+        cwd: None,
     };
 
     assert!(empty.is_empty());
@@ -524,6 +526,7 @@ async fn total_byte_limit_truncates_later_project_docs() {
                 ),
             },
         ],
+        cwd: Some(config.cwd.clone()),
     };
 
     assert_eq!(loaded, expected);
@@ -676,7 +679,7 @@ async fn multiple_environment_docs_use_labeled_layout_and_preserve_source_order(
     assert_eq!(loaded.text(), inner);
     let expected_fragment =
         format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{inner}\n</INSTRUCTIONS>");
-    assert_eq!(loaded.render(&config.cwd), expected_fragment);
+    assert_eq!(loaded.render(), expected_fragment);
     assert_eq!(
         loaded.sources().cloned().collect::<Vec<_>>(),
         vec![
@@ -717,7 +720,7 @@ async fn secondary_only_project_doc_uses_labeled_layout() {
     assert_eq!(loaded.text(), inner);
     let expected_fragment =
         format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{inner}\n</INSTRUCTIONS>");
-    assert_eq!(loaded.render(&config.cwd), expected_fragment);
+    assert_eq!(loaded.render(), expected_fragment);
 }
 
 #[tokio::test]
@@ -743,7 +746,7 @@ async fn primary_only_project_doc_preserves_legacy_layout_with_multiple_bound_en
         "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\n{inner}\n</INSTRUCTIONS>",
         primary.path().display()
     );
-    assert_eq!(loaded.render(&config.cwd), expected_fragment);
+    assert_eq!(loaded.render(), expected_fragment);
 }
 
 #[tokio::test]
@@ -921,6 +924,7 @@ async fn concatenates_root_and_cwd_docs() {
                 provenance: primary_project_provenance(crate_agents.clone(), cfg.cwd.clone()),
             },
         ],
+        cwd: Some(cfg.cwd.clone()),
     };
 
     assert_eq!(loaded, expected);
@@ -1046,6 +1050,7 @@ async fn child_agents_message_after_global_instructions_uses_plain_separator() {
             contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
             provenance: InstructionProvenance::Internal,
         }],
+        cwd: Some(cfg.cwd.clone()),
     };
 
     assert_eq!(loaded, expected);
@@ -1080,6 +1085,7 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
             contents: "project doc".to_string(),
             provenance: primary_project_provenance(project_agents.clone(), cfg.cwd.clone()),
         }],
+        cwd: Some(cfg.cwd.clone()),
     };
     assert_eq!(loaded, expected);
     assert_eq!(loaded.user_instructions(), cfg.user_instructions.as_ref());
@@ -1125,6 +1131,7 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
                 provenance: InstructionProvenance::Internal,
             },
         ],
+        cwd: Some(cfg.cwd.clone()),
     };
     assert_eq!(loaded, expected);
     assert_eq!(
