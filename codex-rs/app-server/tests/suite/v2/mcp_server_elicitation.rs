@@ -450,15 +450,17 @@ impl ServerHandler for ElicitationAppsMcpServer {
             return Ok(CallToolResult::success(vec![Content::text(output)]));
         }
 
-        let openai_form_capabilities = context
-            .peer
-            .peer_info()
-            .and_then(|info| info.capabilities.extensions.as_ref())
-            .and_then(|extensions| extensions.get("openai/form"))
-            .expect("Codex should advertise the negotiated openai/form extension");
         assert_eq!(
-            openai_form_capabilities.get("fieldTypes"),
-            Some(&json!(["openai/file"]))
+            context
+                .peer
+                .peer_info()
+                .and_then(|info| info.capabilities.extensions.as_ref())
+                .and_then(|extensions| extensions.get("openai/form"))
+                .cloned()
+                .map(Value::Object),
+            Some(json!({
+                "fieldTypes": ["openai/file"]
+            }))
         );
 
         let result = context
