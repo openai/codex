@@ -228,6 +228,9 @@ impl CodexErr {
             CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
                 http_status_code: self.http_status_code_value(),
             },
+            CodexErr::Stream(..) => CodexErrorInfo::ResponseStreamDisconnected {
+                http_status_code: self.http_status_code_value(),
+            },
             CodexErr::ConnectionFailed(_) => CodexErrorInfo::HttpConnectionFailed {
                 http_status_code: self.http_status_code_value(),
             },
