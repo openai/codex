@@ -84,7 +84,16 @@ impl ToolExecutor<ToolCall> for ReadTool {
                     mcp_resources: self.context.mcp_resources.clone(),
                 })
                 .await
-                .map_err(|err| FunctionCallError::RespondToModel(err.message))?;
+                .map_err(|err| {
+                    tracing::warn!(
+                        error = %err,
+                        turn_id = %call.turn_id,
+                        call_id = %call.call_id,
+                        resource = requested_resource.as_str(),
+                        "skills.read provider request failed"
+                    );
+                    FunctionCallError::RespondToModel("failed to read skill resource".to_string())
+                })?;
             if result.resource != requested_resource {
                 return Err(FunctionCallError::Fatal(
                     "skill provider returned a different resource".to_string(),
