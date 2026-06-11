@@ -1,7 +1,4 @@
-use std::any::Any;
-use std::fmt;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -103,29 +100,16 @@ pub struct ResumeThreadParams {
     pub metadata: ThreadPersistenceMetadata,
 }
 
-/// Opaque append-time mutation prepared by a concrete store's live-history recorder.
-///
-/// The upstream thread-store crate only guarantees that prepared mutations can travel from
-/// [`LiveHistoryRecorder`](crate::LiveHistoryRecorder) to the matching [`ThreadStore`](crate::ThreadStore).
-/// Concrete stores own the mutation schema and may downcast to their implementation-specific type.
-pub trait ThreadHistoryMutation: Any + fmt::Debug + Send + Sync {
-    fn as_any(&self) -> &dyn Any;
-}
-
-/// Shared handle for an opaque append-time mutation.
-pub type PreparedThreadHistoryMutation = Arc<dyn ThreadHistoryMutation>;
-
 /// Parameters for appending rollout items to a live thread.
 #[derive(Clone, Debug)]
 pub struct AppendThreadItemsParams {
     /// Thread id to append to.
     pub thread_id: ThreadId,
-    /// Items to append in order.
+    /// Raw rollout items to append in order.
+    ///
+    /// Store implementations are responsible for applying the shared rollout persistence policy
+    /// before writing durable replay history or any implementation-owned projections.
     pub items: Vec<RolloutItem>,
-    /// Durable read-model/outbox mutations prepared above the concrete store.
-    pub thread_history_mutations: Vec<PreparedThreadHistoryMutation>,
-    /// Optional idempotency key for the canonical items plus prepared mutations.
-    pub writer_commit_id: Option<String>,
 }
 
 /// Parameters for loading persisted history for resume, fork, rollback, and memory jobs.

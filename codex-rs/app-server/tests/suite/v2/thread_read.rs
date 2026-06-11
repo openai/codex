@@ -484,8 +484,6 @@ async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_pa
         .append_items(AppendThreadItemsParams {
             thread_id,
             items: store_history_items(),
-            thread_history_mutations: Vec::new(),
-            writer_commit_id: None,
         })
         .await?;
 
@@ -1377,8 +1375,6 @@ async fn seed_pathless_store_thread(
         .append_items(AppendThreadItemsParams {
             thread_id,
             items: store_history_items(),
-            thread_history_mutations: Vec::new(),
-            writer_commit_id: None,
         })
         .await?;
     store

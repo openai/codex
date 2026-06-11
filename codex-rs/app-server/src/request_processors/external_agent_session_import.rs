@@ -228,8 +228,6 @@ impl ExternalAgentSessionImporter {
                 .append_items(AppendThreadItemsParams {
                     thread_id,
                     items: rollout_items,
-                    thread_history_mutations: Vec::new(),
-                    writer_commit_id: None,
                 })
                 .await
         {
