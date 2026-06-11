@@ -9,7 +9,10 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
+use tracing::Instrument as _;
 use tracing::info;
+use tracing::instrument;
+use tracing::trace_span;
 use tracing::warn;
 
 use crate::SkillLoadOutcome;
@@ -100,6 +103,7 @@ impl SkillsManager {
     /// This path uses a cache keyed by the effective skill-relevant config state rather than just
     /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
     /// to share a directory.
+    #[instrument(level = "trace", skip_all)]
     pub async fn skills_for_config(
         &self,
         input: &SkillsLoadInput,
@@ -112,7 +116,10 @@ impl SkillsManager {
             return outcome;
         }
 
-        let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
+        let outcome = self
+            .build_skill_outcome(roots, &skill_config_rules)
+            .instrument(trace_span!("skills_for_config.build_outcome"))
+            .await;
         let mut cache = self
             .cache_by_config
             .write()
