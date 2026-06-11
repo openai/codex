@@ -1066,6 +1066,7 @@ async fn interrupt_and_drain_turn(codex: &Codex, expected_turn_id: &str) -> anyh
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::error::CodexErr;
     use codex_protocol::protocol::AgentStatus;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Submission;
@@ -1648,6 +1649,59 @@ mod tests {
         };
         assert_eq!(error.to_string(), "temporary failure");
         assert_eq!(error_info, Some(CodexErrorInfo::ServerOverloaded));
+        assert!(keep_review_session);
+        assert!(capture_token_usage);
+    }
+
+    #[tokio::test]
+    async fn wait_for_guardian_review_preserves_remote_compact_stream_disconnect() {
+        let (review_session, tx_event, _rx_sub) = test_review_session().await;
+        let stream_error = CodexErr::Stream(
+            "WebSocket protocol error: Connection reset without closing handshake".to_string(),
+            None,
+        );
+        tx_event
+            .send(Event {
+                id: "current-turn".to_string(),
+                msg: EventMsg::Error(
+                    stream_error
+                        .to_error_event(Some("Error running remote compact task".to_string())),
+                ),
+            })
+            .await
+            .expect("queue guardian error");
+        tx_event
+            .send(turn_complete_event(
+                "current-turn",
+                /*last_agent_message*/ None,
+                Some(42),
+            ))
+            .await
+            .expect("queue current turn completion");
+
+        let mut analytics_result = GuardianReviewAnalyticsResult::without_session();
+        let (outcome, keep_review_session, capture_token_usage) = wait_for_guardian_review(
+            &review_session,
+            "current-turn",
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            /*external_cancel*/ None,
+            &mut analytics_result,
+        )
+        .await;
+
+        let GuardianReviewSessionOutcome::SessionFailed { error, error_info } = outcome else {
+            panic!("expected structured session failure");
+        };
+        assert_eq!(
+            error.to_string(),
+            "Error running remote compact task: stream disconnected before completion: WebSocket protocol error: Connection reset without closing handshake"
+        );
+        assert_eq!(
+            error_info,
+            Some(CodexErrorInfo::ResponseStreamDisconnected {
+                http_status_code: None,
+            })
+        );
         assert!(keep_review_session);
         assert!(capture_token_usage);
     }
