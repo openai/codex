@@ -1462,11 +1462,16 @@ Order of messages:
 
 1. `mcpServer/elicitation/request` (request) — includes `threadId`, nullable `turnId`, `serverName`, and either:
    - a form request: `{ "mode": "form", "message": "...", "requestedSchema": { ... } }`
+   - an OpenAI extended form request: `{ "mode": "openai/form", "message": "...", "requestedSchema": { ... } }`
    - a URL request: `{ "mode": "url", "message": "...", "url": "...", "elicitationId": "..." }`
 2. Client response — `{ "action": "accept", "content": ... }`, `{ "action": "decline", "content": null }`, or `{ "action": "cancel", "content": null }`.
 3. `serverRequest/resolved` — `{ threadId, requestId }` confirms the pending request has been resolved or cleared, including lifecycle cleanup on turn start/complete/interrupt.
 
 `turnId` is best-effort. When the elicitation is correlated with an active turn, the request includes that turn id; otherwise it is `null`.
+
+For `openai/form`, app-server forwards `requestedSchema` as opaque JSON. The
+client owns validation and rendering of OpenAI field types such as
+`openai/file`, `openai/choice`, and `openai/connector`.
 
 For MCP tool approval elicitations, form request `meta` includes
 `codex_approval_kind: "mcp_tool_call"` and may include `persist: "session"`,

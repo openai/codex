@@ -7,6 +7,7 @@
 //! [`crate::connection_manager`].
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
@@ -62,6 +63,7 @@ use rmcp::model::ClientCapabilities;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
+use rmcp::model::JsonObject;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
 use tokio_util::sync::CancellationToken;
@@ -70,6 +72,7 @@ use tracing::warn;
 /// MCP server capability indicating that Codex should include [`SandboxState`]
 /// in tool-call request `_meta` under this key.
 pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
+pub const OPENAI_FORM_CAPABILITY: &str = "openai/form";
 
 pub(crate) const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
@@ -486,6 +489,10 @@ async fn start_server_task(
     } = params;
     let mut capabilities = ClientCapabilities::default();
     capabilities.elicitation = Some(client_elicitation_capability);
+    capabilities.experimental = Some(BTreeMap::from([(
+        OPENAI_FORM_CAPABILITY.to_string(),
+        JsonObject::new(),
+    )]));
     let params = InitializeRequestParams::new(
         capabilities,
         Implementation::new("codex-mcp-client", env!("CARGO_PKG_VERSION")).with_title("Codex"),

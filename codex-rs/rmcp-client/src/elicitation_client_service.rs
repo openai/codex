@@ -3,6 +3,7 @@ use std::sync::Arc;
 use rmcp::RoleClient;
 use rmcp::model::ClientInfo;
 use rmcp::model::ClientResult;
+use rmcp::model::CustomRequest;
 use rmcp::model::CustomResult;
 use rmcp::model::ElicitationAction;
 use rmcp::model::Meta;
@@ -12,7 +13,9 @@ use rmcp::model::ServerRequest;
 use rmcp::service::NotificationContext;
 use rmcp::service::RequestContext;
 use rmcp::service::Service;
+use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Map;
 use serde_json::Value;
 
 use crate::logging_client_handler::LoggingClientHandler;
@@ -22,6 +25,16 @@ use crate::rmcp_client::ElicitationResponse;
 use crate::rmcp_client::SendElicitation;
 
 const MCP_PROGRESS_TOKEN_META_KEY: &str = "progressToken";
+const OPENAI_FORM_METHOD: &str = "openai/form";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiFormRequestParams {
+    #[serde(rename = "_meta")]
+    meta: Option<Value>,
+    message: String,
+    requested_schema: Value,
+}
 
 #[derive(Clone)]
 pub(crate) struct ElicitationClientService {
@@ -73,10 +86,20 @@ impl Service<RoleClient> for ElicitationClientService {
     ) -> Result<ClientResult, rmcp::ErrorData> {
         match request {
             ServerRequest::CreateElicitationRequest(request) => {
-                let response = self.create_elicitation(request.params, context).await?;
+                let response = self
+                    .create_elicitation(Elicitation::Mcp(request.params), context)
+                    .await?;
                 // RMCP's typed CreateElicitationResult does not model result-level `_meta`.
                 let result = elicitation_response_result(response)?;
                 Ok(ClientResult::CustomResult(result))
+            }
+            ServerRequest::CustomRequest(request) if request.method == OPENAI_FORM_METHOD => {
+                let response = self
+                    .create_elicitation(openai_form_elicitation(request)?, context)
+                    .await?;
+                Ok(ClientResult::CustomResult(elicitation_response_result(
+                    response,
+                )?))
             }
             request => {
                 <LoggingClientHandler as Service<RoleClient>>::handle_request(
@@ -107,6 +130,18 @@ impl Service<RoleClient> for ElicitationClientService {
     }
 }
 
+fn openai_form_elicitation(request: CustomRequest) -> Result<Elicitation, rmcp::ErrorData> {
+    let params = request
+        .params_as::<OpenAiFormRequestParams>()
+        .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?
+        .ok_or_else(|| rmcp::ErrorData::invalid_params("missing params", None))?;
+    Ok(Elicitation::OpenAiForm {
+        meta: params.meta,
+        message: params.message,
+        requested_schema: params.requested_schema,
+    })
+}
+
 fn restore_context_meta(mut request: Elicitation, mut context_meta: Meta) -> Elicitation {
     // RMCP lifts JSON-RPC `_meta` into RequestContext before invoking services.
     context_meta.remove(MCP_PROGRESS_TOKEN_META_KEY);
@@ -114,10 +149,20 @@ fn restore_context_meta(mut request: Elicitation, mut context_meta: Meta) -> Eli
         return request;
     }
 
-    request
-        .meta_mut()
-        .get_or_insert_with(Meta::new)
-        .extend(context_meta);
+    match &mut request {
+        Elicitation::Mcp(request) => request
+            .meta_mut()
+            .get_or_insert_with(Meta::new)
+            .extend(context_meta),
+        Elicitation::OpenAiForm { meta, .. } => {
+            let meta = meta
+                .get_or_insert_with(|| Value::Object(Map::new()))
+                .as_object_mut();
+            if let Some(meta) = meta {
+                meta.extend(context_meta.0);
+            }
+        }
+    }
     request
 }
 
@@ -165,7 +210,7 @@ mod tests {
     #[test]
     fn restore_context_meta_adds_elicitation_meta_and_removes_progress_token() {
         let request = restore_context_meta(
-            form_request(/*meta*/ None),
+            Elicitation::Mcp(form_request(/*meta*/ None)),
             meta(json!({
                 "progressToken": "progress-token",
                 "persist": ["session", "always"],
@@ -174,9 +219,46 @@ mod tests {
 
         assert_eq!(
             request,
-            form_request(Some(meta(json!({
+            Elicitation::Mcp(form_request(Some(meta(json!({
                 "persist": ["session", "always"],
-            }))))
+            })))))
+        );
+    }
+
+    #[test]
+    fn parses_openai_form_custom_requests() {
+        let elicitation = openai_form_elicitation(CustomRequest::new(
+            OPENAI_FORM_METHOD,
+            Some(json!({
+                "message": "Choose a template",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "template": {
+                            "type": "openai/choice",
+                            "options": []
+                        }
+                    }
+                }
+            })),
+        ))
+        .expect("valid openai/form request");
+
+        assert_eq!(
+            elicitation,
+            Elicitation::OpenAiForm {
+                meta: None,
+                message: "Choose a template".to_string(),
+                requested_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "template": {
+                            "type": "openai/choice",
+                            "options": []
+                        }
+                    }
+                }),
+            }
         );
     }
 

@@ -251,7 +251,15 @@ fn remaining_operation_timeout(
     }
 }
 
-pub type Elicitation = CreateElicitationRequestParams;
+#[derive(Debug, Clone, PartialEq)]
+pub enum Elicitation {
+    Mcp(CreateElicitationRequestParams),
+    OpenAiForm {
+        meta: Option<serde_json::Value>,
+        message: String,
+        requested_schema: serde_json::Value,
+    },
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

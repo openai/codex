@@ -375,7 +375,8 @@ impl ChatWidget {
                     self.bottom_pane
                         .push_approval_request(request, &self.config.features);
                 }
-                McpServerElicitationRequest::Url { .. } => {
+                McpServerElicitationRequest::OpenAiForm { .. }
+                | McpServerElicitationRequest::Url { .. } => {
                     self.app_event_tx.resolve_elicitation(
                         thread_id,
                         params.server_name,

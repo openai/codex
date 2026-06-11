@@ -1900,6 +1900,35 @@ fn mcp_server_elicitation_request_from_core_form_request() {
 }
 
 #[test]
+fn mcp_server_elicitation_request_from_core_openai_form_request() {
+    let requested_schema = json!({
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "openai/file",
+                "title": "Source file",
+            },
+        },
+        "required": ["path"],
+    });
+    let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::OpenAiForm {
+        meta: None,
+        message: "Choose a report".to_string(),
+        requested_schema: requested_schema.clone(),
+    })
+    .expect("OpenAI form request should convert");
+
+    assert_eq!(
+        request,
+        McpServerElicitationRequest::OpenAiForm {
+            meta: None,
+            message: "Choose a report".to_string(),
+            requested_schema,
+        }
+    );
+}
+
+#[test]
 fn mcp_elicitation_schema_matches_mcp_2025_11_25_primitives() {
     let schema: McpElicitationSchema = serde_json::from_value(json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",

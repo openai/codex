@@ -41,6 +41,7 @@ use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::Content;
 use rmcp::model::CreateElicitationRequestParams;
+use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationSchema;
 use rmcp::model::JsonObject;
@@ -49,6 +50,7 @@ use rmcp::model::Meta;
 use rmcp::model::PrimitiveSchema;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
+use rmcp::model::ServerRequest as McpServerRequest;
 use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
 use rmcp::service::RequestContext;
@@ -71,6 +73,7 @@ const CALLABLE_TOOL_NAME: &str = "_confirm_action";
 const TOOL_NAME: &str = "calendar_confirm_action";
 const TOOL_CALL_ID: &str = "call-calendar-confirm";
 const ELICITATION_MESSAGE: &str = "Allow this request?";
+const OPENAI_FORM_MESSAGE: &str = "Choose a template";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mcp_server_elicitation_round_trip() -> Result<()> {
@@ -213,7 +216,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         }
     );
 
-    let resolved_request_id = request_id.clone();
+    let standard_request_id = request_id.clone();
     mcp.send_response(
         request_id,
         serde_json::to_value(McpServerElicitationRequestResponse {
@@ -226,7 +229,55 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     )
     .await?;
 
-    let mut saw_resolved = false;
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::McpServerElicitationRequest { request_id, params } = server_req else {
+        panic!("expected McpServerElicitationRequest request, got: {server_req:?}");
+    };
+    let requested_schema = json!({
+        "type": "object",
+        "properties": {
+            "template": {
+                "type": "openai/choice",
+                "presentation": "cards",
+                "options": [{
+                    "value": "monthly-business-review",
+                    "title": "Monthly business review",
+                }],
+            },
+        },
+        "required": ["template"],
+    });
+    assert_eq!(
+        params,
+        McpServerElicitationRequestParams {
+            thread_id: thread.id.clone(),
+            turn_id: Some(turn.id.clone()),
+            server_name: "codex_apps".to_string(),
+            request: McpServerElicitationRequest::OpenAiForm {
+                meta: None,
+                message: OPENAI_FORM_MESSAGE.to_string(),
+                requested_schema,
+            },
+        }
+    );
+    let openai_form_request_id = request_id.clone();
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(McpServerElicitationRequestResponse {
+            action: McpServerElicitationAction::Accept,
+            content: Some(json!({
+                "template": "monthly-business-review",
+            })),
+            meta: None,
+        })?,
+    )
+    .await?;
+
+    let mut resolved_request_ids = Vec::new();
     loop {
         let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
         let JSONRPCMessage::Notification(notification) = message else {
@@ -242,19 +293,26 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
                         .expect("serverRequest/resolved params"),
                 )?;
                 assert_eq!(
-                    resolved,
-                    ServerRequestResolvedNotification {
-                        thread_id: thread.id.clone(),
-                        request_id: resolved_request_id.clone(),
-                    }
+                    resolved.thread_id, thread.id,
+                    "resolved request should belong to the active thread"
                 );
-                saw_resolved = true;
+                assert!(
+                    resolved.request_id == standard_request_id
+                        || resolved.request_id == openai_form_request_id,
+                    "unexpected resolved request id: {:?}",
+                    resolved.request_id
+                );
+                resolved_request_ids.push(resolved.request_id);
             }
             "turn/completed" => {
                 let completed: TurnCompletedNotification = serde_json::from_value(
                     notification.params.clone().expect("turn/completed params"),
                 )?;
-                assert!(saw_resolved, "serverRequest/resolved should arrive first");
+                assert!(
+                    resolved_request_ids.contains(&standard_request_id)
+                        && resolved_request_ids.contains(&openai_form_request_id),
+                    "both server requests should resolve before turn completion"
+                );
                 assert_eq!(completed.thread_id, thread.id);
                 assert_eq!(completed.turn.id, turn.id);
                 assert_eq!(completed.turn.status, TurnStatus::Completed);
@@ -290,7 +348,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         serde_json::from_str::<Value>(payload)?,
         json!([{
             "type": "text",
-            "text": "accepted"
+            "text": "accepted monthly-business-review"
         }])
     );
 
@@ -380,7 +438,60 @@ impl ServerHandler for ElicitationAppsMcpServer {
             ElicitationAction::Cancel => "cancelled",
         };
 
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        if output != "accepted" {
+            return Ok(CallToolResult::success(vec![Content::text(output)]));
+        }
+
+        let result = context
+            .peer
+            .send_request(McpServerRequest::CustomRequest(CustomRequest::new(
+                "openai/form",
+                Some(json!({
+                    "message": OPENAI_FORM_MESSAGE,
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": {
+                            "template": {
+                                "type": "openai/choice",
+                                "presentation": "cards",
+                                "options": [{
+                                    "value": "monthly-business-review",
+                                    "title": "Monthly business review",
+                                }],
+                            },
+                        },
+                        "required": ["template"],
+                    },
+                })),
+            )))
+            .await
+            .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
+        let result = match result {
+            rmcp::model::ClientResult::CustomResult(result) => result.0,
+            rmcp::model::ClientResult::CreateElicitationResult(result) => {
+                serde_json::to_value(result)
+                    .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?
+            }
+            result => {
+                return Err(rmcp::ErrorData::internal_error(
+                    format!("unexpected OpenAI form response: {result:?}"),
+                    None,
+                ));
+            }
+        };
+        assert_eq!(
+            result,
+            json!({
+                "action": "accept",
+                "content": {
+                    "template": "monthly-business-review",
+                },
+            })
+        );
+
+        Ok(CallToolResult::success(vec![Content::text(
+            "accepted monthly-business-review",
+        )]))
     }
 }
 

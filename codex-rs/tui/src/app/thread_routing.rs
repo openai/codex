@@ -291,7 +291,10 @@ impl App {
                                 message: message.clone(),
                             },
                         )),
-                        codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
+                        codex_app_server_protocol::McpServerElicitationRequest::OpenAiForm {
+                            ..
+                        }
+                        | codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
                             self.app_event_tx.resolve_elicitation(
                                 thread_id,
                                 params.server_name.clone(),

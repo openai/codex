@@ -251,13 +251,15 @@ async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
 
     let response = sender(
         NumberOrString::Number(1),
-        CreateElicitationRequestParams::FormElicitationParams {
-            meta: None,
-            message: "Confirm?".to_string(),
-            requested_schema: rmcp::model::ElicitationSchema::builder()
-                .build()
-                .expect("schema should build"),
-        },
+        codex_rmcp_client::Elicitation::Mcp(
+            CreateElicitationRequestParams::FormElicitationParams {
+                meta: None,
+                message: "Confirm?".to_string(),
+                requested_schema: rmcp::model::ElicitationSchema::builder()
+                    .build()
+                    .expect("schema should build"),
+            },
+        ),
     )
     .await
     .expect("elicitation should auto accept");
@@ -284,17 +286,19 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
 
     let response = sender(
         NumberOrString::Number(1),
-        CreateElicitationRequestParams::FormElicitationParams {
-            meta: None,
-            message: "What should I say?".to_string(),
-            requested_schema: rmcp::model::ElicitationSchema::builder()
-                .required_property(
-                    "message",
-                    rmcp::model::PrimitiveSchema::String(rmcp::model::StringSchema::new()),
-                )
-                .build()
-                .expect("schema should build"),
-        },
+        codex_rmcp_client::Elicitation::Mcp(
+            CreateElicitationRequestParams::FormElicitationParams {
+                meta: None,
+                message: "What should I say?".to_string(),
+                requested_schema: rmcp::model::ElicitationSchema::builder()
+                    .required_property(
+                        "message",
+                        rmcp::model::PrimitiveSchema::String(rmcp::model::StringSchema::new()),
+                    )
+                    .build()
+                    .expect("schema should build"),
+            },
+        ),
     )
     .await
     .expect("elicitation should auto decline");

@@ -16,7 +16,7 @@ use codex_protocol::mcp_approval_meta::TOOL_DESCRIPTION_KEY as MCP_ELICITATION_T
 use codex_protocol::mcp_approval_meta::TOOL_NAME_KEY as MCP_ELICITATION_TOOL_NAME_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_PARAMS_KEY as MCP_ELICITATION_TOOL_PARAMS_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_ELICITATION_TOOL_TITLE_KEY;
-use rmcp::model::CreateElicitationRequestParams;
+use codex_rmcp_client::Elicitation;
 use rmcp::model::ElicitationAction;
 use rmcp::model::Meta;
 use serde_json::Map;
@@ -143,6 +143,15 @@ impl Session {
                     requested_schema,
                 }
             }
+            McpServerElicitationRequest::OpenAiForm {
+                meta,
+                message,
+                requested_schema,
+            } => codex_protocol::approvals::ElicitationRequest::OpenAiForm {
+                meta,
+                message,
+                requested_schema,
+            },
             McpServerElicitationRequest::Url {
                 meta,
                 message,
@@ -509,12 +518,15 @@ fn guardian_elicitation_review_request(
     request: &ElicitationReviewRequest,
 ) -> GuardianElicitationReview {
     let (meta, requested_schema) = match &request.elicitation {
-        CreateElicitationRequestParams::FormElicitationParams {
+        Elicitation::Mcp(rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
             meta,
             requested_schema,
             ..
-        } => (meta, Some(requested_schema)),
-        CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => {
+        }) => (meta, Some(requested_schema)),
+        Elicitation::Mcp(rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+            meta,
+            ..
+        }) => {
             return if meta_requests_approval_request(meta) {
                 GuardianElicitationReview::Decline(
                     "guardian MCP elicitation review only supports form elicitations",
@@ -523,6 +535,7 @@ fn guardian_elicitation_review_request(
                 GuardianElicitationReview::NotRequested
             };
         }
+        Elicitation::OpenAiForm { .. } => return GuardianElicitationReview::NotRequested,
     };
 
     let Some(meta) = meta.as_ref().map(|meta| &meta.0) else {
@@ -584,12 +597,18 @@ fn guardian_elicitation_review_request(
     ))
 }
 
-fn elicitation_connector_id(elicitation: &CreateElicitationRequestParams) -> Option<&str> {
+fn elicitation_connector_id(elicitation: &Elicitation) -> Option<&str> {
     match elicitation {
-        CreateElicitationRequestParams::FormElicitationParams { meta, .. }
-        | CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => meta
+        Elicitation::Mcp(
+            rmcp::model::CreateElicitationRequestParams::FormElicitationParams { meta, .. }
+            | rmcp::model::CreateElicitationRequestParams::UrlElicitationParams { meta, .. },
+        ) => meta
             .as_ref()
             .and_then(|meta| metadata_str(&meta.0, MCP_ELICITATION_CONNECTOR_ID_KEY)),
+        Elicitation::OpenAiForm { meta, .. } => meta
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|meta| metadata_str(meta, MCP_ELICITATION_CONNECTOR_ID_KEY)),
     }
 }
 
