@@ -6,7 +6,7 @@ use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::unbounded_channel;
 
 fn all_model_presets() -> Vec<ModelPreset> {
-    crate::legacy_core::test_support::all_model_presets().clone()
+    crate::test_support::TEST_MODEL_PRESETS.clone()
 }
 
 fn model_availability_nux_config(shown_count: &[(&str, u32)]) -> ModelAvailabilityNuxConfig {

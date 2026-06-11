@@ -544,8 +544,6 @@ mod tests {
     use super::render_debug_config_lines;
     use super::sandbox_mode_is_allowed_by_permissions;
     use super::session_all_proxy_url;
-    use crate::legacy_core::config::Constrained;
-    use crate::legacy_core::config::ConstraintError;
     use crate::legacy_core::config::Permissions;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ConfigLayerSource;
@@ -553,7 +551,9 @@ mod tests {
     use codex_config::ConfigLayerStack;
     use codex_config::ConfigRequirements;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::Constrained;
     use codex_config::ConstrainedWithSource;
+    use codex_config::ConstraintError;
     use codex_config::FeatureRequirementsToml;
     use codex_config::FilesystemConstraints;
     use codex_config::HookEventsToml;
