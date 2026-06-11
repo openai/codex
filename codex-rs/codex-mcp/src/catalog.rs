@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use codex_config::McpServerConfig;
 
 /// The component that declared an MCP server registration.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpServerSource {
     Plugin { plugin_id: String },
     Config,
@@ -106,27 +106,27 @@ impl McpServerRegistration {
             precedence,
         }
     }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn source(&self) -> &McpServerSource {
-        &self.source
-    }
 }
 
-/// A same-tier name collision resolved by the catalog's explicit precedence.
+/// One side of an MCP server conflict, including whether it registers or
+/// removes the server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum McpServerConflictAction {
+    Register(McpServerSource),
+    Remove(McpServerSource),
+}
+
+/// A same-tier name collision and the final outcome after all precedence is applied.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpServerConflict {
     pub name: String,
-    pub winner: McpServerSource,
-    pub shadowed: McpServerSource,
+    pub outcome: McpServerConflictAction,
+    pub contenders: Vec<McpServerConflictAction>,
 }
 
 #[derive(Clone, Debug)]
 enum CatalogAction {
-    Register(McpServerRegistration),
+    Register(Box<McpServerRegistration>),
     Remove {
         name: String,
         source: McpServerSource,
@@ -137,15 +137,8 @@ enum CatalogAction {
 impl CatalogAction {
     fn name(&self) -> &str {
         match self {
-            Self::Register(registration) => registration.name(),
+            Self::Register(registration) => &registration.name,
             Self::Remove { name, .. } => name,
-        }
-    }
-
-    fn source(&self) -> &McpServerSource {
-        match self {
-            Self::Register(registration) => registration.source(),
-            Self::Remove { source, .. } => source,
         }
     }
 
@@ -153,6 +146,15 @@ impl CatalogAction {
         match self {
             Self::Register(registration) => registration.precedence,
             Self::Remove { precedence, .. } => *precedence,
+        }
+    }
+
+    fn conflict_action(&self) -> McpServerConflictAction {
+        match self {
+            Self::Register(registration) => {
+                McpServerConflictAction::Register(registration.source.clone())
+            }
+            Self::Remove { source, .. } => McpServerConflictAction::Remove(source.clone()),
         }
     }
 }
@@ -166,7 +168,8 @@ pub struct McpCatalogBuilder {
 
 impl McpCatalogBuilder {
     pub fn register(&mut self, registration: McpServerRegistration) {
-        self.actions.push(CatalogAction::Register(registration));
+        self.actions
+            .push(CatalogAction::Register(Box::new(registration)));
     }
 
     /// Applies the legacy name-scoped disabled veto after source resolution.
@@ -196,12 +199,8 @@ impl McpCatalogBuilder {
     }
 
     pub fn build(mut self) -> ResolvedMcpCatalog {
-        self.actions.sort_by(|left, right| {
-            left.precedence()
-                .cmp(&right.precedence())
-                .then_with(|| left.source().cmp(right.source()))
-                .then_with(|| left.name().cmp(right.name()))
-        });
+        // Stable sorting makes action order the tie-breaker when precedence is equal.
+        self.actions.sort_by_key(CatalogAction::precedence);
 
         let mut winners = BTreeMap::<String, CatalogAction>::new();
         let mut actions_by_name_and_tier = BTreeMap::<(String, u8), Vec<&CatalogAction>>::new();
@@ -215,18 +214,27 @@ impl McpCatalogBuilder {
 
         let mut conflicts = Vec::new();
         for ((name, _), actions) in actions_by_name_and_tier {
-            let (winner, shadowed) = actions.split_last().expect("group is non-empty");
-            conflicts.extend(shadowed.iter().map(|action| McpServerConflict {
-                name: name.clone(),
-                winner: winner.source().clone(),
-                shadowed: action.source().clone(),
-            }));
+            if actions.len() < 2 {
+                continue;
+            }
+            let Some(outcome) = winners.get(&name).map(CatalogAction::conflict_action) else {
+                continue;
+            };
+            conflicts.push(McpServerConflict {
+                name,
+                outcome,
+                contenders: actions
+                    .into_iter()
+                    .map(CatalogAction::conflict_action)
+                    .collect(),
+            });
         }
 
         let servers = winners
             .into_iter()
             .filter_map(|(name, action)| match action {
-                CatalogAction::Register(mut registration) => {
+                CatalogAction::Register(registration) => {
+                    let mut registration = *registration;
                     if self.disabled_server_names.contains(&name) {
                         registration.config.enabled = false;
                     }

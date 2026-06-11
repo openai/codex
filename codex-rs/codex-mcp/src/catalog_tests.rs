@@ -4,17 +4,17 @@ use std::time::Duration;
 use codex_config::AppToolApproval;
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::McpServerConfig;
-use codex_config::McpServerDisabledReason;
 use codex_config::McpServerToolConfig;
 use codex_config::McpServerTransportConfig;
 use pretty_assertions::assert_eq;
 
 use super::McpServerConflict;
+use super::McpServerConflictAction;
 use super::McpServerRegistration;
 use super::McpServerSource;
 use super::ResolvedMcpCatalog;
 
-fn server(url: &str, enabled: bool) -> McpServerConfig {
+fn server(url: &str) -> McpServerConfig {
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
             url: url.to_string(),
@@ -23,10 +23,10 @@ fn server(url: &str, enabled: bool) -> McpServerConfig {
             env_http_headers: None,
         },
         environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-        enabled,
+        enabled: true,
         required: true,
         supports_parallel_tool_calls: true,
-        disabled_reason: (!enabled).then_some(McpServerDisabledReason::Unknown),
+        disabled_reason: None,
         startup_timeout_sec: Some(Duration::from_secs(7)),
         tool_timeout_sec: Some(Duration::from_secs(11)),
         default_tools_approval_mode: Some(AppToolApproval::Prompt),
@@ -44,9 +44,31 @@ fn server(url: &str, enabled: bool) -> McpServerConfig {
     }
 }
 
+fn plugin_source(plugin_id: &str) -> McpServerSource {
+    McpServerSource::Plugin {
+        plugin_id: plugin_id.to_string(),
+    }
+}
+
+fn compatibility_source(id: &str) -> McpServerSource {
+    McpServerSource::Compatibility { id: id.to_string() }
+}
+
+fn extension_source(id: &str) -> McpServerSource {
+    McpServerSource::Extension { id: id.to_string() }
+}
+
+fn register(source: McpServerSource) -> McpServerConflictAction {
+    McpServerConflictAction::Register(source)
+}
+
+fn remove(source: McpServerSource) -> McpServerConflictAction {
+    McpServerConflictAction::Remove(source)
+}
+
 #[test]
 fn source_precedence_preserves_the_winning_registration() {
-    let extension = server("https://extension.example/mcp", true);
+    let extension = server("https://extension.example/mcp");
     let mut builder = ResolvedMcpCatalog::builder();
     builder.register(McpServerRegistration::from_extension(
         "docs".to_string(),
@@ -58,16 +80,22 @@ fn source_precedence_preserves_the_winning_registration() {
         "docs".to_string(),
         "plugin@test".to_string(),
         /*plugin_order*/ 0,
-        server("https://plugin.example/mcp", true),
+        server("https://plugin.example/mcp"),
+    ));
+    builder.register(McpServerRegistration::from_plugin(
+        "docs".to_string(),
+        "other-plugin@test".to_string(),
+        /*plugin_order*/ 1,
+        server("https://other-plugin.example/mcp"),
     ));
     builder.register(McpServerRegistration::from_compatibility(
         "docs".to_string(),
         "legacy",
-        server("https://compatibility.example/mcp", true),
+        server("https://compatibility.example/mcp"),
     ));
     builder.register(McpServerRegistration::from_config(
         "docs".to_string(),
-        server("https://config.example/mcp", true),
+        server("https://config.example/mcp"),
     ));
 
     let catalog = builder.build();
@@ -81,12 +109,22 @@ fn source_precedence_preserves_the_winning_registration() {
     );
     assert_eq!(resolved.config(), &extension);
     assert!(catalog.plugin_ids_by_server_name().is_empty());
-    assert!(catalog.conflicts().is_empty());
+    assert_eq!(
+        catalog.conflicts(),
+        &[McpServerConflict {
+            name: "docs".to_string(),
+            outcome: register(extension_source("hosted")),
+            contenders: vec![
+                register(plugin_source("other-plugin@test")),
+                register(plugin_source("plugin@test")),
+            ],
+        }]
+    );
 }
 
 #[test]
 fn disabled_veto_only_disables_the_winning_registration() {
-    let extension = server("https://extension.example/mcp", true);
+    let extension = server("https://extension.example/mcp");
     let mut expected = extension.clone();
     expected.enabled = false;
     let mut builder = ResolvedMcpCatalog::builder();
@@ -115,13 +153,13 @@ fn earlier_plugin_wins_with_an_explicit_conflict() {
         "docs".to_string(),
         "alpha@test".to_string(),
         /*plugin_order*/ 0,
-        server("https://alpha.example/mcp", true),
+        server("https://alpha.example/mcp"),
     ));
     builder.register(McpServerRegistration::from_plugin(
         "docs".to_string(),
         "beta@test".to_string(),
         /*plugin_order*/ 1,
-        server("https://beta.example/mcp", true),
+        server("https://beta.example/mcp"),
     ));
 
     let catalog = builder.build();
@@ -134,12 +172,54 @@ fn earlier_plugin_wins_with_an_explicit_conflict() {
         catalog.conflicts(),
         &[McpServerConflict {
             name: "docs".to_string(),
-            winner: McpServerSource::Plugin {
-                plugin_id: "alpha@test".to_string(),
-            },
-            shadowed: McpServerSource::Plugin {
-                plugin_id: "beta@test".to_string(),
-            },
+            outcome: register(plugin_source("alpha@test")),
+            contenders: vec![
+                register(plugin_source("beta@test")),
+                register(plugin_source("alpha@test")),
+            ],
+        }]
+    );
+}
+
+#[test]
+fn equal_precedence_uses_insertion_order_not_source_identity() {
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(McpServerRegistration::from_compatibility(
+        "docs".to_string(),
+        "z-first",
+        server("https://first.example/mcp"),
+    ));
+    builder.register(McpServerRegistration::from_compatibility(
+        "docs".to_string(),
+        "a-second",
+        server("https://second.example/mcp"),
+    ));
+
+    let catalog = builder.build();
+
+    assert_eq!(
+        catalog.server("docs"),
+        Some(&super::ResolvedMcpServer {
+            source: compatibility_source("a-second"),
+            config: server("https://second.example/mcp"),
+        })
+    );
+    let mut builder = catalog.to_builder();
+    builder.remove_compatibility("docs".to_string(), "remove-last");
+
+    let catalog = builder.build();
+
+    assert_eq!(catalog.server("docs"), None);
+    assert_eq!(
+        catalog.conflicts(),
+        &[McpServerConflict {
+            name: "docs".to_string(),
+            outcome: remove(compatibility_source("remove-last")),
+            contenders: vec![
+                register(compatibility_source("z-first")),
+                register(compatibility_source("a-second")),
+                remove(compatibility_source("remove-last")),
+            ],
         }]
     );
 }

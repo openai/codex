@@ -95,9 +95,9 @@ impl McpManager {
         for conflict in catalog.conflicts() {
             tracing::warn!(
                 server = conflict.name,
-                winner = ?conflict.winner,
-                shadowed = ?conflict.shadowed,
-                "conflicting MCP server registrations; using explicit source precedence"
+                outcome = ?conflict.outcome,
+                contenders = ?conflict.contenders,
+                "conflicting MCP server actions; using resolved catalog outcome"
             );
         }
         mcp_config.mcp_server_catalog = catalog;
