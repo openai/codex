@@ -292,8 +292,18 @@ impl AuthStorageBackend for AutoAuthStorage {
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        // Keyring storage will delete from disk as well
-        self.keyring_storage.delete()
+        // Keyring storage deletes the fallback file when keyring access succeeds.
+        // If keyring access fails, preserve auto-mode semantics by deleting the
+        // fallback file directly.
+        match self.keyring_storage.delete() {
+            Ok(removed) => Ok(removed),
+            Err(err) => {
+                warn!(
+                    "failed to delete CLI auth from keyring, falling back to file storage: {err}"
+                );
+                self.file_storage.delete()
+            }
+        }
     }
 }
 
