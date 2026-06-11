@@ -47,7 +47,8 @@ impl McpManager {
     /// Returns the MCP config after applying compatibility built-ins and
     /// runtime-only extension overlays.
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
-        self.runtime_config_with_context(config, None).await
+        self.runtime_config_with_context(config, /*thread_init*/ None)
+            .await
     }
 
     pub(crate) async fn runtime_config_for_thread(
