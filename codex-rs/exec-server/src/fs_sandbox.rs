@@ -497,7 +497,7 @@ impl WindowsSandboxWrapperRequestFile {
         codex_home: &std::path::Path,
         request: &codex_windows_sandbox::WindowsSandboxWrapperRequest,
     ) -> Result<Self, JSONRPCErrorError> {
-        let request_dir = codex_windows_sandbox::sandbox_dir(codex_home);
+        let request_dir = windows_sandbox_wrapper_request_dir(codex_home);
         std::fs::create_dir_all(&request_dir).map_err(|err| {
             internal_error(format!(
                 "failed to create windows fs sandbox wrapper request dir {}: {err}",
@@ -527,6 +527,11 @@ impl WindowsSandboxWrapperRequestFile {
         })?;
         Ok(Self { path })
     }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_sandbox_wrapper_request_dir(codex_home: &std::path::Path) -> std::path::PathBuf {
+    codex_windows_sandbox::sandbox_secrets_dir(codex_home).join("wrapper-requests")
 }
 
 #[cfg(target_os = "windows")]
@@ -573,6 +578,8 @@ mod tests {
     use super::helper_env_key_is_allowed;
     use super::helper_read_roots;
     use super::sandbox_cwd;
+    #[cfg(target_os = "windows")]
+    use super::windows_sandbox_wrapper_request_dir;
 
     #[test]
     fn helper_permissions_enable_minimal_reads_for_restricted_profile() {
@@ -735,6 +742,18 @@ mod tests {
                 ("USERPROFILE".to_string(), r"C:\Users\alice".to_string()),
             ])
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_wrapper_request_dir_uses_sandbox_secrets() {
+        let codex_home = std::env::temp_dir().join("codex-home");
+        let sandbox_dir = codex_windows_sandbox::sandbox_dir(&codex_home);
+        let secrets_dir = codex_windows_sandbox::sandbox_secrets_dir(&codex_home);
+        let request_dir = windows_sandbox_wrapper_request_dir(&codex_home);
+
+        assert!(!request_dir.starts_with(sandbox_dir));
+        assert!(request_dir.starts_with(secrets_dir));
     }
 
     #[test]
