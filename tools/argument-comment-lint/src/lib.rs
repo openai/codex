@@ -125,6 +125,11 @@ rustc_session::declare_lint! {
 #[derive(Default)]
 pub struct ArgumentCommentLint;
 
+enum CallKind {
+    Function,
+    Method { name: String },
+}
+
 rustc_session::impl_lint_pass!(
     ArgumentCommentLint => [ARGUMENT_COMMENT_MISMATCH, UNCOMMENTED_ANONYMOUS_LITERAL_ARGUMENT]
 );
@@ -137,10 +142,18 @@ impl<'tcx> LateLintPass<'tcx> for ArgumentCommentLint {
 
         match expr.kind {
             ExprKind::Call(callee, args) => {
-                self.check_call(cx, expr, callee.span, args, 0);
+                self.check_call(cx, expr, callee.span, args, CallKind::Function);
             }
-            ExprKind::MethodCall(_, receiver, args, _) => {
-                self.check_call(cx, expr, receiver.span, args, 1);
+            ExprKind::MethodCall(method, receiver, args, _) => {
+                self.check_call(
+                    cx,
+                    expr,
+                    receiver.span,
+                    args,
+                    CallKind::Method {
+                        name: method.ident.name.to_string(),
+                    },
+                );
             }
             _ => {}
         }
@@ -154,7 +167,7 @@ impl ArgumentCommentLint {
         call: &'tcx Expr<'tcx>,
         first_gap_anchor: Span,
         args: &'tcx [Expr<'tcx>],
-        parameter_offset: usize,
+        call_kind: CallKind,
     ) {
         let Some(def_id) = fn_def_id(cx, call) else {
             return;
@@ -167,6 +180,11 @@ impl ArgumentCommentLint {
             return;
         }
 
+        // Method parameter lists include `self`, which is not present in `args`.
+        let (parameter_offset, method_name) = match &call_kind {
+            CallKind::Function => (0, None),
+            CallKind::Method { name } => (1, Some(name.as_str())),
+        };
         let parameter_names: Vec<_> = cx.tcx.fn_arg_idents(def_id).iter().copied().collect();
         for (index, arg) in args.iter().enumerate() {
             if arg.span.from_expansion() {
@@ -212,6 +230,12 @@ impl ArgumentCommentLint {
                         format!("use `/*{expected_name}*/`"),
                     );
                 }
+                continue;
+            }
+
+            // Don't require a clarifying comment for self-documenting arguments whose names
+            // match the method.
+            if args.len() == 1 && method_name == Some(expected_name.as_str()) {
                 continue;
             }
 
