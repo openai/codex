@@ -258,6 +258,42 @@ fn remote_control_handle_with_current_enrollment(
     }
 }
 
+#[test]
+fn ephemeral_enable_preserves_durable_preference() {
+    let remote_handle = remote_control_handle_with_current_enrollment(
+        TEST_REMOTE_CONTROL_URL,
+        remote_control_auth_manager(),
+    );
+    remote_handle
+        .desired_state_tx
+        .send_replace(RemoteControlDesiredState::Enabled {
+            persistence_preference: Some(true),
+        });
+
+    remote_handle
+        .enable_ephemeral()
+        .expect("ephemeral enable should succeed");
+    assert_eq!(
+        *remote_handle.desired_state_tx.borrow(),
+        RemoteControlDesiredState::Enabled {
+            persistence_preference: Some(true),
+        }
+    );
+
+    remote_handle
+        .desired_state_tx
+        .send_replace(RemoteControlDesiredState::Disabled);
+    remote_handle
+        .enable_ephemeral()
+        .expect("ephemeral enable should succeed");
+    assert_eq!(
+        *remote_handle.desired_state_tx.borrow(),
+        RemoteControlDesiredState::Enabled {
+            persistence_preference: None,
+        }
+    );
+}
+
 fn remote_control_server_token_response(
     server_id: &str,
     environment_id: &str,

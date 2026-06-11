@@ -186,9 +186,20 @@ impl RemoteControlHandle {
             return Err(RemoteControlUnavailable);
         }
 
+        let mut effective_persistence_preference = persistence_preference;
         let desired_state_changed = self.desired_state_tx.send_if_modified(|state| {
+            if effective_persistence_preference.is_none()
+                && matches!(
+                    *state,
+                    RemoteControlDesiredState::Enabled {
+                        persistence_preference: Some(true)
+                    }
+                )
+            {
+                effective_persistence_preference = Some(true);
+            }
             let next_state = RemoteControlDesiredState::Enabled {
-                persistence_preference,
+                persistence_preference: effective_persistence_preference,
             };
             let changed = *state != next_state;
             *state = next_state;
@@ -198,7 +209,7 @@ impl RemoteControlHandle {
         let status = self.status();
         info!(
             desired_state_changed,
-            ?persistence_preference,
+            ?effective_persistence_preference,
             current_status = ?status.status,
             environment_id = ?status.environment_id,
             installation_id = %status.installation_id,
