@@ -97,32 +97,31 @@ impl AppServerSession {
         T: DeserializeOwned,
     {
         let request_id = self.next_request_id();
-        if self.uses_remote_workspace() {
-            let AppServerRequestHandle::Remote(handle) = self.request_handle() else {
-                color_eyre::eyre::bail!(
-                    "raw JSON-RPC requests are only supported by the remote app-server client"
-                );
-            };
-            let response = handle
-                .request_json_rpc(JSONRPCRequest {
-                    id: request_id,
-                    method: method.to_string(),
-                    params: Some(remote_params),
-                    trace: None,
-                })
-                .await
-                .wrap_err_with(|| format!("{method} failed in TUI"))?;
-            let result = response.map_err(|source| {
-                color_eyre::eyre::eyre!("{method} failed in TUI: {}", source.message)
-            })?;
-            return serde_json::from_value(result)
-                .wrap_err_with(|| format!("{method} returned invalid data"));
+        match self.request_handle() {
+            AppServerRequestHandle::Remote(handle) => {
+                let response = handle
+                    .request_json_rpc(JSONRPCRequest {
+                        id: request_id,
+                        method: method.to_string(),
+                        params: Some(remote_params),
+                        trace: None,
+                    })
+                    .await
+                    .wrap_err_with(|| format!("{method} failed in TUI"))?;
+                let result = response.map_err(|source| {
+                    color_eyre::eyre::eyre!("{method} failed in TUI: {}", source.message)
+                })?;
+                serde_json::from_value(result)
+                    .wrap_err_with(|| format!("{method} returned invalid data"))
+            }
+            AppServerRequestHandle::InProcess(_) => {
+                let path = AbsolutePathBuf::from_absolute_path_checked(path.as_str())
+                    .wrap_err_with(|| format!("invalid local app-server fs path {path}"))?;
+                self.client
+                    .request_typed(local_request(request_id, path))
+                    .await
+                    .wrap_err_with(|| format!("{method} failed in TUI"))
+            }
         }
-        let path = AbsolutePathBuf::from_absolute_path_checked(path.as_str())
-            .wrap_err_with(|| format!("invalid local app-server fs path {path}"))?;
-        self.client
-            .request_typed(local_request(request_id, path))
-            .await
-            .wrap_err_with(|| format!("{method} failed in TUI"))
     }
 }

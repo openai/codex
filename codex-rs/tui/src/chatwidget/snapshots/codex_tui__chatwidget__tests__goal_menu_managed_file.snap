@@ -1,11 +1,11 @@
 ---
 source: tui/src/chatwidget/tests/goal_menu.rs
-assertion_line: 99
-expression: rendered
+assertion_line: 94
+expression: rendered_goal_summary(&mut rx)
 ---
 Goal
 Status: active
-Objective file: $CODEX_HOME/attachments/<uuid>/goal-objective.md
+Objective file: /tmp/codex-home/attachments/00000000-0000-4000-8000-000000000000/goal-objective.md
 Time used: 1m
 Tokens used: 12.5K
 Token budget: 80K

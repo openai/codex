@@ -84,29 +84,17 @@ async fn goal_menu_managed_file_snapshot() {
         AppThreadGoalStatus::Active,
         /*token_budget*/ Some(80_000),
     );
-    let path = chat
-        .config
-        .codex_home
+    let codex_home = codex_app_server_client::AppServerPath::from_app_server("/tmp/codex-home");
+    let path = codex_home
         .join("attachments")
         .join("00000000-0000-4000-8000-000000000000")
         .join("goal-objective.md");
-    let goal_path =
-        codex_app_server_client::AppServerPath::from_absolute_str(&path.display().to_string())
-            .expect("absolute goal path");
-    let codex_home = codex_app_server_client::AppServerPath::from_absolute_str(
-        &chat.config.codex_home.display().to_string(),
-    )
-    .expect("absolute codex home");
-    goal.objective = crate::goal_files::objective_file_reference(&goal_path)
-        .expect("goal objective file reference");
+    goal.objective =
+        crate::goal_files::objective_file_reference(&path).expect("goal objective file reference");
 
     chat.show_goal_summary(goal, Some(&codex_home));
 
-    let rendered = rendered_goal_summary(&mut rx).replace(
-        &path.display().to_string(),
-        "$CODEX_HOME/attachments/<uuid>/goal-objective.md",
-    );
-    assert_chatwidget_snapshot!("goal_menu_managed_file", rendered);
+    assert_chatwidget_snapshot!("goal_menu_managed_file", rendered_goal_summary(&mut rx));
 }
 
 #[tokio::test]

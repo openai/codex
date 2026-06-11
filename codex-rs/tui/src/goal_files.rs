@@ -30,9 +30,23 @@ pub(crate) async fn materialize_goal_objective(
     }
 
     if objective.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
-        let output_dir = create_goal_output_dir(app_server, codex_home).await?;
+        let codex_home = codex_home
+            .context("App server did not report $CODEX_HOME; cannot materialize goal files")?;
+        let output_dir = codex_home
+            .join(GOAL_ATTACHMENT_DIR)
+            .join(Uuid::new_v4().to_string());
+        app_server
+            .fs_create_directory_all_path(&output_dir)
+            .await
+            .map_err(|err| anyhow::anyhow!("{err}"))
+            .with_context(|| format!("Could not create goal attachment directory {output_dir}"))?;
+
         let path = output_dir.join(GOAL_FILE_NAME);
-        write_goal_file(app_server, path.clone(), objective.as_bytes().to_vec()).await?;
+        app_server
+            .fs_write_file_path(&path, objective.as_bytes().to_vec())
+            .await
+            .map_err(|err| anyhow::anyhow!("{err}"))
+            .with_context(|| format!("Could not write goal file {path}"))?;
         objective = objective_file_reference(&path)?;
     }
 
@@ -106,33 +120,4 @@ pub(crate) fn objective_file_reference(path: &GoalFilePath) -> Result<String> {
         );
     }
     Ok(reference)
-}
-
-async fn create_goal_output_dir(
-    app_server: &mut AppServerSession,
-    codex_home: Option<&GoalFilePath>,
-) -> Result<GoalFilePath> {
-    let codex_home = codex_home
-        .context("App server did not report $CODEX_HOME; cannot materialize goal files")?;
-    let path = codex_home
-        .join(GOAL_ATTACHMENT_DIR)
-        .join(Uuid::new_v4().to_string());
-    app_server
-        .fs_create_directory_all_path(&path)
-        .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
-        .with_context(|| format!("Could not create goal attachment directory {path}"))?;
-    Ok(path)
-}
-
-async fn write_goal_file(
-    app_server: &mut AppServerSession,
-    path: GoalFilePath,
-    bytes: Vec<u8>,
-) -> Result<()> {
-    app_server
-        .fs_write_file_path(&path, bytes)
-        .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
-        .with_context(|| format!("Could not write goal file {path}"))
 }

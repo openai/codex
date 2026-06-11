@@ -4180,10 +4180,9 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
         .await?
         .goal
         .expect("goal should be set");
+    let saved_objective = goal.objective.clone();
     let codex_home = app_server.codex_home_path(&app.chat_widget.config_ref().codex_home);
-    let path = crate::goal_files::objective_file_path(&goal.objective, codex_home.as_ref())
-        .expect("goal objective should be a managed file reference");
-    assert!(path.as_str().contains("attachments"));
+    assert!(crate::goal_files::objective_file_path(&goal.objective, codex_home.as_ref()).is_some());
     assert_eq!(
         crate::goal_files::objective_text_for_edit(
             &mut app_server,
@@ -4194,29 +4193,14 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
         .expect("managed goal file should be readable"),
         objective
     );
-    let outside_path = codex_app_server_client::AppServerPath::from_absolute_str(
-        &tempdir()?
-            .path()
-            .join("attachments")
-            .join("00000000-0000-4000-8000-000000000000")
-            .join("goal-objective.md")
-            .display()
-            .to_string(),
+    assert_goal_reference_remains_literal(
+        &mut app_server,
+        codex_home.as_ref(),
+        codex_app_server_client::AppServerPath::from_app_server(
+            "/tmp/attachments/00000000-0000-4000-8000-000000000000/goal-objective.md",
+        ),
     )
-    .expect("absolute outside goal path");
-    let reference = crate::goal_files::objective_file_reference(&outside_path)
-        .expect("goal objective reference");
-    assert!(crate::goal_files::objective_file_path(&reference, codex_home.as_ref()).is_none());
-    assert_eq!(
-        crate::goal_files::objective_text_for_edit(
-            &mut app_server,
-            codex_home.as_ref(),
-            &reference
-        )
-        .await
-        .expect("outside goal file reference should not be read"),
-        reference
-    );
+    .await?;
     let escaped_path = codex_home
         .as_ref()
         .expect("codex home")
@@ -4225,48 +4209,10 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
         .join("attachments")
         .join("00000000-0000-4000-8000-000000000000")
         .join("goal-objective.md");
-    let escaped_reference = crate::goal_files::objective_file_reference(&escaped_path)
-        .expect("escaped goal objective reference");
-    assert!(
-        crate::goal_files::objective_file_path(&escaped_reference, codex_home.as_ref()).is_none()
-    );
-    assert_eq!(
-        crate::goal_files::objective_text_for_edit(
-            &mut app_server,
-            codex_home.as_ref(),
-            &escaped_reference
-        )
-        .await
-        .expect("escaped goal file reference should not be read"),
-        escaped_reference
-    );
-    app_server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn set_thread_goal_objective_confirms_replacement_before_materializing() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let started = app_server
-        .start_thread(app.chat_widget.config_ref())
-        .await
-        .expect("thread/start should succeed");
-    let thread_id = started.session.thread_id;
-    app.enqueue_primary_thread_session(started.session, started.turns)
-        .await
-        .expect("primary thread should be registered");
-    app_server
-        .thread_goal_set(
-            thread_id,
-            Some("keep this goal".to_string()),
-            Some(codex_app_server_protocol::ThreadGoalStatus::Active),
-            /*token_budget*/ None,
-        )
+    assert_goal_reference_remains_literal(&mut app_server, codex_home.as_ref(), escaped_path)
         .await?;
     let attachments_dir = app.chat_widget.config_ref().codex_home.join("attachments");
+    let attachment_count = std::fs::read_dir(&attachments_dir)?.count();
 
     let accepted = app
         .set_thread_goal_objective(
@@ -4278,7 +4224,10 @@ async fn set_thread_goal_objective_confirms_replacement_before_materializing() -
         .await;
 
     assert!(!accepted);
-    assert!(!attachments_dir.exists());
+    assert_eq!(
+        std::fs::read_dir(&attachments_dir)?.count(),
+        attachment_count
+    );
     assert_eq!(
         app_server
             .thread_goal_get(thread_id)
@@ -4286,9 +4235,26 @@ async fn set_thread_goal_objective_confirms_replacement_before_materializing() -
             .goal
             .expect("goal should still be set")
             .objective,
-        "keep this goal"
+        saved_objective
     );
     app_server.shutdown().await?;
+    Ok(())
+}
+
+async fn assert_goal_reference_remains_literal(
+    app_server: &mut crate::app_server_session::AppServerSession,
+    codex_home: Option<&codex_app_server_client::AppServerPath>,
+    path: codex_app_server_client::AppServerPath,
+) -> Result<()> {
+    let reference =
+        crate::goal_files::objective_file_reference(&path).expect("goal objective reference");
+    assert!(crate::goal_files::objective_file_path(&reference, codex_home).is_none());
+    assert_eq!(
+        crate::goal_files::objective_text_for_edit(app_server, codex_home, &reference)
+            .await
+            .expect("literal goal file reference should not be read"),
+        reference
+    );
     Ok(())
 }
 

@@ -155,12 +155,6 @@ pub struct RemoteAppServerClient {
     worker_handle: tokio::task::JoinHandle<()>,
 }
 
-#[derive(Debug, Default)]
-struct RemoteInitializeInfo {
-    server_version: Option<String>,
-    codex_home: Option<String>,
-}
-
 #[derive(Clone)]
 pub struct RemoteAppServerRequestHandle {
     command_tx: mpsc::Sender<RemoteClientCommand>,
@@ -206,7 +200,7 @@ impl RemoteAppServerClient {
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let mut stream = stream;
-        let (pending_events, initialize_info) = initialize_remote_connection(
+        let (pending_events, server_version, codex_home) = initialize_remote_connection(
             &mut stream,
             &endpoint,
             initialize_params,
@@ -482,8 +476,8 @@ impl RemoteAppServerClient {
             command_tx,
             event_rx,
             pending_events: pending_events.into(),
-            server_version: initialize_info.server_version,
-            codex_home: initialize_info.codex_home,
+            server_version,
+            codex_home,
             worker_handle,
         })
     }
@@ -800,13 +794,14 @@ async fn initialize_remote_connection<S>(
     endpoint: &str,
     params: InitializeParams,
     initialize_timeout: Duration,
-) -> IoResult<(Vec<AppServerEvent>, RemoteInitializeInfo)>
+) -> IoResult<(Vec<AppServerEvent>, Option<String>, Option<String>)>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let initialize_request_id = RequestId::String("initialize".to_string());
     let mut pending_events = Vec::new();
-    let mut initialize_info = RemoteInitializeInfo::default();
+    let mut server_version = None;
+    let mut codex_home = None;
     write_jsonrpc_message(
         stream,
         JSONRPCMessage::Request(jsonrpc_request_from_client_request(
@@ -830,7 +825,7 @@ where
                     })?;
                     match message {
                         JSONRPCMessage::Response(response) if response.id == initialize_request_id => {
-                            initialize_info.server_version = response
+                            server_version = response
                                 .result
                                 .get("userAgent")
                                 .and_then(serde_json::Value::as_str)
@@ -838,7 +833,7 @@ where
                                     let (_, rest) = user_agent.split_once('/')?;
                                     rest.split_whitespace().next().map(str::to_string)
                                 });
-                            initialize_info.codex_home = response
+                            codex_home = response
                                 .result
                                 .get("codexHome")
                                 .and_then(serde_json::Value::as_str)
@@ -935,7 +930,7 @@ where
     )
     .await?;
 
-    Ok((pending_events, initialize_info))
+    Ok((pending_events, server_version, codex_home))
 }
 
 fn app_server_event_from_notification(notification: JSONRPCNotification) -> Option<AppServerEvent> {

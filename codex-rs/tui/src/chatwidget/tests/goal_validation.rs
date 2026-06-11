@@ -57,10 +57,21 @@ async fn goal_slash_command_accepts_objective_at_limit() {
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
     let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS);
+    let command = format!("/goal {objective}");
 
-    submit_composer_text(&mut chat, &format!("/goal {objective}"));
+    submit_composer_text(&mut chat, &command);
 
-    assert_eq!(next_goal_objective(&mut rx, thread_id), objective);
+    let event = rx.try_recv().expect("expected goal objective event");
+    let AppEvent::SetThreadGoalObjective {
+        thread_id: actual_thread_id,
+        objective: actual_objective,
+        ..
+    } = event
+    else {
+        panic!("expected SetThreadGoalObjective, got {event:?}");
+    };
+    assert_eq!(actual_thread_id, thread_id);
+    assert_eq!(actual_objective, objective);
     assert_no_submit_op(&mut op_rx);
 }
 
@@ -74,7 +85,17 @@ async fn goal_slash_command_accepts_multiline_objective_after_blank_first_line()
 
     submit_composer_text(&mut chat, &format!("/goal \n\n{objective}"));
 
-    assert_eq!(next_goal_objective(&mut rx, thread_id), objective);
+    let event = rx.try_recv().expect("expected goal objective event");
+    let AppEvent::SetThreadGoalObjective {
+        thread_id: actual_thread_id,
+        objective: actual_objective,
+        ..
+    } = event
+    else {
+        panic!("expected SetThreadGoalObjective, got {event:?}");
+    };
+    assert_eq!(actual_thread_id, thread_id);
+    assert_eq!(actual_objective, objective);
     assert_no_submit_op(&mut op_rx);
 }
 
