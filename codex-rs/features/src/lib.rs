@@ -183,6 +183,8 @@ pub enum Feature {
     ImageGeneration,
     /// Replace hosted image generation with the standalone image-generation extension.
     ImageGenExt,
+    /// Resize all inline data-URL images before recording them in history.
+    ResizeAllImages,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
@@ -1085,6 +1087,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageGenExt,
         key: "imagegenext",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResizeAllImages,
+        key: "resize_all_images",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

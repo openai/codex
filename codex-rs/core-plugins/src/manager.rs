@@ -992,14 +992,19 @@ impl PluginsManager {
         &self,
         config: &PluginsConfigInput,
         additional_roots: &[AbsolutePathBuf],
+        include_openai_curated: bool,
     ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
         if !config.plugins_enabled {
             return Ok(ConfiguredMarketplaceListOutcome::default());
         }
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let marketplace_outcome =
-            self.discover_marketplaces_for_config(config, additional_roots)?;
+        let mut marketplace_roots = self.marketplace_roots(config, additional_roots);
+        if !include_openai_curated {
+            let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
+            marketplace_roots.retain(|root| root.as_path() != curated_repo_root.as_path());
+        }
+        let marketplace_outcome = list_marketplaces(&marketplace_roots)?;
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces

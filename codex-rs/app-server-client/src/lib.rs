@@ -22,6 +22,7 @@ use std::fmt;
 use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,7 +49,11 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
+use codex_config::config_toml::ConfigToml;
 use codex_core::config::Config;
+pub use codex_core::otel_init::build_provider as build_otel_provider;
+use codex_core::personality_migration::PersonalityMigrationStatus;
+use codex_core::personality_migration::maybe_migrate_personality;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
@@ -82,24 +87,29 @@ pub mod legacy_core {
         }
     }
 
-    pub mod otel_init {
-        pub use codex_core::otel_init::*;
-    }
-
-    pub mod personality_migration {
-        pub use codex_core::personality_migration::*;
-    }
-
-    pub mod test_support {
-        pub use codex_core::test_support::*;
-    }
-
     pub mod windows_sandbox {
         pub use codex_core::windows_sandbox::*;
     }
 }
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Runs the embedded app-server personality migration.
+///
+/// Returns `true` when the migration changed config and the caller should reload it.
+pub async fn migrate_personality_if_needed(
+    codex_home: &Path,
+    config_toml: &ConfigToml,
+    state_db: Option<StateDbHandle>,
+) -> IoResult<bool> {
+    let status = maybe_migrate_personality(codex_home, config_toml, state_db).await?;
+    match status {
+        PersonalityMigrationStatus::Applied => Ok(true),
+        PersonalityMigrationStatus::SkippedMarker
+        | PersonalityMigrationStatus::SkippedExplicitPersonality
+        | PersonalityMigrationStatus::SkippedNoSessions => Ok(false),
+    }
+}
 
 /// Raw app-server request result for typed in-process requests.
 ///
@@ -158,6 +168,7 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
         ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ItemCompleted(_)
+            | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::AgentMessageDelta(_)
             | ServerNotification::PlanDelta(_)
             | ServerNotification::ReasoningSummaryTextDelta(_)
@@ -2136,6 +2147,13 @@ mod tests {
                             memory_citation: None,
                         },
                     }
+                )
+            )
+        ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::ExternalAgentConfigImportCompleted(
+                    codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {},
                 )
             )
         ));

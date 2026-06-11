@@ -15,8 +15,16 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::codecs::webp::WebPEncoder;
 use image::imageops::FilterType;
+
+const DATA_URL_PREFIX: &str = "data:";
+pub const PROMPT_IMAGE_PATCH_SIZE: u32 = 32;
 /// Maximum width or height used when resizing images before uploading.
 pub const MAX_DIMENSION: u32 = 2048;
+/// Maximum accepted byte length for prompt image input representations.
+///
+/// This is a high sanity guard against pathological inputs, not a protocol
+/// requirement or target upload size.
+pub const MAX_PROMPT_IMAGE_INPUT_BYTES: usize = 1024 * 1024 * 1024;
 
 pub mod error;
 
@@ -32,15 +40,27 @@ pub struct EncodedImage {
 
 impl EncodedImage {
     pub fn into_data_url(self) -> String {
-        let encoded = BASE64_STANDARD.encode(&self.bytes);
-        format!("data:{};base64,{encoded}", self.mime)
+        data_url_from_bytes(&self.mime, &self.bytes)
     }
+}
+
+/// Wraps image bytes in a data URL without decoding or validating them.
+pub fn data_url_from_bytes(mime: &str, bytes: &[u8]) -> String {
+    let encoded = BASE64_STANDARD.encode(bytes);
+    format!("data:{mime};base64,{encoded}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PromptImageMode {
     ResizeToFit,
     Original,
+    ResizeWithLimits(PromptImageResizeLimits),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PromptImageResizeLimits {
+    pub max_dimension: u32,
+    pub max_patches: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -78,9 +98,38 @@ pub fn load_for_prompt_bytes(
 
         let (width, height) = dynamic.dimensions();
 
-        let encoded = if mode == PromptImageMode::Original
-            || (width <= MAX_DIMENSION && height <= MAX_DIMENSION)
-        {
+        let target_dimensions = match mode {
+            PromptImageMode::ResizeToFit if width > MAX_DIMENSION || height > MAX_DIMENSION => {
+                let resized = dynamic.resize(MAX_DIMENSION, MAX_DIMENSION, FilterType::Triangle);
+                Some((resized.width(), resized.height(), resized))
+            }
+            PromptImageMode::ResizeWithLimits(limits) => {
+                let (target_width, target_height) =
+                    prompt_image_output_dimensions_for_limits(width, height, limits);
+                if (target_width, target_height) == (width, height) {
+                    None
+                } else {
+                    let resized =
+                        dynamic.resize_exact(target_width, target_height, FilterType::Triangle);
+                    Some((target_width, target_height, resized))
+                }
+            }
+            PromptImageMode::ResizeToFit | PromptImageMode::Original => None,
+        };
+
+        let encoded = if let Some((width, height, resized)) = target_dimensions {
+            let target_format = format
+                .filter(|format| can_preserve_source_bytes(*format))
+                .unwrap_or(ImageFormat::Png);
+            let (bytes, output_format) = encode_image(&resized, target_format)?;
+            let mime = format_to_mime(output_format);
+            EncodedImage {
+                bytes,
+                mime,
+                width,
+                height,
+            }
+        } else {
             if let Some(format) = format.filter(|format| can_preserve_source_bytes(*format)) {
                 let mime = format_to_mime(format);
                 EncodedImage {
@@ -99,23 +148,105 @@ pub fn load_for_prompt_bytes(
                     height,
                 }
             }
-        } else {
-            let resized = dynamic.resize(MAX_DIMENSION, MAX_DIMENSION, FilterType::Triangle);
-            let target_format = format
-                .filter(|format| can_preserve_source_bytes(*format))
-                .unwrap_or(ImageFormat::Png);
-            let (bytes, output_format) = encode_image(&resized, target_format)?;
-            let mime = format_to_mime(output_format);
-            EncodedImage {
-                bytes,
-                mime,
-                width: resized.width(),
-                height: resized.height(),
-            }
         };
 
         Ok(encoded)
     })
+}
+
+pub fn load_data_url_for_prompt(
+    image_url: &str,
+    mode: PromptImageMode,
+) -> Result<EncodedImage, ImageProcessingError> {
+    let rest = image_url
+        .get(..DATA_URL_PREFIX.len())
+        .filter(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+        .and_then(|_| image_url.get(DATA_URL_PREFIX.len()..))
+        .ok_or_else(|| ImageProcessingError::InvalidDataUrl {
+            reason: "missing data: prefix".to_string(),
+        })?;
+    let (metadata, encoded) =
+        rest.split_once(',')
+            .ok_or_else(|| ImageProcessingError::InvalidDataUrl {
+                reason: "missing comma separator".to_string(),
+            })?;
+    if !metadata
+        .split(';')
+        .any(|part| part.eq_ignore_ascii_case("base64"))
+    {
+        return Err(ImageProcessingError::InvalidDataUrl {
+            reason: "only base64 data URLs are supported".to_string(),
+        });
+    }
+
+    if encoded.len() > MAX_PROMPT_IMAGE_INPUT_BYTES {
+        return Err(ImageProcessingError::ImageTooLarge {
+            representation: "base64 payload",
+            size: encoded.len(),
+            max: MAX_PROMPT_IMAGE_INPUT_BYTES,
+        });
+    }
+    let file_bytes =
+        BASE64_STANDARD
+            .decode(encoded)
+            .map_err(|source| ImageProcessingError::InvalidDataUrl {
+                reason: format!("invalid base64 payload: {source}"),
+            })?;
+    if file_bytes.len() > MAX_PROMPT_IMAGE_INPUT_BYTES {
+        return Err(ImageProcessingError::ImageTooLarge {
+            representation: "decoded input",
+            size: file_bytes.len(),
+            max: MAX_PROMPT_IMAGE_INPUT_BYTES,
+        });
+    }
+
+    load_for_prompt_bytes(Path::new("<data-url-image>"), file_bytes, mode)
+}
+
+fn prompt_image_output_dimensions_for_limits(
+    width: u32,
+    height: u32,
+    limits: PromptImageResizeLimits,
+) -> (u32, u32) {
+    let width = width.max(1);
+    let height = height.max(1);
+    if prompt_image_dimensions_fit(width, height, limits) {
+        return (width, height);
+    }
+
+    let max_dimension_scale =
+        (f64::from(limits.max_dimension) / f64::from(width.max(height))).min(1.0);
+    let width = ((f64::from(width) * max_dimension_scale).round() as u32).max(1);
+    let height = ((f64::from(height) * max_dimension_scale).round() as u32).max(1);
+    if prompt_image_dimensions_fit(width, height, limits) {
+        return (width, height);
+    }
+
+    let width_f64 = f64::from(width);
+    let height_f64 = f64::from(height);
+    let patch_size = f64::from(PROMPT_IMAGE_PATCH_SIZE);
+    let mut scale =
+        (patch_size * patch_size * limits.max_patches as f64 / width_f64 / height_f64).sqrt();
+    // Match Responses patch-budget math: shrink by area, then round the scaled
+    // patch grid down so integer output dimensions remain within the budget.
+    let scaled_patches_wide = width_f64 * scale / patch_size;
+    let scaled_patches_high = height_f64 * scale / patch_size;
+    scale *= (scaled_patches_wide.floor() / scaled_patches_wide)
+        .min(scaled_patches_high.floor() / scaled_patches_high);
+
+    (
+        ((width_f64 * scale).floor() as u32).max(1),
+        ((height_f64 * scale).floor() as u32).max(1),
+    )
+}
+
+fn prompt_image_dimensions_fit(width: u32, height: u32, limits: PromptImageResizeLimits) -> bool {
+    let patches_wide = width.div_ceil(PROMPT_IMAGE_PATCH_SIZE);
+    let patches_high = height.div_ceil(PROMPT_IMAGE_PATCH_SIZE);
+    let patch_count = u64::from(patches_wide) * u64::from(patches_high);
+    width <= limits.max_dimension
+        && height <= limits.max_dimension
+        && patch_count <= limits.max_patches as u64
 }
 
 fn can_preserve_source_bytes(format: ImageFormat) -> bool {
@@ -195,155 +326,5 @@ fn format_to_mime(format: ImageFormat) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io::Cursor;
-
-    use super::*;
-    use image::GenericImageView;
-    use image::ImageBuffer;
-    use image::Rgba;
-
-    fn image_bytes(image: &ImageBuffer<Rgba<u8>, Vec<u8>>, format: ImageFormat) -> Vec<u8> {
-        let mut encoded = Cursor::new(Vec::new());
-        DynamicImage::ImageRgba8(image.clone())
-            .write_to(&mut encoded, format)
-            .expect("encode image to bytes");
-        encoded.into_inner()
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn returns_original_image_when_within_bounds() {
-        for (format, mime) in [
-            (ImageFormat::Png, "image/png"),
-            (ImageFormat::WebP, "image/webp"),
-        ] {
-            let image = ImageBuffer::from_pixel(64, 32, Rgba([10u8, 20, 30, 255]));
-            let original_bytes = image_bytes(&image, format);
-
-            let encoded = load_for_prompt_bytes(
-                Path::new("in-memory-image"),
-                original_bytes.clone(),
-                PromptImageMode::ResizeToFit,
-            )
-            .expect("process image");
-
-            assert_eq!(encoded.width, 64);
-            assert_eq!(encoded.height, 32);
-            assert_eq!(encoded.mime, mime);
-            assert_eq!(encoded.bytes, original_bytes);
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn downscales_large_image() {
-        for (format, mime) in [
-            (ImageFormat::Png, "image/png"),
-            (ImageFormat::WebP, "image/webp"),
-        ] {
-            let image = ImageBuffer::from_pixel(4096, 2048, Rgba([200u8, 10, 10, 255]));
-            let original_bytes = image_bytes(&image, format);
-
-            let processed = load_for_prompt_bytes(
-                Path::new("in-memory-image"),
-                original_bytes,
-                PromptImageMode::ResizeToFit,
-            )
-            .expect("process image");
-
-            assert!(processed.width <= MAX_DIMENSION);
-            assert!(processed.height <= MAX_DIMENSION);
-            assert_eq!(processed.mime, mime);
-
-            let detected_format =
-                image::guess_format(&processed.bytes).expect("detect resized output format");
-            assert_eq!(detected_format, format);
-
-            let loaded = image::load_from_memory(&processed.bytes)
-                .expect("read resized bytes back into image");
-            assert_eq!(loaded.dimensions(), (processed.width, processed.height));
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn downscales_tall_image_to_fit_square_bounds() {
-        let image = ImageBuffer::from_pixel(1024, 4096, Rgba([200u8, 10, 10, 255]));
-        let original_bytes = image_bytes(&image, ImageFormat::Png);
-
-        let processed = load_for_prompt_bytes(
-            Path::new("in-memory-image"),
-            original_bytes,
-            PromptImageMode::ResizeToFit,
-        )
-        .expect("process image");
-
-        assert_eq!(processed.width, 512);
-        assert_eq!(processed.height, MAX_DIMENSION);
-        assert_eq!(processed.mime, "image/png");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn preserves_large_image_in_original_mode() {
-        let image = ImageBuffer::from_pixel(4096, 2048, Rgba([180u8, 30, 30, 255]));
-        let original_bytes = image_bytes(&image, ImageFormat::Png);
-
-        let processed = load_for_prompt_bytes(
-            Path::new("in-memory-image"),
-            original_bytes.clone(),
-            PromptImageMode::Original,
-        )
-        .expect("process image");
-
-        assert_eq!(processed.width, 4096);
-        assert_eq!(processed.height, 2048);
-        assert_eq!(processed.mime, "image/png");
-        assert_eq!(processed.bytes, original_bytes);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn fails_cleanly_for_invalid_images() {
-        let err = load_for_prompt_bytes(
-            Path::new("in-memory-image"),
-            b"not an image".to_vec(),
-            PromptImageMode::ResizeToFit,
-        )
-        .expect_err("invalid image should fail");
-        assert!(matches!(
-            err,
-            ImageProcessingError::Decode { .. }
-                | ImageProcessingError::UnsupportedImageFormat { .. }
-        ));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn reprocesses_updated_file_contents() {
-        {
-            IMAGE_CACHE.clear();
-        }
-
-        let first_image = ImageBuffer::from_pixel(32, 16, Rgba([20u8, 120, 220, 255]));
-        let first_bytes = image_bytes(&first_image, ImageFormat::Png);
-
-        let first = load_for_prompt_bytes(
-            Path::new("in-memory-image"),
-            first_bytes,
-            PromptImageMode::ResizeToFit,
-        )
-        .expect("process first image");
-
-        let second_image = ImageBuffer::from_pixel(96, 48, Rgba([50u8, 60, 70, 255]));
-        let second_bytes = image_bytes(&second_image, ImageFormat::Png);
-
-        let second = load_for_prompt_bytes(
-            Path::new("in-memory-image"),
-            second_bytes,
-            PromptImageMode::ResizeToFit,
-        )
-        .expect("process updated image");
-
-        assert_eq!(first.width, 32);
-        assert_eq!(first.height, 16);
-        assert_eq!(second.width, 96);
-        assert_eq!(second.height, 48);
-        assert_ne!(second.bytes, first.bytes);
-    }
-}
+#[path = "image_tests.rs"]
+mod tests;
