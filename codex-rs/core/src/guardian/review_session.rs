@@ -1518,8 +1518,10 @@ mod tests {
     async fn run_review_removes_trunk_when_event_stream_is_broken() {
         let (mut review_session, tx_event, _rx_sub) = test_review_session().await;
         let params = test_review_params().await;
-        review_session.reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
+        review_session.reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &params.spawn_config,
+            params.parent_session.user_instructions().await,
+        );
         let manager = GuardianReviewSessionManager {
             state: Arc::new(Mutex::new(GuardianReviewSessionState {
                 trunk: Some(Arc::new(review_session)),
