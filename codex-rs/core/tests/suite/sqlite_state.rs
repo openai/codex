@@ -7,10 +7,6 @@ use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
-use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
-use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -120,23 +116,15 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
     )
     .await;
 
-    let dynamic_function = DynamicToolFunctionSpec {
-        name: "resume_lookup".to_string(),
-        description: "Look up a value after resume.".to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": { "query": { "type": "string" } },
-            "required": ["query"],
-            "additionalProperties": false,
-        }),
-        defer_loading: false,
-    };
-    let dynamic_namespace = DynamicToolNamespaceSpec {
-        name: "resume_tools".to_string(),
-        description: "Tools restored after resume.".to_string(),
-        tools: vec![DynamicToolNamespaceTool::Function(dynamic_function.clone())],
-    };
-    let dynamic_tool = DynamicToolSpec::Namespace(dynamic_namespace.clone());
+    let namespace = "resume_tools";
+    let tool_name = "resume_lookup";
+    let tool_description = "Look up a value after resume.";
+    let input_schema = json!({
+        "type": "object",
+        "properties": { "query": { "type": "string" } },
+        "required": ["query"],
+        "additionalProperties": false,
+    });
     let mut builder = test_codex().with_config(|config| {
         config
             .features
@@ -146,7 +134,7 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
     let base_test = builder.build(&server).await?;
     let started = base_test
         .thread_manager
-        .start_thread_with_tools(base_test.config.clone(), vec![dynamic_tool.clone()])
+        .start_thread_with_tools(base_test.config.clone(), Vec::new())
         .await?;
     let rollout_path = started
         .session_configured
@@ -171,6 +159,29 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    started.thread.submit(Op::Shutdown).await?;
+    wait_for_event(&started.thread, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let mut rollout_lines = fs::read_to_string(&rollout_path)?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    rollout_lines.first_mut().expect("session metadata line")["payload"]["dynamic_tools"] = json!([{
+        "namespace": namespace,
+        "name": tool_name,
+        "description": tool_description,
+        "inputSchema": input_schema,
+        "exposeToContext": true,
+    }]);
+    let rollout = rollout_lines
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<serde_json::Result<Vec<_>>>()?
+        .join("\n");
+    fs::write(&rollout_path, format!("{rollout}\n"))?;
 
     let mut resume_builder = test_codex().with_config(|config| {
         config
@@ -192,20 +203,20 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
         .expect("resumed request tools");
     let restored_namespace = tools
         .iter()
-        .find(|tool| tool.get("name") == Some(&json!(dynamic_namespace.name.as_str())))
+        .find(|tool| tool.get("name") == Some(&json!(namespace)))
         .expect("dynamic tool namespace should be restored from rollout metadata");
     assert_eq!(
         restored_namespace,
         &json!({
             "type": "namespace",
-            "name": dynamic_namespace.name,
-            "description": dynamic_namespace.description,
+            "name": namespace,
+            "description": "Tools in the resume_tools namespace.",
             "tools": [{
                 "type": "function",
-                "name": dynamic_function.name,
-                "description": dynamic_function.description,
+                "name": tool_name,
+                "description": tool_description,
                 "strict": false,
-                "parameters": dynamic_function.input_schema,
+                "parameters": input_schema,
             }],
         })
     );
