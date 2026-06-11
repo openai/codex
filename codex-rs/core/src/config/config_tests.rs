@@ -5500,14 +5500,9 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
     .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
-    config.apps_mcp_path_override = Some("/custom/mcp".to_string());
     config.apps_mcp_product_sku = Some("tpp".to_string());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
-    assert_eq!(
-        mcp_config.apps_mcp_path_override.as_deref(),
-        Some("/custom/mcp")
-    );
     assert_eq!(mcp_config.apps_mcp_product_sku.as_deref(), Some("tpp"));
 
     let _ = config.features.disable(Feature::Apps);
@@ -8863,84 +8858,6 @@ allow_login_shell = false
 }
 
 #[tokio::test]
-async fn config_loads_apps_mcp_path_override_from_feature_config() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let toml = r#"
-model = "gpt-5.4"
-
-[features.apps_mcp_path_override]
-path = "/custom/mcp"
-"#;
-    let cfg: ConfigToml =
-        toml::from_str(toml).expect("TOML deserialization should succeed for apps MCP feature");
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.apps_mcp_path_override.as_deref(),
-        Some("/custom/mcp")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn config_defaults_enabled_apps_mcp_path_override_to_plugin_service() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let toml = r#"
-model = "gpt-5.4"
-
-[features]
-apps_mcp_path_override = true
-"#;
-    let cfg: ConfigToml =
-        toml::from_str(toml).expect("TOML deserialization should succeed for apps MCP feature");
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert!(config.features.enabled(Feature::AppsMcpPathOverride));
-    assert_eq!(config.apps_mcp_path_override.as_deref(), Some("/ps/mcp"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn config_preserves_explicit_apps_mcp_path_override_path() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let toml = r#"
-model = "gpt-5.4"
-
-[features.apps_mcp_path_override]
-enabled = true
-path = "/custom/mcp"
-"#;
-    let cfg: ConfigToml =
-        toml::from_str(toml).expect("TOML deserialization should succeed for apps MCP feature");
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.apps_mcp_path_override.as_deref(),
-        Some("/custom/mcp")
-    );
-    assert!(config.features.enabled(Feature::AppsMcpPathOverride));
-    Ok(())
-}
-
-#[tokio::test]
 async fn config_loads_apps_mcp_product_sku_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let toml = r#"
@@ -9914,10 +9831,7 @@ enabled = true
         .build()
         .await?;
 
-    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 4);
-    assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 10_000);
-    assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 3_600_000);
-    assert_eq!(config.multi_agent_v2.default_wait_timeout_ms, 30_000);
+    assert_eq!(config.multi_agent_v2, MultiAgentV2Config::default());
     assert_eq!(
         (
             config.agent_max_threads,
@@ -9925,34 +9839,30 @@ enabled = true
         ),
         (None, Some(3))
     );
-    assert_eq!(
-        config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
-        Some(DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT)
-    );
-    assert!(
-        !config
-            .multi_agent_v2
-            .root_agent_usage_hint_text
-            .as_deref()
-            .unwrap_or_default()
-            .contains("maximum concurrency"),
-    );
-    assert_eq!(
-        config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
-        Some(DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT)
-    );
-    assert!(
-        !config
-            .multi_agent_v2
-            .subagent_usage_hint_text
-            .as_deref()
-            .unwrap_or_default()
-            .contains("maximum concurrency"),
-    );
-    assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
-    assert!(config.multi_agent_v2.non_code_mode_only);
 
     Ok(())
+}
+
+#[test]
+fn multi_agent_v2_default_usage_hints_use_configured_thread_cap() {
+    let config_toml = toml::from_str(
+        r#"[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 17
+"#,
+    )
+    .expect("multi-agent v2 config should parse");
+
+    let config = resolve_multi_agent_v2_config(&config_toml);
+    let concurrency_guidance = "There are 17 available concurrency slots, meaning that up to 17 agents can be active at once, including you.";
+    assert!(
+        [
+            config.root_agent_usage_hint_text,
+            config.subagent_usage_hint_text,
+        ]
+        .into_iter()
+        .all(|hint| hint.is_some_and(|hint| hint.ends_with(concurrency_guidance)))
+    );
 }
 
 #[tokio::test]

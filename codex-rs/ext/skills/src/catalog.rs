@@ -1,4 +1,5 @@
 use codex_core_skills::model::SkillDependencies;
+use codex_exec_server::EnvironmentPathRef;
 
 /// Source authority that owns a skill package and must be used to read it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -8,8 +9,8 @@ pub enum SkillSourceKind {
     Host,
     /// Skills owned by an execution environment.
     Executor,
-    /// Skills read through an authenticated remote catalog/API.
-    Remote,
+    /// Skills owned by the orchestrator rather than an execution environment.
+    Orchestrator,
     /// Extension-private source kind for future providers that do not fit an
     /// existing transport category.
     Custom(String),
@@ -24,7 +25,7 @@ impl SkillSourceKind {
         match self {
             Self::Host => "host",
             Self::Executor => "executor",
-            Self::Remote => "remote",
+            Self::Orchestrator => "orchestrator",
             Self::Custom(kind) => kind,
         }
     }
@@ -56,9 +57,37 @@ impl SkillAuthority {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SkillPackageId(pub String);
 
-/// Opaque resource id inside a skill package.
+/// Opaque resource id inside a skill package, optionally bound to the
+/// environment path that owns its contents.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct SkillResourceId(pub String);
+pub struct SkillResourceId {
+    id: String,
+    environment_path: Option<EnvironmentPathRef>,
+}
+
+impl SkillResourceId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            environment_path: None,
+        }
+    }
+
+    pub fn environment(id: impl Into<String>, path: EnvironmentPathRef) -> Self {
+        Self {
+            id: id.into(),
+            environment_path: Some(path),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.id
+    }
+
+    pub(crate) fn environment_path(&self) -> Option<&EnvironmentPathRef> {
+        self.environment_path.as_ref()
+    }
+}
 
 /// Metadata shown in the always-visible skills catalog.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,7 +154,7 @@ impl SkillCatalogEntry {
     pub(crate) fn rendered_path(&self) -> &str {
         self.display_path
             .as_deref()
-            .unwrap_or(self.main_prompt.0.as_str())
+            .unwrap_or_else(|| self.main_prompt.as_str())
     }
 }
 

@@ -8,8 +8,6 @@ use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::CompactionAnalyticsDetails;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
-use crate::compact_remote::build_compact_request_log_data;
-use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::should_keep_compacted_history_item;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
@@ -129,17 +127,17 @@ async fn run_remote_compact_task_inner(
     let pre_compact_outcome = run_pre_compact_hooks(sess, turn_context, trigger).await;
     match pre_compact_outcome {
         PreCompactHookOutcome::Continue => {}
-        PreCompactHookOutcome::Stopped { reason } => {
-            let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
+        PreCompactHookOutcome::Stopped => {
+            let error = CodexErr::TurnAborted;
             attempt
                 .track(
                     sess.as_ref(),
                     codex_analytics::CompactionStatus::Interrupted,
-                    Some(error),
+                    Some(&error),
                     analytics_details,
                 )
                 .await;
-            return Err(CodexErr::TurnAborted);
+            return Err(error);
         }
     }
     let result = run_remote_compact_task_inner_impl(
@@ -152,18 +150,18 @@ async fn run_remote_compact_task_inner(
     )
     .await;
     let status = compaction_status_from_result(&result);
-    let error = result.as_ref().err().map(ToString::to_string);
+    let codex_error = result.as_ref().err();
     if result.is_ok() {
         let post_compact_outcome = run_post_compact_hooks(sess, turn_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
             attempt
-                .track(sess.as_ref(), status, error, analytics_details)
+                .track(sess.as_ref(), status, codex_error, analytics_details)
                 .await;
             return Err(CodexErr::TurnAborted);
         }
     }
     attempt
-        .track(sess.as_ref(), status, error.clone(), analytics_details)
+        .track(sess.as_ref(), status, codex_error, analytics_details)
         .await;
     if let Err(err) = result {
         sess.track_turn_codex_error(turn_context, &err);
@@ -212,9 +210,8 @@ async fn run_remote_compact_task_inner_impl(
     }
     if estimated_deleted_tokens > 0 {
         let max_local_deleted_tokens = sess
-            .get_total_token_usage_breakdown()
-            .await
-            .estimated_tokens_of_items_added_since_last_successful_api_response;
+            .estimated_tokens_after_last_model_generated_item()
+            .await;
         analytics_details.active_context_tokens_before = analytics_details
             .active_context_tokens_before
             .map(|active_context_tokens_before| {
@@ -243,7 +240,7 @@ async fn run_remote_compact_task_inner_impl(
         output_schema_strict: true,
     };
 
-    let window_id = sess.services.model_client.current_window_id();
+    let window_id = sess.current_window_id().await;
     let turn_metadata_header = turn_context
         .turn_metadata_state
         .current_header_value_for_compaction(&window_id, compaction_metadata);
@@ -267,6 +264,7 @@ async fn run_remote_compact_task_inner_impl(
         turn_context,
         client_session,
         &prompt,
+        &window_id,
         turn_metadata_header.as_deref(),
     )
     .await;
@@ -283,10 +281,12 @@ async fn run_remote_compact_task_inner_impl(
     if let Some(token_usage) = token_usage {
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
         analytics_details.compaction_summary_tokens = Some(token_usage.output_tokens);
+        analytics_details.cached_input_tokens = Some(token_usage.cached_input_tokens);
     }
     let (compacted_history, retained_images) =
         build_v2_compacted_history(&prompt_input, compaction_output);
     analytics_details.retained_image_count = Some(retained_images);
+    let new_window_id = sess.advance_auto_compact_window_id().await;
     let new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -302,6 +302,7 @@ async fn run_remote_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
+        window_id: Some(new_window_id),
     };
     compaction_trace.record_installed(&CompactionCheckpointTracePayload {
         input_history: &trace_input_history,
@@ -326,6 +327,7 @@ async fn run_remote_compaction_request_v2(
     turn_context: &TurnContext,
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
+    window_id: &str,
     turn_metadata_header: Option<&str>,
 ) -> CodexResult<RemoteCompactionV2Output> {
     let max_retries = turn_context
@@ -337,6 +339,7 @@ async fn run_remote_compaction_request_v2(
     loop {
         let result = match client_session
             .stream(
+                window_id,
                 prompt,
                 &turn_context.model_info,
                 &turn_context.session_telemetry,
@@ -354,12 +357,9 @@ async fn run_remote_compaction_request_v2(
 
         match result {
             Ok(compaction_output) => return Ok(compaction_output),
-            Err(err) if !err.is_retryable() => {
-                log_remote_compaction_request_failure(sess, turn_context, prompt, &err).await;
-                return Err(err);
-            }
+            Err(err) if !err.is_retryable() => return Err(err),
             Err(err) => {
-                if let Err(err) = handle_retryable_response_stream_error(
+                handle_retryable_response_stream_error(
                     &mut retries,
                     max_retries,
                     err,
@@ -368,31 +368,10 @@ async fn run_remote_compaction_request_v2(
                     turn_context,
                     ResponsesStreamRequest::RemoteCompactionV2,
                 )
-                .await
-                {
-                    log_remote_compaction_request_failure(sess, turn_context, prompt, &err).await;
-                    return Err(err);
-                }
+                .await?;
             }
         }
     }
-}
-
-async fn log_remote_compaction_request_failure(
-    sess: &Session,
-    turn_context: &TurnContext,
-    prompt: &Prompt,
-    err: &CodexErr,
-) {
-    let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
-    let compact_request_log_data =
-        build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
-    log_remote_compact_failure(
-        turn_context,
-        &compact_request_log_data,
-        total_usage_breakdown,
-        err,
-    );
 }
 
 async fn collect_compaction_output(

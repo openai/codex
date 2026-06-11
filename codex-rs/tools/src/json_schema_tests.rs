@@ -1300,7 +1300,12 @@ fn collapse_deep_schema_objects_traverses_schema_children() {
                     "complex": {
                         "type": "object",
                         "properties": {
-                            "leaf": { "type": "string" }
+                            "nested": {
+                                "type": "object",
+                                "properties": {
+                                    "leaf": { "type": "string" }
+                                }
+                            }
                         }
                     },
                     "scalar": {
@@ -1313,7 +1318,12 @@ fn collapse_deep_schema_objects_traverses_schema_children() {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "leaf": { "type": "string" }
+                        "nested": {
+                            "type": "object",
+                            "properties": {
+                                "leaf": { "type": "string" }
+                            }
+                        }
                     }
                 }
             },
@@ -1322,7 +1332,12 @@ fn collapse_deep_schema_objects_traverses_schema_children() {
                 "additionalProperties": {
                     "type": "object",
                     "properties": {
-                        "leaf": { "type": "string" }
+                        "nested": {
+                            "type": "object",
+                            "properties": {
+                                "leaf": { "type": "string" }
+                            }
+                        }
                     }
                 }
             },
@@ -1331,7 +1346,12 @@ fn collapse_deep_schema_objects_traverses_schema_children() {
                     {
                         "type": "object",
                         "properties": {
-                            "leaf": { "type": "string" }
+                            "nested": {
+                                "type": "object",
+                                "properties": {
+                                    "leaf": { "type": "string" }
+                                }
+                            }
                         }
                     },
                     { "type": "string" }
@@ -1350,7 +1370,12 @@ fn collapse_deep_schema_objects_traverses_schema_children() {
                 "object_parent": {
                     "type": "object",
                     "properties": {
-                        "complex": {},
+                        "complex": {
+                            "type": "object",
+                            "properties": {
+                                "nested": {}
+                            }
+                        },
                         "scalar": {
                             "type": "string"
                         }
@@ -1358,15 +1383,30 @@ fn collapse_deep_schema_objects_traverses_schema_children() {
                 },
                 "array_parent": {
                     "type": "array",
-                    "items": {}
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "nested": {}
+                        }
+                    }
                 },
                 "map_parent": {
                     "type": "object",
-                    "additionalProperties": {}
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "nested": {}
+                        }
+                    }
                 },
                 "union_parent": {
                     "anyOf": [
-                        {},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "nested": {}
+                            }
+                        },
                         { "type": "string" }
                     ]
                 }

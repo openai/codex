@@ -120,12 +120,16 @@ impl McpRequestProcessor {
             timeout_secs,
         } = params;
 
-        let configured_servers = self
+        let auth = self.auth_manager.auth().await;
+        let effective_servers = self
             .thread_manager
             .mcp_manager()
-            .configured_servers(&config)
+            .effective_servers(&config, auth.as_ref())
             .await;
-        let Some(server) = configured_servers.get(&name) else {
+        let Some(server) = effective_servers
+            .get(&name)
+            .and_then(codex_mcp::EffectiveMcpServer::configured_config)
+        else {
             return Err(invalid_request(format!(
                 "No MCP server named '{name}' found."
             )));
@@ -210,8 +214,10 @@ impl McpRequestProcessor {
             }
             None => self.load_latest_config(/*fallback_cwd*/ None).await?,
         };
-        let mcp_config = config
-            .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
+        let mcp_config = self
+            .thread_manager
+            .mcp_manager()
+            .runtime_config(&config)
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
@@ -361,8 +367,10 @@ impl McpRequestProcessor {
         }
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        let mcp_config = config
-            .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
+        let mcp_config = self
+            .thread_manager
+            .mcp_manager()
+            .runtime_config(&config)
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();

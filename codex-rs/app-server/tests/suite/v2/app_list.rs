@@ -119,6 +119,7 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
             last_refresh: None,
             agent_identity: None,
             personal_access_token: None,
+            bedrock_api_key: None,
         },
         AuthCredentialsStoreMode::File,
     )?;
@@ -1516,7 +1517,7 @@ async fn start_apps_server_with_delays_and_control_inner(
             get(workspace_settings_response),
         )
         .with_state(state)
-        .nest_service("/api/codex/apps", mcp_service);
+        .nest_service("/api/codex/ps/mcp", mcp_service);
 
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
