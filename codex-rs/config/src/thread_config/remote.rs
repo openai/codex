@@ -4,6 +4,7 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use codex_model_provider_info::ModelCatalogPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
@@ -163,6 +164,21 @@ fn model_provider_from_proto(
             )));
         }
     };
+    let model_catalog_policy =
+        match proto::ModelCatalogPolicy::try_from(provider.model_catalog_policy) {
+            Ok(proto::ModelCatalogPolicy::Unspecified | proto::ModelCatalogPolicy::Auto) => {
+                ModelCatalogPolicy::Auto
+            }
+            Ok(proto::ModelCatalogPolicy::RemoteAuthoritative) => {
+                ModelCatalogPolicy::RemoteAuthoritative
+            }
+            Err(_) => {
+                return Err(parse_error(format!(
+                    "remote thread config returned unknown model_catalog_policy: {}",
+                    provider.model_catalog_policy
+                )));
+            }
+        };
     let info = ModelProviderInfo {
         name: provider.name,
         base_url: provider.base_url,
@@ -183,6 +199,7 @@ fn model_provider_from_proto(
         stream_idle_timeout_ms: provider.stream_idle_timeout_ms,
         websocket_connect_timeout_ms: provider.websocket_connect_timeout_ms,
         requires_openai_auth: provider.requires_openai_auth,
+        model_catalog_policy,
         supports_websockets: provider.supports_websockets,
     };
     Ok((id, info))
@@ -210,6 +227,7 @@ fn model_provider_to_proto(
         stream_idle_timeout_ms,
         websocket_connect_timeout_ms,
         requires_openai_auth,
+        model_catalog_policy,
         supports_websockets,
     } = provider;
 
@@ -231,6 +249,12 @@ fn model_provider_to_proto(
         websocket_connect_timeout_ms,
         requires_openai_auth,
         supports_websockets,
+        model_catalog_policy: match model_catalog_policy {
+            ModelCatalogPolicy::Auto => proto::ModelCatalogPolicy::Auto.into(),
+            ModelCatalogPolicy::RemoteAuthoritative => {
+                proto::ModelCatalogPolicy::RemoteAuthoritative.into()
+            }
+        },
     }
 }
 
@@ -448,6 +472,8 @@ mod tests {
                             websocket_connect_timeout_ms: Some(10_000),
                             requires_openai_auth: false,
                             supports_websockets: true,
+                            model_catalog_policy: proto::ModelCatalogPolicy::RemoteAuthoritative
+                                .into(),
                         }],
                         features: HashMap::from([
                             ("plugins".to_string(), false),
@@ -510,6 +536,7 @@ mod tests {
             stream_idle_timeout_ms: Some(9_000),
             websocket_connect_timeout_ms: Some(10_000),
             requires_openai_auth: false,
+            model_catalog_policy: ModelCatalogPolicy::RemoteAuthoritative,
             supports_websockets: true,
             aws: None,
         }

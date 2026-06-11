@@ -74,6 +74,7 @@ fn assert_models_contain(actual: &[ModelInfo], expected: &[ModelInfo]) {
 struct TestModelsEndpoint {
     has_command_auth: bool,
     uses_codex_backend: bool,
+    model_catalog_policy: ModelCatalogPolicy,
     responses: Mutex<VecDeque<Vec<ModelInfo>>>,
     fetch_count: AtomicUsize,
 }
@@ -83,6 +84,7 @@ impl TestModelsEndpoint {
         Arc::new(Self {
             has_command_auth: false,
             uses_codex_backend: true,
+            model_catalog_policy: ModelCatalogPolicy::Auto,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
         })
@@ -92,6 +94,7 @@ impl TestModelsEndpoint {
         Arc::new(Self {
             has_command_auth: false,
             uses_codex_backend: false,
+            model_catalog_policy: ModelCatalogPolicy::Auto,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
         })
@@ -146,6 +149,10 @@ impl ExternalAuth for TestUnresolvedExternalApiKeyAuth {
 
 #[async_trait]
 impl ModelsEndpointClient for TestModelsEndpoint {
+    fn model_catalog_policy(&self) -> ModelCatalogPolicy {
+        self.model_catalog_policy
+    }
+
     fn has_command_auth(&self) -> bool {
         self.has_command_auth
     }
@@ -166,6 +173,69 @@ impl ModelsEndpointClient for TestModelsEndpoint {
             .pop_front()
             .unwrap_or_default();
         Ok((models, None))
+    }
+}
+
+#[derive(Debug)]
+struct FailingAuthoritativeModelsEndpoint;
+
+#[async_trait]
+impl ModelsEndpointClient for FailingAuthoritativeModelsEndpoint {
+    fn model_catalog_policy(&self) -> ModelCatalogPolicy {
+        ModelCatalogPolicy::RemoteAuthoritative
+    }
+
+    fn has_command_auth(&self) -> bool {
+        false
+    }
+
+    async fn uses_codex_backend(&self) -> bool {
+        false
+    }
+
+    async fn list_models(
+        &self,
+        _client_version: &str,
+    ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
+        Err(codex_protocol::error::CodexErr::Fatal(
+            "catalog unavailable".to_string(),
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct YieldingAuthoritativeModelsEndpoint {
+    fetch_count: AtomicUsize,
+}
+
+#[async_trait]
+impl ModelsEndpointClient for YieldingAuthoritativeModelsEndpoint {
+    fn model_catalog_policy(&self) -> ModelCatalogPolicy {
+        ModelCatalogPolicy::RemoteAuthoritative
+    }
+
+    fn has_command_auth(&self) -> bool {
+        false
+    }
+
+    async fn uses_codex_backend(&self) -> bool {
+        false
+    }
+
+    async fn list_models(
+        &self,
+        _client_version: &str,
+    ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
+        self.fetch_count.fetch_add(1, Ordering::SeqCst);
+        tokio::task::yield_now().await;
+        Ok((
+            vec![remote_model(
+                "account-model",
+                "Account Model",
+                /*priority*/ 0,
+            )],
+            None,
+        ))
     }
 }
 
@@ -500,6 +570,7 @@ async fn refresh_available_models_keeps_merging_for_api_auth() {
     let endpoint = Arc::new(TestModelsEndpoint {
         has_command_auth: true,
         uses_codex_backend: false,
+        model_catalog_policy: ModelCatalogPolicy::Auto,
         responses: Mutex::new(vec![remote_models.clone()].into()),
         fetch_count: AtomicUsize::new(0),
     });
@@ -520,6 +591,165 @@ async fn refresh_available_models_keeps_merging_for_api_auth() {
 
     assert_eq!(manager.get_remote_models().await, expected);
     assert_eq!(endpoint.fetch_count(), 1, "expected a single model fetch");
+}
+
+#[tokio::test]
+async fn authoritative_remote_catalog_refreshes_without_auth_and_replaces_bundled_models() {
+    let mut remote = remote_model("account-model", "Account Model", /*priority*/ 0);
+    remote.supported_in_api = false;
+    remote.base_instructions = "live account instructions".to_string();
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = Arc::new(TestModelsEndpoint {
+        has_command_auth: false,
+        uses_codex_backend: false,
+        model_catalog_policy: ModelCatalogPolicy::RemoteAuthoritative,
+        responses: Mutex::new(vec![vec![remote.clone()]].into()),
+        fetch_count: AtomicUsize::new(0),
+    });
+    let manager = openai_manager_for_tests_with_auth(
+        codex_home.path().to_path_buf(),
+        endpoint.clone(),
+        /*auth_manager*/ None,
+    );
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, vec![remote.clone()]);
+    let mut expected_preset: ModelPreset = remote.into();
+    expected_preset.is_default = true;
+    assert_eq!(
+        manager.list_models(RefreshStrategy::Offline).await,
+        vec![expected_preset]
+    );
+    assert_eq!(endpoint.fetch_count(), 1, "expected a single model fetch");
+}
+
+#[tokio::test]
+async fn authoritative_remote_catalog_propagates_refresh_failure() {
+    let codex_home = tempdir().expect("temp dir");
+    let manager = openai_manager_for_tests_with_auth(
+        codex_home.path().to_path_buf(),
+        Arc::new(FailingAuthoritativeModelsEndpoint),
+        /*auth_manager*/ None,
+    );
+
+    let err = manager
+        .ensure_model_catalog(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect_err("authoritative refresh should fail closed");
+
+    assert_eq!(err.to_string(), "Fatal error: catalog unavailable");
+}
+
+#[tokio::test]
+async fn authoritative_remote_catalog_refreshes_each_root_session() {
+    let first = remote_model("first", "First", /*priority*/ 0);
+    let second = remote_model("second", "Second", /*priority*/ 0);
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = Arc::new(TestModelsEndpoint {
+        has_command_auth: false,
+        uses_codex_backend: false,
+        model_catalog_policy: ModelCatalogPolicy::RemoteAuthoritative,
+        responses: Mutex::new(vec![vec![first], vec![second.clone()]].into()),
+        fetch_count: AtomicUsize::new(0),
+    });
+    let manager = openai_manager_for_tests_with_auth(
+        codex_home.path().to_path_buf(),
+        endpoint.clone(),
+        /*auth_manager*/ None,
+    );
+
+    manager
+        .ensure_model_catalog(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("first startup refresh succeeds");
+    manager
+        .ensure_model_catalog(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("second startup refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, vec![second]);
+    assert_eq!(endpoint.fetch_count(), 2);
+}
+
+#[tokio::test]
+async fn concurrent_authoritative_refreshes_share_one_request() {
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = Arc::new(YieldingAuthoritativeModelsEndpoint {
+        fetch_count: AtomicUsize::new(0),
+    });
+    let manager = openai_manager_for_tests_with_auth(
+        codex_home.path().to_path_buf(),
+        endpoint.clone(),
+        /*auth_manager*/ None,
+    );
+
+    let (first, second) = tokio::join!(
+        manager.ensure_model_catalog(RefreshStrategy::OnlineIfUncached),
+        manager.ensure_model_catalog(RefreshStrategy::OnlineIfUncached),
+    );
+
+    first.expect("first refresh succeeds");
+    second.expect("concurrent refresh succeeds");
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn authoritative_remote_catalog_rejects_unavailable_catalog_or_model() {
+    let codex_home = tempdir().expect("temp dir");
+    let catalog_model = remote_model("gpt-5", "GPT-5", /*priority*/ 0);
+    let endpoint = Arc::new(TestModelsEndpoint {
+        has_command_auth: false,
+        uses_codex_backend: false,
+        model_catalog_policy: ModelCatalogPolicy::RemoteAuthoritative,
+        responses: Mutex::new(vec![Vec::new(), vec![catalog_model]].into()),
+        fetch_count: AtomicUsize::new(0),
+    });
+    let manager = openai_manager_for_tests_with_auth(
+        codex_home.path().to_path_buf(),
+        endpoint,
+        /*auth_manager*/ None,
+    );
+
+    assert_eq!(
+        manager
+            .ensure_model_catalog(RefreshStrategy::Offline)
+            .await
+            .expect_err("offline startup requires an in-memory catalog")
+            .to_string(),
+        "Fatal error: authoritative model catalog is unavailable offline"
+    );
+    assert_eq!(
+        manager.raw_model_catalog(RefreshStrategy::Offline).await,
+        ModelsResponse { models: Vec::new() }
+    );
+    assert_eq!(
+        manager
+            .ensure_model_catalog(RefreshStrategy::OnlineIfUncached)
+            .await
+            .expect_err("empty authoritative catalog is invalid")
+            .to_string(),
+        "Fatal error: authoritative model catalog is empty"
+    );
+    manager
+        .ensure_model_catalog(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("non-empty authoritative catalog is valid");
+    manager
+        .ensure_model_available("gpt-5")
+        .await
+        .expect("exact model match is valid");
+    assert_eq!(
+        manager
+            .ensure_model_available("gpt-5.5")
+            .await
+            .expect_err("prefix match must not authorize an absent model")
+            .to_string(),
+        "model `gpt-5.5` is not available in the provider's authoritative catalog"
+    );
 }
 
 #[tokio::test]

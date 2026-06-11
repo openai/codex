@@ -3427,6 +3427,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-collaboration-mode-templates",
  "codex-login",
+ "codex-model-provider-info",
  "codex-otel",
  "codex-protocol",
  "codex-utils-output-truncation",

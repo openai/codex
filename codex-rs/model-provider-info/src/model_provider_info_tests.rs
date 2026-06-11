@@ -28,6 +28,7 @@ base_url = "http://localhost:11434/v1"
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: ModelCatalogPolicy::Auto,
         supports_websockets: false,
     };
 
@@ -62,6 +63,7 @@ query_params = { api-version = "2025-04-01-preview" }
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: ModelCatalogPolicy::Auto,
         supports_websockets: false,
     };
 
@@ -99,6 +101,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: ModelCatalogPolicy::Auto,
         supports_websockets: false,
     };
 
@@ -130,6 +133,38 @@ supports_websockets = true
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
     assert_eq!(provider.websocket_connect_timeout_ms, Some(15_000));
+}
+
+#[test]
+fn test_deserialize_remote_authoritative_model_catalog_policy() {
+    let provider_toml = r#"
+name = "Codex backend"
+base_url = "https://example.com/api/codex"
+model_catalog_policy = "remote_authoritative"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+
+    assert_eq!(
+        provider.model_catalog_policy,
+        ModelCatalogPolicy::RemoteAuthoritative
+    );
+}
+
+#[test]
+fn test_validate_remote_authoritative_catalog_rejects_openai_auth() {
+    let provider = ModelProviderInfo {
+        model_catalog_policy: ModelCatalogPolicy::RemoteAuthoritative,
+        requires_openai_auth: true,
+        ..ModelProviderInfo::default()
+    };
+
+    assert_eq!(
+        provider.validate(),
+        Err(
+            "remote_authoritative model catalogs require provider-owned authentication".to_string()
+        )
+    );
 }
 
 #[test]
@@ -167,6 +202,7 @@ fn test_supports_remote_compaction_for_azure_name() {
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: ModelCatalogPolicy::Auto,
         supports_websockets: false,
     };
 
@@ -192,6 +228,7 @@ fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: ModelCatalogPolicy::Auto,
         supports_websockets: false,
     };
 
@@ -275,6 +312,7 @@ fn test_create_amazon_bedrock_provider() {
             stream_idle_timeout_ms: None,
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
+            model_catalog_policy: ModelCatalogPolicy::Auto,
             supports_websockets: false,
         }
     );

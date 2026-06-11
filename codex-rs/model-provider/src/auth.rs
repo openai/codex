@@ -7,6 +7,7 @@ use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelCatalogPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use http::HeaderMap;
@@ -66,15 +67,17 @@ pub fn unauthenticated_auth_provider() -> SharedAuthProvider {
     Arc::new(UnauthenticatedAuthProvider)
 }
 
-/// Returns the provider-scoped auth manager when this provider uses command-backed auth.
+/// Returns the auth manager that this provider may use.
 ///
-/// Providers without custom auth continue using the caller-supplied base manager, when present.
+/// Command-backed providers get an isolated manager. Authoritative remote catalogs never inherit
+/// OpenAI-owned credentials. Other providers continue using the caller-supplied manager.
 pub(crate) fn auth_manager_for_provider(
     auth_manager: Option<Arc<AuthManager>>,
     provider: &ModelProviderInfo,
 ) -> Option<Arc<AuthManager>> {
     match provider.auth.clone() {
         Some(config) => Some(AuthManager::external_bearer_only(config)),
+        None if provider.model_catalog_policy == ModelCatalogPolicy::RemoteAuthoritative => None,
         None => auth_manager,
     }
 }

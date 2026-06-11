@@ -37,6 +37,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -204,6 +205,8 @@ pub(crate) struct ThreadManagerState {
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
+    models_manager_provider: ModelProviderInfo,
+    models_manager_catalog: Option<ModelsResponse>,
     environment_manager: Arc<EnvironmentManager>,
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
@@ -287,6 +290,8 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: build_models_manager(config, auth_manager.clone()),
+                models_manager_provider: config.model_provider.clone(),
+                models_manager_catalog: config.model_catalog.clone(),
                 environment_manager,
                 skills_manager,
                 plugins_manager,
@@ -383,12 +388,15 @@ impl ThreadManager {
             },
             state_db.clone(),
         ));
+        let models_manager_provider = provider.clone();
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
                     .models_manager(codex_home, /*config_model_catalog*/ None),
+                models_manager_provider,
+                models_manager_catalog: None,
                 environment_manager,
                 skills_manager,
                 plugins_manager,
@@ -1320,13 +1328,20 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
+        let models_manager = if config.model_provider == self.models_manager_provider
+            && config.model_catalog == self.models_manager_catalog
+        {
+            Arc::clone(&self.models_manager)
+        } else {
+            build_models_manager(&config, auth_manager.clone())
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
             config,
             installation_id: self.installation_id.clone(),
             auth_manager,
-            models_manager: Arc::clone(&self.models_manager),
+            models_manager,
             environment_manager: Arc::clone(&self.environment_manager),
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),

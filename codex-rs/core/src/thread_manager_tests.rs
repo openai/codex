@@ -8,6 +8,7 @@ use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
+use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -958,6 +959,62 @@ async fn new_uses_active_provider_for_model_refresh() {
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
     assert_eq!(models_mock.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn thread_provider_override_uses_its_own_model_manager() {
+    let mut config = test_config().await;
+    let mut model = bundled_models_response()
+        .expect("bundled models should parse")
+        .models
+        .into_iter()
+        .next()
+        .expect("bundled catalog should contain a model");
+    config.model_catalog = Some(ModelsResponse {
+        models: vec![model.clone()],
+    });
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+    );
+
+    model.base_instructions = "thread provider instructions".to_string();
+    let mut thread_config = config.clone();
+    thread_config.model_provider.name = "thread provider".to_string();
+    thread_config.model_catalog = Some(ModelsResponse {
+        models: vec![model.clone()],
+    });
+    let thread = manager
+        .start_thread(thread_config)
+        .await
+        .expect("thread should start");
+
+    assert_eq!(
+        thread
+            .thread
+            .codex
+            .session
+            .services
+            .models_manager
+            .get_remote_models()
+            .await,
+        vec![model]
+    );
+    thread
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("thread should shut down");
 }
 
 #[test]

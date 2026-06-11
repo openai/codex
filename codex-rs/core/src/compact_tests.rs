@@ -234,6 +234,7 @@ fn should_use_remote_compact_task_for_azure_provider() {
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: Default::default(),
         supports_websockets: false,
     };
 
