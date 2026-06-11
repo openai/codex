@@ -3100,9 +3100,11 @@ dependencies = [
 name = "codex-image-generation-extension"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-api",
  "codex-core",
  "codex-extension-api",
+ "codex-file-system",
  "codex-login",
  "codex-model-provider",
  "codex-model-provider-info",
@@ -3115,6 +3117,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -3916,6 +3919,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-code-mode",
  "codex-features",
+ "codex-file-system",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",

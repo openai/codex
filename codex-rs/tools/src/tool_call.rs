@@ -1,9 +1,12 @@
 use crate::FunctionCallError;
 use crate::ToolName;
 use crate::ToolPayload;
+use codex_file_system::ExecutorFileSystem;
+use codex_file_system::FileSystemSandboxContext;
 use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::models::ResponseItem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use std::future::Future;
 use std::pin::Pin;
@@ -49,6 +52,19 @@ pub trait TurnItemEmitter: Send + Sync {
     fn emit_completed<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a>;
 }
 
+/// Host-owned turn environment summary visible to extension tools.
+#[derive(Clone)]
+pub struct ToolEnvironment {
+    /// Stable host environment id used to route executor-scoped capabilities.
+    pub environment_id: String,
+    /// Effective working directory for this turn in the environment.
+    pub cwd: AbsolutePathBuf,
+    /// Filesystem implementation for this environment.
+    pub file_system: Arc<dyn ExecutorFileSystem>,
+    /// Sandbox context to use for filesystem operations.
+    pub file_system_sandbox_context: FileSystemSandboxContext,
+}
+
 /// Turn-item emitter used when a caller does not expose visible item emission.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoopTurnItemEmitter;
@@ -72,6 +88,7 @@ pub struct ToolCall {
     pub truncation_policy: TruncationPolicy,
     pub conversation_history: ConversationHistory,
     pub turn_item_emitter: Arc<dyn TurnItemEmitter>,
+    pub environments: Option<Vec<ToolEnvironment>>,
     pub payload: ToolPayload,
 }
 
@@ -85,6 +102,10 @@ impl std::fmt::Debug for ToolCall {
             .field("truncation_policy", &self.truncation_policy)
             .field("conversation_history", &self.conversation_history)
             .field("turn_item_emitter", &"<host turn item emitter>")
+            .field(
+                "environment_count",
+                &self.environments.as_ref().map(Vec::len),
+            )
             .field("payload", &self.payload)
             .finish()
     }

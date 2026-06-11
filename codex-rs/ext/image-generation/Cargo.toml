@@ -29,4 +29,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
+codex-file-system = { workspace = true }
 pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
