@@ -61,40 +61,14 @@ impl Default for Hooks {
 
 impl Hooks {
     pub fn new(config: HooksConfig) -> Self {
-        let HooksConfig {
-            legacy_notify_argv,
-            feature_enabled,
-            bypass_hook_trust,
-            config_layer_stack,
-            plugin_hook_sources,
-            plugin_hook_load_warnings,
-            shell_program,
-            shell_args,
-        } = config;
-        let after_agent = legacy_notify_argv
-            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
-            .map(crate::notify_hook)
-            .into_iter()
-            .collect();
-        let engine = ClaudeHooksEngine::new(
-            feature_enabled,
-            bypass_hook_trust,
-            config_layer_stack.as_ref(),
-            plugin_hook_sources,
-            plugin_hook_load_warnings,
-            CommandShell {
-                program: shell_program.unwrap_or_default(),
-                args: shell_args,
-            },
-            AsyncCommandRuntime::new(),
-        );
-        Self {
-            after_agent,
-            engine,
-        }
+        Self::from_config(config, AsyncCommandRuntime::new())
     }
 
     pub fn reconfigured(&self, config: HooksConfig) -> Self {
+        Self::from_config(config, self.engine.async_runtime())
+    }
+
+    fn from_config(config: HooksConfig, async_runtime: AsyncCommandRuntime) -> Self {
         let HooksConfig {
             legacy_notify_argv,
             feature_enabled,
@@ -120,7 +94,7 @@ impl Hooks {
                 program: shell_program.unwrap_or_default(),
                 args: shell_args,
             },
-            self.engine.async_runtime(),
+            async_runtime,
         );
         Self {
             after_agent,

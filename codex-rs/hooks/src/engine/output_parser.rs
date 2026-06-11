@@ -320,64 +320,30 @@ pub(crate) fn parse_async_informational(
     }
 
     let parsed = match event_name {
-        HookEventName::SessionStart => {
-            parse_session_start(stdout).map(|output| AsyncInformationalOutput {
-                additional_context: output.additional_context,
-                system_message: output.universal.system_message,
-            })
-        }
-        HookEventName::SubagentStart => {
-            parse_subagent_start(stdout).map(|output| AsyncInformationalOutput {
-                additional_context: output.additional_context,
-                system_message: output.universal.system_message,
-            })
-        }
-        HookEventName::PreToolUse => {
-            parse_pre_tool_use(stdout).map(|output| AsyncInformationalOutput {
-                additional_context: output.additional_context,
-                system_message: output.universal.system_message,
-            })
-        }
-        HookEventName::PermissionRequest => {
-            parse_permission_request(stdout).map(|output| AsyncInformationalOutput {
-                additional_context: None,
-                system_message: output.universal.system_message,
-            })
-        }
-        HookEventName::PostToolUse => {
-            parse_post_tool_use(stdout).map(|output| AsyncInformationalOutput {
-                additional_context: output.additional_context,
-                system_message: output.universal.system_message,
-            })
-        }
+        HookEventName::SessionStart => parse_session_start(stdout)
+            .map(|output| async_informational(output.universal, output.additional_context)),
+        HookEventName::SubagentStart => parse_subagent_start(stdout)
+            .map(|output| async_informational(output.universal, output.additional_context)),
+        HookEventName::PreToolUse => parse_pre_tool_use(stdout)
+            .map(|output| async_informational(output.universal, output.additional_context)),
+        HookEventName::PermissionRequest => parse_permission_request(stdout)
+            .map(|output| async_informational(output.universal, None)),
+        HookEventName::PostToolUse => parse_post_tool_use(stdout)
+            .map(|output| async_informational(output.universal, output.additional_context)),
         HookEventName::PreCompact => {
-            parse_pre_compact(stdout).map(|output| AsyncInformationalOutput {
-                additional_context: None,
-                system_message: output.universal.system_message,
-            })
+            parse_pre_compact(stdout).map(|output| async_informational(output.universal, None))
         }
         HookEventName::PostCompact => {
-            parse_post_compact(stdout).map(|output| AsyncInformationalOutput {
-                additional_context: None,
-                system_message: output.universal.system_message,
-            })
+            parse_post_compact(stdout).map(|output| async_informational(output.universal, None))
         }
-        HookEventName::UserPromptSubmit => {
-            parse_user_prompt_submit(stdout).map(|output| AsyncInformationalOutput {
-                additional_context: output.additional_context,
-                system_message: output.universal.system_message,
-            })
-        }
+        HookEventName::UserPromptSubmit => parse_user_prompt_submit(stdout)
+            .map(|output| async_informational(output.universal, output.additional_context)),
         HookEventName::SubagentStop => {
-            parse_subagent_stop(stdout).map(|output| AsyncInformationalOutput {
-                additional_context: None,
-                system_message: output.universal.system_message,
-            })
+            parse_subagent_stop(stdout).map(|output| async_informational(output.universal, None))
         }
-        HookEventName::Stop => parse_stop(stdout).map(|output| AsyncInformationalOutput {
-            additional_context: None,
-            system_message: output.universal.system_message,
-        }),
+        HookEventName::Stop => {
+            parse_stop(stdout).map(|output| async_informational(output.universal, None))
+        }
     };
     if let Some(parsed) = parsed {
         return (parsed.additional_context.is_some() || parsed.system_message.is_some())
@@ -397,6 +363,16 @@ pub(crate) fn parse_async_informational(
         additional_context: Some(stdout.to_string()),
         system_message: None,
     })
+}
+
+fn async_informational(
+    universal: UniversalOutput,
+    additional_context: Option<String>,
+) -> AsyncInformationalOutput {
+    AsyncInformationalOutput {
+        additional_context,
+        system_message: universal.system_message,
+    }
 }
 
 pub(crate) fn parse_subagent_stop(stdout: &str) -> Option<StopOutput> {

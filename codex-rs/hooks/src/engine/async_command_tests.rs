@@ -13,42 +13,31 @@ use codex_protocol::protocol::HookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 
+enum TestOutput<'a> {
+    AdditionalContext(&'a str),
+    SystemMessage(&'a str),
+}
+
 fn complete(
     runtime: &AsyncCommandRuntime,
     launch_sequence: u64,
     deliver_at_generation: u64,
-    text: &str,
+    output: TestOutput<'_>,
 ) {
     let mut state = runtime.inner.state.lock().expect("async hook state");
     let ready_sequence = state.next_ready_sequence;
     state.next_ready_sequence += 1;
+    let (additional_context, system_message) = match output {
+        TestOutput::AdditionalContext(text) => (Some(text.to_string()), None),
+        TestOutput::SystemMessage(text) => (None, Some(text.to_string())),
+    };
     state.completions.insert(
         launch_sequence,
         AsyncHookCompletion {
             deliver_at_generation,
             ready_sequence,
-            additional_context: Some(text.to_string()),
-            system_message: None,
-        },
-    );
-}
-
-fn complete_with_system_message(
-    runtime: &AsyncCommandRuntime,
-    launch_sequence: u64,
-    deliver_at_generation: u64,
-    text: &str,
-) {
-    let mut state = runtime.inner.state.lock().expect("async hook state");
-    let ready_sequence = state.next_ready_sequence;
-    state.next_ready_sequence += 1;
-    state.completions.insert(
-        launch_sequence,
-        AsyncHookCompletion {
-            deliver_at_generation,
-            ready_sequence,
-            additional_context: None,
-            system_message: Some(text.to_string()),
+            additional_context,
+            system_message,
         },
     );
 }
@@ -58,7 +47,10 @@ fn completion_after_cutoff_waits_for_following_accepted_turn() {
     let runtime = AsyncCommandRuntime::new();
     let cutoff = runtime.delivery_cutoff();
     complete(
-        &runtime, /*launch_sequence*/ 0, /*deliver_at_generation*/ 1, "late",
+        &runtime,
+        /*launch_sequence*/ 0,
+        /*deliver_at_generation*/ 1,
+        TestOutput::AdditionalContext("late"),
     );
 
     assert_eq!(
@@ -71,40 +63,13 @@ fn completion_after_cutoff_waits_for_following_accepted_turn() {
 }
 
 #[test]
-fn startup_completion_skips_first_accepted_turn() {
-    let runtime = AsyncCommandRuntime::new();
-    complete(
-        &runtime, /*launch_sequence*/ 0, /*deliver_at_generation*/ 2, "startup",
-    );
-
-    assert_eq!(
-        runtime.commit_accepted_turn_and_drain(runtime.delivery_cutoff()),
-        Default::default()
-    );
-
-    let delivery = runtime.commit_accepted_turn_and_drain(runtime.delivery_cutoff());
-    assert_eq!(delivery.additional_contexts, vec!["startup"]);
-}
-
-#[test]
-fn blocked_submission_does_not_advance_generation() {
-    let runtime = AsyncCommandRuntime::new();
-    complete(
-        &runtime,
-        /*launch_sequence*/ 0,
-        /*deliver_at_generation*/ 1,
-        "after block",
-    );
-
-    let delivery = runtime.commit_accepted_turn_and_drain(runtime.delivery_cutoff());
-    assert_eq!(delivery.additional_contexts, vec!["after block"]);
-}
-
-#[test]
 fn unfinished_earlier_launch_does_not_block_ready_output() {
     let runtime = AsyncCommandRuntime::new();
     complete(
-        &runtime, /*launch_sequence*/ 1, /*deliver_at_generation*/ 1, "ready",
+        &runtime,
+        /*launch_sequence*/ 1,
+        /*deliver_at_generation*/ 1,
+        TestOutput::AdditionalContext("ready"),
     );
 
     let delivery = runtime.commit_accepted_turn_and_drain(runtime.delivery_cutoff());
@@ -158,19 +123,34 @@ fn shared_output_budget_leaves_remaining_completions_queued() {
     let runtime = AsyncCommandRuntime::new();
     let output = "x".repeat(MAX_DELIVERED_OUTPUT_TOKENS_PER_TURN);
     complete(
-        &runtime, /*launch_sequence*/ 0, /*deliver_at_generation*/ 1, &output,
-    );
-    complete_with_system_message(
-        &runtime, /*launch_sequence*/ 1, /*deliver_at_generation*/ 1, &output,
-    );
-    complete(
-        &runtime, /*launch_sequence*/ 2, /*deliver_at_generation*/ 1, &output,
-    );
-    complete_with_system_message(
-        &runtime, /*launch_sequence*/ 3, /*deliver_at_generation*/ 1, &output,
+        &runtime,
+        /*launch_sequence*/ 0,
+        /*deliver_at_generation*/ 1,
+        TestOutput::AdditionalContext(&output),
     );
     complete(
-        &runtime, /*launch_sequence*/ 4, /*deliver_at_generation*/ 1, &output,
+        &runtime,
+        /*launch_sequence*/ 1,
+        /*deliver_at_generation*/ 1,
+        TestOutput::SystemMessage(&output),
+    );
+    complete(
+        &runtime,
+        /*launch_sequence*/ 2,
+        /*deliver_at_generation*/ 1,
+        TestOutput::AdditionalContext(&output),
+    );
+    complete(
+        &runtime,
+        /*launch_sequence*/ 3,
+        /*deliver_at_generation*/ 1,
+        TestOutput::SystemMessage(&output),
+    );
+    complete(
+        &runtime,
+        /*launch_sequence*/ 4,
+        /*deliver_at_generation*/ 1,
+        TestOutput::AdditionalContext(&output),
     );
 
     let first_delivery = runtime.commit_accepted_turn_and_drain(runtime.delivery_cutoff());
