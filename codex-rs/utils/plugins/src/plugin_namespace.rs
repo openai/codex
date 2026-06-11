@@ -6,7 +6,8 @@ use codex_utils_path_uri::PathUri;
 use std::path::Path;
 use std::path::PathBuf;
 
-const DISCOVERABLE_PLUGIN_MANIFEST_PATHS: &[&str] =
+/// Ordered plugin manifest paths recognized beneath a plugin root.
+pub const DISCOVERABLE_PLUGIN_MANIFEST_PATHS: &[&str] =
     &[".codex-plugin/plugin.json", ".claude-plugin/plugin.json"];
 
 pub fn find_plugin_manifest_path(plugin_root: &Path) -> Option<PathBuf> {

@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 codex-config = { workspace = true }
+codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
 thiserror = { workspace = true }
