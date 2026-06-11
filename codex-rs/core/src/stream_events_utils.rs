@@ -133,6 +133,9 @@ pub(crate) async fn persist_image_generation_item(
     image_item: &mut ImageGenerationItem,
 ) -> Option<AbsolutePathBuf> {
     image_item.saved_path = None;
+    if image_item.result.is_empty() {
+        return None;
+    }
     let session_id = sess.thread_id.to_string();
     match save_image_generation_result(
         &turn_context.config.codex_home,

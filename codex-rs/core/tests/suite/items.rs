@@ -20,6 +20,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_image_generation_call;
+use core_test_support::responses::ev_image_generation_call_added;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
@@ -372,6 +373,7 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
+        ev_image_generation_call_added(call_id, "in_progress"),
         ev_image_generation_call(call_id, "completed", "A tiny blue square", "Zm9v"),
         ev_completed("resp-1"),
     ]);
@@ -422,6 +424,10 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
 
     assert_eq!(begin.call_id, call_id);
     assert_eq!(started.0.id, call_id);
+    assert_eq!(started.0.status, "in_progress");
+    assert_eq!(started.0.revised_prompt, None);
+    assert_eq!(started.0.result, "");
+    assert_eq!(started.0.saved_path, None);
     assert!(started.1 > 0);
     assert_eq!(completed.0.id, call_id);
     assert!(completed.1 > 0);

@@ -892,6 +892,7 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         revised_prompt: Option<String>,
+        #[serde(default)]
         result: String,
     },
     #[serde(alias = "compaction_summary")]
@@ -1807,6 +1808,26 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: None,
                 result: "Zm9v".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn response_item_parses_in_progress_image_generation_call_without_result() {
+        let item = serde_json::from_value::<ResponseItem>(serde_json::json!({
+            "id": "ig_123",
+            "type": "image_generation_call",
+            "status": "in_progress",
+        }))
+        .expect("in-progress image generation item should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::ImageGenerationCall {
+                id: "ig_123".to_string(),
+                status: "in_progress".to_string(),
+                revised_prompt: None,
+                result: String::new(),
             }
         );
     }
