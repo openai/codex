@@ -338,13 +338,15 @@ Params:
 
 ## Filesystem RPCs
 
-Filesystem methods use absolute paths and return JSON-RPC errors for invalid
-or unavailable paths:
+Filesystem methods use canonical `file:` URIs and return JSON-RPC errors for
+invalid or unavailable paths. For compatibility, requests also accept native
+absolute path strings and normalize them to `file:` URIs:
 
 - `fs/readFile`
 - `fs/writeFile`
 - `fs/createDirectory`
 - `fs/getMetadata`
+- `fs/canonicalize`
 - `fs/readDirectory`
 - `fs/remove`
 - `fs/copy`
