@@ -217,7 +217,9 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
     assert!(first_request.tool_by_name("skills", "search").is_none());
 
     let developer_messages = first_request.message_input_texts("developer");
-    let catalog_line = format!("- {SKILL_NAME}: {SKILL_DESCRIPTION} (file: {SKILL_RESOURCE_URI})");
+    let catalog_line = format!(
+        "- {SKILL_NAME}: {SKILL_DESCRIPTION} (orchestrator resource: {SKILL_RESOURCE_URI})"
+    );
     assert_eq!(
         1,
         developer_messages
@@ -229,6 +231,11 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
         developer_messages
             .iter()
             .all(|text| !text.contains("ignored-plugin:ignored"))
+    );
+    assert!(
+        developer_messages
+            .iter()
+            .any(|text| text.contains("do not treat `skill://` identifiers as filesystem paths"))
     );
     let skill_fragments = first_request
         .message_input_texts("user")
