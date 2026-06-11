@@ -1,5 +1,6 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Returns the path to the Codex configuration directory, which can be
@@ -15,6 +16,23 @@ pub fn find_codex_home() -> std::io::Result<AbsolutePathBuf> {
         .ok()
         .filter(|val| !val.is_empty());
     find_codex_home_from_env(codex_home_env.as_deref())
+}
+
+/// Returns the CODEX_HOME-scoped arg0 helper root for the current runtime
+/// family so Windows and Unix/WSL helper shims never share the same namespace.
+pub fn arg0_temp_root_for_runtime(codex_home: &Path) -> PathBuf {
+    codex_home
+        .join("tmp")
+        .join("arg0")
+        .join(current_runtime_family())
+}
+
+fn current_runtime_family() -> &'static str {
+    if cfg!(windows) {
+        "windows"
+    } else {
+        "unix"
+    }
 }
 
 fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<AbsolutePathBuf> {
@@ -64,6 +82,7 @@ fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<Abs
 
 #[cfg(test)]
 mod tests {
+    use super::arg0_temp_root_for_runtime;
     use super::find_codex_home_from_env;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use dirs::home_dir;
@@ -130,5 +149,16 @@ mod tests {
         expected.push(".codex");
         let expected = AbsolutePathBuf::from_absolute_path(expected).expect("absolute home");
         assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn arg0_temp_root_uses_runtime_family_namespace() {
+        let codex_home = PathBuf::from("/tmp/codex-home");
+        let expected_runtime = if cfg!(windows) { "windows" } else { "unix" };
+
+        assert_eq!(
+            arg0_temp_root_for_runtime(&codex_home),
+            codex_home.join("tmp").join("arg0").join(expected_runtime)
+        );
     }
 }

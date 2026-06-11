@@ -18,6 +18,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_home_dir::arg0_temp_root_for_runtime;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
@@ -49,7 +50,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
     let cwd = temp_dir.path().join("workspace");
     let codex_home = temp_dir.path().join(".codex");
     let zsh_path = temp_dir.path().join("runtime").join("zsh");
-    let arg0_root = codex_home.join("tmp").join("arg0");
+    let arg0_root = arg0_temp_root_for_runtime(&codex_home);
     let allowed_arg0_dir = arg0_root.join("codex-arg0-session");
     let sibling_arg0_dir = arg0_root.join("codex-arg0-other-session");
     let execve_wrapper = allowed_arg0_dir.join("codex-execve-wrapper");

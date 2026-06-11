@@ -8,6 +8,7 @@ use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_install_context::InstallContext;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
+use codex_utils_home_dir::arg0_temp_root_for_runtime;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -337,7 +338,7 @@ fn prepare_path_entry_for_codex_aliases(
 
     std::fs::create_dir_all(&codex_home)?;
     // Use a CODEX_HOME-scoped temp root to avoid cluttering the top-level directory.
-    let temp_root = codex_home.join("tmp").join("arg0");
+    let temp_root = arg0_temp_root_for_runtime(codex_home.as_path());
     std::fs::create_dir_all(&temp_root)?;
     #[cfg(unix)]
     {
