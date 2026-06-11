@@ -9,9 +9,11 @@ use codex_features::Feature;
 use codex_image_generation_extension::install as install_image_generation_extension;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use codex_web_search_extension::install as install_web_search_extension;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
@@ -50,6 +52,62 @@ fn has_hosted_tool(tools: &[Value], tool_type: &str) -> bool {
     tools
         .iter()
         .any(|tool| tool.get("type").and_then(Value::as_str) == Some(tool_type))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_strips_data_image_detail_without_resize_all_images() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+    let mut builder = test_codex().with_model_info_override("gpt-5.4", |model_info| {
+        model_info.use_responses_lite = true;
+        configure_image_capable_model(model_info);
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Image {
+                image_url: image_url.to_string(),
+                detail: Some(ImageDetail::Original),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = response_mock.single_request();
+    let input = request.input();
+    let image = input
+        .iter()
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("input_image"))
+        .context("request should contain an image")?;
+    assert_eq!(
+        image,
+        &serde_json::json!({
+            "type": "input_image",
+            "image_url": image_url
+        })
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -119,10 +177,14 @@ async fn responses_lite_compact_request_uses_lite_transport_contract() -> Result
     let compact_mock =
         responses::mount_compact_json_once(&server, serde_json::json!({ "output": [] })).await;
 
-    let mut builder = test_codex().with_model_info_override("gpt-5.4", |model_info| {
-        model_info.use_responses_lite = true;
-        model_info.supports_parallel_tool_calls = true;
-    });
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+            model_info.supports_parallel_tool_calls = true;
+        })
+        .with_config(|config| {
+            let _ = config.features.disable(Feature::RemoteCompactionV2);
+        });
     let test = builder.build(&server).await?;
 
     test.submit_turn("Compact this conversation").await?;
