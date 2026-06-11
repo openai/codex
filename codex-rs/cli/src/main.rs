@@ -72,6 +72,7 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::resolve_profile_v2_config_path;
 use codex_features::FEATURES;
+use codex_features::Feature;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_login::AuthManager;
@@ -868,13 +869,23 @@ impl FeatureToggles {
         let mut v = Vec::new();
         for feature in &self.enable {
             Self::validate_feature(feature)?;
-            v.push(format!("features.{feature}=true"));
+            let key = Self::config_override_key(feature);
+            v.push(format!("{key}=true"));
         }
         for feature in &self.disable {
             Self::validate_feature(feature)?;
-            v.push(format!("features.{feature}=false"));
+            let key = Self::config_override_key(feature);
+            v.push(format!("{key}=false"));
         }
         Ok(v)
+    }
+
+    fn config_override_key(feature: &str) -> String {
+        if feature == Feature::SystemProxy.key() {
+            format!("features.{feature}.enabled")
+        } else {
+            format!("features.{feature}")
+        }
     }
 
     fn validate_feature(feature: &str) -> anyhow::Result<()> {
@@ -3822,6 +3833,22 @@ mod tests {
             vec![
                 "features.web_search_request=true".to_string(),
                 "features.unified_exec=false".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn feature_toggles_system_proxy_generate_structured_overrides() {
+        let toggles = FeatureToggles {
+            enable: vec!["system_proxy".to_string()],
+            disable: vec!["system_proxy".to_string()],
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(
+            overrides,
+            vec![
+                "features.system_proxy.enabled=true".to_string(),
+                "features.system_proxy.enabled=false".to_string(),
             ]
         );
     }

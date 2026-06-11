@@ -74,6 +74,45 @@ async fn features_disable_writes_feature_flag_to_config() -> Result<()> {
 }
 
 #[tokio::test]
+async fn system_proxy_feature_toggles_preserve_mode() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"[features.system_proxy]
+enabled = false
+mode = "system"
+"#,
+    )?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["features", "enable", "system_proxy"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(&config_path)?,
+        r#"[features.system_proxy]
+enabled = true
+mode = "system"
+"#
+    );
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["features", "disable", "system_proxy"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(config_path)?,
+        r#"[features.system_proxy]
+enabled = false
+mode = "system"
+"#
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn features_enable_under_development_feature_prints_warning() -> Result<()> {
     let codex_home = TempDir::new()?;
 

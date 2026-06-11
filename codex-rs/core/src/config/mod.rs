@@ -2456,7 +2456,8 @@ fn resolved_system_proxy_config(
 /// cloud config is available.
 pub fn resolve_bootstrap_system_proxy_config(
     cfg: &ConfigToml,
-) -> Option<SystemProxyFeatureConfigToml> {
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<Option<SystemProxyFeatureConfigToml>> {
     let configured_features = Features::from_sources(
         FeatureConfigSource {
             features: cfg.features.as_ref(),
@@ -2465,7 +2466,9 @@ pub fn resolve_bootstrap_system_proxy_config(
         FeatureConfigSource::default(),
         FeatureOverrides::default(),
     );
-    resolved_system_proxy_config_from_features(cfg, &configured_features)
+    let features =
+        ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())?;
+    Ok(resolved_system_proxy_config(cfg, &features))
 }
 
 pub(crate) fn resolve_web_search_mode_for_turn(

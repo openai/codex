@@ -1473,6 +1473,91 @@ mode = "system"
     Ok(())
 }
 
+#[test]
+fn bootstrap_system_proxy_honors_feature_requirements() -> std::io::Result<()> {
+    let configured = ConfigToml {
+        features: Some(
+            toml::from_str(
+                r#"
+[system_proxy]
+enabled = true
+mode = "system"
+"#,
+            )
+            .expect("valid features"),
+        ),
+        ..Default::default()
+    };
+    let disabled = Sourced::new(
+        FeatureRequirementsToml {
+            entries: BTreeMap::from([("system_proxy".to_string(), false)]),
+        },
+        RequirementSource::Unknown,
+    );
+    assert_eq!(
+        resolve_bootstrap_system_proxy_config(&configured, Some(&disabled))?,
+        None
+    );
+
+    let configured = ConfigToml {
+        features: Some(
+            toml::from_str(
+                r#"
+[system_proxy]
+mode = "system"
+"#,
+            )
+            .expect("valid features"),
+        ),
+        ..Default::default()
+    };
+    let enabled = Sourced::new(
+        FeatureRequirementsToml {
+            entries: BTreeMap::from([("system_proxy".to_string(), true)]),
+        },
+        RequirementSource::Unknown,
+    );
+    assert_eq!(
+        resolve_bootstrap_system_proxy_config(&configured, Some(&enabled))?,
+        Some(SystemProxyFeatureConfigToml {
+            enabled: Some(true),
+            mode: Some(SystemProxyFeatureModeToml::System),
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_proxy_cli_enable_preserves_configured_mode() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features.system_proxy]
+enabled = false
+mode = "system"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "features.system_proxy.enabled".to_string(),
+            toml::Value::Boolean(true),
+        )])
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.system_proxy,
+        Some(SystemProxyFeatureConfigToml {
+            enabled: Some(true),
+            mode: Some(SystemProxyFeatureModeToml::System),
+        })
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn experimental_network_requirements_enable_proxy_without_feature() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
