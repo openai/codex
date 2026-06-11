@@ -43,7 +43,7 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_start_normalizes_legacy_dynamic_tool_namespaces() -> Result<()> {
+async fn thread_start_normalizes_legacy_dynamic_tools_into_model_request() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -67,7 +67,6 @@ async fn thread_start_normalizes_legacy_dynamic_tool_namespaces() -> Result<()> 
             Some(json!({
                 "dynamicTools": [
                     {
-                        "type": "function",
                         "name": "lookup_ticket",
                         "description": "Look up a ticket",
                         "inputSchema": visible_schema,

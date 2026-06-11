@@ -72,6 +72,8 @@ pub enum DynamicToolCallOutputContentItem {
     InputImage { image_url: String },
 }
 
+/// Former flat `SessionMeta` shape, including the old `exposeToContext` flag.
+/// Kept so new builds can resume sessions written before explicit namespaces.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LegacyDynamicToolSpec {

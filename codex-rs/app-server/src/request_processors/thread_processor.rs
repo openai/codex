@@ -1075,11 +1075,13 @@ impl ThreadRequestProcessor {
                 .default_environment_selections(&config.cwd)
         });
         let dynamic_tools = dynamic_tools.unwrap_or_default();
+        // Count callable tools before grouping changes the outer list length.
         let core_dynamic_tool_count = dynamic_tools.len();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
         } else {
             validate_dynamic_tools(&dynamic_tools).map_err(invalid_request)?;
+            // Normalize the flat app-server input into core's function and namespace types.
             let tools = dynamic_tools
                 .into_iter()
                 .map(|tool| {
