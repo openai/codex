@@ -443,13 +443,15 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
         requests[2].function_call_output_text(continue_call_id),
         Some("Plan updated".to_string())
     );
+    let snapshot = context_snapshot::format_labeled_requests_snapshot(
+        "New context window tool installs fresh full context before the next follow-up request.",
+        &[("Final Follow-Up Request", &requests[2])],
+        &ContextSnapshotOptions::default(),
+    );
+    let snapshot = snapshot.replace(&thread_id.to_string(), "<THREAD_ID>");
     insta::assert_snapshot!(
         "token_budget_new_context_window_tool_full_context",
-        context_snapshot::format_labeled_requests_snapshot(
-            "New context window tool installs fresh full context before the next follow-up request.",
-            &[("Final Follow-Up Request", &requests[2])],
-            &ContextSnapshotOptions::default(),
-        )
+        snapshot
     );
 
     Ok(())

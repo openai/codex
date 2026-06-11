@@ -633,6 +633,7 @@ pub(crate) struct CodexMcpToolCallEventParams {
     pub(crate) mcp_server_name: String,
     pub(crate) mcp_tool_name: String,
     pub(crate) mcp_error_present: bool,
+    pub(crate) plugin_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -762,7 +763,8 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) phase: CompactionPhase,
     pub(crate) strategy: CompactionStrategy,
     pub(crate) status: CompactionStatus,
-    pub(crate) error: Option<String>,
+    pub(crate) codex_error_kind: Option<CodexErrKind>,
+    pub(crate) codex_error_http_status_code: Option<u16>,
     pub(crate) active_context_tokens_before: i64,
     pub(crate) active_context_tokens_after: i64,
     pub(crate) retained_image_count: Option<usize>,
@@ -1000,7 +1002,8 @@ pub(crate) fn codex_compaction_event_params(
         phase: input.phase,
         strategy: input.strategy,
         status: input.status,
-        error: input.error,
+        codex_error_kind: input.codex_error_kind,
+        codex_error_http_status_code: input.codex_error_http_status_code,
         active_context_tokens_before: input.active_context_tokens_before,
         active_context_tokens_after: input.active_context_tokens_after,
         retained_image_count: input.retained_image_count,

@@ -517,7 +517,6 @@ impl Session {
             session_configuration.forked_from_thread_id,
             session_configuration.parent_thread_id,
             &session_configuration.session_source,
-            session_configuration.thread_source.clone(),
             sub_id.clone(),
             cwd.clone(),
             &session_configuration.permission_profile(),
@@ -552,7 +551,7 @@ impl Session {
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration
-                .user_instructions
+                .loaded_agents_md
                 .as_ref()
                 .map(LoadedAgentsMd::text),
             collaboration_mode: session_configuration.collaboration_mode.clone(),

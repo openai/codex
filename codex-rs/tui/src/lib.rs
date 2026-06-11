@@ -11,8 +11,6 @@ use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::legacy_core::format_exec_policy_error_with_source;
-#[cfg(target_os = "windows")]
-use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::session_resume::ResolveCwdOutcome;
 use crate::session_resume::resolve_cwd_for_resume_or_fork;
 pub use crate::startup_error::LocalStateDbStartupError;
@@ -212,6 +210,8 @@ mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
 mod width;
+#[cfg(any(target_os = "windows", test))]
+mod windows_sandbox;
 mod workspace_command;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
@@ -1381,7 +1381,7 @@ async fn run_ratatui_app(
                     return Ok(AppExitInfo {
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
-                        thread_name: None,
+                        resume_hint: None,
                         update_action: Some(action),
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -1474,7 +1474,7 @@ async fn run_ratatui_app(
             return Ok(AppExitInfo {
                 token_usage: crate::token_usage::TokenUsage::default(),
                 thread_id: None,
-                thread_name: None,
+                resume_hint: None,
                 update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });
@@ -1524,7 +1524,7 @@ async fn run_ratatui_app(
         Ok(AppExitInfo {
             token_usage: crate::token_usage::TokenUsage::default(),
             thread_id: None,
-            thread_name: None,
+            resume_hint: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(format!(
                 "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
@@ -1581,7 +1581,7 @@ async fn run_ratatui_app(
                     return Ok(AppExitInfo {
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
-                        thread_name: None,
+                        resume_hint: None,
                         update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -1642,7 +1642,7 @@ async fn run_ratatui_app(
                 return Ok(AppExitInfo {
                     token_usage: crate::token_usage::TokenUsage::default(),
                     thread_id: None,
-                    thread_name: None,
+                    resume_hint: None,
                     update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
@@ -1687,7 +1687,7 @@ async fn run_ratatui_app(
                         return Ok(AppExitInfo {
                             token_usage: crate::token_usage::TokenUsage::default(),
                             thread_id: None,
-                            thread_name: None,
+                            resume_hint: None,
                             update_action: None,
                             exit_reason: ExitReason::UserRequested,
                         });
@@ -1741,7 +1741,7 @@ async fn run_ratatui_app(
     set_default_client_residency_requirement(config.enforce_residency.value());
     let should_show_trust_screen = should_show_trust_screen(&config);
     #[cfg(target_os = "windows")]
-    let windows_sandbox_level = WindowsSandboxLevel::from_config(&config);
+    let windows_sandbox_level = crate::windows_sandbox::level_from_config(&config);
     #[cfg(target_os = "windows")]
     let required_elevated_sandbox_needs_setup = windows_sandbox_level
         == WindowsSandboxLevel::Elevated
@@ -1751,9 +1751,7 @@ async fn run_ratatui_app(
             .windows_sandbox_mode
             .source
             .is_some()
-        && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
-            config.codex_home.as_path(),
-        );
+        && !crate::windows_sandbox::sandbox_setup_is_complete(config.codex_home.as_path());
     #[cfg(target_os = "windows")]
     let should_prompt_windows_sandbox_nux_at_startup = (trust_decision_was_made
         && windows_sandbox_level == WindowsSandboxLevel::Disabled)

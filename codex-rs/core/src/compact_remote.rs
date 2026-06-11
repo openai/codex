@@ -12,10 +12,11 @@ use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
+use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
-use crate::turn_metadata::CompactionTurnMetadata;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -113,17 +114,17 @@ async fn run_remote_compact_task_inner(
     let pre_compact_outcome = run_pre_compact_hooks(sess, turn_context, trigger).await;
     match pre_compact_outcome {
         PreCompactHookOutcome::Continue => {}
-        PreCompactHookOutcome::Stopped { reason } => {
-            let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
+        PreCompactHookOutcome::Stopped => {
+            let error = CodexErr::TurnAborted;
             attempt
                 .track(
                     sess.as_ref(),
                     codex_analytics::CompactionStatus::Interrupted,
-                    Some(error),
+                    Some(&error),
                     analytics_details,
                 )
                 .await;
-            return Err(CodexErr::TurnAborted);
+            return Err(error);
         }
     }
     let result = run_remote_compact_task_inner_impl(
@@ -135,18 +136,18 @@ async fn run_remote_compact_task_inner(
     )
     .await;
     let status = compaction_status_from_result(&result);
-    let error = result.as_ref().err().map(ToString::to_string);
+    let codex_error = result.as_ref().err();
     if result.is_ok() {
         let post_compact_outcome = run_post_compact_hooks(sess, turn_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
             attempt
-                .track(sess.as_ref(), status, error, analytics_details)
+                .track(sess.as_ref(), status, codex_error, analytics_details)
                 .await;
             return Err(CodexErr::TurnAborted);
         }
     }
     attempt
-        .track(sess.as_ref(), status, error.clone(), analytics_details)
+        .track(sess.as_ref(), status, codex_error, analytics_details)
         .await;
     if let Err(err) = result {
         sess.track_turn_codex_error(turn_context, &err);
@@ -225,9 +226,11 @@ async fn run_remote_compact_task_inner_impl(
         output_schema_strict: true,
     };
     let window_id = sess.current_window_id().await;
-    let turn_metadata_header = turn_context
-        .turn_metadata_state
-        .current_header_value_for_compaction(&window_id, compaction_metadata);
+    let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+        sess.installation_id.clone(),
+        window_id,
+        CodexResponsesRequestKind::Compaction(compaction_metadata),
+    );
     let mut new_history = sess
         .services
         .model_client
@@ -245,8 +248,7 @@ async fn run_remote_compact_task_inner_impl(
             },
             &turn_context.session_telemetry,
             &compaction_trace,
-            &window_id,
-            turn_metadata_header.as_deref(),
+            &responses_metadata,
         )
         .await?;
     let new_window_id = sess.advance_auto_compact_window_id().await;

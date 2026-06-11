@@ -297,7 +297,11 @@ fn canonicalize_json_snapshot_value(value: &mut Value, options: &ContextSnapshot
 fn format_snapshot_json_string(text: &str, options: &ContextSnapshotOptions) -> String {
     let normalized = match options.render_mode {
         ContextSnapshotRenderMode::RedactedText
-        | ContextSnapshotRenderMode::KindWithTextPrefix { .. } => redacted_snapshot_text(text),
+        | ContextSnapshotRenderMode::KindWithTextPrefix { .. } => {
+            normalize_snapshot_dynamic_values(&normalize_snapshot_line_endings(
+                &canonicalize_snapshot_text(text),
+            ))
+        }
         ContextSnapshotRenderMode::FullText => normalize_snapshot_line_endings(text),
         ContextSnapshotRenderMode::KindOnly => unreachable!(),
     };
@@ -341,13 +345,14 @@ fn format_changed_lines_diff(
 fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
     match options.render_mode {
         ContextSnapshotRenderMode::RedactedText => {
-            redacted_snapshot_text(text).replace('\n', "\\n")
+            normalize_snapshot_line_endings(&canonicalize_snapshot_text(text)).replace('\n', "\\n")
         }
         ContextSnapshotRenderMode::FullText => {
             normalize_snapshot_line_endings(text).replace('\n', "\\n")
         }
         ContextSnapshotRenderMode::KindWithTextPrefix { max_chars } => {
-            let normalized = redacted_snapshot_text(text).replace('\n', "\\n");
+            let normalized = normalize_snapshot_line_endings(&canonicalize_snapshot_text(text))
+                .replace('\n', "\\n");
             if normalized.chars().count() <= max_chars {
                 normalized
             } else {
@@ -357,12 +362,6 @@ fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String 
         }
         ContextSnapshotRenderMode::KindOnly => unreachable!(),
     }
-}
-
-fn redacted_snapshot_text(text: &str) -> String {
-    normalize_snapshot_uuids(&normalize_snapshot_line_endings(
-        &canonicalize_snapshot_text(text),
-    ))
 }
 
 fn normalize_snapshot_line_endings(text: &str) -> String {
@@ -443,7 +442,7 @@ fn normalize_dynamic_snapshot_paths(text: &str) -> String {
         .into_owned()
 }
 
-fn normalize_snapshot_uuids(text: &str) -> String {
+fn normalize_snapshot_dynamic_values(text: &str) -> String {
     static UUID_RE: OnceLock<Regex> = OnceLock::new();
     let uuid_re = UUID_RE.get_or_init(|| {
         Regex::new(
@@ -451,7 +450,20 @@ fn normalize_snapshot_uuids(text: &str) -> String {
         )
         .expect("uuid regex should compile")
     });
-    uuid_re.replace_all(text, "<UUID>").into_owned()
+    static TURN_STARTED_AT_UNIX_MS_RE: OnceLock<Regex> = OnceLock::new();
+    let turn_started_at_unix_ms_re = TURN_STARTED_AT_UNIX_MS_RE.get_or_init(|| {
+        Regex::new(r#""turn_started_at_unix_ms":\d+"#)
+            .expect("turn_started_at_unix_ms regex should compile")
+    });
+    static SANDBOX_RE: OnceLock<Regex> = OnceLock::new();
+    let sandbox_re = SANDBOX_RE
+        .get_or_init(|| Regex::new(r#""sandbox":"[^"]+""#).expect("sandbox regex should compile"));
+    let text = uuid_re.replace_all(text, "<UUID>");
+    let text =
+        turn_started_at_unix_ms_re.replace_all(&text, r#""turn_started_at_unix_ms":<UNIX_MS>"#);
+    sandbox_re
+        .replace_all(&text, r#""sandbox":"<SANDBOX>""#)
+        .into_owned()
 }
 
 #[cfg(test)]
@@ -459,6 +471,7 @@ mod tests {
     use super::ContextSnapshotOptions;
     use super::ContextSnapshotRenderMode;
     use super::format_response_items_snapshot;
+    use super::format_snapshot_json_string;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
@@ -520,25 +533,6 @@ mod tests {
         );
 
         assert_eq!(rendered, "00:message/user:<AGENTS_MD>");
-    }
-
-    #[test]
-    fn redacted_text_mode_normalizes_uuids() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "developer",
-            "content": [{
-                "type": "input_text",
-                "text": "Thread id 019eb543-d2ec-79a2-9e19-0ab23c5f27ff."
-            }]
-        })];
-
-        let rendered = format_response_items_snapshot(
-            &items,
-            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
-        );
-
-        assert_eq!(rendered, "00:message/developer:Thread id <UUID>.");
     }
 
     #[test]
@@ -728,6 +722,19 @@ mod tests {
         assert_eq!(
             rendered,
             "00:message/developer:## Skills\\n- openai-docs: helper (file: <SYSTEM_SKILLS_ROOT>/openai-docs/SKILL.md)"
+        );
+    }
+
+    #[test]
+    fn redacted_text_mode_normalizes_turn_metadata_dynamic_json_strings() {
+        let rendered = format_snapshot_json_string(
+            r#"{"turn_id":"019eaded-ba5c-7d40-8a81-a4dcebc4679e","sandbox":"seccomp","turn_started_at_unix_ms":1781035793002}"#,
+            &ContextSnapshotOptions::default(),
+        );
+
+        assert_eq!(
+            rendered,
+            r#"{"turn_id":"<UUID>","sandbox":"<SANDBOX>","turn_started_at_unix_ms":<UNIX_MS>}"#
         );
     }
 }

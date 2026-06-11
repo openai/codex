@@ -5,7 +5,7 @@ use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
 use crate::loader::installed_plugin_telemetry_metadata;
-use crate::loader::load_plugin_apps;
+use crate::loader::load_plugin_app_metadata;
 use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_hooks_from_layer_stack;
 use crate::loader::load_plugin_mcp_servers;
@@ -254,6 +254,7 @@ pub struct PluginDetail {
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppConnectorId>,
+    pub app_category_by_id: HashMap<String, String>,
     pub mcp_server_names: Vec<String>,
     pub details_unavailable_reason: Option<PluginDetailsUnavailableReason>,
 }
@@ -1224,6 +1225,7 @@ impl PluginsManager {
                 disabled_skill_paths: HashSet::new(),
                 hooks: Vec::new(),
                 apps: Vec::new(),
+                app_category_by_id: HashMap::new(),
                 mcp_server_names: Vec::new(),
                 details_unavailable_reason: Some(
                     PluginDetailsUnavailableReason::InstallRequiredForRemoteSource,
@@ -1290,7 +1292,12 @@ impl PluginsManager {
                 event_name: hook.event_name,
             })
             .collect();
-        let apps = load_plugin_apps(source_path.as_path()).await;
+        let app_metadata = load_plugin_app_metadata(source_path.as_path()).await;
+        let apps = app_metadata.iter().map(|app| app.id.clone()).collect();
+        let app_category_by_id = app_metadata
+            .into_iter()
+            .filter_map(|app| app.category.map(|category| (app.id.0, category)))
+            .collect();
         let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path())
             .await
             .into_keys()
@@ -1313,6 +1320,7 @@ impl PluginsManager {
             disabled_skill_paths: resolved_skills.disabled_skill_paths,
             hooks,
             apps,
+            app_category_by_id,
             mcp_server_names,
             details_unavailable_reason: None,
         })

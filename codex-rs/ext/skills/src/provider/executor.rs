@@ -6,11 +6,11 @@ use codex_core_skills::filter_skill_load_outcome_for_product;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::EnvironmentPathRef;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -99,7 +99,7 @@ impl SkillProvider for ExecutorSkillProvider {
                         enabled,
                         authority.clone(),
                         &selected_root_id,
-                        Arc::clone(&file_system),
+                        &environment_id,
                     ));
                 }
             }
@@ -121,13 +121,25 @@ impl SkillProvider for ExecutorSkillProvider {
                     "executor skill resource does not match its package",
                 ));
             }
-            let Some(resource_path) = request.resource.environment_path() else {
+            let Some((environment_id, resource_path)) = request.resource.environment_path() else {
                 return Err(SkillProviderError::new(
                     "executor skill resource is not bound to an environment",
                 ));
             };
-            let contents = resource_path
-                .read_to_string(/*sandbox*/ None)
+            let Some(environment) = self.environment_manager.get_environment(environment_id) else {
+                return Err(SkillProviderError::new(format!(
+                    "executor skill resource references unavailable environment `{environment_id}`"
+                )));
+            };
+            let resource_path = PathUri::from_abs_path(resource_path).map_err(|err| {
+                SkillProviderError::new(format!(
+                    "failed to read executor skill resource {}: {err}",
+                    request.resource.as_str()
+                ))
+            })?;
+            let contents = environment
+                .get_filesystem()
+                .read_file_text(&resource_path, /*sandbox*/ None)
                 .await
                 .map_err(|err| {
                     SkillProviderError::new(format!(
@@ -153,7 +165,7 @@ fn catalog_entry_from_skill(
     enabled: bool,
     authority: SkillAuthority,
     selected_root_id: &str,
-    file_system: Arc<dyn codex_exec_server::ExecutorFileSystem>,
+    environment_id: &str,
 ) -> SkillCatalogEntry {
     let skill_path = skill.path_to_skills_md.to_string_lossy().into_owned();
     let normalized_path = skill_path.replace('\\', "/");
@@ -168,7 +180,8 @@ fn catalog_entry_from_skill(
         skill.description.clone(),
         SkillResourceId::environment(
             display_path.clone(),
-            EnvironmentPathRef::new(file_system, skill.path_to_skills_md.clone()),
+            environment_id,
+            skill.path_to_skills_md.clone(),
         ),
     )
     .with_short_description(skill.short_description.clone())

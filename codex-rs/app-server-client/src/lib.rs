@@ -77,7 +77,6 @@ pub use crate::remote::RemoteAppServerEndpoint;
 pub mod legacy_core {
     pub use codex_core::check_execpolicy_for_warnings;
     pub use codex_core::format_exec_policy_error_with_source;
-    pub use codex_core::grant_read_root_non_elevated;
 
     pub mod config {
         pub use codex_core::config::*;
@@ -85,10 +84,6 @@ pub mod legacy_core {
         pub mod edit {
             pub use codex_core::config::edit::*;
         }
-    }
-
-    pub mod windows_sandbox {
-        pub use codex_core::windows_sandbox::*;
     }
 }
 
