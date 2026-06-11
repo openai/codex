@@ -480,14 +480,16 @@ async fn run_guardian_review(
                 record_guardian_non_denial(&session, &assessment_turn_id).await;
                 return ReviewDecision::Abort;
             }
-            GuardianReviewError::PromptBuild { .. } | GuardianReviewError::Parse { .. } => {
+            GuardianReviewError::PromptBuild { .. }
+            | GuardianReviewError::Session { .. }
+            | GuardianReviewError::Parse { .. } => {
                 let message = match &error {
                     GuardianReviewError::PromptBuild { message }
+                    | GuardianReviewError::Session { message, .. }
                     | GuardianReviewError::Parse { message } => message,
                     GuardianReviewError::Timeout | GuardianReviewError::Cancelled => {
                         "guardian review failed"
                     }
-                    GuardianReviewError::Session { .. } => unreachable!(),
                 };
                 let rationale = format!("Automatic approval review failed: {message}");
                 track_guardian_review(
@@ -499,78 +501,6 @@ async fn run_guardian_review(
                         decision: GuardianReviewDecision::Denied,
                         terminal_status: GuardianReviewTerminalStatus::FailedClosed,
                         failure_reason: Some(error.failure_reason()),
-                        ..analytics_result
-                    },
-                    completed_at_ms.try_into().unwrap_or_default(),
-                );
-                (
-                    GuardianAssessment {
-                        risk_level: GuardianRiskLevel::High,
-                        user_authorization: GuardianUserAuthorization::Unknown,
-                        outcome: GuardianAssessmentOutcome::Deny,
-                        rationale,
-                    },
-                    false,
-                )
-            }
-            GuardianReviewError::Session {
-                message,
-                error_info: Some(error_info),
-            } if is_transient_guardian_session_error_info(&error_info) => {
-                let rationale = format!("Automatic approval review failed: {message}");
-                track_guardian_review(
-                    session.as_ref(),
-                    &review_tracking,
-                    approval_request_source,
-                    &reviewed_action,
-                    GuardianReviewAnalyticsResult {
-                        decision: GuardianReviewDecision::Denied,
-                        terminal_status: GuardianReviewTerminalStatus::TimedOut,
-                        failure_reason: Some(GuardianReviewFailureReason::SessionError),
-                        ..analytics_result
-                    },
-                    completed_at_ms.try_into().unwrap_or_default(),
-                );
-                session
-                    .send_event(
-                        turn.as_ref(),
-                        EventMsg::GuardianWarning(WarningEvent {
-                            message: rationale.clone(),
-                        }),
-                    )
-                    .await;
-                session
-                    .send_event(
-                        turn.as_ref(),
-                        EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                            id: review_id,
-                            target_item_id,
-                            turn_id: assessment_turn_id.clone(),
-                            started_at_ms,
-                            completed_at_ms: Some(completed_at_ms),
-                            status: GuardianAssessmentStatus::TimedOut,
-                            risk_level: None,
-                            user_authorization: None,
-                            rationale: Some(rationale),
-                            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
-                            action: terminal_action,
-                        }),
-                    )
-                    .await;
-                record_guardian_non_denial(&session, &assessment_turn_id).await;
-                return ReviewDecision::TimedOut;
-            }
-            GuardianReviewError::Session { message, .. } => {
-                let rationale = format!("Automatic approval review failed: {message}");
-                track_guardian_review(
-                    session.as_ref(),
-                    &review_tracking,
-                    approval_request_source,
-                    &reviewed_action,
-                    GuardianReviewAnalyticsResult {
-                        decision: GuardianReviewDecision::Denied,
-                        terminal_status: GuardianReviewTerminalStatus::FailedClosed,
-                        failure_reason: Some(GuardianReviewFailureReason::SessionError),
                         ..analytics_result
                     },
                     completed_at_ms.try_into().unwrap_or_default(),
@@ -959,32 +889,20 @@ async fn wait_before_guardian_retry(
 }
 
 fn should_retry_guardian_review(outcome: &GuardianReviewOutcome) -> bool {
-    match outcome {
-        GuardianReviewOutcome::Error(GuardianReviewError::Session {
-            error_info: Some(error_info),
-            ..
-        }) => is_transient_guardian_session_error_info(error_info),
-        GuardianReviewOutcome::Error(GuardianReviewError::Parse { .. }) => true,
-        GuardianReviewOutcome::Completed(_)
-        | GuardianReviewOutcome::Error(
-            GuardianReviewError::PromptBuild { .. }
-            | GuardianReviewError::Session {
-                error_info: None, ..
-            }
-            | GuardianReviewError::Timeout
-            | GuardianReviewError::Cancelled,
-        ) => false,
-    }
-}
-
-fn is_transient_guardian_session_error_info(error_info: &CodexErrorInfo) -> bool {
     matches!(
-        error_info,
-        CodexErrorInfo::ServerOverloaded
-            | CodexErrorInfo::HttpConnectionFailed { .. }
-            | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
-            | CodexErrorInfo::InternalServerError
-            | CodexErrorInfo::ResponseStreamDisconnected { .. }
+        outcome,
+        GuardianReviewOutcome::Error(
+            GuardianReviewError::Session {
+                error_info: Some(
+                    CodexErrorInfo::ServerOverloaded
+                        | CodexErrorInfo::HttpConnectionFailed { .. }
+                        | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
+                        | CodexErrorInfo::InternalServerError
+                        | CodexErrorInfo::ResponseStreamDisconnected { .. }
+                ),
+                ..
+            } | GuardianReviewError::Parse { .. }
+        )
     )
 }
 

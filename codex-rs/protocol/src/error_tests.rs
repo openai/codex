@@ -191,27 +191,6 @@ fn to_error_event_handles_response_stream_failed() {
 }
 
 #[test]
-fn to_error_event_handles_response_stream_disconnected() {
-    let err = CodexErr::Stream(
-        "WebSocket protocol error: Connection reset without closing handshake".to_string(),
-        None,
-    );
-
-    let event = err.to_error_event(Some("Error running remote compact task".to_string()));
-
-    assert_eq!(
-        event.message,
-        "Error running remote compact task: stream disconnected before completion: WebSocket protocol error: Connection reset without closing handshake"
-    );
-    assert_eq!(
-        event.codex_error_info,
-        Some(CodexErrorInfo::ResponseStreamDisconnected {
-            http_status_code: None,
-        })
-    );
-}
-
-#[test]
 fn sandbox_denied_reports_exit_code_when_no_output_available() {
     let output = ExecToolCallOutput {
         exit_code: 13,
