@@ -59,6 +59,7 @@ impl RemoteControlHandle {
                 &status.installation_id,
                 &status.server_name,
                 app_server_client_name,
+                super::RemoteControlEnrollmentSelection::ReuseOrCreate,
             )
             .await?;
 

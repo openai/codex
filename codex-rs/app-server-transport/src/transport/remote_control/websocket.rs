@@ -1,4 +1,5 @@
 use super::CurrentRemoteControlEnrollment;
+use super::RemoteControlEnrollmentSelection;
 use super::RemoteControlPairingPersistenceKey;
 use super::desired_state::RemoteControlDesiredState;
 use super::desired_state::acquire_persistence_lock;
@@ -283,6 +284,11 @@ pub(super) struct RemoteControlAuthContext<'a> {
     auth_manager: &'a Arc<AuthManager>,
     auth_recovery: &'a mut UnauthorizedRecovery,
     auth_change_rx: &'a mut watch::Receiver<u64>,
+}
+
+struct RemoteControlEnrollmentAuthContext<'a, 'b> {
+    auth: &'a RemoteControlConnectionAuth,
+    recovery: &'a mut RemoteControlAuthContext<'b>,
 }
 
 enum ConnectOutcome {
@@ -1372,22 +1378,25 @@ pub(super) async fn connect_remote_control_websocket(
                     if websocket_response_reports_missing_remote_app_server(response) =>
                 {
                     info!(
-                        "remote control websocket returned HTTP 404; clearing stale enrollment before re-enrolling: websocket_url={}, account_id={}, server_id={}, environment_id={}",
+                        "remote control websocket returned HTTP 404; replacing stale enrollment: websocket_url={}, account_id={}, server_id={}, environment_id={}",
                         remote_control_target.websocket_url,
                         auth.account_id,
                         enrollment.server_id,
                         enrollment.environment_id
                     );
-                    clear_remote_control_enrollment_if_matches(
+                    replace_remote_control_enrollment_if_matches(
                         state_db,
                         remote_control_target,
-                        &auth.account_id,
-                        connect_options.app_server_client_name,
+                        RemoteControlEnrollmentAuthContext {
+                            auth: &auth,
+                            recovery: &mut auth_context,
+                        },
                         current_enrollment,
                         &enrollment,
+                        connect_options,
                         status_publisher,
                     )
-                    .await;
+                    .await?;
                 }
                 tungstenite::Error::Http(response) if response.status().as_u16() == 404 => {
                     let response_body = response
@@ -1492,14 +1501,17 @@ async fn prepare_remote_control_enrollment(
         });
     }
 
-    enroll_remote_control_server_if_missing(
+    enroll_and_persist_remote_control_server(
         remote_control_target,
         state_db,
-        &auth,
-        auth_context,
+        RemoteControlEnrollmentAuthContext {
+            auth: &auth,
+            recovery: auth_context,
+        },
         enrollment,
         connect_options,
         status_publisher,
+        RemoteControlEnrollmentSelection::ReuseOrCreate,
     )
     .await?;
 
@@ -1531,26 +1543,20 @@ async fn prepare_remote_control_enrollment(
             Ok(()) => {}
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 info!(
-                    "remote control server refresh returned HTTP 404; clearing stale enrollment before re-enrolling: websocket_url={}, account_id={}, server_id={}, environment_id={}",
+                    "remote control server refresh returned HTTP 404; replacing stale enrollment: websocket_url={}, account_id={}, server_id={}, environment_id={}",
                     remote_control_target.websocket_url, auth.account_id, server_id, environment_id
                 );
-                clear_remote_control_enrollment(
-                    state_db,
-                    remote_control_target,
-                    &auth.account_id,
-                    connect_options.app_server_client_name,
-                    enrollment,
-                    status_publisher,
-                )
-                .await;
-                enroll_remote_control_server_if_missing(
+                enroll_and_persist_remote_control_server(
                     remote_control_target,
                     state_db,
-                    &auth,
-                    auth_context,
+                    RemoteControlEnrollmentAuthContext {
+                        auth: &auth,
+                        recovery: auth_context,
+                    },
                     enrollment,
                     connect_options,
                     status_publisher,
+                    RemoteControlEnrollmentSelection::ReplaceExisting,
                 )
                 .await?;
             }
@@ -1585,58 +1591,38 @@ fn websocket_response_reports_missing_remote_app_server(
         })
 }
 
-async fn clear_remote_control_enrollment(
-    state_db: &StateRuntime,
-    remote_control_target: &RemoteControlTarget,
-    account_id: &str,
-    app_server_client_name: Option<&str>,
-    enrollment: &mut Option<RemoteControlEnrollment>,
-    status_publisher: &RemoteControlStatusPublisher,
-) {
-    if let Err(clear_err) = update_persisted_remote_control_enrollment(
-        Some(state_db),
-        remote_control_target,
-        account_id,
-        app_server_client_name,
-        /*enrollment*/ None,
-        /*remote_control_enabled*/ None,
-    )
-    .await
-    {
-        warn!("failed to clear stale remote control enrollment in sqlite state db: {clear_err}");
-    }
-    *enrollment = None;
-    status_publisher.publish_environment_id(/*environment_id*/ None);
-}
-
-async fn clear_remote_control_enrollment_if_matches(
+async fn replace_remote_control_enrollment_if_matches(
     state_db: Option<&StateRuntime>,
     remote_control_target: &RemoteControlTarget,
-    account_id: &str,
-    app_server_client_name: Option<&str>,
+    auth_context: RemoteControlEnrollmentAuthContext<'_, '_>,
     current_enrollment: &CurrentRemoteControlEnrollment,
     enrollment: &RemoteControlEnrollment,
+    connect_options: RemoteControlConnectOptions<'_>,
     status_publisher: &RemoteControlStatusPublisher,
-) {
+) -> io::Result<()> {
     let Some(state_db) = state_db else {
-        return;
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            "remote control requires sqlite state db",
+        ));
     };
     let mut current_enrollment = current_enrollment.lock().await;
     if !current_enrollment
         .as_ref()
         .is_some_and(|current| same_remote_control_enrollment(current, enrollment))
     {
-        return;
+        return Ok(());
     }
-    clear_remote_control_enrollment(
-        state_db,
+    enroll_and_persist_remote_control_server(
         remote_control_target,
-        account_id,
-        app_server_client_name,
+        state_db,
+        auth_context,
         &mut current_enrollment,
+        connect_options,
         status_publisher,
+        RemoteControlEnrollmentSelection::ReplaceExisting,
     )
-    .await;
+    .await
 }
 
 async fn clear_remote_control_server_token_if_matches(
@@ -1654,17 +1640,22 @@ async fn clear_remote_control_server_token_if_matches(
     Ok(())
 }
 
-async fn enroll_remote_control_server_if_missing(
+async fn enroll_and_persist_remote_control_server(
     remote_control_target: &RemoteControlTarget,
     state_db: &StateRuntime,
-    auth: &RemoteControlConnectionAuth,
-    auth_context: &mut RemoteControlAuthContext<'_>,
+    auth_context: RemoteControlEnrollmentAuthContext<'_, '_>,
     enrollment: &mut Option<RemoteControlEnrollment>,
     connect_options: RemoteControlConnectOptions<'_>,
     status_publisher: &RemoteControlStatusPublisher,
+    selection: RemoteControlEnrollmentSelection,
 ) -> io::Result<()> {
-    if enrollment.is_some() {
-        return Ok(());
+    match selection {
+        RemoteControlEnrollmentSelection::ReuseOrCreate => {
+            if enrollment.is_some() {
+                return Ok(());
+            }
+        }
+        RemoteControlEnrollmentSelection::ReplaceExisting => {}
     }
     if !connect_options.desired_state_rx.borrow().is_enabled() {
         return Err(io::Error::new(
@@ -1675,11 +1666,13 @@ async fn enroll_remote_control_server_if_missing(
 
     info!(
         "creating new remote control enrollment: websocket_url={}, enroll_url={}, account_id={}",
-        remote_control_target.websocket_url, remote_control_target.enroll_url, auth.account_id
+        remote_control_target.websocket_url,
+        remote_control_target.enroll_url,
+        auth_context.auth.account_id
     );
     let new_enrollment = match enroll_remote_control_server(
         remote_control_target,
-        auth,
+        auth_context.auth,
         connect_options.installation_id,
         connect_options.server_name,
     )
@@ -1689,8 +1682,8 @@ async fn enroll_remote_control_server_if_missing(
         Err(err)
             if err.kind() == ErrorKind::PermissionDenied
                 && recover_remote_control_auth(
-                    auth_context.auth_recovery,
-                    auth_context.auth_change_rx,
+                    auth_context.recovery.auth_recovery,
+                    auth_context.recovery.auth_change_rx,
                 )
                 .await =>
         {
@@ -1716,7 +1709,7 @@ async fn enroll_remote_control_server_if_missing(
     if let Err(err) = update_persisted_remote_control_enrollment(
         Some(state_db),
         remote_control_target,
-        &auth.account_id,
+        &auth_context.auth.account_id,
         connect_options.app_server_client_name,
         Some(&new_enrollment),
         persistence_preference,

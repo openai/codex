@@ -689,7 +689,7 @@ async fn remote_control_handle_reenrolls_after_stale_pairing_enrollment() {
         "account_id",
         /*app_server_client_name*/ None,
         Some(&stale_enrollment),
-        /*remote_control_enabled*/ None,
+        /*remote_control_enabled*/ Some(true),
     )
     .await
     .expect("stale enrollment should save");
