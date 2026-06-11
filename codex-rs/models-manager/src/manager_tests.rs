@@ -212,6 +212,7 @@ c2ln",
         last_refresh: Some(Utc::now()),
         agent_identity: None,
         personal_access_token: None,
+        bedrock_api_key: None,
     };
     std::fs::create_dir_all(codex_home).expect("codex home should be created");
     std::fs::write(
