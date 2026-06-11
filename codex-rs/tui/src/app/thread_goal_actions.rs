@@ -283,7 +283,11 @@ impl App {
         }
     }
 
-    fn show_replace_thread_goal_confirmation(&mut self, thread_id: ThreadId, objective: String) {
+    pub(super) fn show_replace_thread_goal_confirmation(
+        &mut self,
+        thread_id: ThreadId,
+        objective: String,
+    ) {
         let replace_objective = objective.clone();
         let replace_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::SetThreadGoalObjective {

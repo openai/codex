@@ -11,6 +11,7 @@ use crate::app_backtrack::user_count;
 
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::create_initial_user_message;
+use crate::chatwidget::tests::helpers::render_bottom_popup;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::chatwidget::tests::set_chatgpt_auth;
 use crate::chatwidget::tests::set_fast_mode_test_catalog;
@@ -4174,11 +4175,8 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
     )
     .await;
 
-    let goal = app_server
-        .thread_goal_get(thread_id)
-        .await?
-        .goal
-        .expect("goal should be set");
+    let response = app_server.thread_goal_get(thread_id).await?;
+    let goal = response.goal.expect("goal should be set");
     let saved_objective = goal.objective.clone();
     let codex_home = app_server
         .codex_home_path(&app.chat_widget.config_ref().codex_home)
@@ -4207,6 +4205,8 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
         &AppServerPath::from_app_server("/tmp/codex\\home"),
         &format!("/tmp/codex/home/{suffix}")
     ));
+    let unix_path = AppServerPath::from_app_server("/tmp/codex\\").join("a");
+    assert_eq!(unix_path.as_str(), "/tmp/codex\\/a");
     let attachments_dir = app.chat_widget.config_ref().codex_home.join("attachments");
     let attachment_count = std::fs::read_dir(&attachments_dir)?.count();
 
@@ -4233,6 +4233,16 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
     );
     app_server.shutdown().await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn replace_goal_confirmation_snapshot() {
+    let mut app = make_test_app().await;
+    app.show_replace_thread_goal_confirmation(ThreadId::new(), "New goal".to_string());
+    assert_app_snapshot!(
+        "replace_goal_confirmation",
+        render_bottom_popup(&app.chat_widget, /*width*/ 80)
+    );
 }
 
 fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {

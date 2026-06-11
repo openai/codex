@@ -4,6 +4,7 @@ use crate::app_server_session::AppServerSession;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use anyhow::ensure;
 use codex_app_server_client::AppServerPath;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use uuid::Uuid;
@@ -21,9 +22,7 @@ pub(crate) async fn materialize_goal_objective(
     objective: String,
 ) -> Result<(String, Option<GoalFilePath>)> {
     let objective = objective.trim().to_string();
-    if objective.is_empty() {
-        bail!("Goal objective must not be empty.");
-    }
+    ensure!(!objective.is_empty(), "Goal objective must not be empty.");
 
     if objective.chars().count() <= MAX_THREAD_GOAL_OBJECTIVE_CHARS {
         return Ok((objective, None));
@@ -34,19 +33,19 @@ pub(crate) async fn materialize_goal_objective(
     let output_dir = codex_home
         .join(GOAL_ATTACHMENT_DIR)
         .join(Uuid::new_v4().to_string());
+    let path = output_dir.join(GOAL_FILE_NAME);
+    let reference = objective_file_reference(&path)?;
     app_server
         .fs_create_directory_all_path(&output_dir)
         .await
         .map_err(|err| anyhow::anyhow!("{err}"))
         .with_context(|| format!("Could not create goal attachment directory {output_dir}"))?;
-
-    let path = output_dir.join(GOAL_FILE_NAME);
     app_server
         .fs_write_file_path(&path, objective.as_bytes().to_vec())
         .await
         .map_err(|err| anyhow::anyhow!("{err}"))
         .with_context(|| format!("Could not write goal file {path}"))?;
-    Ok((objective_file_reference(&path)?, Some(output_dir)))
+    Ok((reference, Some(output_dir)))
 }
 
 pub(crate) async fn objective_text_for_edit(

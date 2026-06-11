@@ -31,16 +31,13 @@ impl AppServerPath {
     }
 
     pub fn join(&self, segment: impl AsRef<str>) -> Self {
-        let separator = if is_windows_absolute_path(&self.0) {
-            '\\'
+        let is_windows = is_windows_absolute_path(&self.0);
+        let (path, separator) = if is_windows {
+            (self.0.trim_end_matches(['/', '\\']), '\\')
         } else {
-            '/'
+            (self.0.trim_end_matches('/'), '/')
         };
-        Self(format!(
-            "{}{separator}{}",
-            self.0.trim_end_matches(['/', '\\']),
-            segment.as_ref()
-        ))
+        Self(format!("{path}{separator}{}", segment.as_ref()))
     }
 }
 
