@@ -102,6 +102,33 @@ pub struct AppInfo {
     pub plugin_display_names: Vec<String>,
 }
 
+impl AppInfo {
+    pub fn category(&self) -> Option<String> {
+        self.branding
+            .as_ref()
+            .and_then(|branding| non_empty_category(branding.category.as_deref()))
+            .or_else(|| {
+                self.app_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.categories.as_ref())
+                    .and_then(|categories| {
+                        categories
+                            .iter()
+                            .find_map(|category| non_empty_category(Some(category.as_str())))
+                    })
+            })
+    }
+}
+
+fn non_empty_category(category: Option<&str>) -> Option<String> {
+    let category = category?.trim();
+    if category.is_empty() {
+        None
+    } else {
+        Some(category.to_string())
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -111,15 +138,18 @@ pub struct AppSummary {
     pub name: String,
     pub description: Option<String>,
     pub install_url: Option<String>,
+    pub category: Option<String>,
 }
 
 impl From<AppInfo> for AppSummary {
     fn from(value: AppInfo) -> Self {
+        let category = value.category();
         Self {
             id: value.id,
             name: value.name,
             description: value.description,
             install_url: value.install_url,
+            category,
         }
     }
 }

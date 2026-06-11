@@ -178,6 +178,7 @@ pub struct RemoteAppTemplate {
     pub template_id: String,
     pub name: String,
     pub description: Option<String>,
+    pub category: Option<String>,
     pub canonical_connector_id: Option<String>,
     pub logo_url: Option<String>,
     pub logo_url_dark: Option<String>,
@@ -457,6 +458,8 @@ struct RemoteAppTemplateResponse {
     name: String,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
     #[serde(default)]
     canonical_connector_id: Option<String>,
     #[serde(default)]
@@ -1059,6 +1062,7 @@ async fn build_remote_plugin_detail(
                 template_id: template.template_id,
                 name: template.name,
                 description: template.description,
+                category: template.category,
                 canonical_connector_id: template.canonical_connector_id,
                 logo_url: template.logo_url,
                 logo_url_dark: template.logo_url_dark,
