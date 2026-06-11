@@ -707,16 +707,18 @@ pub async fn run_main_with_transport_options(
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
     let remote_control_startup_mode = runtime_options.remote_control_startup_mode;
-    let remote_control_requested =
+    let remote_control_explicitly_requested =
         remote_control_startup_mode == RemoteControlStartupMode::EnabledEphemeral;
-    let remote_control_enabled = remote_control_requested && state_db.is_some();
-    if remote_control_requested && state_db.is_none() {
+    let remote_control_available = remote_control_startup_mode
+        != RemoteControlStartupMode::DisabledEphemeral
+        && state_db.is_some();
+    if remote_control_explicitly_requested && state_db.is_none() {
         error!("remote control disabled because sqlite state db is unavailable");
     }
-    if transport_accept_handles.is_empty() && !remote_control_enabled {
+    if transport_accept_handles.is_empty() && !remote_control_available {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            if remote_control_requested && state_db.is_none() {
+            if remote_control_explicitly_requested && state_db.is_none() {
                 "no transport configured; remote control disabled because sqlite state db is unavailable"
             } else {
                 "no transport configured; use --listen or enable remote control"

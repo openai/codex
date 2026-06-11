@@ -25,6 +25,7 @@ use codex_app_server_protocol::RemoteControlPairingStatusResponse;
 use codex_app_server_protocol::RemoteControlStatusReadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -57,6 +58,33 @@ async fn wait_for_response(mcp: &mut TestAppServer, request_id: i64) -> Result<J
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await?
+}
+
+#[tokio::test]
+async fn listen_off_honors_persisted_remote_control_enable() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let listener = configured_remote_control_listener(codex_home.path()).await?;
+    let websocket_url = format!(
+        "ws://{}/backend-api/wham/remote/control/server",
+        listener.local_addr()?
+    );
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
+    state_db
+        .upsert_remote_control_enrollment(&RemoteControlEnrollmentRecord {
+            websocket_url,
+            account_id: "account_id".to_string(),
+            app_server_client_name: None,
+            server_id: "server-id".to_string(),
+            environment_id: "environment-id".to_string(),
+            server_name: "server-name".to_string(),
+            remote_control_enabled: Some(true),
+        })
+        .await?;
+
+    let _app_server = TestAppServer::new_with_args(codex_home.path(), &["--listen", "off"]).await?;
+    timeout(DEFAULT_TIMEOUT, listener.accept()).await??;
+    Ok(())
 }
 
 #[tokio::test]
