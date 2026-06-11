@@ -49,6 +49,7 @@ async fn run() -> Result<(), String> {
         sessions: Mutex::new(HashMap::new()),
         next_session_id: AtomicU64::new(1),
         peer,
+        host_id: std::process::id().to_string(),
     });
 
     let writer = tokio::spawn(async move {
@@ -110,8 +111,12 @@ impl HostState {
                 });
                 self.sessions.lock().await.insert(
                     session_id,
-                    Arc::new(CodeModeService::with_delegate(delegate)),
+                    Arc::new(CodeModeService::with_delegate_and_cell_id_prefix(
+                        delegate,
+                        self.host_id.clone(),
+                    )),
                 );
+    host_id: String,
                 self.respond(request_id, Ok(HostResponse::SessionCreated { session_id }))
                     .await;
             }

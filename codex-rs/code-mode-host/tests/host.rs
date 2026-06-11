@@ -25,6 +25,7 @@ async fn serves_code_mode_sessions_over_stdio() {
     .kill_on_drop(true)
     .spawn()
     .expect("spawn codex-code-mode-host");
+    let host_id = child.id().expect("host process id");
     let mut stdin = child.stdin.take().expect("host stdin");
     let mut stdout = child.stdout.take().expect("host stdout");
 
@@ -70,6 +71,7 @@ async fn serves_code_mode_sessions_over_stdio() {
         }) => cell_id,
         message => panic!("unexpected execute response: {message:?}"),
     };
+    assert_eq!(cell_id.as_str(), format!("{host_id}_1"));
     let response = match read_frame(&mut stdout)
         .await
         .expect("initial response frame")
