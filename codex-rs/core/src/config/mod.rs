@@ -193,7 +193,7 @@ pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usiz
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
-pub(crate) const DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT: &str = r#"You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+const DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT: &str = r#"You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 
 At the start of your turn, you are the active agent.
 You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
@@ -213,7 +213,7 @@ Payload:
 ```
 They may be addressed as to=/root
 "#;
-pub(crate) const DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT: &str = r#"You are an agent in a team of agents collaborating to complete a task.
+const DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT: &str = r#"You are an agent in a team of agents collaborating to complete a task.
 
 You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
 
@@ -233,6 +233,14 @@ Payload:
 ```
 You may also see them addressed as to=/root/..., which indicates your identity is /root/...
 "#;
+
+fn default_multi_agent_v2_usage_hint_text(usage_hint_text: &str) -> String {
+    let max_concurrency = DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION;
+    format!(
+        "{usage_hint_text}\nThere are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you."
+    )
+}
+
 pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
 pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
     DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS;
@@ -1065,12 +1073,12 @@ impl Default for MultiAgentV2Config {
             default_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS,
             usage_hint_enabled: true,
             usage_hint_text: None,
-            root_agent_usage_hint_text: Some(
-                DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT.to_string(),
-            ),
-            subagent_usage_hint_text: Some(
-                DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT.to_string(),
-            ),
+            root_agent_usage_hint_text: Some(default_multi_agent_v2_usage_hint_text(
+                DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT,
+            )),
+            subagent_usage_hint_text: Some(default_multi_agent_v2_usage_hint_text(
+                DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
+            )),
             tool_namespace: None,
             hide_spawn_agent_metadata: true,
             non_code_mode_only: true,

@@ -435,34 +435,37 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
-        let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> = if let Some(parent_thread) =
-            parent_thread.as_ref()
-        {
-            if multi_agent_version == MultiAgentVersion::V2 {
-                let parent_config = parent_thread.codex.session.get_config().await;
+        let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
+            if let Some(parent_thread) = parent_thread.as_ref() {
+                if multi_agent_version == MultiAgentVersion::V2 {
+                    let parent_config = parent_thread.codex.session.get_config().await;
+                    [
+                        parent_config
+                            .multi_agent_v2
+                            .root_agent_usage_hint_text
+                            .clone(),
+                        parent_config
+                            .multi_agent_v2
+                            .subagent_usage_hint_text
+                            .clone(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+                } else {
+                    Vec::new()
+                }
+            } else if multi_agent_version == MultiAgentVersion::V2 {
                 [
-                    crate::session::rendered_root_usage_hint_text(&parent_config.multi_agent_v2),
-                    crate::session::rendered_subagent_usage_hint_text(
-                        &parent_config.multi_agent_v2,
-                    ),
+                    config.multi_agent_v2.root_agent_usage_hint_text.clone(),
+                    config.multi_agent_v2.subagent_usage_hint_text.clone(),
                 ]
                 .into_iter()
                 .flatten()
                 .collect()
             } else {
                 Vec::new()
-            }
-        } else if multi_agent_version == MultiAgentVersion::V2 {
-            [
-                crate::session::rendered_root_usage_hint_text(&config.multi_agent_v2),
-                crate::session::rendered_subagent_usage_hint_text(&config.multi_agent_v2),
-            ]
-            .into_iter()
-            .flatten()
-            .collect()
-        } else {
-            Vec::new()
-        };
+            };
         let preserve_reference_context_item = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
         forked_rollout_items.retain(|item| {
             keep_forked_rollout_item(item, preserve_reference_context_item)
@@ -491,7 +494,7 @@ impl AgentControl {
             && multi_agent_version == MultiAgentVersion::V2
             && config.multi_agent_v2.usage_hint_enabled
             && let Some(subagent_usage_hint_text) =
-                crate::session::rendered_subagent_usage_hint_text(&config.multi_agent_v2)
+                config.multi_agent_v2.subagent_usage_hint_text.clone()
             && let Some(subagent_usage_hint_message) =
                 crate::context_manager::updates::build_developer_update_item(vec![
                     subagent_usage_hint_text,
