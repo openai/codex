@@ -26,7 +26,8 @@ use crate::protocol::InitializeResponse;
 
 #[tokio::test]
 async fn remote_file_system_sends_path_uris_without_native_conversion() {
-    let (websocket_url, captured_paths, server) = record_read_file_paths(2).await;
+    let (websocket_url, captured_paths, server) =
+        record_read_file_paths(/*expected_requests*/ 2).await;
     let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
         ExecServerTransportParams::websocket_url(websocket_url),
     ));
