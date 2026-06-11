@@ -19,38 +19,48 @@ const GOAL_FILE_NAME: &str = "goal-objective.md";
 
 pub(crate) type GoalFilePath = AppServerPath;
 
+pub(crate) struct MaterializedGoal {
+    pub(crate) objective: String,
+    pub(crate) output_dir: Option<GoalFilePath>,
+}
+
 pub(crate) async fn materialize_goal_objective(
     app_server: &mut AppServerSession,
     codex_home: Option<&GoalFilePath>,
     objective: String,
-) -> Result<String> {
+) -> Result<MaterializedGoal> {
     let mut objective = objective.trim().to_string();
     if objective.is_empty() {
         bail!("Goal objective must not be empty.");
     }
 
+    let mut output_dir = None;
     if objective.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
         let codex_home = codex_home
             .context("App server did not report $CODEX_HOME; cannot materialize goal files")?;
-        let output_dir = codex_home
+        let dir = codex_home
             .join(GOAL_ATTACHMENT_DIR)
             .join(Uuid::new_v4().to_string());
         app_server
-            .fs_create_directory_all_path(&output_dir)
+            .fs_create_directory_all_path(&dir)
             .await
             .map_err(|err| anyhow::anyhow!("{err}"))
-            .with_context(|| format!("Could not create goal attachment directory {output_dir}"))?;
+            .with_context(|| format!("Could not create goal attachment directory {dir}"))?;
 
-        let path = output_dir.join(GOAL_FILE_NAME);
+        let path = dir.join(GOAL_FILE_NAME);
         app_server
             .fs_write_file_path(&path, objective.as_bytes().to_vec())
             .await
             .map_err(|err| anyhow::anyhow!("{err}"))
             .with_context(|| format!("Could not write goal file {path}"))?;
         objective = objective_file_reference(&path)?;
+        output_dir = Some(dir);
     }
 
-    Ok(objective)
+    Ok(MaterializedGoal {
+        objective,
+        output_dir,
+    })
 }
 
 pub(crate) async fn objective_text_for_edit(
@@ -83,6 +93,7 @@ pub(crate) fn objective_file_path(
     (!codex_home_parts.is_empty()
         && !has_normalization_component(&codex_home_parts)
         && !has_normalization_component(&path_parts)
+        && path_parts.len() == codex_home_parts.len() + 3
         && path_parts.starts_with(&codex_home_parts))
     .then_some(path)
 }

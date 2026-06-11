@@ -8,6 +8,8 @@ use codex_app_server_protocol::FsCreateDirectoryParams;
 use codex_app_server_protocol::FsCreateDirectoryResponse;
 use codex_app_server_protocol::FsReadFileParams;
 use codex_app_server_protocol::FsReadFileResponse;
+use codex_app_server_protocol::FsRemoveParams;
+use codex_app_server_protocol::FsRemoveResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCRequest;
@@ -84,6 +86,25 @@ impl AppServerSession {
         STANDARD
             .decode(response.data_base64)
             .wrap_err("fs/readFile returned invalid base64 data")
+    }
+
+    pub(crate) async fn fs_remove_path(&mut self, path: &AppServerPath) -> Result<()> {
+        let _: FsRemoveResponse = self
+            .request_fs_path(
+                "fs/remove",
+                path,
+                |request_id, path| ClientRequest::FsRemove {
+                    request_id,
+                    params: FsRemoveParams {
+                        path,
+                        recursive: None,
+                        force: None,
+                    },
+                },
+                json!({ "path": path.as_str() }),
+            )
+            .await?;
+        Ok(())
     }
 
     async fn request_fs_path<T>(

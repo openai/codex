@@ -171,7 +171,7 @@ impl App {
             mode
         };
 
-        let objective = match goal_files::materialize_goal_objective(
+        let materialized = match goal_files::materialize_goal_objective(
             app_server,
             codex_home.as_ref(),
             objective,
@@ -187,12 +187,17 @@ impl App {
                 return;
             }
         };
+        let goal_files::MaterializedGoal {
+            objective,
+            output_dir,
+        } = materialized;
 
         let replacing_goal = matches!(mode, ThreadGoalSetMode::ReplaceExisting);
         if replacing_goal {
             let result = app_server.thread_goal_clear(thread_id).await;
 
             if let Err(err) = result {
+                cleanup_materialized_goal_files(app_server, output_dir).await;
                 if self.current_displayed_thread_id() != Some(thread_id) {
                     return;
                 }
@@ -216,12 +221,12 @@ impl App {
         let result = app_server
             .thread_goal_set(thread_id, Some(objective), Some(status), token_budget)
             .await;
-        if self.current_displayed_thread_id() != Some(thread_id) {
-            return;
-        }
 
         match result {
             Ok(response) => {
+                if self.current_displayed_thread_id() != Some(thread_id) {
+                    return;
+                }
                 self.chat_widget.add_info_message(
                     format!("Goal {}", goal_status_label(response.goal.status)),
                     Some(goal_usage_summary(&response.goal, codex_home.as_ref())),
@@ -229,6 +234,10 @@ impl App {
                 self.chat_widget.maybe_send_next_queued_input();
             }
             Err(err) => {
+                cleanup_materialized_goal_files(app_server, output_dir).await;
+                if self.current_displayed_thread_id() != Some(thread_id) {
+                    return;
+                }
                 let action = if replacing_goal { "replace" } else { "set" };
                 self.chat_widget
                     .add_error_message(thread_goal_error_message(action, &err));
@@ -337,6 +346,17 @@ impl App {
             GOAL_USAGE.to_string(),
             Some("Create a goal before editing it.".to_string()),
         );
+    }
+}
+
+async fn cleanup_materialized_goal_files(
+    app_server: &mut AppServerSession,
+    output_dir: Option<goal_files::GoalFilePath>,
+) {
+    if let Some(output_dir) = output_dir
+        && let Err(err) = app_server.fs_remove_path(&output_dir).await
+    {
+        tracing::warn!("failed to clean up materialized goal files at {output_dir}: {err}");
     }
 }
 
