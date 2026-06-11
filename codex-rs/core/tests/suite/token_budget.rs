@@ -98,18 +98,22 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "noted"),
                 ev_completed_with_tokens("resp-1", /*total_tokens*/ 2_500),
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "two"),
                 ev_completed_with_tokens("resp-2", /*total_tokens*/ 3_000),
             ]),
             sse(vec![
                 ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "three"),
                 ev_completed_with_tokens("resp-3", /*total_tokens*/ 5_000),
             ]),
             sse(vec![
                 ev_response_created("resp-4"),
+                ev_assistant_message("msg-4", "four"),
                 ev_completed_with_tokens("resp-4", /*total_tokens*/ 8_000),
             ]),
             sse(vec![ev_response_created("resp-5"), ev_completed("resp-5")]),
@@ -166,6 +170,136 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
     assert_eq!(
         token_budget_texts(&requests[4]),
         vec![full_context, threshold_25, threshold_50, threshold_75]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_context_remaining_returns_token_budget_remaining_fragment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "remaining-call";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "noted"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 2_500),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call(call_id, "get_context_remaining", "{}"),
+                ev_completed_with_tokens("resp-2", /*total_tokens*/ 2_500),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_context_window = Some(10_000);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("spend some tokens").await?;
+    test.submit_turn("check remaining context").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        tool_names(&requests[1])
+            .iter()
+            .any(|name| name == "get_context_remaining"),
+        "get_context_remaining should be exposed when token budget is enabled"
+    );
+
+    let full_context = "<token_budget>\nCurrent context window 0.\nYou have 9500 tokens left in this context window.\n</token_budget>"
+        .to_string();
+    let remaining_context =
+        "<token_budget>\nYou have 7000 tokens left in this context window.\n</token_budget>"
+            .to_string();
+    assert_eq!(
+        token_budget_texts(&requests[1]),
+        vec![full_context, remaining_context.clone()]
+    );
+    assert_eq!(
+        requests[2].function_call_output_content_and_success(call_id),
+        Some((Some(remaining_context), None))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_context_remaining_returns_unknown_when_window_is_unavailable() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "remaining-call";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "get_context_remaining", "{}"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_model_info_override("gpt-5.2", |model_info| {
+            model_info.context_window = None;
+            model_info.max_context_window = None;
+        })
+        .with_config(|config| {
+            config.model_context_window = None;
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("check remaining context").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        tool_names(&requests[0])
+            .iter()
+            .any(|name| name == "get_context_remaining"),
+        "get_context_remaining should be exposed when token budget is enabled"
+    );
+
+    assert_eq!(token_budget_texts(&requests[0]), Vec::<String>::new());
+    assert_eq!(
+        requests[1].function_call_output_content_and_success(call_id),
+        Some((
+            Some(
+                "<token_budget>\nYou have unknown tokens left in this context window.\n</token_budget>"
+                    .to_string()
+            ),
+            None,
+        ))
     );
 
     Ok(())
