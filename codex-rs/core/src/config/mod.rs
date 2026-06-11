@@ -154,6 +154,7 @@ pub use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
+pub(crate) use network_proxy_spec::NetworkProxyRuntimeState;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub(crate) use permissions::is_builtin_permission_profile_name;

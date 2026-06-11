@@ -893,18 +893,31 @@ impl Session {
                             Arc::clone(network_policy_decider_session),
                         )
                     });
-            let (network_proxy, session_network_proxy) =
+            let credentialed_routes = if config.permissions.network.is_some() {
+                crate::credentialed_routes::load_for_session(&config.chatgpt_base_url, auth).await
+            } else {
+                codex_network_proxy::CredentialedRoutesConfig::default()
+            };
+            let credentialed_routes_source = crate::credentialed_routes::source(
+                config.chatgpt_base_url.clone(),
+                Arc::clone(&auth_manager),
+            );
+            let (network_proxy, session_network_proxy, credentialed_routes_reloader) =
                 if let Some(spec) = config.permissions.network.as_ref() {
                     let current_exec_policy = exec_policy.current();
-                    let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
-                        spec,
-                        current_exec_policy.as_ref(),
-                        config.permissions.permission_profile(),
-                        network_policy_decider.as_ref().map(Arc::clone),
-                        blocked_request_observer.as_ref().map(Arc::clone),
-                        managed_network_requirements_configured,
-                        network_proxy_audit_metadata.clone(),
-                    )
+                    let (network_proxy, session_network_proxy, credentialed_routes_reloader) =
+                        Self::start_managed_network_proxy(ManagedNetworkProxyStartRequest {
+                            spec,
+                            credentialed_routes,
+                            credentialed_routes_source: Arc::clone(&credentialed_routes_source),
+                            exec_policy: current_exec_policy.as_ref(),
+                            permission_profile: config.permissions.permission_profile(),
+                            network_policy_decider: network_policy_decider.as_ref().map(Arc::clone),
+                            blocked_request_observer: blocked_request_observer.as_ref().map(Arc::clone),
+                            managed_network_requirements_enabled:
+                                managed_network_requirements_configured,
+                            audit_metadata: network_proxy_audit_metadata.clone(),
+                        })
                     .instrument(info_span!(
                         "session_init.network_proxy",
                         otel.name = "session_init.network_proxy",
@@ -912,9 +925,13 @@ impl Session {
                             managed_network_requirements_enabled,
                     ))
                     .await?;
-                    (Some(network_proxy), Some(session_network_proxy))
+                    (
+                        Some(network_proxy),
+                        Some(session_network_proxy),
+                        Some(credentialed_routes_reloader),
+                    )
                 } else {
-                    (None, None)
+                    (None, None, None)
                 };
 
             let hooks =
@@ -1006,6 +1023,9 @@ impl Session {
                 thread_extension_data,
                 agent_control,
                 network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
+                credentialed_routes_reloader: arc_swap::ArcSwapOption::from(
+                    credentialed_routes_reloader,
+                ),
                 network_proxy_audit_metadata,
                 managed_network_requirements_configured,
                 network_approval: Arc::clone(&network_approval),

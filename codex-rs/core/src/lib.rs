@@ -34,6 +34,7 @@ pub mod config;
 pub mod connectors;
 pub mod context;
 mod context_manager;
+mod credentialed_routes;
 mod environment_selection;
 pub mod exec;
 pub mod exec_env;

@@ -34,6 +34,11 @@ pub struct StartedNetworkProxy {
     _handle: NetworkProxyHandle,
 }
 
+pub(crate) struct NetworkProxyRuntimeState {
+    pub(crate) state: ConfigState,
+    pub(crate) reloader: Arc<dyn ConfigReloader>,
+}
+
 impl StartedNetworkProxy {
     fn new(proxy: NetworkProxy, handle: NetworkProxyHandle) -> Self {
         Self {
@@ -128,7 +133,33 @@ impl NetworkProxySpec {
         enable_network_approval_flow: bool,
         audit_metadata: NetworkProxyAuditMetadata,
     ) -> std::io::Result<StartedNetworkProxy> {
-        let state = self.build_state_with_audit_metadata(audit_metadata)?;
+        let state = self.build_config_state_for_spec()?;
+        self.start_proxy_with_runtime_state(
+            permission_profile,
+            policy_decider,
+            blocked_request_observer,
+            enable_network_approval_flow,
+            audit_metadata,
+            NetworkProxyRuntimeState {
+                state: state.clone(),
+                reloader: Arc::new(StaticNetworkProxyReloader::new(state)),
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn start_proxy_with_runtime_state(
+        &self,
+        permission_profile: &PermissionProfile,
+        policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+        blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
+        enable_network_approval_flow: bool,
+        audit_metadata: NetworkProxyAuditMetadata,
+        runtime_state: NetworkProxyRuntimeState,
+    ) -> std::io::Result<StartedNetworkProxy> {
+        let NetworkProxyRuntimeState { state, reloader } = runtime_state;
+        let state =
+            NetworkProxyState::with_reloader_and_audit_metadata(state, reloader, audit_metadata);
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
         if enable_network_approval_flow && !self.hard_deny_allowlist_misses {
             if let Some(policy_decider) = policy_decider {
@@ -191,6 +222,7 @@ impl NetworkProxySpec {
             })
     }
 
+    #[cfg(test)]
     fn build_state_with_audit_metadata(
         &self,
         audit_metadata: NetworkProxyAuditMetadata,
@@ -204,7 +236,7 @@ impl NetworkProxySpec {
         ))
     }
 
-    fn build_config_state_for_spec(&self) -> std::io::Result<ConfigState> {
+    pub(crate) fn build_config_state_for_spec(&self) -> std::io::Result<ConfigState> {
         build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
             std::io::Error::other(format!("failed to build network proxy state: {err}"))
         })

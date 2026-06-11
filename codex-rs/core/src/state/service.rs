@@ -69,6 +69,8 @@ pub(crate) struct SessionServices {
     pub(crate) thread_extension_data: ExtensionData,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: ArcSwapOption<StartedNetworkProxy>,
+    pub(crate) credentialed_routes_reloader:
+        ArcSwapOption<codex_network_proxy::CredentialedRoutesReloader>,
     pub(crate) network_proxy_audit_metadata: NetworkProxyAuditMetadata,
     pub(crate) managed_network_requirements_configured: bool,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
