@@ -11,6 +11,13 @@ pub use runtime::McpRuntimeContext;
 pub use runtime::SandboxState;
 pub use tools::ToolInfo;
 
+pub use catalog::McpCatalogBuilder;
+pub use catalog::McpServerConflict;
+pub use catalog::McpServerRegistration;
+pub use catalog::McpServerSource;
+pub use catalog::ResolvedMcpCatalog;
+pub use catalog::ResolvedMcpServer;
+
 pub use mcp::CODEX_APPS_MCP_SERVER_NAME;
 pub use mcp::McpConfig;
 pub use mcp::ToolPluginProvenance;
@@ -57,6 +64,7 @@ pub use mcp::qualified_mcp_tool_name_prefix;
 pub use tools::declared_openai_file_input_param_names;
 
 pub(crate) mod auth_elicitation;
+mod catalog;
 pub(crate) mod codex_apps;
 pub(crate) mod connection_manager;
 pub(crate) mod elicitation;

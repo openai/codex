@@ -1,0 +1,329 @@
+use std::cmp::Reverse;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::collections::HashMap;
+
+use codex_config::McpServerConfig;
+
+/// The component that declared an MCP server registration.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum McpServerSource {
+    Plugin { plugin_id: String },
+    Config,
+    Compatibility { id: String },
+    Extension { id: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum RegistrationPrecedence {
+    Plugin(Reverse<usize>),
+    Config,
+    Compatibility,
+    Extension(usize),
+}
+
+impl RegistrationPrecedence {
+    fn tier(self) -> u8 {
+        match self {
+            Self::Plugin(_) => 0,
+            Self::Config => 1,
+            Self::Compatibility => 2,
+            Self::Extension(_) => 3,
+        }
+    }
+}
+
+/// One named MCP server declaration before source resolution.
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpServerRegistration {
+    name: String,
+    source: McpServerSource,
+    config: McpServerConfig,
+    precedence: RegistrationPrecedence,
+}
+
+impl McpServerRegistration {
+    pub fn from_config(name: String, config: McpServerConfig) -> Self {
+        Self::new(
+            name,
+            McpServerSource::Config,
+            config,
+            RegistrationPrecedence::Config,
+        )
+    }
+
+    pub fn from_plugin(
+        name: String,
+        plugin_id: String,
+        plugin_order: usize,
+        config: McpServerConfig,
+    ) -> Self {
+        Self::new(
+            name,
+            McpServerSource::Plugin { plugin_id },
+            config,
+            RegistrationPrecedence::Plugin(Reverse(plugin_order)),
+        )
+    }
+
+    pub fn from_compatibility(
+        name: String,
+        id: impl Into<String>,
+        config: McpServerConfig,
+    ) -> Self {
+        Self::new(
+            name,
+            McpServerSource::Compatibility { id: id.into() },
+            config,
+            RegistrationPrecedence::Compatibility,
+        )
+    }
+
+    pub fn from_extension(
+        name: String,
+        id: impl Into<String>,
+        contribution_order: usize,
+        config: McpServerConfig,
+    ) -> Self {
+        Self::new(
+            name,
+            McpServerSource::Extension { id: id.into() },
+            config,
+            RegistrationPrecedence::Extension(contribution_order),
+        )
+    }
+
+    fn new(
+        name: String,
+        source: McpServerSource,
+        config: McpServerConfig,
+        precedence: RegistrationPrecedence,
+    ) -> Self {
+        Self {
+            name,
+            source,
+            config,
+            precedence,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn source(&self) -> &McpServerSource {
+        &self.source
+    }
+}
+
+/// A same-tier name collision resolved by the catalog's explicit precedence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpServerConflict {
+    pub name: String,
+    pub winner: McpServerSource,
+    pub shadowed: McpServerSource,
+}
+
+#[derive(Clone, Debug)]
+enum CatalogAction {
+    Register(McpServerRegistration),
+    Remove {
+        name: String,
+        source: McpServerSource,
+        precedence: RegistrationPrecedence,
+    },
+}
+
+impl CatalogAction {
+    fn name(&self) -> &str {
+        match self {
+            Self::Register(registration) => registration.name(),
+            Self::Remove { name, .. } => name,
+        }
+    }
+
+    fn source(&self) -> &McpServerSource {
+        match self {
+            Self::Register(registration) => registration.source(),
+            Self::Remove { source, .. } => source,
+        }
+    }
+
+    fn precedence(&self) -> RegistrationPrecedence {
+        match self {
+            Self::Register(registration) => registration.precedence,
+            Self::Remove { precedence, .. } => *precedence,
+        }
+    }
+}
+
+/// Mutable inputs used to produce an immutable resolved catalog.
+#[derive(Clone, Debug, Default)]
+pub struct McpCatalogBuilder {
+    actions: Vec<CatalogAction>,
+    disabled_server_names: BTreeSet<String>,
+}
+
+impl McpCatalogBuilder {
+    pub fn register(&mut self, registration: McpServerRegistration) {
+        self.actions.push(CatalogAction::Register(registration));
+    }
+
+    /// Applies the legacy name-scoped disabled veto after source resolution.
+    pub fn disable(&mut self, name: String) {
+        self.disabled_server_names.insert(name);
+    }
+
+    pub fn remove_compatibility(&mut self, name: String, id: impl Into<String>) {
+        self.actions.push(CatalogAction::Remove {
+            name,
+            source: McpServerSource::Compatibility { id: id.into() },
+            precedence: RegistrationPrecedence::Compatibility,
+        });
+    }
+
+    pub fn remove_extension(
+        &mut self,
+        name: String,
+        id: impl Into<String>,
+        contribution_order: usize,
+    ) {
+        self.actions.push(CatalogAction::Remove {
+            name,
+            source: McpServerSource::Extension { id: id.into() },
+            precedence: RegistrationPrecedence::Extension(contribution_order),
+        });
+    }
+
+    pub fn build(mut self) -> ResolvedMcpCatalog {
+        self.actions.sort_by(|left, right| {
+            left.precedence()
+                .cmp(&right.precedence())
+                .then_with(|| left.source().cmp(right.source()))
+                .then_with(|| left.name().cmp(right.name()))
+        });
+
+        let mut winners = BTreeMap::<String, CatalogAction>::new();
+        let mut actions_by_name_and_tier = BTreeMap::<(String, u8), Vec<&CatalogAction>>::new();
+        for action in &self.actions {
+            winners.insert(action.name().to_string(), action.clone());
+            actions_by_name_and_tier
+                .entry((action.name().to_string(), action.precedence().tier()))
+                .or_default()
+                .push(action);
+        }
+
+        let mut conflicts = Vec::new();
+        for ((name, _), actions) in actions_by_name_and_tier {
+            let (winner, shadowed) = actions.split_last().expect("group is non-empty");
+            conflicts.extend(shadowed.iter().map(|action| McpServerConflict {
+                name: name.clone(),
+                winner: winner.source().clone(),
+                shadowed: action.source().clone(),
+            }));
+        }
+
+        let servers = winners
+            .into_iter()
+            .filter_map(|(name, action)| match action {
+                CatalogAction::Register(mut registration) => {
+                    if self.disabled_server_names.contains(&name) {
+                        registration.config.enabled = false;
+                    }
+                    Some((
+                        name,
+                        ResolvedMcpServer {
+                            source: registration.source,
+                            config: registration.config,
+                        },
+                    ))
+                }
+                CatalogAction::Remove { .. } => None,
+            })
+            .collect();
+
+        ResolvedMcpCatalog {
+            actions: self.actions,
+            disabled_server_names: self.disabled_server_names,
+            servers,
+            conflicts,
+        }
+    }
+}
+
+/// A single winning MCP registration.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedMcpServer {
+    source: McpServerSource,
+    config: McpServerConfig,
+}
+
+impl ResolvedMcpServer {
+    pub fn source(&self) -> &McpServerSource {
+        &self.source
+    }
+
+    pub fn config(&self) -> &McpServerConfig {
+        &self.config
+    }
+}
+
+/// Immutable result of MCP registration resolution.
+#[derive(Clone, Debug, Default)]
+pub struct ResolvedMcpCatalog {
+    actions: Vec<CatalogAction>,
+    disabled_server_names: BTreeSet<String>,
+    servers: BTreeMap<String, ResolvedMcpServer>,
+    conflicts: Vec<McpServerConflict>,
+}
+
+impl ResolvedMcpCatalog {
+    pub fn builder() -> McpCatalogBuilder {
+        McpCatalogBuilder::default()
+    }
+
+    pub fn to_builder(&self) -> McpCatalogBuilder {
+        McpCatalogBuilder {
+            actions: self.actions.clone(),
+            disabled_server_names: self.disabled_server_names.clone(),
+        }
+    }
+
+    pub fn server(&self, name: &str) -> Option<&ResolvedMcpServer> {
+        self.servers.get(name)
+    }
+
+    pub fn disabled_server_names(&self) -> impl Iterator<Item = &str> {
+        self.servers
+            .iter()
+            .filter(|(_, server)| !server.config.enabled)
+            .map(|(name, _)| name.as_str())
+    }
+
+    pub fn configured_servers(&self) -> HashMap<String, McpServerConfig> {
+        self.servers
+            .iter()
+            .map(|(name, server)| (name.clone(), server.config.clone()))
+            .collect()
+    }
+
+    pub fn plugin_ids_by_server_name(&self) -> HashMap<String, String> {
+        self.servers
+            .iter()
+            .filter_map(|(name, server)| match server.source() {
+                McpServerSource::Plugin { plugin_id } => Some((name.clone(), plugin_id.clone())),
+                McpServerSource::Config
+                | McpServerSource::Compatibility { .. }
+                | McpServerSource::Extension { .. } => None,
+            })
+            .collect()
+    }
+
+    pub fn conflicts(&self) -> &[McpServerConflict] {
+        &self.conflicts
+    }
+}
+
+#[cfg(test)]
+#[path = "catalog_tests.rs"]
+mod tests;

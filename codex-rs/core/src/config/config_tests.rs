@@ -4404,13 +4404,14 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
         .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    let configured_servers = mcp_config.mcp_server_catalog.configured_servers();
 
     assert_eq!(
-        mcp_config.configured_mcp_servers.get("sample"),
+        configured_servers.get("sample"),
         Some(&http_mcp("https://sample.example/mcp"))
     );
     assert_eq!(
-        mcp_config.plugin_ids_by_mcp_server_name,
+        mcp_config.mcp_server_catalog.plugin_ids_by_server_name(),
         HashMap::from([("sample".to_string(), "sample@test".to_string())])
     );
 
@@ -4460,12 +4461,18 @@ enabled = true
         .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    let configured_servers = mcp_config.mcp_server_catalog.configured_servers();
 
     assert_eq!(
-        mcp_config.configured_mcp_servers.get("sample"),
+        configured_servers.get("sample"),
         Some(&http_mcp("https://user.example/mcp"))
     );
-    assert!(mcp_config.plugin_ids_by_mcp_server_name.is_empty());
+    assert!(
+        mcp_config
+            .mcp_server_catalog
+            .plugin_ids_by_server_name()
+            .is_empty()
+    );
 
     Ok(())
 }
@@ -4522,17 +4529,16 @@ url = "https://sample.example/mcp"
         .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    let configured_servers = mcp_config.mcp_server_catalog.configured_servers();
 
     assert_eq!(
-        mcp_config
-            .configured_mcp_servers
+        configured_servers
             .get("sample")
             .map(|server| (server.enabled, server.disabled_reason.clone())),
         Some((true, None))
     );
     assert_eq!(
-        mcp_config
-            .configured_mcp_servers
+        configured_servers
             .get("unlisted")
             .map(|server| (server.enabled, server.disabled_reason.clone())),
         Some((
@@ -4595,10 +4601,10 @@ enabled = true
         .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    let configured_servers = mcp_config.mcp_server_catalog.configured_servers();
 
     assert_eq!(
-        mcp_config
-            .configured_mcp_servers
+        configured_servers
             .get("sample")
             .map(|server| (server.enabled, server.disabled_reason.clone())),
         Some((
