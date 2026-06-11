@@ -49,9 +49,14 @@ tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
+[target.'cfg(windows)'.dependencies]
+codex-utils-home-dir = { workspace = true }
+codex-windows-sandbox = { workspace = true }
+
 [dev-dependencies]
 anyhow = { workspace = true }
 codex-test-binary-support = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 ctor = { workspace = true }
 http = { workspace = true }
 pretty_assertions = { workspace = true }
