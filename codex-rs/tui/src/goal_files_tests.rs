@@ -121,3 +121,29 @@ async fn deleted_paste_placeholder_does_not_materialize_or_need_codex_home() {
     assert_eq!(objective, "small goal");
     assert!(store.writes.is_empty());
 }
+
+#[tokio::test]
+async fn deleted_image_placeholder_does_not_materialize_or_need_codex_home() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let image_path = temp_dir.path().join("local-image.png");
+    fs::write(&image_path, b"png bytes").expect("write image");
+    let mut store = RecordingStore::default();
+
+    let objective = materialize_goal_draft(
+        &mut store,
+        /*codex_home*/ None,
+        GoalDraft {
+            objective: "small goal".to_string(),
+            local_images: vec![LocalImageAttachment {
+                placeholder: "[Image #1]".to_string(),
+                path: image_path,
+            }],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("materialize plain goal draft");
+
+    assert_eq!(objective, "small goal");
+    assert!(store.writes.is_empty());
+}

@@ -133,8 +133,22 @@ pub(crate) async fn materialize_goal_draft(
         bail!("Goal objective must not be empty.");
     }
     let text_elements = draft.text_elements;
-    let mut active_paste_placeholders =
-        active_paste_placeholder_counts(&objective, &text_elements, &draft.pending_pastes);
+    let mut active_paste_placeholders = active_placeholder_counts(
+        &objective,
+        &text_elements,
+        draft
+            .pending_pastes
+            .iter()
+            .map(|(placeholder, _)| placeholder.as_str()),
+    );
+    let mut active_image_placeholders = active_placeholder_counts(
+        &objective,
+        &text_elements,
+        draft
+            .local_images
+            .iter()
+            .map(|image| image.placeholder.as_str()),
+    );
 
     let mut output_dir = None;
     let mut replacements = Vec::new();
@@ -157,6 +171,11 @@ pub(crate) async fn materialize_goal_draft(
 
     let mut image_lines = Vec::new();
     for (idx, image) in draft.local_images.iter().enumerate() {
+        if !image.placeholder.is_empty()
+            && !take_active_placeholder(&mut active_image_placeholders, &image.placeholder)
+        {
+            continue;
+        }
         let extension = image_extension(&image.path);
         let path = join_goal_path(
             &ensure_output_dir(store, codex_home, &mut output_dir).await?,
@@ -198,14 +217,15 @@ pub(crate) async fn materialize_goal_draft(
     Ok(objective)
 }
 
-fn active_paste_placeholder_counts(
+fn active_placeholder_counts<'a>(
     objective: &str,
     text_elements: &[TextElement],
-    pending_pastes: &[(String, String)],
+    placeholders: impl IntoIterator<Item = &'a str>,
 ) -> HashMap<String, usize> {
-    let mut counts = pending_pastes
-        .iter()
-        .map(|(placeholder, _)| (placeholder.clone(), 0))
+    let mut counts = placeholders
+        .into_iter()
+        .filter(|placeholder| !placeholder.is_empty())
+        .map(|placeholder| (placeholder.to_string(), 0))
         .collect::<HashMap<_, _>>();
     for element in text_elements {
         if let Some(count) = element
