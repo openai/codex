@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::sandbox_tags::permission_profile_sandbox_tag;
+use codex_protocol::AgentPath;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
@@ -20,6 +21,7 @@ fn test_mcp_turn_metadata_context() -> McpTurnMetadataContext<'static> {
     McpTurnMetadataContext {
         model: "gpt-5.4",
         reasoning_effort: Some(ReasoningEffortConfig::High),
+        has_spawned_subagent: false,
     }
 }
 
@@ -404,6 +406,7 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
         .current_meta_value_for_mcp_request(McpTurnMetadataContext {
             model: "gpt-5.4",
             reasoning_effort: None,
+            has_spawned_subagent: false,
         })
         .expect("turn metadata should be present");
     assert_eq!(
@@ -414,6 +417,84 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
         meta_without_reasoning_effort
             .get("reasoning_effort")
             .is_none()
+    );
+}
+
+#[test]
+fn turn_metadata_state_includes_agent_path_only_in_request_meta() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let cwd = temp_dir.path().abs();
+    let permission_profile = PermissionProfile::read_only();
+    let parent_thread_id = ThreadId::new();
+    let agent_path = AgentPath::try_from("/root/worker").expect("agent path");
+
+    let root_state = TurnMetadataState::new(
+        "session-root".to_string(),
+        "thread-root".to_string(),
+        /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
+        &SessionSource::Exec,
+        /*thread_source*/ None,
+        "turn-root".to_string(),
+        cwd.clone(),
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+    let subagent_state = TurnMetadataState::new(
+        "session-child".to_string(),
+        "thread-child".to_string(),
+        /*forked_from_thread_id*/ None,
+        Some(parent_thread_id),
+        &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: Some(agent_path),
+            agent_nickname: None,
+            agent_role: None,
+        }),
+        /*thread_source*/ None,
+        "turn-child".to_string(),
+        cwd,
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+
+    let root_header: Value =
+        serde_json::from_str(&root_state.current_header_value().expect("root header"))
+            .expect("valid json");
+    assert!(root_header.get(AGENT_PATH_KEY).is_none());
+
+    let root_meta = root_state
+        .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
+        .expect("root mcp metadata");
+    assert_eq!(
+        serde_json::json!({
+            "agent_path": "/root",
+            "has_spawned_subagent": false,
+        }),
+        serde_json::json!({
+            "agent_path": root_meta.get(AGENT_PATH_KEY),
+            "has_spawned_subagent": root_meta.get(HAS_SPAWNED_SUBAGENT_KEY),
+        })
+    );
+
+    let subagent_meta = subagent_state
+        .current_meta_value_for_mcp_request(McpTurnMetadataContext {
+            has_spawned_subagent: true,
+            ..test_mcp_turn_metadata_context()
+        })
+        .expect("subagent mcp metadata");
+    assert_eq!(
+        serde_json::json!({
+            "agent_path": "/root/worker",
+            "has_spawned_subagent": true,
+        }),
+        serde_json::json!({
+            "agent_path": subagent_meta.get(AGENT_PATH_KEY),
+            "has_spawned_subagent": subagent_meta.get(HAS_SPAWNED_SUBAGENT_KEY),
+        })
     );
 }
 
@@ -503,6 +584,11 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
             "client-supplied".to_string(),
         ),
         ("subagent_kind".to_string(), "client-supplied".to_string()),
+        (AGENT_PATH_KEY.to_string(), "client-supplied".to_string()),
+        (
+            HAS_SPAWNED_SUBAGENT_KEY.to_string(),
+            "client-supplied".to_string(),
+        ),
     ]));
 
     let header = state.current_header_value().expect("header");
@@ -512,6 +598,8 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     assert!(json.get("forked_from_thread_id").is_none());
     assert!(json.get("parent_thread_id").is_none());
     assert!(json.get("subagent_kind").is_none());
+    assert!(json.get(AGENT_PATH_KEY).is_none());
+    assert!(json.get(HAS_SPAWNED_SUBAGENT_KEY).is_none());
 }
 
 #[test]
