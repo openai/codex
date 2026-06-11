@@ -113,17 +113,17 @@ async fn run_remote_compact_task_inner(
     let pre_compact_outcome = run_pre_compact_hooks(sess, turn_context, trigger).await;
     match pre_compact_outcome {
         PreCompactHookOutcome::Continue => {}
-        PreCompactHookOutcome::Stopped { reason } => {
-            let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
+        PreCompactHookOutcome::Stopped => {
+            let error = CodexErr::TurnAborted;
             attempt
                 .track(
                     sess.as_ref(),
                     codex_analytics::CompactionStatus::Interrupted,
-                    Some(error),
+                    Some(&error),
                     analytics_details,
                 )
                 .await;
-            return Err(CodexErr::TurnAborted);
+            return Err(error);
         }
     }
     let result = run_remote_compact_task_inner_impl(
@@ -135,18 +135,18 @@ async fn run_remote_compact_task_inner(
     )
     .await;
     let status = compaction_status_from_result(&result);
-    let error = result.as_ref().err().map(ToString::to_string);
+    let codex_error = result.as_ref().err();
     if result.is_ok() {
         let post_compact_outcome = run_post_compact_hooks(sess, turn_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
             attempt
-                .track(sess.as_ref(), status, error, analytics_details)
+                .track(sess.as_ref(), status, codex_error, analytics_details)
                 .await;
             return Err(CodexErr::TurnAborted);
         }
     }
     attempt
-        .track(sess.as_ref(), status, error.clone(), analytics_details)
+        .track(sess.as_ref(), status, codex_error, analytics_details)
         .await;
     if let Err(err) = result {
         sess.track_turn_codex_error(turn_context, &err);
