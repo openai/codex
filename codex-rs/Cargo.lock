@@ -4281,6 +4281,7 @@ dependencies = [
  "chrono",
  "codex-otel",
  "codex-protocol",
+ "codex-sandboxing",
  "codex-utils-absolute-path",
  "codex-utils-pty",
  "codex-utils-string",

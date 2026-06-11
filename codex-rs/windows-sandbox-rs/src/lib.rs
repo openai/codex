@@ -53,6 +53,7 @@ mod desktop;
 mod dpapi;
 #[cfg(target_os = "windows")]
 mod env;
+mod filesystem_overrides;
 #[cfg(target_os = "windows")]
 mod helper_materialization;
 #[cfg(target_os = "windows")]
@@ -169,6 +170,11 @@ pub use dpapi::unprotect as dpapi_unprotect;
 pub use elevated_impl::ElevatedSandboxProfileCaptureRequest;
 #[cfg(target_os = "windows")]
 pub use elevated_impl::run_windows_sandbox_capture_for_permission_profile as run_windows_sandbox_capture_for_permission_profile_elevated;
+pub use filesystem_overrides::WindowsSandboxFilesystemOverrides;
+pub use filesystem_overrides::permission_profile_supports_windows_restricted_token_sandbox;
+pub use filesystem_overrides::resolve_windows_elevated_filesystem_overrides;
+pub use filesystem_overrides::resolve_windows_restricted_token_filesystem_overrides;
+pub use filesystem_overrides::unsupported_windows_restricted_token_sandbox_reason;
 #[cfg(target_os = "windows")]
 pub use helper_materialization::resolve_current_exe_for_launch;
 #[cfg(target_os = "windows")]
