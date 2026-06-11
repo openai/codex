@@ -15,6 +15,7 @@ use crate::events::CodexDynamicToolCallEventParams;
 use crate::events::CodexDynamicToolCallEventRequest;
 use crate::events::CodexFileChangeEventParams;
 use crate::events::CodexFileChangeEventRequest;
+use crate::events::CodexGoalEventRequest;
 use crate::events::CodexHookRunEventRequest;
 use crate::events::CodexImageGenerationEventParams;
 use crate::events::CodexImageGenerationEventRequest;
@@ -51,6 +52,7 @@ use crate::events::TrackEventRequest;
 use crate::events::WebSearchActionKind;
 use crate::events::codex_app_metadata;
 use crate::events::codex_compaction_event_params;
+use crate::events::codex_goal_event_params;
 use crate::events::codex_hook_run_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
@@ -62,6 +64,7 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginState;
@@ -187,6 +190,16 @@ impl<'a> AnalyticsDropSite<'a> {
             event_name: "compaction",
             thread_id: &input.thread_id,
             turn_id: Some(&input.turn_id),
+            review_id: None,
+            item_id: None,
+        }
+    }
+
+    fn goal(input: &'a CodexGoalEvent) -> Self {
+        Self {
+            event_name: "goal",
+            thread_id: &input.thread_id,
+            turn_id: input.turn_id.as_deref(),
             review_id: None,
             item_id: None,
         }
@@ -360,7 +373,9 @@ impl TurnToolCounts {
             ThreadItem::FileChange { .. } => self.file_change += 1,
             ThreadItem::McpToolCall { .. } => self.mcp_tool_call += 1,
             ThreadItem::DynamicToolCall { .. } => self.dynamic_tool_call += 1,
-            ThreadItem::CollabAgentToolCall { .. } => self.subagent_tool_call += 1,
+            ThreadItem::CollabAgentToolCall { .. } | ThreadItem::SubAgentActivity { .. } => {
+                self.subagent_tool_call += 1;
+            }
             ThreadItem::WebSearch { .. } => self.web_search += 1,
             ThreadItem::ImageGeneration { .. } => self.image_generation += 1,
             ThreadItem::UserMessage { .. }
@@ -458,6 +473,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::Compaction(input) => {
                     self.ingest_compaction(*input, out);
+                }
+                CustomAnalyticsFact::Goal(input) => {
+                    self.ingest_goal(*input, out);
                 }
                 CustomAnalyticsFact::GuardianReview(input) => {
                     self.ingest_guardian_review(*input, out);
@@ -1091,6 +1109,18 @@ impl AnalyticsReducer {
                 );
             }
             ServerNotification::ItemCompleted(notification) => {
+                if matches!(notification.item, ThreadItem::SubAgentActivity { .. }) {
+                    let Some(turn_state) = self.turns.get_mut(&notification.turn_id) else {
+                        tracing::warn!(
+                            thread_id = %notification.thread_id,
+                            turn_id = %notification.turn_id,
+                            "dropping sub-agent activity tool count update: missing turn state"
+                        );
+                        return;
+                    };
+                    turn_state.tool_counts.record(&notification.item);
+                    return;
+                }
                 let Some(item_id) = tracked_tool_item_id(&notification.item) else {
                     return;
                 };
@@ -1249,12 +1279,32 @@ impl AnalyticsReducer {
                     thread_metadata.session_id.clone(),
                     connection_state.app_server_client.clone(),
                     connection_state.runtime.clone(),
-                    thread_metadata.thread_source,
+                    thread_metadata.thread_source.clone(),
                     thread_metadata.subagent_source.clone(),
                     thread_metadata.parent_thread_id.clone(),
                 ),
             },
         )));
+    }
+
+    fn ingest_goal(&mut self, input: CodexGoalEvent, out: &mut Vec<TrackEventRequest>) {
+        let Some((connection_state, thread_metadata)) =
+            self.thread_context_or_warn(AnalyticsDropSite::goal(&input))
+        else {
+            return;
+        };
+        out.push(TrackEventRequest::Goal(Box::new(CodexGoalEventRequest {
+            event_type: "codex_goal_event",
+            event_params: codex_goal_event_params(
+                input,
+                thread_metadata.session_id.clone(),
+                connection_state.app_server_client.clone(),
+                connection_state.runtime.clone(),
+                thread_metadata.thread_source.clone(),
+                thread_metadata.subagent_source.clone(),
+                thread_metadata.parent_thread_id.clone(),
+            ),
+        })));
     }
 
     fn ingest_guardian_review_completed(
@@ -1354,7 +1404,7 @@ impl AnalyticsReducer {
                 accepted_turn_id,
                 app_server_client: connection_state.app_server_client.clone(),
                 runtime: connection_state.runtime.clone(),
-                thread_source: thread_metadata.thread_source,
+                thread_source: thread_metadata.thread_source.clone(),
                 subagent_source: thread_metadata.subagent_source.clone(),
                 parent_thread_id: thread_metadata.parent_thread_id.clone(),
                 num_input_images: pending_request.num_input_images,
@@ -1397,7 +1447,7 @@ impl AnalyticsReducer {
                 review_id: pending_review.review_id,
                 app_server_client: connection_state.app_server_client.clone(),
                 runtime: connection_state.runtime.clone(),
-                thread_source: thread_metadata.thread_source,
+                thread_source: thread_metadata.thread_source.clone(),
                 subagent_source: thread_metadata.subagent_source.clone(),
                 parent_thread_id: thread_metadata.parent_thread_id.clone(),
                 subject_kind: pending_review.subject_kind,
@@ -1447,17 +1497,23 @@ impl AnalyticsReducer {
         let Some(thread_id) = turn_state.thread_id.as_ref() else {
             return;
         };
-        let Some(connection_id) = turn_state.connection_id else {
+        let drop_site = AnalyticsDropSite::turn(thread_id, turn_id);
+        let connection_id = turn_state.connection_id.or_else(|| {
+            self.threads
+                .get(drop_site.thread_id)
+                .and_then(|thread| thread.connection_id)
+        });
+        let Some(connection_id) = connection_id else {
+            warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadConnection);
             return;
         };
         let Some(connection_state) = self.connections.get(&connection_id) else {
             warn_missing_analytics_context(
-                &AnalyticsDropSite::turn(thread_id, turn_id),
+                &drop_site,
                 MissingAnalyticsContext::Connection { connection_id },
             );
             return;
         };
-        let drop_site = AnalyticsDropSite::turn(thread_id, turn_id);
         let Some(thread_metadata) = self
             .threads
             .get(drop_site.thread_id)
@@ -1562,6 +1618,7 @@ fn tracked_tool_item_id(item: &ThreadItem) -> Option<&str> {
         | ThreadItem::AgentMessage { .. }
         | ThreadItem::Plan { .. }
         | ThreadItem::Reasoning { .. }
+        | ThreadItem::SubAgentActivity { .. }
         | ThreadItem::ImageView { .. }
         | ThreadItem::EnteredReviewMode { .. }
         | ThreadItem::ExitedReviewMode { .. }
@@ -1964,7 +2021,7 @@ fn tool_item_base(
         item_id,
         app_server_client: context.connection_state.app_server_client.clone(),
         runtime: context.connection_state.runtime.clone(),
-        thread_source: thread_metadata.thread_source,
+        thread_source: thread_metadata.thread_source.clone(),
         subagent_source: thread_metadata.subagent_source.clone(),
         parent_thread_id: thread_metadata.parent_thread_id.clone(),
         tool_name,
@@ -2444,7 +2501,7 @@ fn codex_turn_event_params(
         runtime,
         submission_type,
         ephemeral,
-        thread_source: thread_metadata.thread_source,
+        thread_source: thread_metadata.thread_source.clone(),
         initialization_mode: thread_metadata.initialization_mode,
         subagent_source: thread_metadata.subagent_source.clone(),
         parent_thread_id: thread_metadata.parent_thread_id.clone(),

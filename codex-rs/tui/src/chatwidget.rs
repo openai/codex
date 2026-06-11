@@ -58,10 +58,7 @@ use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
 use crate::diff_model::FileChange;
 use crate::git_action_directives::parse_assistant_markdown;
-use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
 use crate::legacy_core::config::Config;
-use crate::legacy_core::config::Constrained;
-use crate::legacy_core::config::ConstraintResult;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 #[cfg(any(target_os = "windows", test))]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -127,6 +124,8 @@ use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::ConfigLayerStackOrdering;
+use codex_config::Constrained;
+use codex_config::ConstraintResult;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
@@ -255,6 +254,11 @@ fn queued_message_edit_hint_binding(
         .contains(&terminal_binding)
         .then_some(terminal_binding)
         .or_else(|| bindings.first().copied())
+}
+
+fn normalize_thread_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 use crate::app_event::AppEvent;

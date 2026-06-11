@@ -54,7 +54,6 @@ impl ListAvailablePluginsToInstallHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ListAvailablePluginsToInstallHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME)
@@ -68,7 +67,13 @@ impl ToolExecutor<ToolInvocation> for ListAvailablePluginsToInstallHandler {
         false
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ListAvailablePluginsToInstallHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {

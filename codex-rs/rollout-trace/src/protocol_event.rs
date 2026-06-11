@@ -21,6 +21,7 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus;
+use codex_protocol::protocol::SubAgentActivityEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use serde::Serialize;
 
@@ -110,6 +111,7 @@ pub(crate) enum ToolRuntimePayload<'a> {
     CollabWaitingEnd(&'a codex_protocol::protocol::CollabWaitingEndEvent),
     CollabCloseBegin(&'a codex_protocol::protocol::CollabCloseBeginEvent),
     CollabCloseEnd(&'a codex_protocol::protocol::CollabCloseEndEvent),
+    SubAgentActivity(&'a SubAgentActivityEvent),
 }
 
 impl Serialize for ToolRuntimePayload<'_> {
@@ -132,6 +134,7 @@ impl Serialize for ToolRuntimePayload<'_> {
             ToolRuntimePayload::CollabWaitingEnd(event) => event.serialize(serializer),
             ToolRuntimePayload::CollabCloseBegin(event) => event.serialize(serializer),
             ToolRuntimePayload::CollabCloseEnd(event) => event.serialize(serializer),
+            ToolRuntimePayload::SubAgentActivity(event) => event.serialize(serializer),
         }
     }
 }
@@ -214,6 +217,11 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
             tool_call_id: &event.call_id,
             status: ExecutionStatus::Completed,
             payload: ToolRuntimePayload::CollabCloseEnd(event),
+        }),
+        EventMsg::SubAgentActivity(event) => Some(ToolRuntimeTraceEvent::Ended {
+            tool_call_id: &event.event_id,
+            status: ExecutionStatus::Completed,
+            payload: ToolRuntimePayload::SubAgentActivity(event),
         }),
         EventMsg::Error(_)
         | EventMsg::Warning(_)
@@ -357,7 +365,8 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
-        | EventMsg::CollabResumeEnd(_) => None,
+        | EventMsg::CollabResumeEnd(_)
+        | EventMsg::SubAgentActivity(_) => None,
     }
 }
 
@@ -393,3 +402,7 @@ fn execution_status_for_abort_reason(reason: &TurnAbortReason) -> ExecutionStatu
         | TurnAbortReason::BudgetLimited => ExecutionStatus::Cancelled,
     }
 }
+
+#[cfg(test)]
+#[path = "protocol_event_tests.rs"]
+mod tests;

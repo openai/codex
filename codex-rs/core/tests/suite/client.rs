@@ -90,6 +90,7 @@ use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
 const INSTALLATION_ID_FILENAME: &str = "installation_id";
+const TEST_WINDOW_ID: &str = "test-thread:0";
 
 #[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
@@ -924,6 +925,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
 
     let mut stream = client_session
         .stream(
+            TEST_WINDOW_ID,
             &prompt,
             &model_info,
             &session_telemetry,
@@ -2467,6 +2469,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     let mut stream = client_session
         .stream(
+            TEST_WINDOW_ID,
             &prompt,
             &model_info,
             &session_telemetry,

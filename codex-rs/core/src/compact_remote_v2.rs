@@ -240,7 +240,7 @@ async fn run_remote_compact_task_inner_impl(
         output_schema_strict: true,
     };
 
-    let window_id = sess.services.model_client.current_window_id();
+    let window_id = sess.current_window_id().await;
     let turn_metadata_header = turn_context
         .turn_metadata_state
         .current_header_value_for_compaction(&window_id, compaction_metadata);
@@ -264,6 +264,7 @@ async fn run_remote_compact_task_inner_impl(
         turn_context,
         client_session,
         &prompt,
+        &window_id,
         turn_metadata_header.as_deref(),
     )
     .await;
@@ -284,6 +285,7 @@ async fn run_remote_compact_task_inner_impl(
     let (compacted_history, retained_images) =
         build_v2_compacted_history(&prompt_input, compaction_output);
     analytics_details.retained_image_count = Some(retained_images);
+    let new_window_id = sess.advance_auto_compact_window_id().await;
     let new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -299,6 +301,7 @@ async fn run_remote_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
+        window_id: Some(new_window_id),
     };
     compaction_trace.record_installed(&CompactionCheckpointTracePayload {
         input_history: &trace_input_history,
@@ -323,6 +326,7 @@ async fn run_remote_compaction_request_v2(
     turn_context: &TurnContext,
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
+    window_id: &str,
     turn_metadata_header: Option<&str>,
 ) -> CodexResult<RemoteCompactionV2Output> {
     let max_retries = turn_context
@@ -334,6 +338,7 @@ async fn run_remote_compaction_request_v2(
     loop {
         let result = match client_session
             .stream(
+                window_id,
                 prompt,
                 &turn_context.model_info,
                 &turn_context.session_telemetry,

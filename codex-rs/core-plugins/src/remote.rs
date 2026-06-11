@@ -851,14 +851,12 @@ pub(crate) async fn fetch_remote_installed_plugins(
 
 pub fn group_remote_installed_plugins_by_marketplaces(
     plugins: &[RemoteInstalledPlugin],
-    visible_scopes: &[RemotePluginScope],
+    visible_marketplaces: &[&str],
 ) -> Vec<RemoteMarketplace> {
     let mut plugins_by_marketplace = BTreeMap::<String, Vec<RemotePluginSummary>>::new();
 
     for plugin in plugins {
-        if !RemotePluginScope::from_marketplace_name(&plugin.marketplace_name)
-            .is_some_and(|scope| visible_scopes.contains(&scope))
-        {
+        if !visible_marketplaces.contains(&plugin.marketplace_name.as_str()) {
             continue;
         }
         let Ok(plugin_id) = PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone())
@@ -1126,7 +1124,7 @@ pub async fn uninstall_remote_plugin(
     let plugin_name = plugin.name;
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
-    let url = format!("{base_url}/plugins/{plugin_id}/uninstall");
+    let url = format!("{base_url}/ps/plugins/{plugin_id}/uninstall");
     let client = build_reqwest_client();
     let request = authenticated_request(client.post(&url), auth)?;
     let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;

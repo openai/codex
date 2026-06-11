@@ -22,6 +22,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::history_cell::new_session_info;
 use crate::multi_agents::AgentPickerThreadEntry;
+use crate::multi_agents::SubAgentActivityDisplay;
 use assert_matches::assert_matches;
 
 use crate::app_command::AppCommand as Op;
@@ -74,6 +75,8 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::UserInput as AppServerUserInput;
 use codex_app_server_protocol::WarningNotification;
+use codex_models_manager::test_support::construct_model_info_offline_for_tests;
+use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -306,7 +309,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     let thread_id = ThreadId::new();
     let initial_prompt = "follow-up after replay".to_string();
     let config = app.config.clone();
-    let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let model = get_model_offline_for_tests(config.model.as_deref());
     app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
         config,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -1164,6 +1167,8 @@ async fn collab_receiver_notification_caches_thread_without_app_server_read() {
         Some(&AgentPickerThreadEntry {
             agent_nickname: None,
             agent_role: None,
+            agent_path: None,
+            is_running: false,
             is_closed: false,
         })
     );
@@ -1223,6 +1228,8 @@ async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
         Some(&AgentPickerThreadEntry {
             agent_nickname: None,
             agent_role: None,
+            agent_path: None,
+            is_running: false,
             is_closed: true,
         })
     );
@@ -1256,6 +1263,88 @@ async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Res
         Some(&AgentPickerThreadEntry {
             agent_nickname: Some("Robie".to_string()),
             agent_role: Some("explorer".to_string()),
+            agent_path: None,
+            is_running: false,
+            is_closed: true,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn open_agent_picker_clears_completed_path_backed_agent_running_state() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let thread_id = ThreadId::new();
+    let channel = ThreadEventChannel::new(/*capacity*/ 4);
+    {
+        let mut store = channel.store.lock().await;
+        store.push_notification(turn_started_notification(thread_id, "turn-1"));
+        store.push_notification(turn_completed_notification(
+            thread_id,
+            "turn-1",
+            TurnStatus::Completed,
+        ));
+    }
+    app.thread_event_channels.insert(thread_id, channel);
+    app.agent_navigation
+        .record_sub_agent_activity(SubAgentActivityDisplay {
+            thread_id,
+            agent_path: "/root/child".to_string(),
+            is_running_hint: true,
+        });
+
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
+
+    assert_eq!(
+        app.agent_navigation.get(&thread_id),
+        Some(&AgentPickerThreadEntry {
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: Some("/root/child".to_string()),
+            is_running: false,
+            is_closed: false,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn open_agent_picker_refreshes_replay_only_path_backed_liveness() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let thread_id = ThreadId::new();
+    let mut channel = ThreadEventChannel::new(/*capacity*/ 4);
+    channel.mark_replay_only();
+    {
+        let mut store = channel.store.lock().await;
+        store.push_notification(turn_started_notification(thread_id, "turn-1"));
+    }
+    app.thread_event_channels.insert(thread_id, channel);
+    app.agent_navigation
+        .record_sub_agent_activity(SubAgentActivityDisplay {
+            thread_id,
+            agent_path: "/root/child".to_string(),
+            is_running_hint: true,
+        });
+
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
+
+    assert_eq!(
+        app.agent_navigation.get(&thread_id),
+        Some(&AgentPickerThreadEntry {
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: Some("/root/child".to_string()),
+            is_running: false,
             is_closed: true,
         })
     );
@@ -1310,6 +1399,8 @@ async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
         Some(&AgentPickerThreadEntry {
             agent_nickname: Some("Robie".to_string()),
             agent_role: Some("explorer".to_string()),
+            agent_path: None,
+            is_running: false,
             is_closed: true,
         })
     );
@@ -1348,6 +1439,8 @@ fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
             Some(&AgentPickerThreadEntry {
                 agent_nickname: None,
                 agent_role: None,
+                agent_path: None,
+                is_running: false,
                 is_closed: false,
             })
         );
@@ -2819,6 +2912,8 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         Some(&AgentPickerThreadEntry {
             agent_nickname: Some("Robie".to_string()),
             agent_role: Some("explorer".to_string()),
+            agent_path: None,
+            is_running: false,
             is_closed: false,
         })
     );
@@ -3931,7 +4026,7 @@ async fn make_test_app() -> App {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
-    let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     App {
@@ -3995,7 +4090,7 @@ async fn make_test_app_with_channels() -> (
     let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
-    let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     (
@@ -4514,7 +4609,8 @@ fn lines_to_single_string(lines: &[Line<'_>]) -> String {
 }
 
 fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info = crate::legacy_core::test_support::construct_model_info_offline(model, config);
+    let model_info =
+        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
     SessionTelemetry::new(
         ThreadId::new(),
         model,
@@ -4613,6 +4709,23 @@ fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
         Some(ActiveTurnSteerRace::ExpectedTurnMismatch {
             actual_turn_id: "turn-actual".to_string(),
         })
+    );
+}
+
+#[test]
+fn active_turn_interrupt_race_extracts_actual_turn_id_from_mismatch() {
+    let error = TypedRequestError::Server {
+        method: "turn/interrupt".to_string(),
+        source: JSONRPCErrorError {
+            code: -32602,
+            message: "expected active turn id turn-expected but found turn-actual".to_string(),
+            data: None,
+        },
+    };
+
+    assert_eq!(
+        active_turn_interrupt_race(&error),
+        Some("turn-actual".to_string())
     );
 }
 
