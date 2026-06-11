@@ -70,11 +70,10 @@ Formatting of citations:
 - Do not put citations on a line by themselves or collect all citations at the
   end of the response.
 
-If you browse the internet, cite statements supported by web sources. Ensure
-that every factual statement that may have changed since your knowledge cutoff
-has a citation. Each cited source must directly support the associated claim.
-Prefer primary and authoritative sources, and use sources from different domains
-when the response benefits from multiple perspectives.
+If you browse the internet, cite statements supported by web sources. Each cited
+source must directly support the associated claim. Prefer primary and
+authoritative sources, and use sources from different domains when the response
+benefits from multiple perspectives.
 
 ---
 
