@@ -201,6 +201,8 @@ mod inject;
 mod input_queue;
 mod mcp;
 mod multi_agents;
+pub(crate) use multi_agents::rendered_root_usage_hint_text;
+pub(crate) use multi_agents::rendered_subagent_usage_hint_text;
 mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]

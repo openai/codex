@@ -1049,6 +1049,96 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
 }
 
 #[tokio::test]
+async fn spawn_agent_full_history_fork_replaces_rendered_default_usage_hint() {
+    let harness = AgentControlHarness::new().await;
+    let mut parent_config = harness.config.clone();
+    let _ = parent_config.features.enable(Feature::MultiAgentV2);
+    parent_config
+        .multi_agent_v2
+        .max_concurrent_threads_per_session = 17;
+    let child_config = parent_config.clone();
+    let parent_root_usage_hint =
+        crate::session::rendered_root_usage_hint_text(&parent_config.multi_agent_v2)
+            .expect("default root usage hint should render");
+    let child_subagent_usage_hint =
+        crate::session::rendered_subagent_usage_hint_text(&child_config.multi_agent_v2)
+            .expect("default subagent usage hint should render");
+    let new_thread = harness
+        .manager
+        .start_thread(parent_config)
+        .await
+        .expect("start parent thread");
+    let parent_thread_id = new_thread.thread_id;
+    let parent_thread = new_thread.thread;
+    let turn_context = parent_thread.codex.session.new_default_turn().await;
+    let parent_usage_hint_message =
+        crate::context_manager::updates::build_developer_update_item(vec![parent_root_usage_hint])
+            .expect("parent usage hint should build a developer message");
+    parent_thread
+        .codex
+        .session
+        .record_conversation_items(turn_context.as_ref(), &[parent_usage_hint_message])
+        .await;
+    parent_thread
+        .codex
+        .session
+        .persist_rollout_items(&[RolloutItem::TurnContext(
+            turn_context.to_turn_context_item(),
+        )])
+        .await;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            child_config,
+            text_input("child task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some("spawn-call-default-usage-hint".to_string()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("forked spawn should succeed")
+        .thread_id;
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let history = child_thread.codex.session.clone_history().await;
+    let expected_history = [
+        crate::context_manager::updates::build_developer_update_item(vec![
+            child_subagent_usage_hint,
+        ])
+        .expect("child usage hint should build a developer message"),
+    ];
+    assert_eq!(
+        history.raw_items(),
+        &expected_history,
+        "full-history fork should replace the rendered root hint with the rendered subagent hint"
+    );
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
 async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();

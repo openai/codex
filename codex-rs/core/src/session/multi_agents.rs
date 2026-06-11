@@ -1,5 +1,6 @@
 use crate::config::DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT;
 use crate::config::DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT;
+use crate::config::MultiAgentV2Config;
 use crate::session::turn_context::TurnContext;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
@@ -18,23 +19,43 @@ pub(super) fn usage_hint_text(
         return None;
     }
 
-    let usage_hint_text = match session_source {
+    match session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) => {
-            multi_agent_v2.subagent_usage_hint_text.as_deref()
+            rendered_subagent_usage_hint_text(multi_agent_v2)
         }
         SessionSource::Cli
         | SessionSource::VSCode
         | SessionSource::Exec
         | SessionSource::Mcp
         | SessionSource::Custom(_)
-        | SessionSource::Unknown => multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+        | SessionSource::Unknown => rendered_root_usage_hint_text(multi_agent_v2),
         SessionSource::Internal(_) | SessionSource::SubAgent(_) => None,
-    }?;
+    }
+}
 
-    Some(format_usage_hint_text(
-        usage_hint_text,
+pub(crate) fn rendered_root_usage_hint_text(multi_agent_v2: &MultiAgentV2Config) -> Option<String> {
+    render_usage_hint_text(
+        multi_agent_v2.root_agent_usage_hint_text.as_deref(),
         multi_agent_v2.max_concurrent_threads_per_session,
-    ))
+    )
+}
+
+pub(crate) fn rendered_subagent_usage_hint_text(
+    multi_agent_v2: &MultiAgentV2Config,
+) -> Option<String> {
+    render_usage_hint_text(
+        multi_agent_v2.subagent_usage_hint_text.as_deref(),
+        multi_agent_v2.max_concurrent_threads_per_session,
+    )
+}
+
+fn render_usage_hint_text(
+    usage_hint_text: Option<&str>,
+    max_concurrent_threads_per_session: usize,
+) -> Option<String> {
+    usage_hint_text.map(|usage_hint_text| {
+        format_usage_hint_text(usage_hint_text, max_concurrent_threads_per_session)
+    })
 }
 
 fn format_usage_hint_text(
