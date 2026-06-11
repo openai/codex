@@ -52,8 +52,10 @@ pub(crate) async fn load_project_instructions(
     environments: &ResolvedTurnEnvironments,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
-    for (index, turn_environment) in environments.turn_environments.iter().enumerate() {
-        let is_primary = index == 0;
+    let primary_environment = environments.primary();
+    for turn_environment in &environments.turn_environments {
+        let is_primary =
+            primary_environment.is_some_and(|primary| std::ptr::eq(primary, turn_environment));
         let project_environment = ProjectEnvironment {
             turn_environment,
             source: ProjectEnvironmentSource {
@@ -85,7 +87,7 @@ pub(crate) async fn load_project_instructions(
         });
     }
 
-    loaded.finalize(&config.cwd)
+    (!loaded.is_empty()).then_some(loaded)
 }
 
 /// Attempt to locate and load AGENTS.md documentation.
@@ -289,9 +291,6 @@ pub struct LoadedAgentsMd {
 
     /// Ordered instructions and their provenance.
     entries: Vec<InstructionEntry>,
-
-    /// Complete contextual user fragment frozen after all sources are loaded.
-    model_visible_fragment: Option<String>,
 }
 
 impl LoadedAgentsMd {
@@ -306,7 +305,6 @@ impl LoadedAgentsMd {
                 source: path,
             }),
             entries: Vec::new(),
-            model_visible_fragment: None,
         }
     }
 
@@ -315,7 +313,6 @@ impl LoadedAgentsMd {
             user_instructions: user_instructions
                 .filter(|instructions| !instructions.text.trim().is_empty()),
             entries: Vec::new(),
-            model_visible_fragment: None,
         }
     }
 
@@ -334,7 +331,6 @@ impl LoadedAgentsMd {
                 contents,
                 provenance: InstructionProvenance::Internal,
             }],
-            model_visible_fragment: None,
         }
     }
 
@@ -420,27 +416,17 @@ impl LoadedAgentsMd {
         output
     }
 
-    fn finalize(mut self, directory: &AbsolutePathBuf) -> Option<Self> {
-        if self.is_empty() {
-            return None;
-        }
+    /// Returns the complete model-visible contextual user fragment.
+    pub(crate) fn render(&self, directory: &AbsolutePathBuf) -> String {
         // The legacy wrapper attributes the complete fragment to the primary cwd. Once a
         // non-primary environment contributes, the body labels every environment itself, so the
         // outer cwd must be omitted to avoid falsely attributing secondary instructions to it.
-        self.model_visible_fragment = Some(
-            ContextUserInstructions {
-                directory: (!self.uses_environment_labels())
-                    .then(|| directory.to_string_lossy().into_owned()),
-                text: self.text(),
-            }
-            .render(),
-        );
-        Some(self)
-    }
-
-    /// Returns the complete creation-time contextual user fragment.
-    pub(crate) fn model_visible_fragment(&self) -> Option<&str> {
-        self.model_visible_fragment.as_deref()
+        ContextUserInstructions {
+            directory: (!self.uses_environment_labels())
+                .then(|| directory.to_string_lossy().into_owned()),
+            text: self.text(),
+        }
+        .render()
     }
 
     /// Returns the host-provided user instructions.

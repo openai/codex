@@ -1,6 +1,5 @@
 use super::*;
 use crate::SkillLoadOutcome;
-use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_core_skills::HostLoadedSkills;
@@ -550,11 +549,13 @@ impl Session {
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
-            user_instructions: session_configuration
-                .loaded_agents_md
-                .as_ref()
-                .and_then(LoadedAgentsMd::model_visible_fragment)
-                .map(str::to_owned),
+            user_instructions: session_configuration.loaded_agents_md.as_ref().map(
+                |loaded_agents_md| {
+                    // Render against the immutable creation cwd so later environment or cwd
+                    // changes cannot relabel the creation-time instruction snapshot.
+                    loaded_agents_md.render(&session_configuration.original_config_do_not_use.cwd)
+                },
+            ),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             multi_agent_version,
             personality: session_configuration.personality,
