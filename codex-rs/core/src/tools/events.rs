@@ -588,7 +588,7 @@ async fn emit_patch_end(
     if let Some(tracker) = ctx.turn_diff_tracker {
         let (should_emit_turn_diff, unified_diff) = {
             let mut guard = tracker.lock().await;
-            let previous_diff = guard.get_unified_diff();
+            let had_unified_diff = guard.has_unified_diff();
             let tracker_changed = match tracker_update {
                 TurnDiffTrackerUpdate::Track {
                     environment_id,
@@ -605,7 +605,7 @@ async fn emit_patch_end(
             };
             let unified_diff = guard.get_unified_diff();
             (
-                tracker_changed && (previous_diff.is_some() || unified_diff.is_some()),
+                tracker_changed && (had_unified_diff || unified_diff.is_some()),
                 unified_diff.unwrap_or_default(),
             )
         };
@@ -717,5 +717,99 @@ mod tests {
             PatchApplyStatus::Declined,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn net_zero_patch_emits_empty_turn_diff() {
+        let (session, turn, rx_event) =
+            make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
+        let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
+        let dir = tempdir().expect("tempdir");
+        let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).expect("absolute cwd");
+
+        for patch in [
+            "*** Begin Patch\n*** Add File: a.txt\n+one\n*** End Patch",
+            "*** Begin Patch\n*** Delete File: a.txt\n*** End Patch",
+        ] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let delta = codex_apply_patch::apply_patch(
+                patch,
+                &cwd,
+                &mut stdout,
+                &mut stderr,
+                LOCAL_FS.as_ref(),
+                /*sandbox*/ None,
+            )
+            .await
+            .expect("apply patch");
+
+            emit_patch_end(
+                ToolEventCtx::new(session.as_ref(), turn.as_ref(), "call-id", Some(&tracker)),
+                HashMap::new(),
+                String::new(),
+                String::new(),
+                PatchApplyStatus::Completed,
+                TurnDiffTrackerUpdate::Track {
+                    environment_id: None,
+                    delta: &delta,
+                },
+            )
+            .await;
+
+            rx_event.recv().await.expect("item completed event");
+            let unified_diff = loop {
+                let event = rx_event.recv().await.expect("turn diff event");
+                if let EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) = event.msg {
+                    break unified_diff;
+                }
+            };
+            if patch.contains("Delete File") {
+                assert_eq!(unified_diff, "");
+            } else {
+                assert!(unified_diff.contains("+one"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn invalidation_emits_empty_turn_diff() {
+        let (session, turn, rx_event) =
+            make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
+        let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
+        let dir = tempdir().expect("tempdir");
+        let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).expect("absolute cwd");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let delta = codex_apply_patch::apply_patch(
+            "*** Begin Patch\n*** Add File: a.txt\n+one\n*** End Patch",
+            &cwd,
+            &mut stdout,
+            &mut stderr,
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await
+        .expect("apply patch");
+        tracker.lock().await.track_delta("", &delta);
+
+        emit_patch_end(
+            ToolEventCtx::new(session.as_ref(), turn.as_ref(), "call-id", Some(&tracker)),
+            HashMap::new(),
+            String::new(),
+            String::new(),
+            PatchApplyStatus::Completed,
+            TurnDiffTrackerUpdate::Invalidate,
+        )
+        .await;
+
+        rx_event.recv().await.expect("item completed event");
+        loop {
+            let event = rx_event.recv().await.expect("turn diff event");
+            if let EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) = event.msg {
+                assert_eq!(unified_diff, "");
+                break;
+            }
+        }
     }
 }
