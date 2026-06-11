@@ -4,12 +4,14 @@ use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CodexErrKind;
+use crate::facts::CodexGoalEvent;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
 use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
+use crate::facts::GoalEventKind;
 use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
@@ -63,6 +65,7 @@ pub(crate) enum TrackEventRequest {
     AppUsed(CodexAppUsedEventRequest),
     HookRun(CodexHookRunEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
+    Goal(Box<CodexGoalEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
     CommandExecution(CodexCommandExecutionEventRequest),
@@ -263,6 +266,7 @@ pub struct GuardianReviewEventParams {
     pub decision: GuardianReviewDecision,
     pub terminal_status: GuardianReviewTerminalStatus,
     pub failure_reason: Option<GuardianReviewFailureReason>,
+    pub attempt_count: i64,
     pub risk_level: Option<GuardianRiskLevel>,
     pub user_authorization: Option<GuardianUserAuthorization>,
     pub outcome: Option<GuardianAssessmentOutcome>,
@@ -335,6 +339,7 @@ impl GuardianReviewTrackContext {
             decision: result.decision,
             terminal_status: result.terminal_status,
             failure_reason: result.failure_reason,
+            attempt_count: result.attempt_count,
             risk_level: result.risk_level,
             user_authorization: result.user_authorization,
             outcome: result.outcome,
@@ -370,6 +375,7 @@ pub struct GuardianReviewAnalyticsResult {
     pub decision: GuardianReviewDecision,
     pub terminal_status: GuardianReviewTerminalStatus,
     pub failure_reason: Option<GuardianReviewFailureReason>,
+    pub attempt_count: i64,
     pub risk_level: Option<GuardianRiskLevel>,
     pub user_authorization: Option<GuardianUserAuthorization>,
     pub outcome: Option<GuardianAssessmentOutcome>,
@@ -389,6 +395,7 @@ impl GuardianReviewAnalyticsResult {
             decision: GuardianReviewDecision::Denied,
             terminal_status: GuardianReviewTerminalStatus::FailedClosed,
             failure_reason: None,
+            attempt_count: 1,
             risk_level: None,
             user_authorization: None,
             outcome: None,
@@ -626,6 +633,7 @@ pub(crate) struct CodexMcpToolCallEventParams {
     pub(crate) mcp_server_name: String,
     pub(crate) mcp_tool_name: String,
     pub(crate) mcp_error_present: bool,
+    pub(crate) plugin_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -755,11 +763,13 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) phase: CompactionPhase,
     pub(crate) strategy: CompactionStrategy,
     pub(crate) status: CompactionStatus,
-    pub(crate) error: Option<String>,
+    pub(crate) codex_error_kind: Option<CodexErrKind>,
+    pub(crate) codex_error_http_status_code: Option<u16>,
     pub(crate) active_context_tokens_before: i64,
     pub(crate) active_context_tokens_after: i64,
     pub(crate) retained_image_count: Option<usize>,
     pub(crate) compaction_summary_tokens: Option<i64>,
+    pub(crate) cached_input_tokens: Option<i64>,
     pub(crate) started_at: u64,
     pub(crate) completed_at: u64,
     pub(crate) duration_ms: Option<u64>,
@@ -769,6 +779,30 @@ pub(crate) struct CodexCompactionEventParams {
 pub(crate) struct CodexCompactionEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexCompactionEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexGoalEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) session_id: String,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) goal_id: String,
+    pub(crate) event_kind: GoalEventKind,
+    pub(crate) goal_status: codex_state::ThreadGoalStatus,
+    pub(crate) has_token_budget: bool,
+    pub(crate) cumulative_tokens_accounted: Option<i64>,
+    pub(crate) cumulative_time_accounted_seconds: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexGoalEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexGoalEventParams,
 }
 
 #[derive(Serialize)]
@@ -803,7 +837,6 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) status: Option<TurnStatus>,
     pub(crate) turn_error: Option<CodexErrorInfo>,
     pub(crate) codex_error_kind: Option<CodexErrKind>,
-    pub(crate) codex_error_subreason: Option<String>,
     pub(crate) codex_error_http_status_code: Option<u16>,
     pub(crate) steer_count: Option<usize>,
     pub(crate) total_tool_call_count: Option<usize>,
@@ -969,14 +1002,43 @@ pub(crate) fn codex_compaction_event_params(
         phase: input.phase,
         strategy: input.strategy,
         status: input.status,
-        error: input.error,
+        codex_error_kind: input.codex_error_kind,
+        codex_error_http_status_code: input.codex_error_http_status_code,
         active_context_tokens_before: input.active_context_tokens_before,
         active_context_tokens_after: input.active_context_tokens_after,
         retained_image_count: input.retained_image_count,
         compaction_summary_tokens: input.compaction_summary_tokens,
+        cached_input_tokens: input.cached_input_tokens,
         started_at: input.started_at,
         completed_at: input.completed_at,
         duration_ms: input.duration_ms,
+    }
+}
+
+pub(crate) fn codex_goal_event_params(
+    input: CodexGoalEvent,
+    session_id: String,
+    app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
+    thread_source: Option<ThreadSource>,
+    subagent_source: Option<String>,
+    parent_thread_id: Option<String>,
+) -> CodexGoalEventParams {
+    CodexGoalEventParams {
+        thread_id: input.thread_id,
+        session_id,
+        turn_id: input.turn_id,
+        app_server_client,
+        runtime,
+        thread_source,
+        subagent_source,
+        parent_thread_id,
+        goal_id: input.goal_id,
+        event_kind: input.event_kind,
+        goal_status: input.goal_status,
+        has_token_budget: input.has_token_budget,
+        cumulative_tokens_accounted: input.cumulative_tokens_accounted,
+        cumulative_time_accounted_seconds: input.cumulative_time_accounted_seconds,
     }
 }
 

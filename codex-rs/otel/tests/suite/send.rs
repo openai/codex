@@ -13,8 +13,9 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     let (metrics, exporter) =
         build_metrics_with_defaults(&[("service", "codex-cli"), ("env", "prod")])?;
 
-    metrics.counter(
+    metrics.counter_with_description(
         "codex.turns",
+        "Total number of Codex turns.",
         /*inc*/ 1,
         &[("model", "gpt-5.1"), ("env", "dev")],
     )?;
@@ -23,11 +24,18 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
         /*value*/ 25,
         &[("tool", "shell")],
     )?;
+    metrics.gauge_with_description(
+        "codex.active",
+        "Number of active Codex operations.",
+        /*value*/ 2,
+        &[("component", "test")],
+    )?;
     metrics.shutdown()?;
 
     let resource_metrics = latest_metrics(&exporter);
 
     let counter = find_metric(&resource_metrics, "codex.turns").expect("counter metric missing");
+    assert_eq!(counter.description(), "Total number of Codex turns.");
     let counter_attributes = match counter.data() {
         opentelemetry_sdk::metrics::data::AggregatedMetrics::U64(data) => match data {
             opentelemetry_sdk::metrics::data::MetricData::Sum(sum) => {
@@ -77,6 +85,27 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
         ("tool".to_string(), "shell".to_string()),
     ]);
     assert_eq!(histogram_attrs, expected_histogram_attributes);
+
+    let gauge = find_metric(&resource_metrics, "codex.active").expect("gauge metric missing");
+    assert_eq!(gauge.description(), "Number of active Codex operations.");
+    let gauge_point = match gauge.data() {
+        opentelemetry_sdk::metrics::data::AggregatedMetrics::I64(data) => match data {
+            opentelemetry_sdk::metrics::data::MetricData::Gauge(gauge) => {
+                gauge.data_points().next().expect("gauge point")
+            }
+            _ => panic!("unexpected gauge aggregation"),
+        },
+        _ => panic!("unexpected gauge metric data type"),
+    };
+    assert_eq!(gauge_point.value(), 2);
+    assert_eq!(
+        attributes_to_map(gauge_point.attributes()),
+        BTreeMap::from([
+            ("component".to_string(), "test".to_string()),
+            ("env".to_string(), "prod".to_string()),
+            ("service".to_string(), "codex-cli".to_string()),
+        ])
+    );
 
     Ok(())
 }

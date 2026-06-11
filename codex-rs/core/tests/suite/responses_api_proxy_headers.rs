@@ -20,6 +20,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use pretty_assertions::assert_eq;
@@ -150,12 +151,11 @@ async fn submit_turn_with_timeout(test: &TestCodex, prompt: &str) -> Result<()> 
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd),
+                environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

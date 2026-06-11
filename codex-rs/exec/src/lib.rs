@@ -1146,7 +1146,7 @@ fn session_configured_from_thread_start_response(
         &response.thread.session_id,
         &response.thread.id,
         response.thread.parent_thread_id.as_deref(),
-        response.thread.thread_source.map(Into::into),
+        response.thread.thread_source.clone().map(Into::into),
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -1169,7 +1169,7 @@ fn session_configured_from_thread_resume_response(
         &response.thread.session_id,
         &response.thread.id,
         response.thread.parent_thread_id.as_deref(),
-        response.thread.thread_source.map(Into::into),
+        response.thread.thread_source.clone().map(Into::into),
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -1256,6 +1256,11 @@ fn should_process_notification(
 ) -> bool {
     match notification {
         ServerNotification::ConfigWarning(_) | ServerNotification::DeprecationNotice(_) => true,
+        // TODO(anp) resolve duplicate startup warnings
+        ServerNotification::Warning(notification) => notification
+            .thread_id
+            .as_deref()
+            .is_none_or(|candidate| candidate == thread_id),
         ServerNotification::Error(notification) => {
             notification.thread_id == thread_id && notification.turn_id == turn_id
         }

@@ -109,6 +109,21 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PluginLocation {
+    Local { marketplace_path: AbsolutePathBuf },
+    Remote { marketplace_name: String },
+}
+
+impl PluginLocation {
+    pub(crate) fn into_request_params(self) -> (Option<AbsolutePathBuf>, Option<String>) {
+        match self {
+            PluginLocation::Local { marketplace_path } => (Some(marketplace_path), None),
+            PluginLocation::Remote { marketplace_name } => (None, Some(marketplace_name)),
+        }
+    }
+}
+
 /// Distinguishes why a rate-limit refresh was requested so the completion
 /// handler can route the result correctly.
 ///
@@ -206,11 +221,17 @@ pub(crate) enum AppEvent {
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
+    /// Open the external agent migration picker inside the running TUI session.
+    OpenExternalAgentConfigMigration,
+
     /// Resume a thread by UUID or thread name inside the running TUI session.
     ResumeSessionByIdOrName(String),
 
     /// Archive the current active main thread and exit after it succeeds.
     ArchiveCurrentThread,
+
+    /// Permanently delete the current active main thread and exit after it succeeds.
+    DeleteCurrentThread,
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
@@ -493,7 +514,7 @@ pub(crate) enum AppEvent {
     /// Install a specific plugin from a marketplace.
     FetchPluginInstall {
         cwd: PathBuf,
-        marketplace_path: AbsolutePathBuf,
+        location: PluginLocation,
         plugin_name: String,
         plugin_display_name: String,
     },
@@ -501,7 +522,7 @@ pub(crate) enum AppEvent {
     /// Result of installing a plugin.
     PluginInstallLoaded {
         cwd: PathBuf,
-        marketplace_path: AbsolutePathBuf,
+        location: PluginLocation,
         plugin_name: String,
         plugin_display_name: String,
         result: Result<PluginInstallResponse, String>,

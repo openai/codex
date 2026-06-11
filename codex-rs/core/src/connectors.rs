@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -18,6 +17,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::config::Config;
@@ -41,8 +41,9 @@ use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_mcp::compute_auth_statuses;
+use codex_mcp::effective_mcp_servers;
 use codex_mcp::host_owned_codex_apps_enabled;
-use codex_mcp::with_codex_apps_mcp;
+use codex_mcp::tool_plugin_provenance;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 
@@ -221,6 +222,23 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     force_refetch: bool,
     environment_manager: Arc<EnvironmentManager>,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
+    let mcp_manager = Arc::new(McpManager::new(plugins_manager));
+    list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+        config,
+        force_refetch,
+        environment_manager,
+        mcp_manager,
+    )
+    .await
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+    config: &Config,
+    force_refetch: bool,
+    environment_manager: Arc<EnvironmentManager>,
+    mcp_manager: Arc<McpManager>,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
@@ -234,9 +252,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         });
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
-    let mcp_manager = McpManager::new(Arc::clone(&plugins_manager));
-    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config).await;
+    let mcp_config = mcp_manager.runtime_config(config).await;
+    let tool_plugin_provenance = tool_plugin_provenance(&mcp_config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
         let cached_connectors = codex_connectors::filter::filter_disallowed_connectors(
@@ -250,8 +267,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         });
     }
 
-    let mcp_config = config.to_mcp_config(plugins_manager.as_ref()).await;
-    let mcp_servers = with_codex_apps_mcp(HashMap::new(), auth.as_ref(), &mcp_config);
+    let mut mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
+    mcp_servers.retain(|name, _| name == CODEX_APPS_MCP_SERVER_NAME);
     let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
@@ -270,13 +287,15 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+    let cancel_token = CancellationToken::new();
+    let mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries,
         &config.permissions.approval_policy,
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
+        cancel_token.clone(),
         PermissionProfile::default(),
         // Connector discovery is threadless. Use an actually configured env if
         // one exists, but do not reintroduce the old hidden-local fallback.

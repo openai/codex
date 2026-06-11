@@ -41,6 +41,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
                 .into_iter()
                 .map(|plugin| DiscoverablePluginInfo {
                     id: plugin.id,
+                    remote_plugin_id: plugin.remote_plugin_id,
                     name: plugin.name,
                     description: plugin.description,
                     has_skills: plugin.has_skills,

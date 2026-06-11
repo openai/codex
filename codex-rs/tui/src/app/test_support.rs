@@ -6,12 +6,14 @@
 
 use super::*;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+use codex_models_manager::test_support::construct_model_info_offline_for_tests;
+use codex_models_manager::test_support::get_model_offline_for_tests;
 
 pub(super) async fn make_test_app() -> App {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
-    let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     App {
@@ -25,6 +27,7 @@ pub(super) async fn make_test_app() -> App {
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
         loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
+        cloud_config_bundle: CloudConfigBundleLoader::default(),
         runtime_approval_policy_override: None,
         runtime_permission_profile_override: None,
         file_search,
@@ -67,7 +70,8 @@ pub(super) async fn make_test_app() -> App {
 }
 
 fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info = crate::legacy_core::test_support::construct_model_info_offline(model, config);
+    let model_info =
+        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
     SessionTelemetry::new(
         ThreadId::new(),
         model,

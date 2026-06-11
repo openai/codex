@@ -32,6 +32,7 @@ use core_test_support::responses::sse_completed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -45,12 +46,11 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
         turn_permission_fields(PermissionProfile::read_only(), test.cwd_path());
     Op::UserInput {
         items,
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(test.config.cwd.clone()),
+            environments: Some(local_selections(test.config.cwd.clone())),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -136,6 +136,7 @@ fn test_model_info(
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
@@ -957,6 +958,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         context_window: Some(large_context_window),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent,
         experimental_supported_tools: Vec::new(),
     };

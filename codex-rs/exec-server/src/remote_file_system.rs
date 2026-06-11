@@ -1,8 +1,7 @@
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use codex_utils_absolute_path::AbsolutePathBuf;
-use std::path::Path;
+use codex_utils_path_uri::PathUri;
 use tokio::io;
 use tracing::trace;
 
@@ -20,8 +19,6 @@ use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
-use crate::protocol::FsJoinParams;
-use crate::protocol::FsParentParams;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsRemoveParams;
@@ -45,9 +42,9 @@ impl RemoteFileSystem {
 impl ExecutorFileSystem for RemoteFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
+    ) -> FileSystemResult<PathUri> {
         trace!("remote fs canonicalize");
         let client = self.client.get().await.map_err(map_remote_error)?;
         let response = client
@@ -60,36 +57,9 @@ impl ExecutorFileSystem for RemoteFileSystem {
         Ok(response.path)
     }
 
-    async fn join(
-        &self,
-        base_path: &AbsolutePathBuf,
-        path: &Path,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        trace!("remote fs join");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        let response = client
-            .fs_join(FsJoinParams {
-                base_path: base_path.clone(),
-                path: path.to_path_buf(),
-            })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(response.path)
-    }
-
-    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        trace!("remote fs parent");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        let response = client
-            .fs_parent(FsParentParams { path: path.clone() })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(response.path)
-    }
-
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         trace!("remote fs read_file");
@@ -111,7 +81,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn write_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         contents: Vec<u8>,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -130,7 +100,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn create_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -149,7 +119,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         trace!("remote fs get_metadata");
@@ -172,7 +142,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn read_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         trace!("remote fs read_directory");
@@ -197,7 +167,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn remove(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -217,8 +187,8 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
     async fn copy(
         &self,
-        source_path: &AbsolutePathBuf,
-        destination_path: &AbsolutePathBuf,
+        source_path: &PathUri,
+        destination_path: &PathUri,
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -261,6 +231,10 @@ fn map_remote_error(error: ExecServerError) -> io::Error {
     }
 }
 
+#[cfg(all(test, any(unix, windows)))]
+#[path = "remote_file_system_path_uri_tests.rs"]
+mod path_uri_tests;
+
 #[cfg(test)]
 mod tests {
     use codex_protocol::models::PermissionProfile;
@@ -270,6 +244,7 @@ mod tests {
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::permissions::NetworkSandboxPolicy;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     use super::*;

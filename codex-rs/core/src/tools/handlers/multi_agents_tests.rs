@@ -1,5 +1,4 @@
 use super::*;
-use crate::LoadedAgentsMd;
 use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
@@ -24,6 +23,7 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::BaseInstructions;
@@ -2331,6 +2331,9 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
+    let mut config = (*turn.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    set_turn_config(&mut turn, config);
     turn.permission_profile = expected_permission_profile.clone();
     assert_ne!(
         expected_permission_profile,
@@ -2370,6 +2373,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .await;
     assert_eq!(snapshot.sandbox_policy(), expected_sandbox);
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
+    assert_eq!(snapshot.approvals_reviewer, ApprovalsReviewer::AutoReview);
     assert_eq!(snapshot.permission_profile, expected_permission_profile);
     let child_thread = manager
         .get_thread(agent_id)
@@ -2671,7 +2675,6 @@ async fn send_input_accepts_structured_items() {
         .expect("send_input should succeed");
 
     let expected = Op::UserInput {
-        environments: None,
         items: vec![
             UserInput::Mention {
                 name: "drive".to_string(),
@@ -4237,6 +4240,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
@@ -4514,25 +4518,6 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .set_permission_profile(permission_profile)
         .expect("permission profile set");
     assert_eq!(config, expected);
-}
-
-#[tokio::test]
-async fn build_agent_spawn_config_preserves_base_user_instructions() {
-    let (_session, mut turn) = make_session_and_context().await;
-    let mut base_config = (*turn.config).clone();
-    base_config.user_instructions = Some(LoadedAgentsMd::new_user(
-        "base-user".to_string(),
-        base_config.codex_home.join("AGENTS.md"),
-    ));
-    turn.user_instructions = Some("resolved-user".to_string());
-    turn.config = Arc::new(base_config.clone());
-    let base_instructions = BaseInstructions {
-        text: "base".to_string(),
-    };
-
-    let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
-
-    assert_eq!(config.user_instructions, base_config.user_instructions);
 }
 
 #[tokio::test]

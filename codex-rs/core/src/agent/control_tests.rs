@@ -458,7 +458,6 @@ async fn send_input_submits_user_message() {
     let expected = (
         thread_id,
         Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello from tests".to_string(),
                 text_elements: Vec::new(),
@@ -797,7 +796,6 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
     let expected = (
         thread_id,
         Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "spawned".to_string(),
                 text_elements: Vec::new(),
@@ -1017,7 +1015,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let expected = (
         child_thread_id,
         Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "child task".to_string(),
                 text_elements: Vec::new(),
@@ -1100,6 +1097,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
             RolloutItem::Compacted(CompactedItem {
                 message: String::new(),
                 replacement_history: Some(replacement_history),
+                window_id: None,
             }),
             RolloutItem::TurnContext(turn_context.to_turn_context_item()),
             RolloutItem::ResponseItem(spawn_agent_call(&parent_spawn_call_id)),
@@ -2493,7 +2491,7 @@ async fn list_agent_subtree_thread_ids_includes_anonymous_and_closed_descendants
 }
 
 #[tokio::test]
-async fn list_agent_subtree_thread_ids_includes_live_descendants_without_state_db() {
+async fn list_agent_subtree_thread_ids_finds_live_descendants_of_unloaded_root() {
     let (_home, config) = test_config().await;
     let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
         CodexAuth::from_api_key("dummy"),
@@ -2537,6 +2535,8 @@ async fn list_agent_subtree_thread_ids_includes_live_descendants_without_state_d
         )
         .await
         .expect("grandchild spawn should succeed");
+
+    manager.remove_thread(&parent_thread_id).await;
 
     let mut subtree_thread_ids = manager
         .list_agent_subtree_thread_ids(parent_thread_id)

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -13,6 +14,7 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::agents_md::LoadedAgentsMd;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
@@ -31,6 +33,7 @@ use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
+use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session_prefix::format_subagent_notification_message;
@@ -51,6 +54,8 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_extension_api::ExtensionDataInit;
+use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::PromptSlot;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -62,6 +67,7 @@ use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
+use codex_mcp::McpResourceClient;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_models_manager::manager::RefreshStrategy;
@@ -116,6 +122,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -181,7 +188,6 @@ use crate::config::PermissionProfileState;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
-use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerSource;
@@ -204,6 +210,7 @@ mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+mod token_budget;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
 use self::config_lock::export_config_lock_if_configured;
@@ -272,10 +279,12 @@ impl SteerInputError {
 /// Conceptually this is the same role that `previous_model` used to fill, but
 /// it can carry other prior-turn settings that matter when constructing
 /// sensible state-change diffs or full-context reinjection, such as model
-/// switches or detecting a prior `realtime_active -> false` transition.
+/// switches, compaction compatibility, or detecting a prior
+/// `realtime_active -> false` transition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PreviousTurnSettings {
     pub(crate) model: String,
+    pub(crate) comp_hash: Option<String>,
     pub(crate) realtime_active: Option<bool>,
 }
 
@@ -284,7 +293,7 @@ use crate::SkillLoadOutcome;
 #[cfg(test)]
 use crate::SkillMetadata;
 use crate::SkillsManager;
-use crate::agents_md::AgentsMdManager;
+use crate::agents_md::load_project_instructions;
 use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
@@ -325,6 +334,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::LocalImagePreparation;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -391,6 +401,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) user_instructions: LoadedUserInstructions,
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
@@ -417,6 +428,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) environment_selections: ResolvedTurnEnvironments,
+    pub(crate) thread_extension_init: ExtensionDataInit,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
@@ -475,6 +487,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            user_instructions,
             installation_id,
             auth_manager,
             models_manager,
@@ -497,6 +510,7 @@ impl Codex {
             parent_rollout_thread_trace,
             parent_trace: _,
             environment_selections,
+            thread_extension_init,
             analytics_events_client,
             thread_store,
             attestation_provider,
@@ -505,16 +519,21 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
+        let LoadedUserInstructions {
+            instructions: user_instructions,
+            warnings: user_instruction_provider_warnings,
+        } = user_instructions;
+        // TODO(anp) pull startup_warnings out of Config
+        config
+            .startup_warnings
+            .extend(user_instruction_provider_warnings);
+        // TODO(anp) assemble instructions from multiple environments
         let primary_environment = environment_selections.primary_environment();
-        let mut user_instruction_warnings = Vec::new();
-        let user_instructions = if let Some(primary_environment) = primary_environment {
-            AgentsMdManager::new(&config)
-                .user_instructions(primary_environment.as_ref(), &mut user_instruction_warnings)
-                .await
-        } else {
-            None
-        };
-        config.startup_warnings.extend(user_instruction_warnings);
+        let primary_fs = primary_environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem());
+        let loaded_agents_md =
+            load_project_instructions(&mut config, user_instructions, primary_fs.as_deref()).await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -594,7 +613,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
-            user_instructions,
+            loaded_agents_md,
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
@@ -602,11 +621,13 @@ impl Codex {
             approvals_reviewer: config.approvals_reviewer,
             permission_profile_state: session_permission_profile_state_from_config(&config)?,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-            cwd: config.cwd.clone(),
+            environments: TurnEnvironmentSelections::new(
+                config.cwd.clone(),
+                environment_selections.to_selections(),
+            ),
             workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
-            environments: environment_selections.to_selections(),
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
@@ -639,6 +660,7 @@ impl Codex {
             plugins_manager,
             mcp_manager.clone(),
             extensions,
+            thread_extension_init,
             agent_control,
             environment_manager,
             analytics_events_client,
@@ -787,7 +809,7 @@ impl Codex {
                 ..Default::default()
             })
             .await?;
-        let mcp_connection_manager = self.session.services.mcp_connection_manager.read().await;
+        let mcp_connection_manager = self.session.services.mcp_connection_manager.load_full();
         mcp_connection_manager.set_elicitations_auto_deny(mcp_elicitations_auto_deny);
         Ok(())
     }
@@ -805,7 +827,7 @@ impl Codex {
         let state = self.session.state.lock().await;
         state
             .session_configuration
-            .user_instructions
+            .loaded_agents_md
             .as_ref()
             .map_or_else(Vec::new, |instructions| {
                 instructions.sources().cloned().collect()
@@ -814,7 +836,10 @@ impl Codex {
 
     pub(crate) async fn thread_environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
         let state = self.session.state.lock().await;
-        state.session_configuration.environments.clone()
+        state
+            .session_configuration
+            .environment_selections()
+            .to_vec()
     }
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
@@ -1114,7 +1139,6 @@ impl Session {
             self,
             self.next_internal_sub_id(),
             Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text,
                     text_elements: Vec::new(),
@@ -1124,7 +1148,6 @@ impl Session {
                 additional_context: Default::default(),
                 thread_settings: Default::default(),
             },
-            /*mirror_user_text_to_realtime*/ None,
             /*client_user_message_id*/ None,
         )
         .await;
@@ -1140,9 +1163,11 @@ impl Session {
         state.auto_compact_window_snapshot()
     }
 
-    pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
+    pub(crate) async fn estimated_tokens_after_last_model_generated_item(&self) -> i64 {
         let state = self.state.lock().await;
-        state.history.get_total_token_usage_breakdown()
+        state
+            .history
+            .estimated_tokens_after_last_model_generated_item()
     }
 
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
@@ -1290,15 +1315,27 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Option<PreviousTurnSettings> {
-        let reconstructed_rollout = self
+        let rollout_reconstruction::RolloutReconstruction {
+            mut history,
+            previous_turn_settings,
+            reference_context_item,
+            window_id,
+        } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
-        self.replace_history(
-            reconstructed_rollout.history,
-            reconstructed_rollout.reference_context_item,
-        )
-        .await;
+        if turn_context.features.enabled(Feature::ResizeAllImages) {
+            // Keep the recorded rollout unchanged. Prepare its reconstructed history before
+            // installing it, so legacy images are processed once for this resume or fork and
+            // will be processed again if the rollout is reconstructed in a future session.
+            // This meets image resizing requirements without modifying persisted rollouts.
+            prepare_response_items(&mut history);
+        }
+        {
+            let mut state = self.state.lock().await;
+            state.replace_history(history, reference_context_item);
+            state.set_auto_compact_window_id(window_id);
+            state.set_previous_turn_settings(previous_turn_settings.clone());
+        }
         let prefix_tokens = if matches!(
             turn_context.config.model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix
@@ -1313,8 +1350,6 @@ impl Session {
             self.set_auto_compact_window_estimated_prefill_for_scope(turn_context, prefix_tokens)
                 .await;
         }
-        self.set_previous_turn_settings(previous_turn_settings.clone())
-            .await;
         previous_turn_settings
     }
 
@@ -1414,12 +1449,12 @@ impl Session {
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
             let new_config =
                 notify_config_contributors.then(|| Self::build_effective_session_config(&updated));
-            let previous_cwd = state.session_configuration.cwd.clone();
+            let previous_cwd = state.session_configuration.cwd().clone();
             let previous_permission_profile = state.session_configuration.permission_profile();
             let updated_permission_profile = updated.permission_profile();
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
-            let next_cwd = updated.cwd.clone();
+            let next_cwd = updated.cwd().clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
             state.session_configuration = updated;
@@ -1479,6 +1514,16 @@ impl Session {
             .session_configuration
             .original_config_do_not_use
             .clone()
+    }
+
+    pub(crate) async fn user_instructions(&self) -> Option<codex_extension_api::UserInstructions> {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .loaded_agents_md
+            .as_ref()
+            .and_then(LoadedAgentsMd::user_instructions)
+            .cloned()
     }
 
     pub(crate) async fn provider(&self) -> ModelProviderInfo {
@@ -1784,9 +1829,7 @@ impl Session {
         let Some(text) = realtime_text_for_event(msg) else {
             return;
         };
-        if self.conversation.running_state().await.is_none()
-            || self.conversation.active_handoff_id().await.is_none()
-        {
+        if self.conversation.running_state().await.is_none() {
             return;
         }
         if let Err(err) = self.conversation.handoff_out(text).await {
@@ -2573,11 +2616,43 @@ impl Session {
 
     /// Records conversation items: append to history, persist to rollout, and
     /// notify clients observing raw response items.
+    pub(crate) fn prepare_conversation_items_for_history<'a>(
+        &self,
+        turn_context: &TurnContext,
+        items: &'a [ResponseItem],
+    ) -> Cow<'a, [ResponseItem]> {
+        if !turn_context.features.enabled(Feature::ResizeAllImages) {
+            return Cow::Borrowed(items);
+        }
+
+        let mut prepared_items = items.to_vec();
+        prepare_response_items(&mut prepared_items);
+        Cow::Owned(prepared_items)
+    }
+
+    pub(crate) fn response_item_from_user_input(
+        &self,
+        turn_context: &TurnContext,
+        input: Vec<UserInput>,
+    ) -> ResponseItem {
+        let local_image_preparation = if turn_context.features.enabled(Feature::ResizeAllImages) {
+            LocalImagePreparation::Defer
+        } else {
+            LocalImagePreparation::Process
+        };
+        ResponseItem::from(ResponseInputItem::from_user_input(
+            input,
+            local_image_preparation,
+        ))
+    }
+
     pub(crate) async fn record_conversation_items(
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
+        let items = self.prepare_conversation_items_for_history(turn_context, items);
+        let items = items.as_ref();
         {
             let mut state = self.state.lock().await;
             state.record_items(items.iter(), turn_context.truncation_policy);
@@ -2646,6 +2721,7 @@ impl Session {
             .await;
     }
 
+    #[cfg(test)]
     pub(crate) async fn replace_history(
         &self,
         items: Vec<ResponseItem>,
@@ -2664,7 +2740,6 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
-            state.start_next_auto_compact_window();
         }
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
@@ -2677,7 +2752,6 @@ impl Session {
             let mut state = self.state.lock().await;
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
-        self.services.model_client.advance_window_generation();
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -2739,10 +2813,6 @@ impl Session {
         }
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP app context rendering reads through the session-owned manager guard"
-    )]
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
@@ -2756,6 +2826,7 @@ impl Session {
             collaboration_mode,
             base_instructions,
             session_source,
+            auto_compact_window_id,
         ) = {
             let state = self.state.lock().await;
             (
@@ -2764,6 +2835,7 @@ impl Session {
                 state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
                 state.session_configuration.session_source.clone(),
+                state.auto_compact_window_id(),
             )
         };
         if let Some(model_switch_message) =
@@ -2835,7 +2907,7 @@ impl Session {
             }
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+            let mcp_connection_manager = self.services.mcp_connection_manager.load_full();
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(
                     &mcp_connection_manager,
@@ -2913,6 +2985,19 @@ impl Session {
                 .render(),
             );
         }
+        // This is full-context metadata. Steady-state context diffs should not re-emit it.
+        if turn_context.features.enabled(Feature::TokenBudget)
+            && let Some(model_context_window) = turn_context.model_context_window()
+        {
+            developer_sections.push(
+                crate::context::TokenBudgetContext::new(
+                    self.thread_id(),
+                    auto_compact_window_id,
+                    model_context_window,
+                )
+                .render(),
+            );
+        }
         if turn_context.config.include_environment_context {
             let shell = self.user_shell();
             let subagents = self
@@ -2984,6 +3069,56 @@ impl Session {
         state.clone_history()
     }
 
+    pub(crate) async fn current_window_id(&self) -> String {
+        let state = self.state.lock().await;
+        let thread_id = self.thread_id;
+        let window_id = state.auto_compact_window_id();
+        format!("{thread_id}:{window_id}")
+    }
+
+    pub(crate) async fn advance_auto_compact_window_id(&self) -> u64 {
+        let mut state = self.state.lock().await;
+        state.advance_auto_compact_window_id()
+    }
+
+    pub(crate) async fn request_new_context_window(&self) {
+        let mut state = self.state.lock().await;
+        state.request_new_context_window();
+    }
+
+    pub(crate) async fn maybe_start_new_context_window(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<u64> {
+        let window_id = {
+            let mut state = self.state.lock().await;
+            state.start_new_context_window_if_requested()
+        };
+        let window_id = window_id?;
+        let context_items = self.build_initial_context(turn_context).await;
+        let turn_context_item = turn_context.to_turn_context_item();
+        let replacement_history = context_items;
+        {
+            let mut state = self.state.lock().await;
+            state.replace_history(replacement_history.clone(), Some(turn_context_item.clone()));
+        };
+        self.persist_rollout_items(&[
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: Some(replacement_history),
+                window_id: Some(window_id),
+            }),
+            RolloutItem::TurnContext(turn_context_item),
+        ])
+        .await;
+        {
+            let mut state = self.state.lock().await;
+            state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
+        }
+        self.recompute_token_usage(turn_context).await;
+        Some(window_id)
+    }
+
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
         let state = self.state.lock().await;
         state.reference_context_item()
@@ -3002,6 +3137,7 @@ impl Session {
     /// Mid-turn compaction is the other path that can re-establish that baseline when it
     /// reinjects full initial context into replacement history. Other non-regular tasks
     /// intentionally do not update the baseline.
+    #[instrument(level = "trace", skip_all)]
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
@@ -3191,7 +3327,7 @@ impl Session {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
-        let response_item = ResponseItem::from(ResponseInputItem::from(input.to_vec()));
+        let response_item = self.response_item_from_user_input(turn_context, input.to_vec());
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
         let mut user_message_item = UserMessageItem::new(input);

@@ -1,6 +1,12 @@
 use super::*;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
+use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
+
+const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
+    "direct app-server input is not allowed for multi-agent v2 sub-agents";
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
@@ -43,7 +49,7 @@ fn map_additional_context(
 
 struct ThreadSettingsBuildParams {
     method: &'static str,
-    cwd: Option<AbsolutePathBuf>,
+    environments: Option<TurnEnvironmentSelections>,
     runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     approval_policy: Option<codex_app_server_protocol::AskForApproval>,
     approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
@@ -236,6 +242,26 @@ impl TurnRequestProcessor {
 
         Ok((thread_id, thread))
     }
+
+    async fn ensure_direct_input_allowed(
+        &self,
+        request_id: &ConnectionRequestId,
+        thread: &CodexThread,
+    ) -> Result<(), JSONRPCErrorError> {
+        if thread.multi_agent_version() == Some(MultiAgentVersion::V2)
+            && matches!(
+                thread.config_snapshot().await.session_source,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            )
+        {
+            let error = invalid_request(DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR);
+            self.track_error_response(request_id, &error, /*error_type*/ None);
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
     fn normalize_collaboration_mode(
         &self,
         mut collaboration_mode: CollaborationMode,
@@ -370,6 +396,14 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
+        let (thread_id, thread) =
+            self.load_thread(&params.thread_id)
+                .await
+                .inspect_err(|error| {
+                    self.track_error_response(&request_id, error, /*error_type*/ None);
+                })?;
+        self.ensure_direct_input_allowed(&request_id, thread.as_ref())
+            .await?;
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
             self.track_error_response(
                 &request_id,
@@ -378,12 +412,6 @@ impl TurnRequestProcessor {
             );
             return Err(error);
         }
-        let (thread_id, thread) =
-            self.load_thread(&params.thread_id)
-                .await
-                .inspect_err(|error| {
-                    self.track_error_response(&request_id, error, /*error_type*/ None);
-                })?;
         Self::set_app_server_client_info(
             thread.as_ref(),
             app_server_client_name,
@@ -406,12 +434,14 @@ impl TurnRequestProcessor {
         let additional_context = map_additional_context(params.additional_context);
         let turn_has_input = !mapped_items.is_empty();
         let cwd = resolve_request_cwd(params.cwd)?;
+        let environments =
+            Self::build_environment_override(thread.as_ref(), cwd, environment_selections).await;
         let thread_settings = self
             .build_thread_settings_overrides(
                 thread.as_ref(),
                 ThreadSettingsBuildParams {
                     method: "turn/start",
-                    cwd,
+                    environments,
                     runtime_workspace_roots: params.runtime_workspace_roots,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
@@ -430,7 +460,6 @@ impl TurnRequestProcessor {
         // Start the turn by submitting the user input. Return its submission id as turn_id.
         let turn_op = Op::UserInput {
             items: mapped_items,
-            environments: environment_selections,
             final_output_json_schema: params.output_schema,
             responsesapi_client_metadata: params.responsesapi_client_metadata,
             additional_context,
@@ -478,6 +507,31 @@ impl TurnRequestProcessor {
         Ok(TurnStartResponse { turn })
     }
 
+    async fn build_environment_override(
+        thread: &CodexThread,
+        cwd: Option<AbsolutePathBuf>,
+        environment_selections: Option<Vec<TurnEnvironmentSelection>>,
+    ) -> Option<TurnEnvironmentSelections> {
+        if cwd.is_none() && environment_selections.is_none() {
+            return None;
+        }
+
+        let snapshot = thread.config_snapshot().await;
+        let environment_selections =
+            environment_selections.unwrap_or_else(|| snapshot.environment_selections().to_vec());
+        let legacy_fallback_cwd = cwd.unwrap_or_else(|| {
+            environment_selections
+                .iter()
+                .find(|selection| selection.environment_id == LOCAL_ENVIRONMENT_ID)
+                .map(|selection| selection.cwd.clone())
+                .unwrap_or_else(|| snapshot.cwd().clone())
+        });
+        Some(TurnEnvironmentSelections::new(
+            legacy_fallback_cwd,
+            environment_selections,
+        ))
+    }
+
     async fn build_thread_settings_overrides(
         &self,
         thread: &CodexThread,
@@ -485,7 +539,7 @@ impl TurnRequestProcessor {
     ) -> Result<codex_protocol::protocol::ThreadSettingsOverrides, JSONRPCErrorError> {
         let ThreadSettingsBuildParams {
             method,
-            cwd,
+            environments,
             runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
@@ -508,6 +562,7 @@ impl TurnRequestProcessor {
         let collaboration_mode =
             collaboration_mode.map(|mode| self.normalize_collaboration_mode(mode));
         let runtime_workspace_roots_request = runtime_workspace_roots;
+        let has_environment_override = environments.is_some();
         // `thread/settings/update` only acknowledges that the update was queued.
         // Clients that send dependent partial updates should wait for
         // `thread/settings/updated` or combine the fields in one request.
@@ -517,7 +572,7 @@ impl TurnRequestProcessor {
             None
         };
 
-        let has_any_overrides = cwd.is_some()
+        let has_any_overrides = has_environment_override
             || runtime_workspace_roots_request.is_some()
             || approval_policy.is_some()
             || approvals_reviewer.is_some()
@@ -545,7 +600,9 @@ impl TurnRequestProcessor {
                     )));
                 };
                 let overrides = ConfigOverrides {
-                    cwd: cwd.as_ref().map(AbsolutePathBuf::to_path_buf),
+                    cwd: environments
+                        .as_ref()
+                        .map(|environments| environments.legacy_fallback_cwd.to_path_buf()),
                     workspace_roots: Some(
                         runtime_workspace_roots
                             .clone()
@@ -561,7 +618,7 @@ impl TurnRequestProcessor {
                     .load_for_cwd(
                         /*request_overrides*/ None,
                         overrides,
-                        Some(snapshot.cwd.to_path_buf()),
+                        Some(snapshot.cwd().to_path_buf()),
                     )
                     .await
                     .map_err(|err| config_load_error(&err))?;
@@ -588,7 +645,7 @@ impl TurnRequestProcessor {
         if has_any_overrides {
             thread
                 .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
-                    cwd: cwd.clone(),
+                    environments: environments.clone(),
                     workspace_roots: runtime_workspace_roots.clone(),
                     approval_policy,
                     approvals_reviewer,
@@ -611,7 +668,7 @@ impl TurnRequestProcessor {
         }
 
         Ok(codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd,
+            environments,
             workspace_roots: runtime_workspace_roots,
             profile_workspace_roots,
             approval_policy,
@@ -636,12 +693,18 @@ impl TurnRequestProcessor {
     ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         let cwd = resolve_request_cwd(params.cwd)?;
+        let environments = Self::build_environment_override(
+            thread.as_ref(),
+            cwd,
+            /*environment_selections*/ None,
+        )
+        .await;
         let thread_settings = self
             .build_thread_settings_overrides(
                 thread.as_ref(),
                 ThreadSettingsBuildParams {
                     method: "thread/settings/update",
-                    cwd,
+                    environments,
                     runtime_workspace_roots: None,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
@@ -727,6 +790,8 @@ impl TurnRequestProcessor {
             .inspect_err(|error| {
                 self.track_error_response(request_id, error, /*error_type*/ None);
             })?;
+        self.ensure_direct_input_allowed(request_id, thread.as_ref())
+            .await?;
 
         if params.expected_turn_id.is_empty() {
             return Err(invalid_request("expectedTurnId must not be empty"));
@@ -869,6 +934,7 @@ impl TurnRequestProcessor {
             request_id,
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
+                model: params.model,
                 output_modality: params.output_modality,
                 prompt: params.prompt,
                 realtime_session_id: params.realtime_session_id,
@@ -880,6 +946,7 @@ impl TurnRequestProcessor {
                         ConversationStartTransport::Webrtc { sdp }
                     }
                 }),
+                version: params.version,
                 voice: params.voice,
             }),
         )

@@ -1,3 +1,4 @@
+use core_test_support::test_codex::local_selections;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -97,12 +98,11 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
                 text: "hi".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.clone()),
+                environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(codex_protocol::protocol::AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -365,6 +365,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),

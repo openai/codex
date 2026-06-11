@@ -193,6 +193,34 @@ impl ChatWidget {
                 });
                 self.request_redraw();
             }
+            SlashCommand::Delete => {
+                self.bottom_pane.show_selection_view(SelectionViewParams {
+                    title: Some("Delete this session?".to_string()),
+                    subtitle: Some(
+                        "Cannot be undone. Subagent threads will also be deleted.".to_string(),
+                    ),
+                    footer_hint: Some(standard_popup_hint_line()),
+                    items: vec![
+                        SelectionItem {
+                            name: "No, keep this session".to_string(),
+                            description: Some("Return to the current session".to_string()),
+                            dismiss_on_select: true,
+                            ..Default::default()
+                        },
+                        SelectionItem {
+                            name: "Yes, delete and exit".to_string(),
+                            description: Some("Permanently delete this session now".to_string()),
+                            actions: vec![Box::new(|tx| {
+                                tx.send(AppEvent::DeleteCurrentThread);
+                            })],
+                            dismiss_on_select: true,
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                });
+                self.request_redraw();
+            }
             SlashCommand::Clear => {
                 self.app_event_tx.send(AppEvent::ClearUi);
             }
@@ -213,14 +241,6 @@ impl ChatWidget {
                     .send(AppEvent::OpenDesktopThread { thread_id });
             }
             SlashCommand::Init => {
-                let init_target = self.config.cwd.join(DEFAULT_AGENTS_MD_FILENAME);
-                if init_target.exists() {
-                    let message = format!(
-                        "{DEFAULT_AGENTS_MD_FILENAME} already exists here. Skipping /init to avoid overwriting it."
-                    );
-                    self.add_info_message(message, /*hint*/ None);
-                    return;
-                }
                 const INIT_PROMPT: &str = include_str!("../../prompt_for_init_command.md");
                 self.submit_user_message(INIT_PROMPT.to_string().into());
             }
@@ -297,12 +317,11 @@ impl ChatWidget {
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
-                    let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+                    let windows_sandbox_level =
+                        crate::windows_sandbox::level_from_config(&self.config);
                     let windows_degraded_sandbox_enabled =
                         matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
-                    if !windows_degraded_sandbox_enabled
-                        || !crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                    {
+                    if !windows_degraded_sandbox_enabled {
                         // This command should not be visible/recognized outside degraded mode,
                         // but guard anyway in case something dispatches it directly.
                         return;
@@ -405,6 +424,10 @@ impl ChatWidget {
             }
             SlashCommand::Skills => {
                 self.open_skills_menu();
+            }
+            SlashCommand::Import => {
+                self.app_event_tx
+                    .send(AppEvent::OpenExternalAgentConfigMigration);
             }
             SlashCommand::Hooks => {
                 self.add_hooks_output();
@@ -662,7 +685,7 @@ impl ChatWidget {
                 }
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
-                let Some(name) = crate::legacy_core::util::normalize_thread_name(&args) else {
+                let Some(name) = normalize_thread_name(&args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
@@ -944,7 +967,7 @@ impl ChatWidget {
     fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         #[cfg(target_os = "windows")]
         let allow_elevate_sandbox = {
-            let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+            let windows_sandbox_level = crate::windows_sandbox::level_from_config(&self.config);
             matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken)
         };
         #[cfg(not(target_os = "windows"))]
@@ -990,6 +1013,7 @@ impl ChatWidget {
             SlashCommand::Feedback
             | SlashCommand::New
             | SlashCommand::Archive
+            | SlashCommand::Delete
             | SlashCommand::Clear
             | SlashCommand::Resume
             | SlashCommand::Fork
@@ -1018,6 +1042,7 @@ impl ChatWidget {
             | SlashCommand::Logout
             | SlashCommand::Mention
             | SlashCommand::Skills
+            | SlashCommand::Import
             | SlashCommand::Hooks
             | SlashCommand::Title
             | SlashCommand::Statusline

@@ -7,7 +7,7 @@ use crate::plugins::test_support::write_plugins_feature_config;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsManager;
-use codex_core_plugins::remote::RemotePluginScope;
+use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_core_plugins::remote::fetch_and_cache_global_remote_plugin_catalog;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
@@ -362,7 +362,7 @@ remote_plugin = true
         .build_and_cache_remote_installed_plugin_marketplaces(
             &config.plugins_config_input(),
             Some(&auth),
-            &[RemotePluginScope::Global],
+            &[REMOTE_GLOBAL_MARKETPLACE_NAME],
             /*on_effective_plugins_changed*/ None,
         )
         .await
@@ -393,6 +393,7 @@ remote_plugin = true
         remote_plugins,
         vec![DiscoverablePluginInfo {
             id: "github@openai-curated-remote".to_string(),
+            remote_plugin_id: Some("plugins~Plugin_remote_github".to_string()),
             name: "Remote GitHub".to_string(),
             description: Some("Remote GitHub short".to_string()),
             has_skills: true,
@@ -680,6 +681,7 @@ async fn list_tool_suggest_discoverable_plugins_normalizes_description() {
         discoverable_plugins,
         vec![DiscoverablePluginInfo {
             id: "slack@openai-curated".to_string(),
+            remote_plugin_id: None,
             name: "slack".to_string(),
             description: Some("Plugin with extra spacing".to_string()),
             has_skills: true,
@@ -816,6 +818,7 @@ discoverables = [{ type = "plugin", id = "sample@openai-curated" }]
         discoverable_plugins,
         vec![DiscoverablePluginInfo {
             id: "sample@openai-curated".to_string(),
+            remote_plugin_id: None,
             name: "sample".to_string(),
             description: Some(
                 "Plugin that includes skills, MCP servers, and app connectors".to_string(),
