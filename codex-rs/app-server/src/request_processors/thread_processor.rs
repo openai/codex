@@ -409,6 +409,12 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) fn thread_capabilities_read(&self) -> ThreadCapabilitiesReadResponse {
+        ThreadCapabilitiesReadResponse {
+            fork_disable_multi_agent_tools: true,
+        }
+    }
+
     pub(crate) async fn thread_resume(
         &self,
         request_id: ConnectionRequestId,
@@ -3341,7 +3347,7 @@ impl ThreadRequestProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread_from_history(
+            .fork_thread_from_history_with_runtime_override(
                 ForkSnapshot::Interrupted,
                 config,
                 InitialHistory::Resumed(ResumedHistory {

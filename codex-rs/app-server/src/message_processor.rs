@@ -1043,6 +1043,9 @@ impl MessageProcessor {
                     )
                     .await
             }
+            ClientRequest::ThreadCapabilitiesRead { params: _, .. } => Ok(Some(
+                self.thread_processor.thread_capabilities_read().into(),
+            )),
             ClientRequest::ThreadUnsubscribe { params, .. } => {
                 self.thread_processor
                     .thread_unsubscribe(&request_id, params)

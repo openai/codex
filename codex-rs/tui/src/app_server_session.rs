@@ -186,7 +186,7 @@ pub(crate) struct AppServerSession {
     default_model: Option<String>,
     available_models: Vec<ModelPreset>,
     rejected_fork_thread_ids: HashSet<ThreadId>,
-    disabled_forks_unsupported: bool,
+    disabled_fork_support: DisabledForkSupport,
     external_agent_config_import_completion_pending: AtomicBool,
 }
 
@@ -200,6 +200,13 @@ pub(crate) enum ThreadParamsMode {
 pub(crate) enum MultiAgentToolsOverride {
     Inherit,
     Disabled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DisabledForkSupport {
+    Unknown,
+    Supported,
+    Unsupported,
 }
 
 impl ThreadParamsMode {
@@ -229,6 +236,10 @@ pub(crate) enum TurnPermissionsOverride {
 
 impl AppServerSession {
     pub(crate) fn new(client: AppServerClient, thread_params_mode: ThreadParamsMode) -> Self {
+        let disabled_fork_support = match &client {
+            AppServerClient::InProcess(_) => DisabledForkSupport::Supported,
+            AppServerClient::Remote(_) => DisabledForkSupport::Unknown,
+        };
         Self {
             client,
             next_request_id: 1,
@@ -238,7 +249,7 @@ impl AppServerSession {
             default_model: None,
             available_models: Vec::new(),
             rejected_fork_thread_ids: HashSet::new(),
-            disabled_forks_unsupported: false,
+            disabled_fork_support,
             external_agent_config_import_completion_pending: AtomicBool::new(false),
         }
     }
@@ -499,9 +510,27 @@ impl AppServerSession {
         thread_id: ThreadId,
         multi_agent_tools: MultiAgentToolsOverride,
     ) -> Result<AppServerStartedThread> {
-        if multi_agent_tools == MultiAgentToolsOverride::Disabled && self.disabled_forks_unsupported
-        {
-            return Err(color_eyre::eyre::eyre!(DISABLED_FORK_UNSUPPORTED_MESSAGE));
+        if multi_agent_tools == MultiAgentToolsOverride::Disabled {
+            if self.disabled_fork_support == DisabledForkSupport::Unknown {
+                let request_id = self.next_request_id();
+                self.disabled_fork_support = if self
+                    .client
+                    .supports_thread_fork_disable_multi_agent_tools(request_id)
+                    .await
+                    .map_err(|err| {
+                        bootstrap_request_error(
+                            "thread/capabilities/read failed before TUI fork",
+                            err,
+                        )
+                    })? {
+                    DisabledForkSupport::Supported
+                } else {
+                    DisabledForkSupport::Unsupported
+                };
+            }
+            if self.disabled_fork_support == DisabledForkSupport::Unsupported {
+                return Err(color_eyre::eyre::eyre!(DISABLED_FORK_UNSUPPORTED_MESSAGE));
+            }
         }
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
@@ -524,10 +553,14 @@ impl AppServerSession {
         if multi_agent_tools == MultiAgentToolsOverride::Disabled
             && !response.multi_agent_tools_disabled
         {
-            self.disabled_forks_unsupported = true;
+            self.disabled_fork_support = DisabledForkSupport::Unsupported;
             if let Ok(thread_id) = ThreadId::from_string(&response.thread.id) {
                 self.quarantine_rejected_fork(thread_id);
-                let _ = self.thread_unsubscribe(thread_id).await;
+                if let Err(err) = self.thread_unsubscribe(thread_id).await {
+                    tracing::warn!(
+                        "failed to unsubscribe rejected multi-agent-enabled fork {thread_id}: {err}"
+                    );
+                }
             }
             return Err(color_eyre::eyre::eyre!(DISABLED_FORK_UNSUPPORTED_MESSAGE));
         }
@@ -2347,6 +2380,38 @@ mod tests {
         );
         assert_eq!(params.thread_source, Some(ThreadSource::User));
         assert!(params.disable_multi_agent_tools);
+    }
+
+    #[tokio::test]
+    async fn unsupported_disabled_fork_is_rejected_before_creating_a_thread() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config)
+            .await
+            .expect("embedded app server");
+        app_server.disabled_fork_support = DisabledForkSupport::Unsupported;
+        let before = app_server
+            .thread_loaded_list(ThreadLoadedListParams::default())
+            .await
+            .expect("loaded threads before rejected fork");
+
+        let error = app_server
+            .fork_thread(config, ThreadId::new(), MultiAgentToolsOverride::Disabled)
+            .await
+            .expect_err("unsupported disabled fork should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains(DISABLED_FORK_UNSUPPORTED_MESSAGE)
+        );
+        assert_eq!(
+            app_server
+                .thread_loaded_list(ThreadLoadedListParams::default())
+                .await
+                .expect("loaded threads after rejected fork"),
+            before
+        );
     }
 
     #[tokio::test]

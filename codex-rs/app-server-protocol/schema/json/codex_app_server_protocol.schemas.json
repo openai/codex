@@ -307,6 +307,29 @@
             },
             "method": {
               "enum": [
+                "thread/capabilities/read"
+              ],
+              "title": "Thread/capabilities/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Thread/capabilities/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/archive"
               ],
               "title": "Thread/archiveRequestMethod",
@@ -16067,6 +16090,20 @@
           "threadId"
         ],
         "title": "ThreadArchivedNotification",
+        "type": "object"
+      },
+      "ThreadCapabilitiesReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "forkDisableMultiAgentTools": {
+            "description": "Whether `thread/fork` supports disabling multi-agent collaboration.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "forkDisableMultiAgentTools"
+        ],
+        "title": "ThreadCapabilitiesReadResponse",
         "type": "object"
       },
       "ThreadClosedNotification": {

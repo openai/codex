@@ -592,6 +592,14 @@ pub struct ThreadForkResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadCapabilitiesReadResponse {
+    /// Whether `thread/fork` supports disabling multi-agent collaboration.
+    pub fork_disable_multi_agent_tools: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadArchiveParams {
     pub thread_id: String,
 }

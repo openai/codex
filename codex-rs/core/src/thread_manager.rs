@@ -864,15 +864,8 @@ impl ThreadManager {
     {
         let snapshot = snapshot.into();
         let history = self.initial_history_from_rollout_path(path).await?;
-        self.fork_thread_from_history(
-            snapshot,
-            config,
-            history,
-            MultiAgentRuntimeOverride::Inherit,
-            thread_source,
-            parent_trace,
-        )
-        .await
+        self.fork_thread_from_history(snapshot, config, history, thread_source, parent_trace)
+            .await
     }
 
     async fn initial_history_from_rollout_path(
@@ -895,6 +888,30 @@ impl ThreadManager {
 
     /// Fork an existing thread from already-loaded store history.
     pub async fn fork_thread_from_history<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        self.fork_thread_from_history_with_runtime_override(
+            snapshot,
+            config,
+            history,
+            MultiAgentRuntimeOverride::Inherit,
+            thread_source,
+            parent_trace,
+        )
+        .await
+    }
+
+    /// Fork an existing thread from already-loaded store history with an
+    /// explicit multi-agent runtime override.
+    pub async fn fork_thread_from_history_with_runtime_override<S>(
         &self,
         snapshot: S,
         config: Config,

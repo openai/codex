@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "forkDisableMultiAgentTools": {
+      "description": "Whether `thread/fork` supports disabling multi-agent collaboration.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "forkDisableMultiAgentTools"
+  ],
+  "title": "ThreadCapabilitiesReadResponse",
+  "type": "object"
+}

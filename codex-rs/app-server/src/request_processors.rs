@@ -178,6 +178,7 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsListParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsListResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsTerminateParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsTerminateResponse;
+use codex_app_server_protocol::ThreadCapabilitiesReadResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
