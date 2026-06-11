@@ -22,8 +22,13 @@ impl AppServerPath {
     }
 
     pub fn components(&self) -> Vec<&str> {
+        let separators = if is_windows_absolute_path(&self.0) {
+            &['/', '\\'][..]
+        } else {
+            &['/'][..]
+        };
         self.0
-            .split(['/', '\\'])
+            .split(separators)
             .filter(|part| !part.is_empty())
             .collect()
     }

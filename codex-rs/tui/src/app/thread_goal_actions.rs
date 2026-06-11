@@ -10,6 +10,7 @@ use crate::goal_display::GOAL_USAGE;
 use crate::goal_display::goal_status_label;
 use crate::goal_display::goal_usage_summary;
 use crate::goal_files;
+use crate::text_formatting::truncate_text;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_protocol::ThreadId;
@@ -220,17 +221,19 @@ impl App {
         }
 
         match result {
-            Ok(response) => self.chat_widget.add_info_message(
-                format!("Goal {}", goal_status_label(response.goal.status)),
-                Some(goal_usage_summary(&response.goal, codex_home.as_ref())),
-            ),
+            Ok(response) => {
+                self.chat_widget.add_info_message(
+                    format!("Goal {}", goal_status_label(response.goal.status)),
+                    Some(goal_usage_summary(&response.goal, codex_home.as_ref())),
+                );
+                self.chat_widget.maybe_send_next_queued_input();
+            }
             Err(err) => {
                 let action = if replacing_goal { "replace" } else { "set" };
                 self.chat_widget
                     .add_error_message(thread_goal_error_message(action, &err));
             }
         }
-        self.chat_widget.maybe_send_next_queued_input();
     }
 
     pub(super) async fn set_thread_goal_status(
@@ -317,7 +320,10 @@ impl App {
         ];
         self.chat_widget.show_selection_view(SelectionViewParams {
             title: Some("Replace goal?".to_string()),
-            subtitle: Some(format!("New objective: {objective}")),
+            subtitle: Some(format!(
+                "New objective: {}",
+                truncate_text(&objective, /*max_graphemes*/ 200)
+            )),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()

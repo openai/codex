@@ -4208,6 +4208,14 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
         .join("00000000-0000-4000-8000-000000000000")
         .join("goal-objective.md");
     assert_goal_reference_remains_literal(codex_home.as_ref(), escaped_path);
+    assert_goal_reference_remains_literal(
+        Some(&codex_app_server_client::AppServerPath::from_app_server(
+            "/tmp/codex\\home",
+        )),
+        codex_app_server_client::AppServerPath::from_app_server(
+            "/tmp/codex/home/attachments/00000000-0000-4000-8000-000000000000/goal-objective.md",
+        ),
+    );
     let attachments_dir = app.chat_widget.config_ref().codex_home.join("attachments");
     let attachment_count = std::fs::read_dir(&attachments_dir)?.count();
 
