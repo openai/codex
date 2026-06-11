@@ -370,7 +370,6 @@ pub struct StoredThreadItem {
     pub item_key: String,
     pub item_ordinal: u64,
     pub item_created_at_ms: i64,
-    pub is_open: bool,
     pub materialized_thread_item_json: Vec<u8>,
 }
 
