@@ -29,13 +29,16 @@ use crate::connection::JsonRpcConnection;
 use crate::process::ExecProcessEvent;
 use crate::process::ExecProcessEventLog;
 use crate::process::ExecProcessEventReceiver;
+use crate::protocol::ENVIRONMENT_INFO_METHOD;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
 use crate::protocol::EXEC_READ_METHOD;
+use crate::protocol::EXEC_SIGNAL_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
+use crate::protocol::EnvironmentInfo;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
@@ -78,8 +81,11 @@ use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ProcessOutputChunk;
+use crate::protocol::ProcessSignal;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::SignalParams;
+use crate::protocol::SignalResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -279,6 +285,12 @@ impl HttpClient for LazyRemoteExecServerClient {
     }
 }
 
+impl LazyRemoteExecServerClient {
+    pub(crate) async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
+        self.get().await?.environment_info().await
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExecServerError {
     #[error("failed to spawn exec-server: {0}")]
@@ -363,6 +375,10 @@ impl ExecServerClient {
         self.call(EXEC_METHOD, &params).await
     }
 
+    pub async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
+        self.call(ENVIRONMENT_INFO_METHOD, &()).await
+    }
+
     pub async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
         self.call(EXEC_READ_METHOD, &params).await
     }
@@ -380,6 +396,23 @@ impl ExecServerClient {
             },
         )
         .await
+    }
+
+    pub async fn signal(
+        &self,
+        process_id: &ProcessId,
+        signal: ProcessSignal,
+    ) -> Result<(), ExecServerError> {
+        let _response: SignalResponse = self
+            .call(
+                EXEC_SIGNAL_METHOD,
+                &SignalParams {
+                    process_id: process_id.clone(),
+                    signal,
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn terminate(
@@ -749,6 +782,10 @@ impl Session {
 
     pub(crate) async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
         self.client.write(&self.process_id, chunk).await
+    }
+
+    pub(crate) async fn signal(&self, signal: ProcessSignal) -> Result<(), ExecServerError> {
+        self.client.signal(&self.process_id, signal).await
     }
 
     pub(crate) async fn terminate(&self) -> Result<(), ExecServerError> {

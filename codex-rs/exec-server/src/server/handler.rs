@@ -14,6 +14,7 @@ use tokio_util::task::TaskTracker;
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::PendingReqwestHttpBodyStream;
 use crate::client::http_client::ReqwestHttpRequestRunner;
+use crate::protocol::EnvironmentInfo;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCanonicalizeParams;
@@ -41,6 +42,8 @@ use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::SignalParams;
+use crate::protocol::SignalResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -147,6 +150,11 @@ impl ExecServerHandler {
         session.process().exec(params).await
     }
 
+    pub(crate) fn environment_info(&self) -> Result<EnvironmentInfo, JSONRPCErrorError> {
+        self.require_initialized_for("environment info")?;
+        Ok(EnvironmentInfo::local())
+    }
+
     pub(crate) async fn exec_read(
         &self,
         params: ReadParams,
@@ -163,6 +171,14 @@ impl ExecServerHandler {
     ) -> Result<WriteResponse, JSONRPCErrorError> {
         let session = self.require_initialized_for("exec")?;
         session.process().exec_write(params).await
+    }
+
+    pub(crate) async fn signal(
+        &self,
+        params: SignalParams,
+    ) -> Result<SignalResponse, JSONRPCErrorError> {
+        let session = self.require_initialized_for("exec")?;
+        session.process().signal(params).await
     }
 
     pub(crate) async fn terminate(

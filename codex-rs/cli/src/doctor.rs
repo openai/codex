@@ -682,7 +682,7 @@ fn structured_json_details(details: &[String]) -> (BTreeMap<String, JsonDetailVa
             notes.push(redacted);
             continue;
         }
-        let value = value.to_string();
+        let value = json_detail_value(key, value);
         match structured.get_mut(key) {
             Some(existing) => existing.push(value),
             None => {
@@ -691,6 +691,21 @@ fn structured_json_details(details: &[String]) -> (BTreeMap<String, JsonDetailVa
         }
     }
     (structured, notes)
+}
+
+fn json_detail_value(key: &str, value: &str) -> String {
+    if matches!(
+        key,
+        "VISUAL" | "EDITOR" | "PAGER" | "GIT_PAGER" | "GH_PAGER" | "LESS"
+    ) && !value.eq_ignore_ascii_case("not set")
+    {
+        // Editor and pager configuration can contain arbitrary arguments or
+        // inline environment assignments. Keep full values local to human output
+        // because the JSON report may be attached to feedback.
+        "set".to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 fn run_sync_check(
@@ -1308,6 +1323,8 @@ fn stored_auth_mode(auth: &codex_login::AuthDotJson) -> &'static str {
         codex_app_server_protocol::AuthMode::Chatgpt => "chatgpt",
         codex_app_server_protocol::AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
         codex_app_server_protocol::AuthMode::AgentIdentity => "agent_identity",
+        codex_app_server_protocol::AuthMode::PersonalAccessToken => "personal_access_token",
+        codex_app_server_protocol::AuthMode::BedrockApiKey => "bedrock_api_key",
     }
 }
 
@@ -1315,7 +1332,11 @@ fn stored_auth_mode_value(auth: &AuthDotJson) -> codex_app_server_protocol::Auth
     if let Some(mode) = auth.auth_mode {
         return mode;
     }
-    if auth.openai_api_key.is_some() {
+    if auth.personal_access_token.is_some() {
+        codex_app_server_protocol::AuthMode::PersonalAccessToken
+    } else if auth.bedrock_api_key.is_some() {
+        codex_app_server_protocol::AuthMode::BedrockApiKey
+    } else if auth.openai_api_key.is_some() {
         codex_app_server_protocol::AuthMode::ApiKey
     } else {
         codex_app_server_protocol::AuthMode::Chatgpt
@@ -1378,6 +1399,20 @@ fn stored_auth_issues(
                 .is_none_or(|token| token.trim().is_empty())
             {
                 issues.push("agent identity auth is missing an agent identity token");
+            }
+        }
+        codex_app_server_protocol::AuthMode::PersonalAccessToken => {
+            if auth
+                .personal_access_token
+                .as_deref()
+                .is_none_or(|token| token.trim().is_empty())
+            {
+                issues.push("personal access token auth is missing a personal access token");
+            }
+        }
+        codex_app_server_protocol::AuthMode::BedrockApiKey => {
+            if auth.bedrock_api_key.is_none() {
+                issues.push("Bedrock API key auth is missing a Bedrock API key");
             }
         }
     }
@@ -2114,8 +2149,9 @@ async fn state_check(config: &Config) -> DoctorCheck {
     };
     let mut check = DoctorCheck::new("state.paths", "state", status, summary).details(details);
     if status == CheckStatus::Fail {
-        check = check
-            .remediation("Back up CODEX_HOME, then remove or repair the affected SQLite database.");
+        check = check.remediation(
+            "Move the damaged SQLite database aside, then restart the interactive CLI or app server so it can rebuild that runtime database from saved data. Other entry points may not rebuild automatically.",
+        );
     }
     check
 }
@@ -2408,6 +2444,8 @@ fn auth_mode_name(auth: &CodexAuth) -> &'static str {
         codex_app_server_protocol::AuthMode::Chatgpt => "chatgpt",
         codex_app_server_protocol::AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
         codex_app_server_protocol::AuthMode::AgentIdentity => "agent_identity",
+        codex_app_server_protocol::AuthMode::PersonalAccessToken => "personal_access_token",
+        codex_app_server_protocol::AuthMode::BedrockApiKey => "bedrock_api_key",
     }
 }
 
@@ -2537,11 +2575,15 @@ fn provider_auth_reachability_mode_from_auth(
         return ProviderAuthReachabilityMode::Chatgpt;
     }
     match stored_auth.map(stored_auth_mode_value) {
-        Some(codex_app_server_protocol::AuthMode::ApiKey) => ProviderAuthReachabilityMode::ApiKey,
+        Some(
+            codex_app_server_protocol::AuthMode::ApiKey
+            | codex_app_server_protocol::AuthMode::BedrockApiKey,
+        ) => ProviderAuthReachabilityMode::ApiKey,
         Some(
             codex_app_server_protocol::AuthMode::Chatgpt
             | codex_app_server_protocol::AuthMode::ChatgptAuthTokens
-            | codex_app_server_protocol::AuthMode::AgentIdentity,
+            | codex_app_server_protocol::AuthMode::AgentIdentity
+            | codex_app_server_protocol::AuthMode::PersonalAccessToken,
         )
         | None => ProviderAuthReachabilityMode::Chatgpt,
     }
@@ -3213,6 +3255,18 @@ mod tests {
             codex_version: "0.0.0".to_string(),
             checks: vec![
                 DoctorCheck::new(
+                    "system.environment",
+                    "system",
+                    CheckStatus::Ok,
+                    "OS language en-US",
+                )
+                .detail("VISUAL: code --wait")
+                .detail("EDITOR: env AWS_ACCESS_KEY_ID=AKIAEXAMPLE vim")
+                .detail("PAGER: env PRIVATE_PAGER_VALUE=pager-secret less")
+                .detail("GIT_PAGER: delta")
+                .detail("GH_PAGER: less")
+                .detail("LESS: -FRX"),
+                DoctorCheck::new(
                     "mcp.config",
                     "mcp",
                     CheckStatus::Warning,
@@ -3246,8 +3300,35 @@ mod tests {
         assert!(!redacted.contains("user:pass"));
         assert!(!redacted.contains("x=abc"));
         assert!(!redacted.contains("sk-live-secret"));
+        assert!(!redacted.contains("AKIAEXAMPLE"));
+        assert!(!redacted.contains("pager-secret"));
+        assert!(!redacted.contains("code --wait"));
         assert!(redacted.contains("https://example.com/mcp"));
         assert_eq!(json["checks"].is_object(), true);
+        assert_eq!(
+            json["checks"]["system.environment"]["details"]["VISUAL"],
+            "set"
+        );
+        assert_eq!(
+            json["checks"]["system.environment"]["details"]["EDITOR"],
+            "set"
+        );
+        assert_eq!(
+            json["checks"]["system.environment"]["details"]["PAGER"],
+            "set"
+        );
+        assert_eq!(
+            json["checks"]["system.environment"]["details"]["GIT_PAGER"],
+            "set"
+        );
+        assert_eq!(
+            json["checks"]["system.environment"]["details"]["GH_PAGER"],
+            "set"
+        );
+        assert_eq!(
+            json["checks"]["system.environment"]["details"]["LESS"],
+            "set"
+        );
         assert_eq!(json["checks"]["mcp.config"]["id"], "mcp.config");
         assert_eq!(
             json["checks"]["mcp.config"]["details"]["OPENAI_API_KEY"],
@@ -3401,6 +3482,8 @@ mod tests {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            personal_access_token: None,
+            bedrock_api_key: None,
         };
 
         assert_eq!(
@@ -3418,6 +3501,8 @@ mod tests {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            personal_access_token: None,
+            bedrock_api_key: None,
         };
 
         assert_eq!(
@@ -3430,6 +3515,29 @@ mod tests {
     }
 
     #[test]
+    fn stored_auth_validation_handles_personal_access_token() {
+        let mut auth = AuthDotJson {
+            auth_mode: None,
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+            personal_access_token: Some("at-test".to_string()),
+            bedrock_api_key: None,
+        };
+
+        assert_eq!(stored_auth_mode(&auth), "personal_access_token");
+        assert!(stored_auth_issues(&auth, |_| false).is_empty());
+
+        auth.auth_mode = Some(codex_app_server_protocol::AuthMode::PersonalAccessToken);
+        auth.personal_access_token = None;
+        assert_eq!(
+            stored_auth_issues(&auth, |_| false),
+            vec!["personal access token auth is missing a personal access token"]
+        );
+    }
+
+    #[test]
     fn provider_reachability_mode_uses_api_key_auth() {
         let api_key_auth = AuthDotJson {
             auth_mode: Some(codex_app_server_protocol::AuthMode::ApiKey),
@@ -3437,6 +3545,8 @@ mod tests {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            personal_access_token: None,
+            bedrock_api_key: None,
         };
 
         assert_eq!(

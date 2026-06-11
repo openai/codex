@@ -7,6 +7,7 @@
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
+use crate::config_update::format_config_error;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
@@ -240,7 +241,7 @@ impl App {
         &mut self,
         app_server: &AppServerSession,
         cwd: PathBuf,
-        marketplace_path: AbsolutePathBuf,
+        location: PluginLocation,
         plugin_name: String,
         plugin_display_name: String,
     ) {
@@ -248,14 +249,14 @@ impl App {
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let cwd_for_event = cwd.clone();
-            let marketplace_path_for_event = marketplace_path.clone();
+            let location_for_event = location.clone();
             let plugin_name_for_event = plugin_name.clone();
-            let result = fetch_plugin_install(request_handle, marketplace_path, plugin_name)
+            let result = fetch_plugin_install(request_handle, location, plugin_name)
                 .await
                 .map_err(|err| format!("Failed to install plugin: {err}"));
             app_event_tx.send(AppEvent::PluginInstallLoaded {
                 cwd: cwd_for_event,
-                marketplace_path: marketplace_path_for_event,
+                location: location_for_event,
                 plugin_name: plugin_name_for_event,
                 plugin_display_name,
                 result,
@@ -357,7 +358,12 @@ impl App {
             let result = write_hook_enabled(request_handle, key, enabled)
                 .await
                 .map(|_| ())
-                .map_err(|err| format!("Failed to update hook config: {err}"));
+                .map_err(|err| {
+                    format!(
+                        "Failed to update hook config: {}",
+                        format_config_error(&err)
+                    )
+                });
             app_event_tx.send(AppEvent::HookEnabledSet {
                 key: key_for_event,
                 enabled,
@@ -378,7 +384,7 @@ impl App {
             let result = write_hook_trust(request_handle, key, current_hash)
                 .await
                 .map(|_| ())
-                .map_err(|err| format!("Failed to trust hook: {err}"));
+                .map_err(|err| format!("Failed to trust hook: {}", format_config_error(&err)));
             app_event_tx.send(AppEvent::HookTrusted { result });
         });
     }
@@ -394,7 +400,7 @@ impl App {
             let result = write_hook_trusts(request_handle, updates)
                 .await
                 .map(|_| ())
-                .map_err(|err| format!("Failed to trust hooks: {err}"));
+                .map_err(|err| format!("Failed to trust hooks: {}", format_config_error(&err)));
             app_event_tx.send(AppEvent::HookTrusted { result });
         });
     }
@@ -829,16 +835,17 @@ pub(super) async fn fetch_marketplace_upgrade(
 }
 pub(super) async fn fetch_plugin_install(
     request_handle: AppServerRequestHandle,
-    marketplace_path: AbsolutePathBuf,
+    location: PluginLocation,
     plugin_name: String,
 ) -> Result<PluginInstallResponse> {
     let request_id = RequestId::String(format!("plugin-install-{}", Uuid::new_v4()));
+    let (marketplace_path, remote_marketplace_name) = location.into_request_params();
     request_handle
         .request_typed(ClientRequest::PluginInstall {
             request_id,
             params: PluginInstallParams {
-                marketplace_path: Some(marketplace_path),
-                remote_marketplace_name: None,
+                marketplace_path,
+                remote_marketplace_name,
                 plugin_name,
             },
         })
@@ -1053,6 +1060,26 @@ mod tests {
                 interface: None,
                 plugins: Vec::new(),
             }]
+        );
+    }
+
+    #[test]
+    fn plugin_location_request_params_select_exactly_one_location() {
+        let local_path = test_absolute_path("/marketplaces/local");
+
+        assert_eq!(
+            PluginLocation::Local {
+                marketplace_path: local_path.clone()
+            }
+            .into_request_params(),
+            (Some(local_path), None)
+        );
+        assert_eq!(
+            PluginLocation::Remote {
+                marketplace_name: "workspace-directory".to_string()
+            }
+            .into_request_params(),
+            (None, Some("workspace-directory".to_string()))
         );
     }
 

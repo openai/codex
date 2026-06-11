@@ -11,6 +11,7 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:llvm_rusty_v8_custom_libcxx.patch",
+        "//patches:llvm_windows_arm64_powl.patch",
         "//patches:llvm_windows_symlink_extract.patch",
     ],
 )
@@ -94,6 +95,7 @@ single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
     patches = [
+        "//patches:rules_rs_build_script_deps_annotation.patch",
         "//patches:rules_rs_windows_gnullvm_exec.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
     ],
@@ -295,6 +297,11 @@ bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
 inject_repo(crate, "xz")
 
 crate.annotation(
+    # Build scripts compile in Bazel's exec configuration, so target-specific
+    # optional build deps are otherwise dropped for the musl release platforms.
+    build_script_deps = [
+        "@crates//:openssl-src-300.5.5+3.5.5",
+    ],
     build_script_data = [
         "@openssl//:gen_dir",
     ],
@@ -415,18 +422,18 @@ crate.annotation(
 
 inject_repo(crate, "alsa_lib")
 
-bazel_dep(name = "v8", version = "14.7.173.20")
+bazel_dep(name = "v8", version = "14.9.207.2")
 archive_override(
     module_name = "v8",
-    integrity = "sha256-v/x6I4X38a2wckzUIft3Dh0SUdkuOTokwxyF7lzW8Lc=",
+    integrity = "sha256-tflbZE5srqal6leMxJjK/ZQtwpF96OMGJ6avd5lice4=",
     patch_strip = 3,
     patches = [
         "//patches:v8_module_deps.patch",
         "//patches:v8_bazel_rules.patch",
         "//patches:v8_source_portability.patch",
     ],
-    strip_prefix = "v8-14.7.173.20",
-    urls = ["https://github.com/v8/v8/archive/refs/tags/14.7.173.20.tar.gz"],
+    strip_prefix = "v8-14.9.207.2",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.9.207.2.tar.gz"],
 )
 
 http_archive(
@@ -439,12 +446,12 @@ http_archive(
 )
 
 http_archive(
-    name = "v8_crate_147_4_0",
+    name = "v8_crate_149_2_0",
     build_file = "//third_party/v8:v8_crate.BUILD.bazel",
-    sha256 = "2df8fffd507fb18ed000673a83d937f58e60fb07f3306b2274284125b15137cd",
-    strip_prefix = "v8-147.4.0",
+    sha256 = "46dccf61a364b61bbaac70a8ba64a1a1006e87123b7d62eaeec999a3ba31ecdb",
+    strip_prefix = "v8-149.2.0",
     type = "tar.gz",
-    urls = ["https://static.crates.io/crates/v8/v8-147.4.0.crate"],
+    urls = ["https://static.crates.io/crates/v8/v8-149.2.0.crate"],
 )
 
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
@@ -452,7 +459,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 git_repository(
     name = "rusty_v8_libcxx",
     build_file = "//third_party/v8:libcxx.BUILD.bazel",
-    commit = "7ab65651aed6802d2599dcb7a73b1f82d5179d05",
+    commit = "99457fa555797f8c5ac3c076ca288d8481d3b23a",
     remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx.git",
 )
 
@@ -466,25 +473,25 @@ git_repository(
 git_repository(
     name = "rusty_v8_llvm_libc",
     build_file = "//third_party/v8:llvm_libc.BUILD.bazel",
-    commit = "b3aa5bb702ff9e890179fd1e7d3ba346e17ecf8e",
+    commit = "cb952785ccee13811f293f3c419958d1e3ddafbf",
     remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc.git",
 )
 
 http_file(
-    name = "rusty_v8_147_4_0_aarch64_pc_windows_msvc_archive",
+    name = "rusty_v8_149_2_0_aarch64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
-    sha256 = "1fa3f94d9e09cff1f6bcce94c478e5cb072c0755f6a0357abadb9dd3b48d8127",
+    sha256 = "923f2b6ccdc14526b814e171e34c9aafd7969f12304948857c6696d022f0fb3c",
     urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v147.4.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+        "https://github.com/denoland/rusty_v8/releases/download/v149.2.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
     ],
 )
 
 http_file(
-    name = "rusty_v8_147_4_0_x86_64_pc_windows_msvc_archive",
+    name = "rusty_v8_149_2_0_x86_64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
-    sha256 = "e2827ff98b1a9d4c0343000fc5124ac30dfab3007bc0129c168c9355fc2fcd7c",
+    sha256 = "12b5a791b54e92f748738ad8d0d12dad8d281a2d836638ad1aa6678e3b855d9a",
     urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v147.4.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+        "https://github.com/denoland/rusty_v8/releases/download/v149.2.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
     ],
 )
 

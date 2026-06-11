@@ -430,6 +430,11 @@ impl EventProcessorWithJsonOutput {
                 }));
                 CodexStatus::Running
             }
+            ServerNotification::Warning(notification) => {
+                let warning = self.collect_warning(notification.message);
+                events.extend(warning.events);
+                warning.status
+            }
             ServerNotification::Error(notification) => {
                 let message = match notification.error.additional_details {
                     Some(details) if !details.is_empty() => {
@@ -455,10 +460,6 @@ impl EventProcessorWithJsonOutput {
                         details: ThreadItemDetails::Error(ErrorItem { message }),
                     },
                 }));
-                CodexStatus::Running
-            }
-            ServerNotification::Warning(notification) => {
-                events.extend(self.collect_warning(notification.message).events);
                 CodexStatus::Running
             }
             ServerNotification::HookStarted(_) | ServerNotification::HookCompleted(_) => {

@@ -19,6 +19,9 @@ const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_C
 #[derive(Debug, Parser)]
 #[command(version)]
 struct AppServerArgs {
+    #[command(flatten)]
+    config_overrides: CliConfigOverrides,
+
     /// Transport endpoint URL. Supported values: `stdio://` (default),
     /// `unix://`, `unix://PATH`, `ws://IP:PORT`, `off`.
     #[arg(
@@ -58,6 +61,7 @@ struct AppServerArgs {
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let AppServerArgs {
+            config_overrides,
             listen,
             session_source,
             auth,
@@ -84,7 +88,7 @@ fn main() -> anyhow::Result<()> {
 
         run_main_with_transport_options(
             arg0_paths,
-            CliConfigOverrides::default(),
+            config_overrides,
             loader_overrides,
             strict_config,
             /*default_analytics_enabled*/ false,
@@ -123,3 +127,7 @@ fn managed_config_path_from_debug_env() -> Option<PathBuf> {
 
     None
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;

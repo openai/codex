@@ -239,6 +239,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 CodexStatus::Running
             }
+            ServerNotification::Warning(notification) => self.process_warning(notification.message),
             ServerNotification::Error(notification) => {
                 eprintln!(
                     "{} {}",
@@ -256,14 +257,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 if let Some(details) = notification.details {
                     eprintln!("{}", details.style(self.dimmed));
                 }
-                CodexStatus::Running
-            }
-            ServerNotification::Warning(notification) => {
-                eprintln!(
-                    "{} {}",
-                    "warning:".style(self.yellow).style(self.bold),
-                    notification.message
-                );
                 CodexStatus::Running
             }
             ServerNotification::HookStarted(notification) => {
@@ -454,7 +447,8 @@ fn config_summary_entries(
             "reasoning effort",
             config
                 .model_reasoning_effort
-                .map(|effort| effort.to_string())
+                .as_ref()
+                .map(std::string::ToString::to_string)
                 .unwrap_or_else(|| "none".to_string()),
         ));
         entries.push((

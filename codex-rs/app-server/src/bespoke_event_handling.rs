@@ -75,6 +75,7 @@ use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnItemsView;
+use codex_app_server_protocol::TurnModerationMetadataNotification;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -99,6 +100,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::SubAgentActivityKind;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
@@ -211,6 +213,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }
             };
             let notification = McpServerStatusUpdatedNotification {
+                thread_id: Some(conversation_id.to_string()),
                 name: update.server,
                 status,
                 error,
@@ -335,6 +338,16 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::ModelVerification(notification))
+                .await;
+        }
+        EventMsg::TurnModerationMetadata(event) => {
+            let notification = TurnModerationMetadataNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                metadata: event.metadata,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::TurnModerationMetadata(notification))
                 .await;
         }
         EventMsg::RealtimeConversationStarted(event) => {
@@ -755,7 +768,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let requested_permissions = request.permissions.clone();
             let request_cwd = match request.cwd.clone() {
                 Some(cwd) => cwd,
-                None => conversation.config_snapshot().await.cwd,
+                None => conversation.config_snapshot().await.cwd().clone(),
             };
             let params = PermissionsRequestApprovalParams {
                 thread_id: conversation_id.to_string(),
@@ -844,6 +857,24 @@ pub(crate) async fn apply_bespoke_event_handling(
         | EventMsg::AgentReasoningSectionBreak(_)) => {
             let notification = item_event_to_server_notification(
                 msg,
+                &conversation_id.to_string(),
+                &event_turn_id,
+            );
+            outgoing.send_server_notification(notification).await;
+        }
+        EventMsg::SubAgentActivity(activity) => {
+            if activity.kind == SubAgentActivityKind::Interrupted
+                && thread_manager
+                    .get_thread(activity.agent_thread_id)
+                    .await
+                    .is_err()
+            {
+                thread_watch_manager
+                    .remove_thread(&activity.agent_thread_id.to_string())
+                    .await;
+            }
+            let notification = item_event_to_server_notification(
+                EventMsg::SubAgentActivity(activity),
                 &conversation_id.to_string(),
                 &event_turn_id,
             );
@@ -1149,7 +1180,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         return;
                     }
                 };
-                let fallback_cwd = conversation.config_snapshot().await.cwd;
+                let fallback_cwd = conversation.config_snapshot().await.cwd().clone();
                 let stored_thread = match conversation
                     .read_thread(
                         /*include_archived*/ true, /*include_history*/ true,
@@ -2092,6 +2123,7 @@ mod tests {
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_login::CodexAuth;
+    use codex_protocol::AgentPath;
     use codex_protocol::items::HookPromptFragment;
     use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
@@ -2113,6 +2145,7 @@ mod tests {
     use codex_protocol::protocol::RateLimitWindow;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentActivityEvent;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_protocol::protocol::UserMessageEvent;
@@ -2169,6 +2202,7 @@ mod tests {
         ];
         let stored_thread = StoredThread {
             thread_id,
+            extra_config: None,
             rollout_path: None,
             forked_from_id: None,
             parent_thread_id: None,
@@ -3283,6 +3317,94 @@ mod tests {
             }
             other => bail!("unexpected message: {other:?}"),
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn interrupted_subagent_activity_removes_missing_thread_watch() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config).await?;
+        let child_thread_id = ThreadId::new();
+        let child_thread_id_string = child_thread_id.to_string();
+        let thread_watch_manager = ThreadWatchManager::new();
+        thread_watch_manager
+            .note_turn_started(&child_thread_id_string)
+            .await;
+        assert_eq!(thread_watch_manager.running_turn_count().await, 1);
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        apply_bespoke_event_handling(
+            Event {
+                id: "turn-1".to_string(),
+                msg: EventMsg::SubAgentActivity(SubAgentActivityEvent {
+                    event_id: "activity-1".to_string(),
+                    occurred_at_ms: 42,
+                    agent_thread_id: child_thread_id,
+                    agent_path: AgentPath::try_from("/root/worker")
+                        .expect("agent path should parse"),
+                    kind: SubAgentActivityKind::Interrupted,
+                }),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            outgoing,
+            new_thread_state(),
+            thread_watch_manager.clone(),
+            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
+            "test-provider".to_string(),
+        )
+        .await;
+
+        assert_eq!(
+            thread_watch_manager
+                .loaded_status_for_thread(&child_thread_id_string)
+                .await,
+            ThreadStatus::NotLoaded
+        );
+        assert_eq!(thread_watch_manager.running_turn_count().await, 0);
+        let message = recv_broadcast_message(&mut rx).await?;
+        let OutgoingMessage::AppServerNotification(ServerNotification::ItemCompleted(payload)) =
+            message
+        else {
+            bail!("unexpected message: {message:?}");
+        };
+        assert_eq!(
+            payload,
+            ItemCompletedNotification {
+                item: ThreadItem::SubAgentActivity {
+                    id: "activity-1".to_string(),
+                    kind: codex_app_server_protocol::SubAgentActivityKind::Interrupted,
+                    agent_thread_id: child_thread_id_string,
+                    agent_path: "/root/worker".to_string(),
+                },
+                thread_id: conversation_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                completed_at_ms: 42,
+            }
+        );
         Ok(())
     }
 

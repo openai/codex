@@ -4,6 +4,7 @@ use std::sync::PoisonError;
 use std::sync::Weak;
 use std::time::Duration;
 
+use codex_analytics::AnalyticsEventsClient;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -124,7 +125,7 @@ async fn goal_tools_hidden_for_review_subagents() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn installed_goal_tools_reject_duplicate_goal_creation() -> anyhow::Result<()> {
+async fn installed_goal_tools_only_replace_complete_goal() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -152,10 +153,31 @@ async fn installed_goal_tools_reject_duplicate_goal_creation() -> anyhow::Result
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "cannot create a new goal because this thread already has a goal; use update_goal only when the existing goal is complete"
+            "cannot create a new goal because this thread has an unfinished goal; complete the existing goal first"
                 .to_string()
         )
     );
+
+    let update_tool = tool_by_name(&tools, "update_goal");
+    update_tool
+        .handle(tool_call(
+            "update_goal",
+            "call-complete-goal",
+            json!({ "status": "complete" }),
+        ))
+        .await?;
+
+    let invocation = tool_call(
+        "create_goal",
+        "call-create-goal-3",
+        json!({ "objective": "replacement goal" }),
+    );
+    let output = create_tool.handle(invocation.clone()).await?;
+    let result = output.code_mode_result(&invocation.payload);
+
+    assert_eq!(json!("replacement goal"), result["goal"]["objective"]);
+    assert_eq!(json!("active"), result["goal"]["status"]);
+    assert_eq!(json!(0), result["goal"]["tokensUsed"]);
     Ok(())
 }
 
@@ -494,18 +516,9 @@ async fn turn_error_usage_limit_accounts_progress_and_clears_accounting() -> any
             ),
         )
         .await;
-    let turn_store = ExtensionData::new("turn-1");
-    for contributor in harness.registry.turn_lifecycle_contributors() {
-        contributor
-            .on_turn_error(TurnErrorInput {
-                turn_id: "turn-1",
-                error: CodexErrorInfo::UsageLimitExceeded,
-                session_store: &harness.session_store,
-                thread_store: &harness.thread_store,
-                turn_store: &turn_store,
-            })
-            .await;
-    }
+    harness
+        .notify_turn_error("turn-1", CodexErrorInfo::UsageLimitExceeded)
+        .await;
 
     let goal = runtime
         .thread_goals()
@@ -554,6 +567,36 @@ async fn turn_error_usage_limit_accounts_progress_and_clears_accounting() -> any
         .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
     assert_eq!(23, goal.tokens_used);
     assert_eq!(codex_state::ThreadGoalStatus::UsageLimited, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_error_blocks_goal() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+
+    let tools = harness.tools();
+    tool_by_name(&tools, "create_goal")
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": "ship goal extension backend" }),
+        ))
+        .await?;
+
+    harness
+        .notify_turn_error("turn-1", CodexErrorInfo::Other)
+        .await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Blocked, goal.status);
     Ok(())
 }
 
@@ -1072,6 +1115,7 @@ async fn installed_tools_with_start(
     install_with_backend(
         &mut builder,
         runtime,
+        AnalyticsEventsClient::disabled(),
         /*metrics_client*/ None,
         Weak::new(),
         goal_service,
@@ -1122,6 +1166,7 @@ impl GoalExtensionHarness {
         install_with_backend(
             &mut builder,
             runtime,
+            AnalyticsEventsClient::disabled(),
             /*metrics_client*/ None,
             Weak::new(),
             Arc::clone(&goal_service),
@@ -1250,6 +1295,21 @@ impl GoalExtensionHarness {
                     tool_name: &tool_name,
                     source: ToolCallSource::Direct,
                     outcome: ToolCallOutcome::Completed { success: true },
+                })
+                .await;
+        }
+    }
+
+    async fn notify_turn_error(&self, turn_id: &str, error: CodexErrorInfo) {
+        let turn_store = ExtensionData::new(turn_id);
+        for contributor in self.registry.turn_lifecycle_contributors() {
+            contributor
+                .on_turn_error(TurnErrorInput {
+                    turn_id,
+                    error: error.clone(),
+                    session_store: &self.session_store,
+                    thread_store: &self.thread_store,
+                    turn_store: &turn_store,
                 })
                 .await;
         }

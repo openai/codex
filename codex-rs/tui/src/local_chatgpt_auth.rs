@@ -109,6 +109,8 @@ mod tests {
             }),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
+            personal_access_token: None,
+            bedrock_api_key: None,
         };
         save_auth(codex_home, &auth, AuthCredentialsStoreMode::File)
             .expect("chatgpt auth should save");
@@ -156,6 +158,8 @@ mod tests {
                 tokens: None,
                 last_refresh: None,
                 agent_identity: None,
+                personal_access_token: None,
+                bedrock_api_key: None,
             },
             AuthCredentialsStoreMode::File,
         )

@@ -67,10 +67,7 @@ async fn build_refresh_config(
     let config = config_manager
         .load_latest_config_for_thread(thread_config.as_ref())
         .await?;
-    let mcp_servers = thread_manager
-        .mcp_manager()
-        .configured_servers(&config)
-        .await;
+    let mcp_servers = thread_manager.mcp_manager().runtime_servers(&config).await;
     Ok(McpServerRefreshConfig {
         mcp_servers: serde_json::to_value(mcp_servers).map_err(io::Error::other)?,
         mcp_oauth_credentials_store_mode: serde_json::to_value(
@@ -99,6 +96,7 @@ async fn queue_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extensions::ThreadExtensionDependencies;
     use crate::extensions::guardian_agent_spawner;
     use crate::extensions::thread_extensions;
     use async_trait::async_trait;
@@ -115,6 +113,7 @@ mod tests {
     use codex_core::thread_store_from_config;
     use codex_exec_server::EnvironmentManager;
     use codex_extension_api::NoopExtensionEventSink;
+    use codex_home::CodexHomeUserInstructionsProvider;
     use codex_login::AuthManager;
     use codex_login::CodexAuth;
     use codex_protocol::protocol::SessionSource;
@@ -181,17 +180,35 @@ mod tests {
             .await
             .expect("refresh tests require state db");
         let thread_store = thread_store_from_config(&good_config, Some(state_db.clone()));
+        let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+        let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
+            codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
+                Arc::clone(&environment_manager),
+                SessionSource::Exec.restriction_product(),
+            ),
+        );
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 &good_config,
                 auth_manager.clone(),
                 SessionSource::Exec,
-                Arc::new(EnvironmentManager::default_for_tests()),
+                Arc::clone(&environment_manager),
                 thread_extensions(
                     guardian_agent_spawner(thread_manager.clone()),
-                    Arc::new(NoopExtensionEventSink),
-                    auth_manager.clone(),
+                    ThreadExtensionDependencies {
+                        event_sink: Arc::new(NoopExtensionEventSink),
+                        auth_manager: auth_manager.clone(),
+                        state_db: Some(state_db.clone()),
+                        analytics_events_client: codex_analytics::AnalyticsEventsClient::disabled(),
+                        thread_manager: thread_manager.clone(),
+                        goal_service: Arc::new(codex_goal_extension::GoalService::new()),
+                        executor_skill_provider: Arc::clone(&executor_skill_provider),
+                        thread_store: Arc::clone(&thread_store),
+                    },
                 ),
+                Arc::new(CodexHomeUserInstructionsProvider::new(
+                    good_config.codex_home.clone(),
+                )),
                 /*analytics_events_client*/ None,
                 Arc::clone(&thread_store),
                 Some(state_db.clone()),

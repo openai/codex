@@ -1,8 +1,12 @@
+use std::collections::HashSet;
+
 use codex_api::ImageBackground;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
+use codex_core::context::extension_image_generation_output_hint;
+use codex_core::image_generation_artifact_path;
 use codex_extension_api::ExtensionTurnItem;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
@@ -25,6 +29,9 @@ use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolExposure;
 use codex_tools::default_namespace_description;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_image::PromptImageMode;
+use codex_utils_image::load_for_prompt_bytes;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
@@ -42,12 +49,22 @@ const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
+    codex_home: AbsolutePathBuf,
+    thread_id: String,
 }
 
 impl ImageGenerationTool {
     /// Creates an image-generation tool backed by an image API executor.
-    pub(crate) fn new(backend: CodexImagesBackend) -> Self {
-        Self { backend }
+    pub(crate) fn new(
+        backend: CodexImagesBackend,
+        codex_home: AbsolutePathBuf,
+        thread_id: String,
+    ) -> Self {
+        Self {
+            backend,
+            codex_home,
+            thread_id,
+        }
     }
 }
 
@@ -55,24 +72,19 @@ impl ImageGenerationTool {
 #[serde(deny_unknown_fields)]
 struct ImagegenArgs {
     prompt: String,
-    action: ImagegenAction,
+    #[schemars(length(max = 5))]
+    referenced_image_paths: Option<Vec<AbsolutePathBuf>>,
+    #[schemars(range(min = 1, max = 5))]
+    num_last_images_to_include: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-enum ImagegenAction {
-    Generate,
-    Edit,
-}
-
-#[async_trait::async_trait]
 impl ToolExecutor<ToolCall> for ImageGenerationTool {
     /// Keeps the tool in the existing image-generation Responses namespace.
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(IMAGE_GEN_NAMESPACE, IMAGEGEN_TOOL_NAME)
     }
 
-    /// Advertises the model contract: a rewritten prompt and semantic action.
+    /// Advertises the model contract: a rewritten prompt and optional edit references.
     fn spec(&self) -> ToolSpec {
         imagegen_tool_spec()
     }
@@ -83,9 +95,15 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
     }
 
     /// Executes the selected image operation and returns the completed image result.
-    async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+    fn handle(&self, call: ToolCall) -> codex_extension_api::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(call))
+    }
+}
+
+impl ImageGenerationTool {
+    async fn handle_call(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
-        let request = request_for_action(&args, call.conversation_history.items())?;
+        let request = request_for_args(&args, call.conversation_history.items())?;
         call.turn_item_emitter
             .emit_started(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
                 id: call.call_id.clone(),
@@ -116,7 +134,17 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
                 saved_path: None,
             }))
             .await;
-        Ok(Box::new(GeneratedImageOutput { result }))
+        let output_path =
+            image_generation_artifact_path(&self.codex_home, &self.thread_id, &call.call_id);
+        let output_dir = output_path
+            .parent()
+            .unwrap_or_else(|| self.codex_home.clone());
+        let output_hint =
+            extension_image_generation_output_hint(output_dir.display(), output_path.display());
+        Ok(Box::new(GeneratedImageOutput {
+            result,
+            output_hint,
+        }))
     }
 }
 
@@ -126,105 +154,84 @@ enum ImageRequest {
     Edit(ImageEditRequest),
 }
 
-/// Maps the model-selected action to the fixed image API request parameters.
-fn request_for_action(
+/// Builds a generation or edit request from the mutually exclusive image selectors.
+fn request_for_args(
     args: &ImagegenArgs,
     history: &[ResponseItem],
 ) -> Result<ImageRequest, FunctionCallError> {
-    match args.action {
-        ImagegenAction::Generate => Ok(ImageRequest::Generate(ImageGenerationRequest {
-            prompt: args.prompt.clone(),
-            background: Some(ImageBackground::Auto),
-            model: IMAGE_MODEL.to_string(),
-            n: None,
-            quality: Some(ImageQuality::Auto),
-            size: Some("auto".to_string()),
-        })),
-        ImagegenAction::Edit => {
-            let images = edit_images(history);
-            if images.is_empty() {
-                return Err(FunctionCallError::RespondToModel(
-                    "image edit requested without any usable image in conversation history"
-                        .to_string(),
-                ));
-            }
-            Ok(ImageRequest::Edit(ImageEditRequest {
-                images,
+    let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
+    if paths.len() > MAX_EDIT_IMAGES {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`referenced_image_paths` must contain at most {MAX_EDIT_IMAGES} paths"
+        )));
+    }
+    let images = match (paths.is_empty(), args.num_last_images_to_include) {
+        (true, None) => {
+            return Ok(ImageRequest::Generate(ImageGenerationRequest {
                 prompt: args.prompt.clone(),
                 background: Some(ImageBackground::Auto),
                 model: IMAGE_MODEL.to_string(),
                 n: None,
                 quality: Some(ImageQuality::Auto),
                 size: Some("auto".to_string()),
-            }))
+            }));
         }
-    }
+        (false, None) => paths.iter().map(image_url).collect::<Result<Vec<_>, _>>()?,
+        (true, Some(count)) => {
+            if !(1..=MAX_EDIT_IMAGES).contains(&count) {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "`num_last_images_to_include` must be between 1 and {MAX_EDIT_IMAGES}"
+                )));
+            }
+            // Pathless images have no stable reference, so this bounded window may include newer
+            // unrelated images. This remains best-effort until the harness provides stable refs.
+            let images = recent_images(history, count);
+            if images.len() != count {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "requested the last {count} conversation images, but only {} were available",
+                    images.len()
+                )));
+            }
+            images
+        }
+        (false, Some(_)) => {
+            return Err(FunctionCallError::RespondToModel(
+                "provide only one of `referenced_image_paths` or \
+                 `num_last_images_to_include`"
+                    .to_string(),
+            ));
+        }
+    };
+
+    Ok(ImageRequest::Edit(ImageEditRequest {
+        images,
+        prompt: args.prompt.clone(),
+        background: Some(ImageBackground::Auto),
+        model: IMAGE_MODEL.to_string(),
+        n: None,
+        quality: Some(ImageQuality::Auto),
+        size: Some("auto".to_string()),
+    }))
 }
 
-/// Selects edit context using the hosted imagegen anchor and truncation behavior.
-fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
-    let latest_uploaded_images = history.iter().enumerate().rev().find_map(|(index, item)| {
-        let ResponseItem::Message { role, content, .. } = item else {
-            return None;
-        };
-        if role != "user" {
-            return None;
-        }
-        let images = content
-            .iter()
-            .filter_map(|item| match item {
-                ContentItem::InputImage { image_url, .. } => Some(ImageUrl {
-                    image_url: image_url.clone(),
-                }),
-                ContentItem::InputText { .. } | ContentItem::OutputText { .. } => None,
-            })
-            .collect::<Vec<_>>();
-        (!images.is_empty()).then_some((index, images))
-    });
-    let (user_images, follow_up_start) = latest_uploaded_images
-        .map_or_else(|| (Vec::new(), 0), |(index, images)| (images, index + 1));
-    let mut generated_images = Vec::new();
-    for item in &history[follow_up_start..] {
+/// Selects the newest requested images while preserving their conversation order.
+fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
+    let mut function_call_ids = HashSet::new();
+    let mut custom_tool_call_ids = HashSet::new();
+    for item in history {
         match item {
-            ResponseItem::ImageGenerationCall { result, .. } if !result.is_empty() => {
-                generated_images.push(ImageUrl {
-                    image_url: format!("data:image/png;base64,{result}"),
-                });
+            ResponseItem::FunctionCall { call_id, .. } => {
+                function_call_ids.insert(call_id.as_str());
             }
-            ResponseItem::FunctionCallOutput { call_id, output }
-                if history.iter().any(|item| {
-                    matches!(
-                        item,
-                        ResponseItem::FunctionCall {
-                            name,
-                            namespace: Some(namespace),
-                            call_id: function_call_id,
-                            ..
-                        } if function_call_id == call_id
-                            && name == IMAGEGEN_TOOL_NAME
-                            && namespace == IMAGE_GEN_NAMESPACE
-                    )
-                }) =>
-            {
-                generated_images.extend(output.content_items().into_iter().flatten().filter_map(
-                    |item| match item {
-                        FunctionCallOutputContentItem::InputImage { image_url, .. } => {
-                            Some(ImageUrl {
-                                image_url: image_url.clone(),
-                            })
-                        }
-                        FunctionCallOutputContentItem::InputText { .. }
-                        | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
-                    },
-                ));
+            ResponseItem::CustomToolCall { call_id, .. } => {
+                custom_tool_call_ids.insert(call_id.as_str());
             }
             ResponseItem::Message { .. }
+            | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::FunctionCall { .. }
             | ResponseItem::ToolSearchCall { .. }
             | ResponseItem::FunctionCallOutput { .. }
-            | ResponseItem::CustomToolCall { .. }
             | ResponseItem::CustomToolCallOutput { .. }
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
@@ -235,25 +242,89 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
             | ResponseItem::Other => {}
         }
     }
-    truncate_images(user_images, generated_images)
+
+    let mut images = Vec::with_capacity(count);
+    'history: for item in history.iter().rev() {
+        let mut image_urls = Vec::new();
+        match item {
+            ResponseItem::Message { content, .. } => {
+                image_urls.extend(content.iter().rev().filter_map(|item| match item {
+                    ContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
+                    ContentItem::InputText { .. } | ContentItem::OutputText { .. } => None,
+                }));
+            }
+            ResponseItem::FunctionCallOutput { call_id, output }
+                if function_call_ids.contains(call_id.as_str()) =>
+            {
+                image_urls.extend(output_image_urls(output));
+            }
+            ResponseItem::CustomToolCallOutput {
+                call_id, output, ..
+            } if custom_tool_call_ids.contains(call_id.as_str()) => {
+                image_urls.extend(output_image_urls(output));
+            }
+            ResponseItem::ImageGenerationCall { result, .. } if !result.is_empty() => {
+                image_urls.push(format!("data:image/png;base64,{result}"));
+            }
+            ResponseItem::Reasoning { .. }
+            | ResponseItem::AgentMessage { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::FunctionCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger
+            | ResponseItem::ContextCompaction { .. }
+            | ResponseItem::Other => {}
+        }
+        for image_url in image_urls {
+            images.push(ImageUrl { image_url });
+            if images.len() == count {
+                break 'history;
+            }
+        }
+    }
+    images.reverse();
+    images
 }
 
-/// Truncates edit inputs while preserving the newest generated image when possible.
-fn truncate_images(
-    mut user_images: Vec<ImageUrl>,
-    mut generated_images: Vec<ImageUrl>,
-) -> Vec<ImageUrl> {
-    let mut excess = (user_images.len() + generated_images.len()).saturating_sub(MAX_EDIT_IMAGES);
-    let drop_generated = excess.min(generated_images.len().saturating_sub(1));
-    generated_images.drain(..drop_generated);
-    excess -= drop_generated;
-    let drop_user = excess.min(user_images.len());
-    user_images.drain(..drop_user);
-    excess -= drop_user;
-    generated_images.drain(..excess);
+/// Extracts image URLs from a tool output in newest-first order.
+fn output_image_urls(output: &FunctionCallOutputPayload) -> impl Iterator<Item = String> + '_ {
+    output
+        .content_items()
+        .into_iter()
+        .flatten()
+        .rev()
+        .filter_map(|item| match item {
+            FunctionCallOutputContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
+            FunctionCallOutputContentItem::InputText { .. }
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
+        })
+}
 
-    user_images.extend(generated_images);
-    user_images
+fn image_url(path: &AbsolutePathBuf) -> Result<ImageUrl, FunctionCallError> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        FunctionCallError::RespondToModel(format!(
+            "unable to read referenced image at `{}`: {error}",
+            path.display()
+        ))
+    })?;
+    let image = load_for_prompt_bytes(path.as_path(), bytes, PromptImageMode::Original).map_err(
+        |error| {
+            FunctionCallError::RespondToModel(format!(
+                "unable to process referenced image at `{}`: {error}",
+                path.display()
+            ))
+        },
+    )?;
+    Ok(ImageUrl {
+        image_url: image.into_data_url(),
+    })
 }
 
 /// Parses the strict model-facing arguments for an image-generation call.
@@ -297,6 +368,7 @@ fn imagegen_tool_spec() -> ToolSpec {
 
 struct GeneratedImageOutput {
     result: String,
+    output_hint: Option<String>,
 }
 
 impl ToolOutput for GeneratedImageOutput {
@@ -310,12 +382,32 @@ impl ToolOutput for GeneratedImageOutput {
         true
     }
 
-    /// Returns generated bytes for model follow-up.
+    /// Returns the object consumed by the code-mode `generatedImage()` helper.
+    fn code_mode_result(&self, _payload: &ToolPayload) -> Value {
+        let mut result = Map::from_iter([(
+            "image_url".to_string(),
+            Value::String(format!("data:image/png;base64,{}", self.result)),
+        )]);
+        if let Some(output_hint) = &self.output_hint {
+            result.insert(
+                "output_hint".to_string(),
+                Value::String(output_hint.clone()),
+            );
+        }
+        Value::Object(result)
+    }
+
+    /// Returns generated bytes and persisted-artifact context for model follow-up.
     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
-        let content = vec![FunctionCallOutputContentItem::InputImage {
+        let mut content = vec![FunctionCallOutputContentItem::InputImage {
             image_url: format!("data:image/png;base64,{}", self.result),
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }];
+        if let Some(output_hint) = &self.output_hint {
+            content.push(FunctionCallOutputContentItem::InputText {
+                text: output_hint.clone(),
+            });
+        }
         ResponseInputItem::FunctionCallOutput {
             call_id: call_id.to_string(),
             output: FunctionCallOutputPayload {

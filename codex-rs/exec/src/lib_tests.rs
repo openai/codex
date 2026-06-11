@@ -267,6 +267,35 @@ fn lagged_event_warning_message_is_explicit() {
     );
 }
 
+#[test]
+fn runtime_warnings_are_filtered_to_the_primary_thread() {
+    let primary_thread_id = "thread-1";
+    let turn_id = "turn-1";
+    let outcomes = [
+        codex_app_server_protocol::WarningNotification {
+            thread_id: None,
+            message: "global warning".to_string(),
+        },
+        codex_app_server_protocol::WarningNotification {
+            thread_id: Some(primary_thread_id.to_string()),
+            message: "primary warning".to_string(),
+        },
+        codex_app_server_protocol::WarningNotification {
+            thread_id: Some("thread-2".to_string()),
+            message: "other warning".to_string(),
+        },
+    ]
+    .map(|warning| {
+        should_process_notification(
+            &ServerNotification::Warning(warning),
+            primary_thread_id,
+            turn_id,
+        )
+    });
+
+    assert_eq!(outcomes, [true, true, false]);
+}
+
 #[tokio::test]
 async fn resume_lookup_model_providers_filters_only_last_lookup() {
     let codex_home = tempdir().expect("create temp codex home");
@@ -387,26 +416,6 @@ fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
     assert!(!should_backfill_turn_completed_items(
         /*thread_ephemeral*/ true,
         &notification
-    ));
-}
-
-#[test]
-fn should_process_warning_for_current_thread() {
-    let notification =
-        ServerNotification::Warning(codex_app_server_protocol::WarningNotification {
-            thread_id: Some("thread-1".to_string()),
-            message: "failed to parse hooks config".to_string(),
-        });
-
-    assert!(should_process_notification(
-        &notification,
-        "thread-1",
-        "turn-1"
-    ));
-    assert!(!should_process_notification(
-        &notification,
-        "thread-2",
-        "turn-1"
     ));
 }
 
