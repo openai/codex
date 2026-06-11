@@ -10,6 +10,7 @@ mod util;
 mod external_bearer;
 mod manager;
 mod revoke;
+mod workload_identity;
 
 pub use bedrock_api_key::BedrockApiKeyAuth;
 pub use bedrock_api_key::login_with_bedrock_api_key;

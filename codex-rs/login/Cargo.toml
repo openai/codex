@@ -21,6 +21,7 @@ codex-protocol = { workspace = true }
 codex-secrets = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-utils-template = { workspace = true }
+codex-workload-identity = { workspace = true, features = ["azure"] }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }

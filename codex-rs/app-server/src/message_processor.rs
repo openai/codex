@@ -320,7 +320,7 @@ impl MessageProcessor {
             remote_control_handle,
             plugin_startup_tasks,
         } = args;
-        auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
+        auth_manager.set_external_auth_if_absent(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
         let thread_state_manager = ThreadStateManager::new();

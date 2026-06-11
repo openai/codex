@@ -789,6 +789,32 @@
       },
       "type": "object"
     },
+    "CredentialSourceConfig": {
+      "description": "Supported runtime credential sources. Implementations are independently feature gated.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A projected Azure workload identity token.",
+          "properties": {
+            "token_file": {
+              "default": null,
+              "description": "Token path. When omitted, Codex reads `AZURE_FEDERATED_TOKEN_FILE`.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "azure"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "DebugConfigLockToml": {
       "additionalProperties": false,
       "properties": {
@@ -4388,6 +4414,39 @@
         }
       ]
     },
+    "WorkloadIdentityConfig": {
+      "additionalProperties": false,
+      "description": "Configuration for exchanging a workload credential for a Codex access token.",
+      "properties": {
+        "credential_source": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CredentialSourceConfig"
+            }
+          ],
+          "description": "Runtime-specific mechanism used to obtain the external subject token."
+        },
+        "identity_provider_id": {
+          "description": "OpenAI workload identity provider selected by the workspace administrator.",
+          "type": "string"
+        },
+        "identity_provider_mapping_id": {
+          "description": "Administrator-created mapping from external claims to a ChatGPT principal.",
+          "type": "string"
+        },
+        "token_url": {
+          "default": "https://auth.openai.com/oauth/token",
+          "description": "OAuth token endpoint. The override is primarily useful for local development.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "credential_source",
+        "identity_provider_id",
+        "identity_provider_mapping_id"
+      ],
+      "type": "object"
+    },
     "WorkspaceRootsToml": {
       "type": "object"
     }
@@ -5290,6 +5349,15 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
+    },
+    "workload_identity": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkloadIdentityConfig"
+        }
+      ],
+      "default": null,
+      "description": "Workload identity federation for unattended Codex execution."
     }
   },
   "title": "ConfigToml",

@@ -14,6 +14,8 @@ use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 use tempfile::tempdir;
 use wiremock::Mock;
@@ -545,6 +547,86 @@ fn external_auth_tokens_without_chatgpt_metadata_cannot_seed_chatgpt_auth() {
         err.to_string(),
         "external auth tokens are missing ChatGPT metadata"
     );
+}
+
+struct TestExternalChatgptAuth {
+    initial: ExternalAuthTokens,
+    refreshed: ExternalAuthTokens,
+    refresh_count: AtomicUsize,
+}
+
+#[async_trait]
+impl ExternalAuth for TestExternalChatgptAuth {
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::Chatgpt
+    }
+
+    async fn resolve(&self) -> std::io::Result<Option<ExternalAuthTokens>> {
+        Ok(Some(self.initial.clone()))
+    }
+
+    async fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> std::io::Result<ExternalAuthTokens> {
+        self.refresh_count.fetch_add(1, Ordering::Relaxed);
+        Ok(self.refreshed.clone())
+    }
+}
+
+#[tokio::test]
+async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("enterprise".to_string()),
+        chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+    })
+    .expect("build test access token");
+    let refreshed_token = format!("{}.refreshed", token.rsplit_once('.').unwrap().0);
+    let external = Arc::new(TestExternalChatgptAuth {
+        initial: ExternalAuthTokens::chatgpt(
+            token.clone(),
+            WORKSPACE_ID_ALLOWED,
+            Some("enterprise".to_string()),
+        ),
+        refreshed: ExternalAuthTokens::chatgpt(
+            refreshed_token.clone(),
+            WORKSPACE_ID_ALLOWED,
+            Some("enterprise".to_string()),
+        ),
+        refresh_count: AtomicUsize::new(0),
+    });
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    manager.set_external_auth(external.clone());
+
+    assert_eq!(manager.auth_mode(), Some(AuthMode::Chatgpt));
+    assert_eq!(
+        manager.get_api_auth_mode(),
+        Some(AuthMode::ChatgptAuthTokens)
+    );
+    let auth = manager.auth().await.expect("external auth should resolve");
+    assert!(manager.is_external_chatgpt_auth_active());
+    assert_eq!(auth.get_token().unwrap(), token);
+    assert_eq!(auth.get_account_id().as_deref(), Some(WORKSPACE_ID_ALLOWED));
+    assert!(!get_auth_file(codex_home.path()).exists());
+
+    manager
+        .refresh_token()
+        .await
+        .expect("external auth refresh");
+    assert_eq!(external.refresh_count.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        manager.auth_cached().unwrap().get_token().unwrap(),
+        refreshed_token
+    );
+    assert!(!get_auth_file(codex_home.path()).exists());
 }
 
 #[tokio::test]

@@ -108,6 +108,7 @@ pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
+use codex_workload_identity::WorkloadIdentityConfig;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
 use rmcp::model::UrlElicitationCapability;
@@ -804,6 +805,9 @@ pub struct Config {
     /// auto: Use the OS-specific keyring service if available, otherwise use a file.
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 
+    /// Workload identity federation configuration for external ChatGPT auth.
+    pub workload_identity: Option<WorkloadIdentityConfig>,
+
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
@@ -1145,6 +1149,10 @@ impl AuthManagerConfig for Config {
 
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
+    }
+
+    fn workload_identity(&self) -> Option<WorkloadIdentityConfig> {
+        self.workload_identity.clone()
     }
 }
 
@@ -3518,6 +3526,11 @@ impl Config {
             profile_workspace_roots,
         )
         .map_err(std::io::Error::from)?;
+        if let Some(workload_identity) = cfg.workload_identity.as_ref() {
+            workload_identity.validate().map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
+            })?;
+        }
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             model,
@@ -3564,6 +3577,7 @@ impl Config {
                 cfg.cli_auth_credentials_store.unwrap_or_default(),
                 env!("CARGO_PKG_VERSION"),
             ),
+            workload_identity: cfg.workload_identity.clone(),
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.

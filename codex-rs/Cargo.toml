@@ -32,6 +32,7 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
+    "workload-identity",
     "context-fragments",
     "shell-command",
     "shell-escalation",
@@ -163,6 +164,7 @@ codex-code-mode = { path = "code-mode" }
 codex-code-mode-protocol = { path = "code-mode-protocol" }
 codex-home = { path = "codex-home" }
 codex-config = { path = "config" }
+codex-workload-identity = { path = "workload-identity" }
 codex-connectors = { path = "connectors" }
 codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }

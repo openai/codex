@@ -51,6 +51,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
+use codex_workload_identity::WorkloadIdentityConfig;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -231,6 +232,10 @@ pub struct ConfigToml {
     /// When set, restricts ChatGPT login to one or more workspace identifiers.
     #[serde(default)]
     pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
+
+    /// Workload identity federation for unattended Codex execution.
+    #[serde(default)]
+    pub workload_identity: Option<WorkloadIdentityConfig>,
 
     /// When set, restricts the login mechanism users may use.
     #[serde(default)]
