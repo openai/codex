@@ -2,6 +2,7 @@ mod description;
 mod response;
 mod runtime;
 mod session;
+pub mod wire;
 
 pub use description::CODE_MODE_PRAGMA_PREFIX;
 pub use description::CodeModeToolKind;

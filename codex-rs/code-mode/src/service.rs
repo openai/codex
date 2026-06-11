@@ -93,6 +93,7 @@ struct Inner {
     cells: Mutex<HashMap<CellId, CellHandle>>,
     delegate: Arc<dyn CodeModeSessionDelegate>,
     shutting_down: AtomicBool,
+    cell_id_prefix: Option<String>,
     next_cell_id: AtomicU64,
 }
 
@@ -106,24 +107,38 @@ impl CodeModeService {
     }
 
     pub fn with_delegate(delegate: Arc<dyn CodeModeSessionDelegate>) -> Self {
+        Self::with_inner(delegate, /*cell_id_prefix*/ None)
+    }
+
+    pub fn with_delegate_and_cell_id_prefix(
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        cell_id_prefix: String,
+    ) -> Self {
+        Self::with_inner(delegate, Some(cell_id_prefix))
+    }
+
+    fn with_inner(
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        cell_id_prefix: Option<String>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 stored_values: Mutex::new(HashMap::new()),
                 cells: Mutex::new(HashMap::new()),
                 delegate,
                 shutting_down: AtomicBool::new(false),
+                cell_id_prefix,
                 next_cell_id: AtomicU64::new(1),
             }),
         }
     }
 
     fn allocate_cell_id(&self) -> CellId {
-        CellId::new(
-            self.inner
-                .next_cell_id
-                .fetch_add(1, Ordering::Relaxed)
-                .to_string(),
-        )
+        let cell_id = self.inner.next_cell_id.fetch_add(1, Ordering::Relaxed);
+        CellId::new(match &self.inner.cell_id_prefix {
+            Some(prefix) => format!("{prefix}_{cell_id}"),
+            None => cell_id.to_string(),
+        })
     }
 
     pub async fn execute(&self, request: ExecuteRequest) -> Result<StartedCell, String> {
@@ -823,6 +838,7 @@ mod tests {
             cells: Mutex::new(HashMap::new()),
             delegate: Arc::new(NoopCodeModeSessionDelegate),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
+            cell_id_prefix: None,
             next_cell_id: AtomicU64::new(1),
         })
     }
@@ -847,6 +863,27 @@ mod tests {
                 cell_id: cell_id("1"),
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "before".to_string(),
+                }],
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn cell_ids_include_the_configured_host_prefix() {
+        let service = CodeModeService::with_delegate_and_cell_id_prefix(
+            Arc::new(NoopCodeModeSessionDelegate),
+            "host7".to_string(),
+        );
+
+        let response = execute(&service, execute_request("text('done');")).await;
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: cell_id("host7_1"),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "done".to_string(),
                 }],
                 error_text: None,
             }

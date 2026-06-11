@@ -2493,6 +2493,15 @@ dependencies = [
 [[package]]
 name = "codex-code-mode-host"
 version = "0.0.0"
+dependencies = [
+ "codex-code-mode",
+ "codex-code-mode-protocol",
+ "codex-utils-cargo-bin",
+ "pretty_assertions",
+ "tokio",
+ "tokio-util",
+ "v8",
+]
 
 [[package]]
 name = "codex-code-mode-protocol"
