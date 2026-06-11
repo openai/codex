@@ -16,7 +16,6 @@ use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_goal_extension::GoalService;
 use codex_login::AuthManager;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::Event;
@@ -74,9 +73,9 @@ where
         &mut builder,
         codex_skills_extension::SkillProviders::new()
             .with_executor_provider(executor_skill_provider)
-            .with_remote_provider(Arc::new(codex_skills_extension::BackendSkillProvider::new(
-                CODEX_APPS_MCP_SERVER_NAME,
-            ))),
+            .with_orchestrator_provider(Arc::new(
+                codex_skills_extension::OrchestratorSkillProvider::new(),
+            )),
     );
     Arc::new(builder.build())
 }

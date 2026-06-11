@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceContent;
 
@@ -19,41 +20,41 @@ use crate::provider::SkillProviderFuture;
 use crate::provider::SkillReadRequest;
 use crate::provider::SkillSearchRequest;
 
-const BACKEND_SKILL_MIME_TYPE: &str = "mcp/skill";
-const BACKEND_SKILL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
-const BACKEND_SKILL_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const ORCHESTRATOR_SKILL_MIME_TYPE: &str = "mcp/skill";
+const ORCHESTRATOR_SKILL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
+const ORCHESTRATOR_SKILL_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESOURCE_PAGES: usize = 10;
-const MAX_BACKEND_SKILLS: usize = 100;
+const MAX_ORCHESTRATOR_SKILLS: usize = 100;
 const MAX_SKILL_NAME_CHARS: usize = 64;
 const MAX_QUALIFIED_SKILL_NAME_CHARS: usize = 128;
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 1_024;
 const MAX_SKILL_URI_CHARS: usize = 1_024;
 
-/// Discovers and reads backend skills through a session-owned MCP connection.
-#[derive(Clone, Debug)]
-pub struct BackendSkillProvider {
-    server_name: String,
-}
+/// Discovers and reads skills owned by the orchestrator.
+///
+/// The provider uses session-scoped resources without exposing the transport or
+/// resource server to callers that configure the skills extension.
+#[derive(Clone, Debug, Default)]
+pub struct OrchestratorSkillProvider;
 
-impl BackendSkillProvider {
-    pub fn new(server_name: impl Into<String>) -> Self {
-        Self {
-            server_name: server_name.into(),
-        }
+impl OrchestratorSkillProvider {
+    pub fn new() -> Self {
+        Self
     }
 }
 
-impl SkillProvider for BackendSkillProvider {
+impl SkillProvider for OrchestratorSkillProvider {
     fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
         Box::pin(async move {
             let Some(client) = query.mcp_resources else {
                 return Ok(SkillCatalog::default());
             };
-            if !client.has_server(&self.server_name).await {
+            if !client.has_server(CODEX_APPS_MCP_SERVER_NAME).await {
                 return Ok(SkillCatalog::default());
             }
 
-            let discovery_deadline = tokio::time::Instant::now() + BACKEND_SKILL_DISCOVERY_TIMEOUT;
+            let discovery_deadline =
+                tokio::time::Instant::now() + ORCHESTRATOR_SKILL_DISCOVERY_TIMEOUT;
             let mut catalog = SkillCatalog::default();
             let mut cursor = None;
             let mut seen_cursors = HashSet::new();
@@ -65,22 +66,18 @@ impl SkillProvider for BackendSkillProvider {
             for _ in 0..MAX_RESOURCE_PAGES {
                 let page = match tokio::time::timeout_at(
                     discovery_deadline,
-                    client.list_resources(&self.server_name, cursor.clone()),
+                    client.list_resources(CODEX_APPS_MCP_SERVER_NAME, cursor.clone()),
                 )
                 .await
                 {
                     Ok(result) => result.map_err(|err| {
                         SkillProviderError::new(format!(
-                            "failed to list backend skill resources from {}: {err:#}",
-                            self.server_name
+                            "failed to list orchestrator skill resources: {err:#}"
                         ))
                     }),
-                    Err(_) => {
-                        let server_name = &self.server_name;
-                        Err(SkillProviderError::new(format!(
-                            "backend skill discovery from {server_name} timed out after {BACKEND_SKILL_DISCOVERY_TIMEOUT:?}"
-                        )))
-                    }
+                    Err(_) => Err(SkillProviderError::new(format!(
+                        "orchestrator skill discovery timed out after {ORCHESTRATOR_SKILL_DISCOVERY_TIMEOUT:?}"
+                    ))),
                 };
                 let result = match page {
                     Ok(result) => result,
@@ -92,8 +89,8 @@ impl SkillProvider for BackendSkillProvider {
                             "pages"
                         };
                         catalog.warnings.push(format!(
-                            "Backend skill discovery from {} stopped after {completed_pages} resource {page_word}: {}",
-                            self.server_name, err.message
+                            "Orchestrator skill discovery stopped after {completed_pages} resource {page_word}: {}",
+                            err.message
                         ));
                         cursor = None;
                         break;
@@ -102,15 +99,15 @@ impl SkillProvider for BackendSkillProvider {
                 completed_pages = completed_pages.saturating_add(1);
 
                 for resource in &result.resources {
-                    if resource.mime_type.as_deref() != Some(BACKEND_SKILL_MIME_TYPE) {
+                    if resource.mime_type.as_deref() != Some(ORCHESTRATOR_SKILL_MIME_TYPE) {
                         continue;
                     }
-                    if skill_resources_seen >= MAX_BACKEND_SKILLS {
+                    if skill_resources_seen >= MAX_ORCHESTRATOR_SKILLS {
                         truncated = true;
                         break;
                     }
                     skill_resources_seen = skill_resources_seen.saturating_add(1);
-                    match catalog_entry_from_resource(resource, &self.server_name) {
+                    match catalog_entry_from_resource(resource) {
                         Some(entry) => catalog.push_entry(entry),
                         None => skipped_resources = skipped_resources.saturating_add(1),
                     }
@@ -124,10 +121,10 @@ impl SkillProvider for BackendSkillProvider {
                     break;
                 };
                 if !seen_cursors.insert(next_cursor.clone()) {
-                    catalog.warnings.push(format!(
-                        "Backend skill resource pagination from {} returned a duplicate cursor.",
-                        self.server_name
-                    ));
+                    catalog.warnings.push(
+                        "Orchestrator skill resource pagination returned a duplicate cursor."
+                            .to_string(),
+                    );
                     cursor = None;
                     break;
                 }
@@ -136,14 +133,12 @@ impl SkillProvider for BackendSkillProvider {
 
             if cursor.is_some() || truncated {
                 catalog.warnings.push(format!(
-                    "Backend skill discovery from {} was truncated at {MAX_BACKEND_SKILLS} skills or {MAX_RESOURCE_PAGES} resource pages.",
-                    self.server_name
+                    "Orchestrator skill discovery was truncated at {MAX_ORCHESTRATOR_SKILLS} skills or {MAX_RESOURCE_PAGES} resource pages."
                 ));
             }
             if skipped_resources > 0 {
                 catalog.warnings.push(format!(
-                    "Skipped {skipped_resources} malformed backend skill resources from {}.",
-                    self.server_name
+                    "Skipped {skipped_resources} malformed orchestrator skill resources."
                 ));
             }
 
@@ -154,17 +149,17 @@ impl SkillProvider for BackendSkillProvider {
     fn read(&self, request: SkillReadRequest) -> SkillProviderFuture<'_, SkillReadResult> {
         Box::pin(async move {
             if request.authority
-                != SkillAuthority::new(SkillSourceKind::Remote, self.server_name.clone())
+                != SkillAuthority::new(SkillSourceKind::Orchestrator, CODEX_APPS_MCP_SERVER_NAME)
             {
                 return Err(SkillProviderError::new(format!(
-                    "backend skill provider cannot read authority {}",
+                    "orchestrator skill provider cannot read authority {}",
                     request.authority.id
                 )));
             }
             let expected_resource = main_prompt_uri(&request.package.0);
             if request.resource.as_str() != expected_resource {
                 return Err(SkillProviderError::new(
-                    "backend skill resource does not match its package",
+                    "orchestrator skill resource does not match its package",
                 ));
             }
 
@@ -174,19 +169,18 @@ impl SkillProvider for BackendSkillProvider {
                 ));
             };
             let result = tokio::time::timeout(
-                BACKEND_SKILL_READ_TIMEOUT,
-                client.read_resource(&self.server_name, request.resource.as_str()),
+                ORCHESTRATOR_SKILL_READ_TIMEOUT,
+                client.read_resource(CODEX_APPS_MCP_SERVER_NAME, request.resource.as_str()),
             )
             .await
             .map_err(|_| {
                 SkillProviderError::new(format!(
-                    "backend skill read from {} timed out after {BACKEND_SKILL_READ_TIMEOUT:?}",
-                    self.server_name
+                    "orchestrator skill read timed out after {ORCHESTRATOR_SKILL_READ_TIMEOUT:?}"
                 ))
             })?
             .map_err(|err| {
                 SkillProviderError::new(format!(
-                    "failed to read backend skill resource {}: {err:#}",
+                    "failed to read orchestrator skill resource {}: {err:#}",
                     request.resource.as_str()
                 ))
             })?;
@@ -201,7 +195,7 @@ impl SkillProvider for BackendSkillProvider {
                 });
             let Some(contents) = contents else {
                 return Err(SkillProviderError::new(format!(
-                    "backend skill resource {} did not return matching text contents",
+                    "orchestrator skill resource {} did not return matching text contents",
                     request.resource.as_str()
                 )));
             };
@@ -218,10 +212,7 @@ impl SkillProvider for BackendSkillProvider {
     }
 }
 
-fn catalog_entry_from_resource(
-    resource: &Resource,
-    server_name: &str,
-) -> Option<SkillCatalogEntry> {
+fn catalog_entry_from_resource(resource: &Resource) -> Option<SkillCatalogEntry> {
     let uri = validated_skill_uri(resource.uri.as_str())?;
     let meta = resource.meta.as_ref()?.as_object()?;
     let skill_name = normalized_label(meta.get("skill_name")?.as_str()?, MAX_SKILL_NAME_CHARS)?;
@@ -240,7 +231,7 @@ fn catalog_entry_from_resource(
     Some(
         SkillCatalogEntry::new(
             SkillPackageId(uri.to_string()),
-            SkillAuthority::new(SkillSourceKind::Remote, server_name),
+            SkillAuthority::new(SkillSourceKind::Orchestrator, CODEX_APPS_MCP_SERVER_NAME),
             name,
             description,
             SkillResourceId::new(main_prompt),

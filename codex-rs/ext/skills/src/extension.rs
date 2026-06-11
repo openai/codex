@@ -98,14 +98,14 @@ impl ContextContributor for SkillsExtension {
                 return Vec::new();
             }
             let catalog = self
-                .catalog_for_turn(
+                .list_skills(
                     SkillListQuery {
                         turn_id: thread_store.level_id().to_string(),
                         executor_roots: thread_state.selected_roots().to_vec(),
                         host: None,
                         include_host_skills: false,
                         include_bundled_skills: config.bundled_skills_enabled,
-                        include_remote_skills: true,
+                        include_orchestrator_skills: true,
                         mcp_resources: session_store.get::<McpResourceClient>(),
                     },
                     &thread_state,
@@ -143,10 +143,10 @@ impl TurnInputContributor for SkillsExtension {
                 host: host_loaded_skills.clone(),
                 include_host_skills: true,
                 include_bundled_skills: config.bundled_skills_enabled,
-                include_remote_skills: true,
+                include_orchestrator_skills: true,
                 mcp_resources: session_store.get::<McpResourceClient>(),
             };
-            let catalog = self.catalog_for_turn(query, &thread_state).await;
+            let catalog = self.list_skills(query, &thread_state).await;
             for warning in &catalog.warnings {
                 self.emit_warning(&input.turn_id, warning.clone());
             }
@@ -157,7 +157,7 @@ impl TurnInputContributor for SkillsExtension {
                 let mut turn_catalog = catalog.clone();
                 turn_catalog.entries.retain(|entry| {
                     entry.authority.kind != SkillSourceKind::Executor
-                        && entry.authority.kind != SkillSourceKind::Remote
+                        && entry.authority.kind != SkillSourceKind::Orchestrator
                 });
                 if let Some(fragment) = available_skills_fragment(&turn_catalog) {
                     fragments.push(Box::new(fragment));
@@ -239,22 +239,25 @@ impl TurnInputContributor for SkillsExtension {
 }
 
 impl SkillsExtension {
-    async fn catalog_for_turn(
+    async fn list_skills(
         &self,
         mut query: SkillListQuery,
         thread_state: &SkillsThreadState,
     ) -> SkillCatalog {
-        let include_remote_skills = query.include_remote_skills;
-        let remote_query = query.clone();
-        query.include_remote_skills = false;
+        let include_orchestrator_skills = query.include_orchestrator_skills;
+        let orchestrator_query = query.clone();
+        query.include_orchestrator_skills = false;
 
         let mut catalog = self.providers.list_for_turn(query).await;
-        if include_remote_skills {
+        if include_orchestrator_skills {
             match thread_state
-                .remote_catalog_snapshot(self.providers.list_remote_for_turn(remote_query))
+                .orchestrator_catalog_snapshot(
+                    self.providers
+                        .list_orchestrator_for_turn(orchestrator_query),
+                )
                 .await
             {
-                Ok(remote_catalog) => catalog.extend(remote_catalog),
+                Ok(orchestrator_catalog) => catalog.extend(orchestrator_catalog),
                 Err(err) => catalog.warnings.push(err.message),
             }
         }

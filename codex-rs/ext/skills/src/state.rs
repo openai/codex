@@ -27,7 +27,7 @@ impl SkillsExtensionConfig {
 pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     selected_roots: Vec<SelectedCapabilityRoot>,
-    remote_catalog: OnceCell<SkillCatalog>,
+    orchestrator_catalog: OnceCell<SkillCatalog>,
 }
 
 impl SkillsThreadState {
@@ -38,7 +38,7 @@ impl SkillsThreadState {
         Self {
             config: Mutex::new(config),
             selected_roots,
-            remote_catalog: OnceCell::new(),
+            orchestrator_catalog: OnceCell::new(),
         }
     }
 
@@ -60,11 +60,11 @@ impl SkillsThreadState {
         &self.selected_roots
     }
 
-    pub(crate) async fn remote_catalog_snapshot(
+    pub(crate) async fn orchestrator_catalog_snapshot(
         &self,
         initialize: impl Future<Output = Result<SkillCatalog, SkillProviderError>> + Send,
     ) -> Result<SkillCatalog, SkillProviderError> {
-        self.remote_catalog
+        self.orchestrator_catalog
             .get_or_try_init(|| initialize)
             .await
             .cloned()

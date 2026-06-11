@@ -2,9 +2,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-mod backend;
 mod executor;
 mod host;
+mod orchestrator;
 
 use codex_core_skills::HostLoadedSkills;
 use codex_mcp::McpResourceClient;
@@ -18,9 +18,9 @@ use crate::catalog::SkillReadResult;
 use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSearchResult;
 
-pub use backend::BackendSkillProvider;
 pub use executor::ExecutorSkillProvider;
 pub use host::HostSkillProvider;
+pub use orchestrator::OrchestratorSkillProvider;
 
 #[derive(Clone, Debug)]
 pub struct SkillListQuery {
@@ -29,7 +29,7 @@ pub struct SkillListQuery {
     pub host: Option<Arc<HostLoadedSkills>>,
     pub include_host_skills: bool,
     pub include_bundled_skills: bool,
-    pub include_remote_skills: bool,
+    pub include_orchestrator_skills: bool,
     pub mcp_resources: Option<Arc<McpResourceClient>>,
 }
 

@@ -224,7 +224,7 @@ async fn executor_provider_reads_from_the_environment_instance_used_for_listing(
             host: None,
             include_host_skills: false,
             include_bundled_skills: true,
-            include_remote_skills: false,
+            include_orchestrator_skills: false,
             mcp_resources: None,
         })
         .await
@@ -290,7 +290,7 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
             host: None,
             include_host_skills: false,
             include_bundled_skills: true,
-            include_remote_skills: false,
+            include_orchestrator_skills: false,
             mcp_resources: None,
         })
         .await

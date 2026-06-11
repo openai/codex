@@ -243,22 +243,23 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
 }
 
 #[tokio::test]
-async fn remote_catalog_snapshot_retries_failure_then_is_reused() -> TestResult {
+async fn orchestrator_catalog_snapshot_retries_failure_then_is_reused() -> TestResult {
     let list_calls = Arc::new(AtomicUsize::new(0));
-    let providers = SkillProviders::new().with_remote_provider(Arc::new(StaticSkillProvider {
-        catalog: SkillCatalog {
-            entries: vec![test_entry(
-                SkillSourceKind::Remote,
-                "codex_apps",
-                "remote/first",
-                "skill://remote/first/SKILL.md",
-            )],
-            warnings: Vec::new(),
-        },
-        read_requests: Arc::new(Mutex::new(Vec::new())),
-        list_calls: Some(Arc::clone(&list_calls)),
-        fail_first_list: true,
-    }));
+    let providers =
+        SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries: vec![test_entry(
+                    SkillSourceKind::Orchestrator,
+                    "codex_apps",
+                    "orchestrator/first",
+                    "skill://orchestrator/first/SKILL.md",
+                )],
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: Some(Arc::clone(&list_calls)),
+            fail_first_list: true,
+        }));
     let mut builder = ExtensionRegistryBuilder::new();
     install_with_providers(&mut builder, providers);
     let registry = builder.build();
@@ -485,7 +486,7 @@ impl SkillProvider for StaticSkillProvider {
         let catalog = self.catalog.clone();
         Box::pin(async move {
             if fail {
-                Err(SkillProviderError::new("temporary remote failure"))
+                Err(SkillProviderError::new("temporary orchestrator failure"))
             } else {
                 Ok(catalog)
             }

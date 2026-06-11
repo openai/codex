@@ -40,15 +40,15 @@ impl SkillProviderSource {
         Self::new(SkillSourceKind::Executor, label, provider)
     }
 
-    pub fn remote(label: impl Into<String>, provider: Arc<dyn SkillProvider>) -> Self {
-        Self::new(SkillSourceKind::Remote, label, provider)
+    pub fn orchestrator(label: impl Into<String>, provider: Arc<dyn SkillProvider>) -> Self {
+        Self::new(SkillSourceKind::Orchestrator, label, provider)
     }
 
     fn should_list(&self, query: &SkillListQuery) -> bool {
         match &self.kind {
             SkillSourceKind::Host => query.include_host_skills,
             SkillSourceKind::Executor => !query.executor_roots.is_empty(),
-            SkillSourceKind::Remote => query.include_remote_skills,
+            SkillSourceKind::Orchestrator => query.include_orchestrator_skills,
             SkillSourceKind::Custom(_) => true,
         }
     }
@@ -95,9 +95,9 @@ impl SkillProviders {
         self
     }
 
-    pub fn with_remote_provider(mut self, provider: Arc<dyn SkillProvider>) -> Self {
+    pub fn with_orchestrator_provider(mut self, provider: Arc<dyn SkillProvider>) -> Self {
         self.sources
-            .push(SkillProviderSource::remote("remote", provider));
+            .push(SkillProviderSource::orchestrator("orchestrator", provider));
         self
     }
 
@@ -106,7 +106,7 @@ impl SkillProviders {
             .await
     }
 
-    pub(crate) async fn list_remote_for_turn(
+    pub(crate) async fn list_orchestrator_for_turn(
         &self,
         query: SkillListQuery,
     ) -> SkillProviderResult<SkillCatalog> {
@@ -115,7 +115,7 @@ impl SkillProviders {
         for source in self
             .sources
             .iter()
-            .filter(|source| source.kind == SkillSourceKind::Remote)
+            .filter(|source| source.kind == SkillSourceKind::Orchestrator)
         {
             let source_catalog = source.provider.list(query.clone()).await.map_err(|err| {
                 SkillProviderError::new(format!(
