@@ -152,6 +152,50 @@ fn install_with_version_uses_requested_cache_version() {
 }
 
 #[test]
+fn remote_plugin_identity_follows_installed_cache_lifecycle() {
+    let tmp = tempdir().unwrap();
+    write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
+    let plugin_id = PluginId::new(
+        "sample-plugin".to_string(),
+        "openai-curated-remote".to_string(),
+    )
+    .unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let source = AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap();
+
+    store
+        .install(source.clone(), plugin_id.clone())
+        .expect("install plugin");
+    assert_eq!(store.remote_plugin_id(&plugin_id).unwrap(), None);
+
+    store
+        .write_remote_plugin_id(&plugin_id, "plugins~Plugin_sample")
+        .expect("write remote identity");
+    assert_eq!(
+        store.remote_plugin_id(&plugin_id).unwrap(),
+        Some("plugins~Plugin_sample".to_string())
+    );
+    store
+        .write_remote_plugin_id(&plugin_id, "plugins~Plugin_updated")
+        .expect("replace remote identity");
+    assert_eq!(
+        store.remote_plugin_id(&plugin_id).unwrap(),
+        Some("plugins~Plugin_updated".to_string())
+    );
+
+    store
+        .install(source, plugin_id.clone())
+        .expect("replace with local install");
+    assert_eq!(store.remote_plugin_id(&plugin_id).unwrap(), None);
+
+    store
+        .write_remote_plugin_id(&plugin_id, "plugins~Plugin_sample")
+        .expect("restore remote identity");
+    store.uninstall(&plugin_id).expect("uninstall plugin");
+    assert_eq!(store.remote_plugin_id(&plugin_id).unwrap(), None);
+}
+
+#[test]
 fn install_uses_manifest_version_when_present() {
     let tmp = tempdir().unwrap();
     write_plugin_with_version(

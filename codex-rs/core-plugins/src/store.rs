@@ -6,16 +6,25 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
 use semver::Version;
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::cmp::Ordering;
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
 pub const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub const PLUGINS_CACHE_DIR: &str = "plugins/cache";
 pub const PLUGINS_DATA_DIR: &str = "plugins/data";
+const REMOTE_PLUGIN_IDENTITY_FILE: &str = ".remote-plugin.json";
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemotePluginIdentity {
+    remote_plugin_id: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallResult {
@@ -99,6 +108,83 @@ impl PluginStore {
         self.active_plugin_version(plugin_id).is_some()
     }
 
+    pub fn remote_plugin_id(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<Option<String>, PluginStoreError> {
+        if !self.is_installed(plugin_id) {
+            return Ok(None);
+        }
+        let path = self.remote_plugin_identity_path(plugin_id);
+        let contents = match fs::read_to_string(path.as_path()) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                return Err(PluginStoreError::io(
+                    "failed to read remote plugin identity",
+                    err,
+                ));
+            }
+        };
+        let identity: RemotePluginIdentity = serde_json::from_str(&contents).map_err(|err| {
+            PluginStoreError::Invalid(format!("failed to parse remote plugin identity: {err}"))
+        })?;
+        let remote_plugin_id = identity.remote_plugin_id.trim();
+        if remote_plugin_id.is_empty() {
+            return Err(PluginStoreError::Invalid(
+                "invalid remote plugin identity: remote plugin id must not be blank".to_string(),
+            ));
+        }
+        Ok(Some(remote_plugin_id.to_string()))
+    }
+
+    pub fn write_remote_plugin_id(
+        &self,
+        plugin_id: &PluginId,
+        remote_plugin_id: &str,
+    ) -> Result<(), PluginStoreError> {
+        if !self.is_installed(plugin_id) {
+            return Err(PluginStoreError::Invalid(format!(
+                "cannot write remote identity for uninstalled plugin `{}`",
+                plugin_id.as_key()
+            )));
+        }
+        let remote_plugin_id = remote_plugin_id.trim();
+        if remote_plugin_id.is_empty() {
+            return Err(PluginStoreError::Invalid(
+                "invalid remote plugin identity: remote plugin id must not be blank".to_string(),
+            ));
+        }
+        let path = self.remote_plugin_identity_path(plugin_id);
+        let parent = path.as_path().parent().ok_or_else(|| {
+            PluginStoreError::Invalid(format!(
+                "remote plugin identity path has no parent: {}",
+                path.display()
+            ))
+        })?;
+        let mut contents = serde_json::to_vec(&RemotePluginIdentity {
+            remote_plugin_id: remote_plugin_id.to_string(),
+        })
+        .map_err(|err| {
+            PluginStoreError::Invalid(format!("failed to serialize remote plugin identity: {err}"))
+        })?;
+        contents.push(b'\n');
+        let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|err| {
+            PluginStoreError::io("failed to create temporary remote plugin identity", err)
+        })?;
+        temporary
+            .write_all(&contents)
+            .map_err(|err| PluginStoreError::io("failed to write remote plugin identity", err))?;
+        temporary
+            .as_file_mut()
+            .flush()
+            .map_err(|err| PluginStoreError::io("failed to flush remote plugin identity", err))?;
+        temporary.persist(path.as_path()).map_err(|err| {
+            PluginStoreError::io("failed to persist remote plugin identity", err.error)
+        })?;
+        Ok(())
+    }
+
     pub fn install(
         &self,
         source_path: AbsolutePathBuf,
@@ -135,6 +221,7 @@ impl PluginStore {
             self.plugin_base_root(&plugin_id).as_path(),
             &plugin_version,
         )?;
+        self.remove_remote_plugin_identity(&plugin_id)?;
 
         Ok(PluginInstallResult {
             plugin_id,
@@ -145,6 +232,23 @@ impl PluginStore {
 
     pub fn uninstall(&self, plugin_id: &PluginId) -> Result<(), PluginStoreError> {
         remove_existing_target(self.plugin_base_root(plugin_id).as_path())
+    }
+
+    fn remote_plugin_identity_path(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
+        self.plugin_base_root(plugin_id)
+            .join(REMOTE_PLUGIN_IDENTITY_FILE)
+    }
+
+    fn remove_remote_plugin_identity(&self, plugin_id: &PluginId) -> Result<(), PluginStoreError> {
+        let path = self.remote_plugin_identity_path(plugin_id);
+        match fs::remove_file(path.as_path()) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(PluginStoreError::io(
+                "failed to remove remote plugin identity",
+                err,
+            )),
+        }
     }
 }
 

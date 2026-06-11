@@ -199,6 +199,16 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                 .map(str::trim)
                 .filter(|version| !version.is_empty());
             if store.active_plugin_version(&plugin_id).as_deref() == release_version {
+                if let Err(err) = store.write_remote_plugin_id(&plugin_id, &plugin.id) {
+                    warn!(
+                        remote_plugin_id = %plugin.id,
+                        plugin = %plugin.name,
+                        marketplace = %marketplace_name,
+                        error = %err,
+                        "failed to persist identity for cached remote installed plugin"
+                    );
+                    failed_remote_plugin_ids.insert(plugin.id);
+                }
                 continue;
             }
 
