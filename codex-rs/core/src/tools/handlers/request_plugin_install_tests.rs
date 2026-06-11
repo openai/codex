@@ -69,21 +69,8 @@ fn remote_plugin_install_suggestions_skip_core_installed_verification() {
 }
 
 #[test]
-fn recommended_plugin_install_args_accept_legacy_tool_id() {
-    let current: RecommendedPluginInstallArgs = serde_json::from_value(json!({
-        "plugin_id": "google-drive@openai-curated-remote",
-        "suggest_reason": "Use Google Drive for this request"
-    }))
-    .expect("current arguments should deserialize");
-    let legacy: RecommendedPluginInstallArgs = serde_json::from_value(json!({
-        "tool_type": "plugin",
-        "action_type": "install",
-        "tool_id": "google-drive@openai-curated-remote",
-        "suggest_reason": "Use Google Drive for this request"
-    }))
-    .expect("legacy arguments should deserialize");
-
-    assert_eq!(current, legacy);
+fn request_plugin_install_does_not_support_parallel_calls() {
+    assert!(!RequestPluginInstallHandler::new(Vec::new()).supports_parallel_tool_calls());
 }
 
 #[test]

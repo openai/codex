@@ -14,15 +14,66 @@ use crate::DiscoverableToolAction;
 use crate::DiscoverableToolType;
 
 pub const REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE: &str = "tool_suggestion";
+pub const REQUEST_PLUGIN_INSTALL_FLAT_CATEGORY_ID: &str = "suggested";
 pub const REQUEST_PLUGIN_INSTALL_PERSIST_KEY: &str = "persist";
 pub const REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE: &str = "always";
 
 #[derive(Debug, Deserialize)]
-pub struct RequestPluginInstallArgs {
+#[serde(untagged)]
+pub enum RequestPluginInstallArgs {
+    Single(RequestPluginInstallSingleArgs),
+    Picker(RequestPluginInstallPickerArgs),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RequestPluginInstallSingleArgs {
     pub tool_type: DiscoverableToolType,
     pub action_type: DiscoverableToolAction,
     pub tool_id: String,
     pub suggest_reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RequestPluginInstallPickerArgs {
+    pub action_type: DiscoverableToolAction,
+    pub suggest_reason: String,
+    pub title: Option<String>,
+    pub entries: Option<Vec<RequestPluginInstallPickerEntry>>,
+    pub categories: Option<Vec<RequestPluginInstallPickerCategory>>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct RequestPluginInstallPickerEntry {
+    pub id: String,
+    pub tool_id: String,
+    pub tool_name: String,
+    pub tool_type: DiscoverableToolType,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct RequestPluginInstallPickerCategory {
+    pub id: String,
+    pub title: String,
+    pub required: Option<bool>,
+    pub min_installed: Option<u32>,
+    pub entries: Vec<RequestPluginInstallPickerEntry>,
+}
+
+impl RequestPluginInstallArgs {
+    pub fn action_type(&self) -> DiscoverableToolAction {
+        match self {
+            Self::Single(args) => args.action_type,
+            Self::Picker(args) => args.action_type,
+        }
+    }
+
+    pub fn suggest_reason(&self) -> &str {
+        match self {
+            Self::Single(args) => args.suggest_reason.as_str(),
+            Self::Picker(args) => args.suggest_reason.as_str(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -34,6 +85,34 @@ pub struct RequestPluginInstallResult {
     pub tool_id: String,
     pub tool_name: String,
     pub suggest_reason: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RequestPluginInstallPickerResult {
+    pub completed: bool,
+    pub user_confirmed: bool,
+    pub action_type: DiscoverableToolAction,
+    pub suggest_reason: String,
+    pub installed_entries: Vec<RequestPluginInstallInstalledEntry>,
+    pub entries: Vec<RequestPluginInstallEntryResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RequestPluginInstallInstalledEntry {
+    pub category_id: String,
+    pub entry_id: String,
+    pub tool_id: String,
+    pub tool_type: DiscoverableToolType,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RequestPluginInstallEntryResult {
+    pub category_id: String,
+    pub entry_id: String,
+    pub tool_type: DiscoverableToolType,
+    pub tool_id: String,
+    pub tool_name: String,
+    pub completed: bool,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -53,10 +132,58 @@ pub struct RequestPluginInstallMeta<'a> {
     pub app_connector_ids: Option<&'a [String]>,
 }
 
+#[derive(Debug)]
+pub struct RequestPluginInstallResolvedPickerEntry<'a> {
+    pub category_id: Option<&'a str>,
+    pub entry_id: &'a str,
+    pub tool: &'a DiscoverableTool,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RequestPluginInstallPickerMeta<'a> {
+    pub codex_approval_kind: &'static str,
+    pub suggest_type: DiscoverableToolAction,
+    pub suggest_reason: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entries: Option<Vec<RequestPluginInstallPickerEntryMeta<'a>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<Vec<RequestPluginInstallPickerCategoryMeta<'a>>>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RequestPluginInstallPickerEntryMeta<'a> {
+    pub id: &'a str,
+    pub tool_id: &'a str,
+    pub tool_name: &'a str,
+    pub tool_type: DiscoverableToolType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_url: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_plugin_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_connector_ids: Option<&'a [String]>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RequestPluginInstallPickerCategoryMeta<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_installed: Option<u32>,
+    pub entries: Vec<RequestPluginInstallPickerEntryMeta<'a>>,
+}
+
 pub fn build_request_plugin_install_elicitation_request(
     server_name: &str,
     thread_id: String,
     turn_id: String,
+    args: &RequestPluginInstallSingleArgs,
     suggest_reason: &str,
     tool: &DiscoverableTool,
 ) -> McpServerElicitationRequestParams {
@@ -68,6 +195,8 @@ pub fn build_request_plugin_install_elicitation_request(
         server_name: server_name.to_string(),
         request: McpServerElicitationRequest::Form {
             meta: Some(json!(build_request_plugin_install_meta(
+                args.tool_type,
+                args.action_type,
                 suggest_reason,
                 tool,
             ))),
@@ -80,6 +209,37 @@ pub fn build_request_plugin_install_elicitation_request(
             },
         },
     }
+}
+
+pub fn build_request_plugin_install_picker_elicitation_request<'a>(
+    server_name: &str,
+    thread_id: String,
+    turn_id: String,
+    args: &'a RequestPluginInstallPickerArgs,
+    suggest_reason: &'a str,
+    resolved_entries: &'a [RequestPluginInstallResolvedPickerEntry<'a>],
+) -> Result<McpServerElicitationRequestParams, String> {
+    let message = suggest_reason.to_string();
+
+    Ok(McpServerElicitationRequestParams {
+        thread_id,
+        turn_id: Some(turn_id),
+        server_name: server_name.to_string(),
+        request: McpServerElicitationRequest::Form {
+            meta: Some(json!(build_request_plugin_install_picker_meta(
+                args,
+                suggest_reason,
+                resolved_entries,
+            )?)),
+            message,
+            requested_schema: McpElicitationSchema {
+                schema_uri: None,
+                type_: McpElicitationObjectType::Object,
+                properties: BTreeMap::new(),
+                required: None,
+            },
+        },
+    })
 }
 
 pub fn all_requested_connectors_picked_up(
@@ -101,14 +261,102 @@ pub fn verified_connector_install_completed(
         .is_some_and(|connector| connector.is_accessible)
 }
 
+fn build_request_plugin_install_picker_meta<'a>(
+    args: &'a RequestPluginInstallPickerArgs,
+    suggest_reason: &'a str,
+    resolved_entries: &'a [RequestPluginInstallResolvedPickerEntry<'a>],
+) -> Result<RequestPluginInstallPickerMeta<'a>, String> {
+    let entries = args
+        .entries
+        .as_ref()
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| picker_entry_meta(None, entry, resolved_entries))
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .transpose()?;
+
+    let categories = args
+        .categories
+        .as_ref()
+        .map(|categories| {
+            categories
+                .iter()
+                .map(|category| {
+                    let entries = category
+                        .entries
+                        .iter()
+                        .map(|entry| {
+                            picker_entry_meta(Some(category.id.as_str()), entry, resolved_entries)
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    Ok(RequestPluginInstallPickerCategoryMeta {
+                        id: category.id.as_str(),
+                        title: category.title.as_str(),
+                        required: category.required,
+                        min_installed: category.min_installed,
+                        entries,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .transpose()?;
+
+    Ok(RequestPluginInstallPickerMeta {
+        codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+        suggest_type: args.action_type,
+        suggest_reason,
+        title: args.title.as_deref(),
+        entries,
+        categories,
+    })
+}
+
+fn picker_entry_meta<'a>(
+    category_id: Option<&str>,
+    entry: &'a RequestPluginInstallPickerEntry,
+    resolved_entries: &'a [RequestPluginInstallResolvedPickerEntry<'a>],
+) -> Result<RequestPluginInstallPickerEntryMeta<'a>, String> {
+    let tool = resolved_entries
+        .iter()
+        .find(|resolved_entry| {
+            resolved_entry.category_id == category_id && resolved_entry.entry_id == entry.id
+        })
+        .map(|resolved_entry| resolved_entry.tool)
+        .ok_or_else(|| format!("missing resolved picker entry for {}", entry.id))?;
+    let (remote_plugin_id, app_connector_ids) = match tool {
+        DiscoverableTool::Connector(_) => (None, None),
+        DiscoverableTool::Plugin(plugin) => (
+            plugin.remote_plugin_id.as_deref(),
+            Some(plugin.app_connector_ids.as_slice()),
+        ),
+    };
+
+    Ok(RequestPluginInstallPickerEntryMeta {
+        id: entry.id.as_str(),
+        tool_id: tool.id(),
+        tool_name: tool.name(),
+        tool_type: tool.tool_type(),
+        description: entry
+            .description
+            .as_deref()
+            .or_else(|| discoverable_tool_description(tool)),
+        install_url: tool.install_url(),
+        remote_plugin_id,
+        app_connector_ids,
+    })
+}
+
 fn build_request_plugin_install_meta<'a>(
+    tool_type: DiscoverableToolType,
+    action_type: DiscoverableToolAction,
     suggest_reason: &'a str,
     tool: &'a DiscoverableTool,
 ) -> RequestPluginInstallMeta<'a> {
-    let (tool_type, remote_plugin_id, app_connector_ids) = match tool {
-        DiscoverableTool::Connector(_) => (DiscoverableToolType::Connector, None, None),
+    let (remote_plugin_id, app_connector_ids) = match tool {
+        DiscoverableTool::Connector(_) => (None, None),
         DiscoverableTool::Plugin(plugin) => (
-            DiscoverableToolType::Plugin,
             plugin.remote_plugin_id.as_deref(),
             Some(plugin.app_connector_ids.as_slice()),
         ),
@@ -117,13 +365,20 @@ fn build_request_plugin_install_meta<'a>(
         codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
         persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
         tool_type,
-        suggest_type: DiscoverableToolAction::Install,
+        suggest_type: action_type,
         suggest_reason,
         tool_id: tool.id(),
         tool_name: tool.name(),
         install_url: tool.install_url(),
         remote_plugin_id,
         app_connector_ids,
+    }
+}
+
+fn discoverable_tool_description(tool: &DiscoverableTool) -> Option<&str> {
+    match tool {
+        DiscoverableTool::Connector(connector) => connector.description.as_deref(),
+        DiscoverableTool::Plugin(plugin) => plugin.description.as_deref(),
     }
 }
 

@@ -65,6 +65,36 @@ fn tool_names(body: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn function_tool_description(body: &Value, name: &str) -> Option<String> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                if tool.get("name").and_then(Value::as_str) == Some(name) {
+                    tool.get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn function_tool_parameters<'a>(body: &'a Value, name: &str) -> Option<&'a Value> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                if tool.get("name").and_then(Value::as_str) == Some(name) {
+                    tool.get("parameters")
+                } else {
+                    None
+                }
+            })
+        })
+}
+
 fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) {
     for feature in [
         Feature::Apps,
@@ -178,7 +208,49 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
             .join("\n")
             .contains("<recommended_plugins>")
     );
-    assert_legacy_tools(&request.body_json());
+    let body = request.body_json();
+    assert_legacy_tools(&body);
+    let list_description =
+        function_tool_description(&body, LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME)
+            .expect("description");
+    assert!(list_description.contains(
+        "The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list."
+    ));
+    assert!(list_description.contains(
+        "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
+    ));
+    assert!(list_description.contains(
+        "When both a plugin and a connector match, prefer the plugin; use the connector only when its corresponding plugin is already installed."
+    ));
+
+    let description =
+        function_tool_description(&body, REQUEST_PLUGIN_INSTALL_TOOL_NAME).expect("description");
+    assert!(description.contains(
+        "Use this tool only after `list_available_plugins_to_install` returns one or more plugins or connectors that exactly match the user's explicit request."
+    ));
+    assert!(
+        description
+            .contains("For multiple exact targets, make one call with `entries` or `categories`")
+    );
+    assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
+    assert!(!description.contains(DISCOVERABLE_GMAIL_ID));
+    assert!(!description.contains("tool_search fails to find a good match"));
+
+    let parameters =
+        function_tool_parameters(&body, REQUEST_PLUGIN_INSTALL_TOOL_NAME).expect("parameters");
+    let variants = parameters
+        .get("oneOf")
+        .and_then(Value::as_array)
+        .expect("request_plugin_install should expose oneOf parameters");
+    assert_eq!(variants.len(), 2);
+    assert!(variants.iter().any(|variant| {
+        variant.pointer("/properties/tool_id").is_some()
+            && variant.pointer("/properties/tool_type").is_some()
+    }));
+    assert!(variants.iter().any(|variant| {
+        variant.pointer("/properties/entries").is_some()
+            && variant.pointer("/properties/categories").is_some()
+    }));
     let output = requests[1]
         .function_call_output_text(call_id)
         .expect("list tool output");
