@@ -38,6 +38,30 @@ fn uses_reserved_image_gen_namespace() {
 }
 
 #[test]
+fn description_allows_continuing_unfinished_requests() {
+    let ToolSpec::Namespace(spec) = imagegen_tool_spec() else {
+        panic!("imagegen should advertise a namespace tool");
+    };
+    let ResponsesApiNamespaceTool::Function(function) = &spec.tools[0];
+
+    assert!(
+        function
+            .description
+            .contains("If image generation fully completes the user's request")
+    );
+    assert!(
+        function
+            .description
+            .contains("If the active user request still has unfinished deliverables")
+    );
+    assert!(
+        !function
+            .description
+            .contains("Do not say ANYTHING after you generate an image")
+    );
+}
+
+#[test]
 fn omitted_references_generate_with_fixed_defaults() {
     assert_eq!(
         request_for_args(
