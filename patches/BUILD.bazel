@@ -14,6 +14,7 @@ exports_files([
     "rules_rust_windows_msvc_direct_link_args.patch",
     "rules_rust_windows_gnullvm_build_script.patch",
     "rules_cc_rusty_v8_custom_libcxx.patch",
+    "rules_rs_build_script_deps_annotation.patch",
     "rules_rs_windows_gnullvm_exec.patch",
     "rules_rs_windows_exec_linker.patch",
     "rusty_v8_prebuilt_out_dir.patch",

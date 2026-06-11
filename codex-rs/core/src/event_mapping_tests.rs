@@ -1,3 +1,4 @@
+use super::has_non_contextual_dev_message_content;
 use super::is_contextual_dev_message_content;
 use super::parse_turn_item;
 use crate::context::ContextualUserFragment;
@@ -25,6 +26,17 @@ fn recognizes_skills_instructions_as_contextual_developer_content() {
             text: format!("{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills"),
         },
     ]));
+}
+
+#[test]
+fn recognizes_token_budget_as_contextual_developer_content() {
+    let content = vec![ContentItem::InputText {
+        text: "<token_budget>\nYou have 710 tokens left in this context window.\n</token_budget>"
+            .to_string(),
+    }];
+
+    assert!(is_contextual_dev_message_content(&content));
+    assert!(!has_non_contextual_dev_message_content(&content));
 }
 
 #[test]

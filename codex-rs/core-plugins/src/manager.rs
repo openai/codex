@@ -48,6 +48,7 @@ use crate::store::PluginInstallResult as StorePluginInstallResult;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
 use codex_analytics::AnalyticsEventsClient;
+use codex_app_server_protocol::AuthMode;
 use codex_config::ConfigLayerStack;
 use codex_config::clear_user_plugin;
 use codex_config::set_user_plugin_enabled;
@@ -203,6 +204,13 @@ fn featured_plugin_ids_cache_key(
     }
 }
 
+fn project_plugin_load_outcome_for_auth(
+    outcome: PluginLoadOutcome,
+    _auth_mode: Option<AuthMode>,
+) -> PluginLoadOutcome {
+    outcome
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallRequest {
     pub plugin_name: String,
@@ -319,6 +327,7 @@ pub struct PluginsManager {
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     global_remote_catalog_cache_refresh_state: RwLock<GlobalRemoteCatalogCacheRefreshState>,
     restriction_product: Option<Product>,
+    auth_mode: RwLock<Option<AuthMode>>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
 
@@ -375,7 +384,27 @@ impl PluginsManager {
                 GlobalRemoteCatalogCacheRefreshState::default(),
             ),
             restriction_product,
+            auth_mode: RwLock::new(None),
             analytics_events_client: RwLock::new(None),
+        }
+    }
+
+    pub fn set_auth_mode(&self, auth_mode: Option<AuthMode>) -> bool {
+        let mut stored_auth_mode = match self.auth_mode.write() {
+            Ok(auth_mode_guard) => auth_mode_guard,
+            Err(err) => err.into_inner(),
+        };
+        if *stored_auth_mode == auth_mode {
+            return false;
+        }
+        *stored_auth_mode = auth_mode;
+        true
+    }
+
+    pub fn auth_mode(&self) -> Option<AuthMode> {
+        match self.auth_mode.read() {
+            Ok(auth_mode_guard) => *auth_mode_guard,
+            Err(err) => *err.into_inner(),
         }
     }
 
@@ -417,7 +446,7 @@ impl PluginsManager {
             remote_plugin_enabled: config.remote_plugin_enabled,
         };
         if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&cache_key) {
-            return outcome;
+            return self.project_plugins_for_auth(outcome);
         }
 
         let Ok(_load_permit) = self.enabled_outcome_load_semaphore.acquire().await else {
@@ -425,7 +454,7 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         };
         if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&cache_key) {
-            return outcome;
+            return self.project_plugins_for_auth(outcome);
         }
         let cache_generation = self.enabled_outcome_cache_generation();
         let outcome = load_plugins_from_layer_stack(
@@ -438,7 +467,11 @@ impl PluginsManager {
         .await;
         log_plugin_load_errors(&outcome);
         self.cache_enabled_outcome_if_current(cache_generation, cache_key, outcome.clone());
-        outcome
+        self.project_plugins_for_auth(outcome)
+    }
+
+    fn project_plugins_for_auth(&self, outcome: PluginLoadOutcome) -> PluginLoadOutcome {
+        project_plugin_load_outcome_for_auth(outcome, self.auth_mode())
     }
 
     pub fn clear_cache(&self) {
@@ -468,14 +501,15 @@ impl PluginsManager {
         if !config.plugins_enabled {
             return PluginLoadOutcome::default();
         }
-        load_plugins_from_layer_stack(
+        let outcome = load_plugins_from_layer_stack(
             config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
             config.remote_plugin_enabled,
         )
-        .await
+        .await;
+        self.project_plugins_for_auth(outcome)
     }
 
     /// Resolve plugin hooks for a config layer stack without loading other plugin capabilities.
@@ -992,14 +1026,19 @@ impl PluginsManager {
         &self,
         config: &PluginsConfigInput,
         additional_roots: &[AbsolutePathBuf],
+        include_openai_curated: bool,
     ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
         if !config.plugins_enabled {
             return Ok(ConfiguredMarketplaceListOutcome::default());
         }
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let marketplace_outcome =
-            self.discover_marketplaces_for_config(config, additional_roots)?;
+        let mut marketplace_roots = self.marketplace_roots(config, additional_roots);
+        if !include_openai_curated {
+            let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
+            marketplace_roots.retain(|root| root.as_path() != curated_repo_root.as_path());
+        }
+        let marketplace_outcome = list_marketplaces(&marketplace_roots)?;
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces

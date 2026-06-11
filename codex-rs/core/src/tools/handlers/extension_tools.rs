@@ -11,13 +11,11 @@ use codex_tools::ToolSpec;
 use codex_tools::TurnItemEmissionFuture;
 use codex_tools::TurnItemEmitter;
 
-use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_turn_item;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
@@ -30,7 +28,6 @@ impl ExtensionToolAdapter {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
     fn tool_name(&self) -> ToolName {
         self.0.tool_name()
@@ -52,11 +49,8 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
         self.0.search_info()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        self.0.handle(to_extension_call(&invocation).await).await
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async move { self.0.handle(to_extension_call(&invocation).await).await })
     }
 }
 
@@ -162,7 +156,6 @@ mod tests {
 
     struct StubExtensionExecutor;
 
-    #[async_trait::async_trait]
     impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for StubExtensionExecutor {
         fn tool_name(&self) -> codex_tools::ToolName {
             codex_tools::ToolName::plain("extension_echo")
@@ -187,13 +180,13 @@ mod tests {
             })
         }
 
-        async fn handle(
-            &self,
-            _call: codex_tools::ToolCall,
-        ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
-            Ok(Box::new(codex_tools::JsonToolOutput::new(
-                json!({ "ok": true }),
-            )))
+        fn handle(&self, _call: codex_tools::ToolCall) -> codex_tools::ToolExecutorFuture<'_> {
+            Box::pin(async {
+                Ok(
+                    Box::new(codex_tools::JsonToolOutput::new(json!({ "ok": true })))
+                        as Box<dyn codex_tools::ToolOutput>,
+                )
+            })
         }
     }
 
@@ -201,7 +194,6 @@ mod tests {
         captured_call: Arc<Mutex<Option<codex_tools::ToolCall>>>,
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for CapturingExtensionExecutor {
         fn tool_name(&self) -> codex_tools::ToolName {
             codex_tools::ToolName::plain("extension_echo")
@@ -218,7 +210,13 @@ mod tests {
             })
         }
 
-        async fn handle(
+        fn handle(&self, call: codex_tools::ToolCall) -> codex_tools::ToolExecutorFuture<'_> {
+            Box::pin(self.handle_call(call))
+        }
+    }
+
+    impl CapturingExtensionExecutor {
+        async fn handle_call(
             &self,
             call: codex_tools::ToolCall,
         ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
@@ -233,9 +231,10 @@ mod tests {
             call.turn_item_emitter.emit_started(item.clone()).await;
             call.turn_item_emitter.emit_completed(item).await;
             *self.captured_call.lock().await = Some(call);
-            Ok(Box::new(codex_tools::JsonToolOutput::new(
-                json!({ "ok": true }),
-            )))
+            Ok(
+                Box::new(codex_tools::JsonToolOutput::new(json!({ "ok": true })))
+                    as Box<dyn codex_tools::ToolOutput>,
+            )
         }
     }
 
@@ -432,7 +431,6 @@ mod tests {
         );
     }
 
-    #[async_trait::async_trait]
     impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for ImageGenerationExtensionExecutor {
         fn tool_name(&self) -> codex_tools::ToolName {
             codex_tools::ToolName::namespaced("image_gen", "imagegen")
@@ -449,7 +447,13 @@ mod tests {
             })
         }
 
-        async fn handle(
+        fn handle(&self, call: codex_tools::ToolCall) -> codex_tools::ToolExecutorFuture<'_> {
+            Box::pin(self.handle_call(call))
+        }
+    }
+
+    impl ImageGenerationExtensionExecutor {
+        async fn handle_call(
             &self,
             call: codex_tools::ToolCall,
         ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
@@ -475,9 +479,10 @@ mod tests {
                     },
                 ))
                 .await;
-            Ok(Box::new(codex_tools::JsonToolOutput::new(
-                json!({ "ok": true }),
-            )))
+            Ok(
+                Box::new(codex_tools::JsonToolOutput::new(json!({ "ok": true })))
+                    as Box<dyn codex_tools::ToolOutput>,
+            )
         }
     }
 

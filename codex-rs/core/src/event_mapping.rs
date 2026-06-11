@@ -32,6 +32,7 @@ const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     REALTIME_CONVERSATION_OPEN_TAG,
     SKILLS_INSTRUCTIONS_OPEN_TAG,
     "<personality_spec>",
+    "<token_budget>",
 ];
 
 pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {

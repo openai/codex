@@ -43,6 +43,34 @@ async fn contributes_hosted_plugin_runtime_without_an_executor() -> TestResult {
 }
 
 #[tokio::test]
+async fn runtime_overlay_preserves_disabled_server() -> TestResult {
+    let codex_home = tempfile::tempdir()?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cli_overrides(vec![
+            ("features.apps".to_string(), true.into()),
+            (
+                "mcp_servers.codex_apps.url".to_string(),
+                "https://example.com/mcp".into(),
+            ),
+            ("mcp_servers.codex_apps.enabled".to_string(), false.into()),
+        ])
+        .build()
+        .await?;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let manager = installed_manager(&config);
+
+    let servers = manager.effective_servers(&config, Some(&auth)).await;
+    let server = servers
+        .get(CODEX_APPS_MCP_SERVER_NAME)
+        .ok_or("hosted plugin runtime should remain configured")?;
+
+    assert!(!server.enabled());
+    Ok(())
+}
+
+#[tokio::test]
 async fn legacy_fallback_overwrites_reserved_config_without_an_extension() -> TestResult {
     let codex_home = tempfile::tempdir()?;
     let config = ConfigBuilder::default()

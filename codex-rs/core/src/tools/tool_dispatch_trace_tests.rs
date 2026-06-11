@@ -30,7 +30,6 @@ struct TestHandler {
     tool_name: codex_tools::ToolName,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for TestHandler {
     fn tool_name(&self) -> codex_tools::ToolName {
         self.tool_name.clone()
@@ -47,14 +46,13 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
         })
     }
 
-    async fn handle(
-        &self,
-        _invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        Ok(Box::new(FunctionToolOutput::from_text(
-            "ok".to_string(),
-            Some(true),
-        )))
+    fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async {
+            Ok(
+                Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+                    as Box<dyn crate::tools::context::ToolOutput>,
+            )
+        })
     }
 }
 
