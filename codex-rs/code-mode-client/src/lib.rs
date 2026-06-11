@@ -132,6 +132,10 @@ struct IpcCodeModeSession {
 }
 
 impl CodeModeSession for IpcCodeModeSession {
+    fn is_alive(&self) -> bool {
+        !self.shutdown.load(Ordering::Acquire) && self.connection.is_alive()
+    }
+
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,

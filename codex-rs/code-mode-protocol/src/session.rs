@@ -110,6 +110,14 @@ pub trait CodeModeSessionDelegate: Send + Sync {
 /// must keep those values isolated. Implementations may execute cells
 /// in-process or remotely.
 pub trait CodeModeSession: Send + Sync {
+    /// Returns whether the session can still accept requests.
+    ///
+    /// Remote implementations should return `false` after their underlying
+    /// connection fails so callers can create a fresh session for later work.
+    fn is_alive(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,

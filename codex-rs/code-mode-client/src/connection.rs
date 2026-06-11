@@ -286,6 +286,7 @@ impl ConnectionState {
         if !self.alive.swap(false, Ordering::AcqRel) {
             return;
         }
+        warn!(%reason, "code-mode host connection failed");
         if let Ok(mut failure) = self.failure.lock() {
             *failure = Some(reason.clone());
         }

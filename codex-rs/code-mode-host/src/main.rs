@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -48,8 +49,8 @@ async fn run() -> Result<(), String> {
     let state = Arc::new(HostState {
         sessions: Mutex::new(HashMap::new()),
         next_session_id: AtomicU64::new(1),
-        peer,
         host_id: std::process::id().to_string(),
+        peer,
     });
 
     let writer = tokio::spawn(async move {
@@ -70,7 +71,7 @@ async fn run() -> Result<(), String> {
         match message {
             ClientMessage::Request { id, request } => {
                 let state = Arc::clone(&state);
-                tokio::spawn(async move {
+                spawn_critical_request_task("request handler", async move {
                     state.handle_request(id, request).await;
                 });
             }
@@ -94,9 +95,25 @@ async fn run() -> Result<(), String> {
     writer.await.map_err(|err| err.to_string())?
 }
 
+fn spawn_critical_request_task(
+    description: &'static str,
+    future: impl Future<Output = ()> + Send + 'static,
+) {
+    let task = tokio::spawn(future);
+    tokio::spawn(async move {
+        if let Err(err) = task.await
+            && err.is_panic()
+        {
+            eprintln!("code-mode host {description} panicked: {err}");
+            std::process::exit(1);
+        }
+    });
+}
+
 struct HostState {
     sessions: Mutex<HashMap<SessionId, Arc<CodeModeService>>>,
     next_session_id: AtomicU64,
+    host_id: String,
     peer: Arc<HostPeer>,
 }
 
@@ -116,7 +133,6 @@ impl HostState {
                         self.host_id.clone(),
                     )),
                 );
-    host_id: String,
                 self.respond(request_id, Ok(HostResponse::SessionCreated { session_id }))
                     .await;
             }
@@ -134,7 +150,7 @@ impl HostState {
                             )
                             .await;
                             let peer = Arc::clone(&self.peer);
-                            tokio::spawn(async move {
+                            spawn_critical_request_task("initial response handler", async move {
                                 let response = started.initial_response().await;
                                 peer.send(HostMessage::InitialResponse {
                                     id: request_id,

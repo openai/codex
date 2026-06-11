@@ -353,6 +353,10 @@ impl Drop for CodeModeService {
 }
 
 impl CodeModeSession for CodeModeService {
+    fn is_alive(&self) -> bool {
+        !self.inner.shutting_down.load(Ordering::Acquire)
+    }
+
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,
@@ -834,11 +838,11 @@ mod tests {
             cells: Mutex::new(HashMap::new()),
             delegate: Arc::new(NoopCodeModeSessionDelegate),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
+            cell_id_prefix: None,
             next_cell_id: AtomicU64::new(1),
         })
     }
 
-            cell_id_prefix: None,
     #[tokio::test]
     async fn synchronous_exit_returns_successfully() {
         let service = CodeModeService::new();
@@ -866,10 +870,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stored_values_are_shared_between_cells_but_not_sessions() {
-        let first_session = CodeModeService::new();
-        let second_session = CodeModeService::new();
-    #[tokio::test]
     async fn cell_ids_include_the_configured_host_prefix() {
         let service = CodeModeService::with_delegate_and_cell_id_prefix(
             Arc::new(NoopCodeModeSessionDelegate),
@@ -890,6 +890,10 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn stored_values_are_shared_between_cells_but_not_sessions() {
+        let first_session = CodeModeService::new();
+        let second_session = CodeModeService::new();
 
         let write_response = execute(
             &first_session,
