@@ -1097,6 +1097,7 @@ impl ThreadRequestProcessor {
         if !dynamic_tools.is_empty() {
             validate_dynamic_tools(&dynamic_tools).map_err(invalid_request)?;
         }
+        // Count callable functions rather than top-level namespace containers.
         let dynamic_tool_count: usize = dynamic_tools
             .iter()
             .map(|tool| match tool {

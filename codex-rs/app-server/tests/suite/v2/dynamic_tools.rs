@@ -45,20 +45,6 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn dynamic_function(
-    name: &str,
-    description: &str,
-    input_schema: Value,
-    defer_loading: bool,
-) -> DynamicToolFunctionSpec {
-    DynamicToolFunctionSpec {
-        name: name.to_string(),
-        description: description.to_string(),
-        input_schema,
-        defer_loading,
-    }
-}
-
 #[tokio::test]
 async fn thread_start_normalizes_legacy_dynamic_tools_into_model_request() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
@@ -184,16 +170,16 @@ async fn thread_start_rejects_hidden_dynamic_tools_without_namespace() -> Result
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let dynamic_tool = DynamicToolSpec::Function(dynamic_function(
-        "hidden_tool",
-        "Hidden dynamic tool",
-        json!({
+    let dynamic_tool = DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: "hidden_tool".to_string(),
+        description: "Hidden dynamic tool".to_string(),
+        input_schema: json!({
             "type": "object",
             "properties": {},
             "additionalProperties": false,
         }),
-        /*defer_loading*/ true,
-    ));
+        defer_loading: true,
+    });
 
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -327,18 +313,18 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         name: tool_namespace.to_string(),
         description: namespace_description.to_string(),
         tools: vec![
-            DynamicToolNamespaceTool::Function(dynamic_function(
-                tool_name,
-                "Demo dynamic tool",
-                input_schema.clone(),
-                /*defer_loading*/ false,
-            )),
-            DynamicToolNamespaceTool::Function(dynamic_function(
-                "lookup_status",
-                "Look up ticket status",
-                status_schema.clone(),
-                /*defer_loading*/ false,
-            )),
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: tool_name.to_string(),
+                description: "Demo dynamic tool".to_string(),
+                input_schema: input_schema.clone(),
+                defer_loading: false,
+            }),
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: "lookup_status".to_string(),
+                description: "Look up ticket status".to_string(),
+                input_schema: status_schema.clone(),
+                defer_loading: false,
+            }),
         ],
     });
 
@@ -529,10 +515,10 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let dynamic_tool = DynamicToolSpec::Function(dynamic_function(
-        tool_name,
-        "Demo dynamic tool",
-        json!({
+    let dynamic_tool = DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: tool_name.to_string(),
+        description: "Demo dynamic tool".to_string(),
+        input_schema: json!({
             "type": "object",
             "properties": {
                 "city": { "type": "string" }
@@ -540,8 +526,8 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
             "required": ["city"],
             "additionalProperties": false,
         }),
-        /*defer_loading*/ false,
-    ));
+        defer_loading: false,
+    });
 
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
