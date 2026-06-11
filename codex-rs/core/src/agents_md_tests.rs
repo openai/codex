@@ -1,11 +1,14 @@
 use super::*;
 use crate::config::ConfigBuilder;
+use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::session::turn_context::TurnEnvironment;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemSandboxContext;
@@ -26,6 +29,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 #[derive(Clone, Copy)]
@@ -228,10 +232,11 @@ async fn get_user_instructions(config: &TestConfig) -> Option<String> {
 async fn load_agents_md(config: &TestConfig, warnings: &mut Vec<String>) -> Option<LoadedAgentsMd> {
     let mut core_config = config.config.clone();
     let existing_warning_count = core_config.startup_warnings.len();
+    let environments = resolved_local_environments([("local", core_config.cwd.clone())]);
     let loaded = load_project_instructions(
         &mut core_config,
         config.user_instructions.clone(),
-        Some(LOCAL_FS.as_ref()),
+        &environments,
     )
     .await;
     warnings.extend(
@@ -244,7 +249,47 @@ async fn load_agents_md(config: &TestConfig, warnings: &mut Vec<String>) -> Opti
 }
 
 async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<AbsolutePathBuf>> {
-    super::agents_md_paths(&config.config, LOCAL_FS.as_ref()).await
+    super::agents_md_paths(&config.config, &config.cwd, LOCAL_FS.as_ref()).await
+}
+
+fn resolved_local_environments<const N: usize>(
+    environments: [(&str, AbsolutePathBuf); N],
+) -> ResolvedTurnEnvironments {
+    ResolvedTurnEnvironments {
+        turn_environments: environments
+            .into_iter()
+            .map(|(environment_id, cwd)| TurnEnvironment {
+                environment_id: environment_id.to_string(),
+                environment: Arc::new(
+                    Environment::create_for_tests(/*exec_server_url*/ None)
+                        .expect("local environment"),
+                ),
+                cwd,
+                shell: None,
+            })
+            .collect(),
+    }
+}
+
+fn primary_project_environment_source(
+    environment_id: &str,
+    cwd: AbsolutePathBuf,
+) -> ProjectEnvironmentSource {
+    ProjectEnvironmentSource {
+        environment_id: environment_id.to_string(),
+        cwd,
+        is_primary: true,
+    }
+}
+
+fn primary_project_provenance(
+    path: AbsolutePathBuf,
+    cwd: AbsolutePathBuf,
+) -> InstructionProvenance {
+    InstructionProvenance::Project {
+        path,
+        environment: primary_project_environment_source("local", cwd),
+    }
 }
 
 fn assert_invalid_utf8_warning(warnings: &[String], source: &str, path: &Path) {
@@ -381,6 +426,7 @@ fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
             contents: String::new(),
             provenance: InstructionProvenance::Internal,
         }],
+        model_visible_fragment: None,
     };
     let whitespace = LoadedAgentsMd {
         user_instructions: None,
@@ -388,6 +434,7 @@ fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
             contents: " \n\t".to_string(),
             provenance: InstructionProvenance::Internal,
         }],
+        model_visible_fragment: None,
     };
 
     assert!(empty.is_empty());
@@ -466,14 +513,23 @@ async fn total_byte_limit_truncates_later_project_docs() {
         entries: vec![
             InstructionEntry {
                 contents: "root".to_string(),
-                provenance: InstructionProvenance::Project(repo.path().join("AGENTS.md").abs()),
+                provenance: primary_project_provenance(
+                    repo.path().join("AGENTS.md").abs(),
+                    config.cwd.clone(),
+                ),
             },
             InstructionEntry {
                 contents: "abc".to_string(),
-                provenance: InstructionProvenance::Project(config.cwd.join("AGENTS.md")),
+                provenance: primary_project_provenance(
+                    config.cwd.join("AGENTS.md"),
+                    config.cwd.clone(),
+                ),
             },
         ],
-    };
+        model_visible_fragment: None,
+    }
+    .finalize(&config.cwd)
+    .expect("expected instructions");
 
     assert_eq!(loaded, expected);
     assert_eq!(loaded.text(), "root\n\nabc");
@@ -490,7 +546,8 @@ async fn read_agents_md_propagates_metadata_errors() {
         failure: InjectedFailure::Metadata(io::ErrorKind::PermissionDenied),
     };
 
-    let err = read_agents_md(&mut config.config, &fs)
+    let environment = primary_project_environment_source("local", config.cwd.clone());
+    let err = read_agents_md_from_filesystem(&mut config.config, &fs, &environment)
         .await
         .expect_err("metadata error");
 
@@ -507,7 +564,8 @@ async fn read_agents_md_propagates_read_errors() {
         failure: InjectedFailure::Read(io::ErrorKind::PermissionDenied),
     };
 
-    let err = read_agents_md(&mut config.config, &fs)
+    let environment = primary_project_environment_source("local", config.cwd.clone());
+    let err = read_agents_md_from_filesystem(&mut config.config, &fs, &environment)
         .await
         .expect_err("read error");
 
@@ -524,7 +582,8 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
         failure: InjectedFailure::Read(io::ErrorKind::NotFound),
     };
 
-    let loaded = read_agents_md(&mut config.config, &fs)
+    let environment = primary_project_environment_source("local", config.cwd.clone());
+    let loaded = read_agents_md_from_filesystem(&mut config.config, &fs, &environment)
         .await
         .expect("removed file is recoverable");
 
@@ -591,6 +650,217 @@ async fn merges_existing_instructions_with_agents_md() {
     assert_eq!(res, expected);
 }
 
+#[tokio::test]
+async fn multiple_environment_docs_use_labeled_layout_and_preserve_source_order() {
+    let primary = tempfile::tempdir().expect("primary tempdir");
+    let secondary = tempfile::tempdir().expect("secondary tempdir");
+    fs::write(primary.path().join("AGENTS.md"), "primary doc").unwrap();
+    fs::write(secondary.path().join("AGENTS.md"), "secondary doc").unwrap();
+    let mut config = make_config(&primary, /*limit*/ 4096, Some("global instructions")).await;
+    let environments = resolved_local_environments([
+        ("primary", config.cwd.clone()),
+        ("secondary", secondary.abs()),
+    ]);
+    let user_instructions = config.user_instructions.clone();
+
+    let loaded = load_project_instructions(&mut config.config, user_instructions, &environments)
+        .await
+        .expect("instructions expected");
+    let inner = format!(
+        "global instructions\n\nfor `primary` with root {}\n\nprimary doc\n\nfor `secondary` with root {}\n\nsecondary doc",
+        primary.path().display(),
+        secondary.path().display(),
+    );
+
+    assert_eq!(loaded.environment_labeled_text(), inner);
+    assert_eq!(loaded.text(), inner);
+    let expected_fragment =
+        format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{inner}\n</INSTRUCTIONS>");
+    assert_eq!(
+        loaded.model_visible_fragment(),
+        Some(expected_fragment.as_str())
+    );
+    assert_eq!(
+        loaded.sources().cloned().collect::<Vec<_>>(),
+        vec![
+            config
+                .user_instructions
+                .as_ref()
+                .expect("global instructions")
+                .source
+                .clone(),
+            primary.path().join("AGENTS.md").abs(),
+            secondary.path().join("AGENTS.md").abs(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn secondary_only_project_doc_uses_labeled_layout() {
+    let primary = tempfile::tempdir().expect("primary tempdir");
+    let secondary = tempfile::tempdir().expect("secondary tempdir");
+    fs::write(secondary.path().join("AGENTS.md"), "secondary doc").unwrap();
+    let mut config = make_config(&primary, /*limit*/ 4096, Some("global instructions")).await;
+    let environments = resolved_local_environments([
+        ("primary", config.cwd.clone()),
+        ("secondary", secondary.abs()),
+    ]);
+    let user_instructions = config.user_instructions.clone();
+
+    let loaded = load_project_instructions(&mut config.config, user_instructions, &environments)
+        .await
+        .expect("instructions expected");
+    let inner = format!(
+        "global instructions\n\nfor `secondary` with root {}\n\nsecondary doc",
+        secondary.path().display()
+    );
+
+    assert_eq!(loaded.environment_labeled_text(), inner);
+    assert_eq!(loaded.text(), inner);
+    let expected_fragment =
+        format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{inner}\n</INSTRUCTIONS>");
+    assert_eq!(
+        loaded.model_visible_fragment(),
+        Some(expected_fragment.as_str())
+    );
+}
+
+#[tokio::test]
+async fn primary_only_project_doc_preserves_legacy_layout_with_multiple_bound_environments() {
+    let primary = tempfile::tempdir().expect("primary tempdir");
+    let secondary = tempfile::tempdir().expect("secondary tempdir");
+    fs::write(primary.path().join("AGENTS.md"), "primary doc").unwrap();
+    let mut config = make_config(&primary, /*limit*/ 4096, Some("global instructions")).await;
+    let environments = resolved_local_environments([
+        ("primary", config.cwd.clone()),
+        ("secondary", secondary.abs()),
+    ]);
+    let user_instructions = config.user_instructions.clone();
+
+    let loaded = load_project_instructions(&mut config.config, user_instructions, &environments)
+        .await
+        .expect("instructions expected");
+    let inner = format!("global instructions{AGENTS_MD_SEPARATOR}primary doc");
+
+    assert_eq!(loaded.legacy_text(), inner);
+    assert_eq!(loaded.text(), inner);
+    let expected_fragment = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\n{inner}\n</INSTRUCTIONS>",
+        primary.path().display()
+    );
+    assert_eq!(
+        loaded.model_visible_fragment(),
+        Some(expected_fragment.as_str())
+    );
+}
+
+#[tokio::test]
+async fn project_doc_byte_limit_is_applied_independently_per_environment() {
+    let primary = tempfile::tempdir().expect("primary tempdir");
+    let secondary = tempfile::tempdir().expect("secondary tempdir");
+    fs::write(primary.path().join("AGENTS.md"), "ABCDE").unwrap();
+    fs::write(secondary.path().join("AGENTS.md"), "VWXYZ").unwrap();
+    let mut config = make_config(&primary, /*limit*/ 3, /*instructions*/ None).await;
+    let environments = resolved_local_environments([
+        ("primary", config.cwd.clone()),
+        ("secondary", secondary.abs()),
+    ]);
+    let user_instructions = config.user_instructions.clone();
+
+    let loaded = load_project_instructions(&mut config.config, user_instructions, &environments)
+        .await
+        .expect("instructions expected");
+
+    assert_eq!(
+        loaded.text(),
+        format!(
+            "for `primary` with root {}\n\nABC\n\nfor `secondary` with root {}\n\nVWX",
+            primary.path().display(),
+            secondary.path().display()
+        )
+    );
+}
+
+#[tokio::test]
+async fn multiple_environments_can_exceed_single_environment_project_doc_limit() {
+    const LIMIT: usize = 8;
+    let primary = tempfile::tempdir().expect("primary tempdir");
+    let secondary = tempfile::tempdir().expect("secondary tempdir");
+    let primary_doc = "P".repeat(LIMIT);
+    let secondary_doc = "S".repeat(LIMIT);
+    fs::write(primary.path().join("AGENTS.md"), &primary_doc).unwrap();
+    fs::write(secondary.path().join("AGENTS.md"), &secondary_doc).unwrap();
+    let mut config = make_config(&primary, LIMIT, /*instructions*/ None).await;
+    let environments = resolved_local_environments([
+        ("primary", config.cwd.clone()),
+        ("secondary", secondary.abs()),
+    ]);
+
+    let loaded = load_project_instructions(&mut config.config, None, &environments)
+        .await
+        .expect("instructions expected");
+    let project_bytes = loaded
+        .entries
+        .iter()
+        .filter(|entry| matches!(&entry.provenance, InstructionProvenance::Project { .. }))
+        .map(|entry| entry.contents.len())
+        .sum::<usize>();
+
+    // TODO(anp): Add an aggregate cap across environments instead of allowing the combined
+    // project instructions to grow by one full per-environment budget for every binding.
+    assert_eq!(project_bytes, LIMIT * 2);
+    assert!(project_bytes > config.project_doc_max_bytes);
+    assert!(loaded.text().contains(&primary_doc));
+    assert!(loaded.text().contains(&secondary_doc));
+}
+
+#[tokio::test]
+async fn secondary_environment_invalid_utf8_warns_without_suppressing_other_docs() {
+    let primary = tempfile::tempdir().expect("primary tempdir");
+    let secondary = tempfile::tempdir().expect("secondary tempdir");
+    fs::write(primary.path().join("AGENTS.md"), "primary doc").unwrap();
+    fs::write(secondary.path().join("AGENTS.md"), b"secondary\xFFdoc").unwrap();
+    let mut config = make_config(&primary, /*limit*/ 4096, /*instructions*/ None).await;
+    let environments = resolved_local_environments([
+        ("primary", config.cwd.clone()),
+        ("secondary", secondary.abs()),
+    ]);
+
+    let loaded = load_project_instructions(&mut config.config, None, &environments)
+        .await
+        .expect("instructions expected");
+
+    assert!(loaded.text().contains("primary doc"));
+    assert!(loaded.text().contains("secondary\u{FFFD}doc"));
+    assert_invalid_utf8_warning(
+        &config.startup_warnings,
+        "Project",
+        secondary.path().join("AGENTS.md").as_path(),
+    );
+}
+
+#[tokio::test]
+async fn child_agents_guidance_is_appended_once_after_environment_groups() {
+    let primary = tempfile::tempdir().expect("primary tempdir");
+    let secondary = tempfile::tempdir().expect("secondary tempdir");
+    fs::write(primary.path().join("AGENTS.md"), "primary doc").unwrap();
+    fs::write(secondary.path().join("AGENTS.md"), "secondary doc").unwrap();
+    let mut config = make_config(&primary, /*limit*/ 4096, /*instructions*/ None).await;
+    config.features.enable(Feature::ChildAgentsMd).unwrap();
+    let environments = resolved_local_environments([
+        ("primary", config.cwd.clone()),
+        ("secondary", secondary.abs()),
+    ]);
+
+    let loaded = load_project_instructions(&mut config.config, None, &environments)
+        .await
+        .expect("instructions expected");
+    let text = loaded.text();
+
+    assert_eq!(text.matches(HIERARCHICAL_AGENTS_MESSAGE).count(), 1);
+    assert!(text.ends_with(HIERARCHICAL_AGENTS_MESSAGE));
+}
+
 /// If there are existing system instructions but AGENTS.md docs are
 /// missing we expect the original instructions to be returned unchanged.
 #[tokio::test]
@@ -640,14 +910,17 @@ async fn concatenates_root_and_cwd_docs() {
         entries: vec![
             InstructionEntry {
                 contents: "root doc".to_string(),
-                provenance: InstructionProvenance::Project(root_agents.clone()),
+                provenance: primary_project_provenance(root_agents.clone(), cfg.cwd.clone()),
             },
             InstructionEntry {
                 contents: "crate doc".to_string(),
-                provenance: InstructionProvenance::Project(crate_agents.clone()),
+                provenance: primary_project_provenance(crate_agents.clone(), cfg.cwd.clone()),
             },
         ],
-    };
+        model_visible_fragment: None,
+    }
+    .finalize(&cfg.cwd)
+    .expect("expected instructions");
 
     assert_eq!(loaded, expected);
     assert_eq!(loaded.text(), "root doc\n\ncrate doc");
@@ -772,7 +1045,10 @@ async fn child_agents_message_after_global_instructions_uses_plain_separator() {
             contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
             provenance: InstructionProvenance::Internal,
         }],
-    };
+        model_visible_fragment: None,
+    }
+    .finalize(&cfg.cwd)
+    .expect("expected instructions");
 
     assert_eq!(loaded, expected);
     assert_eq!(
@@ -804,9 +1080,12 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
         }),
         entries: vec![InstructionEntry {
             contents: "project doc".to_string(),
-            provenance: InstructionProvenance::Project(project_agents.clone()),
+            provenance: primary_project_provenance(project_agents.clone(), cfg.cwd.clone()),
         }],
-    };
+        model_visible_fragment: None,
+    }
+    .finalize(&cfg.cwd)
+    .expect("expected instructions");
     assert_eq!(loaded, expected);
     assert_eq!(loaded.user_instructions(), cfg.user_instructions.as_ref());
     assert_eq!(
@@ -844,14 +1123,17 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
         entries: vec![
             InstructionEntry {
                 contents: "project doc".to_string(),
-                provenance: InstructionProvenance::Project(project_agents.clone()),
+                provenance: primary_project_provenance(project_agents.clone(), cfg.cwd.clone()),
             },
             InstructionEntry {
                 contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
                 provenance: InstructionProvenance::Internal,
             },
         ],
-    };
+        model_visible_fragment: None,
+    }
+    .finalize(&cfg.cwd)
+    .expect("expected instructions");
     assert_eq!(loaded, expected);
     assert_eq!(
         loaded.sources().collect::<Vec<_>>(),
