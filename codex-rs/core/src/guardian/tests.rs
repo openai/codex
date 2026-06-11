@@ -1137,12 +1137,18 @@ async fn routes_approval_to_guardian_requires_guardian_reviewer() {
     config.approvals_reviewer = ApprovalsReviewer::User;
     turn.config = Arc::new(config.clone());
 
-    assert!(!routes_approval_to_guardian(&turn));
+    assert!(!routes_approval_to_guardian_with_reviewer(
+        &turn,
+        turn.config.approvals_reviewer
+    ));
 
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     turn.config = Arc::new(config);
 
-    assert!(routes_approval_to_guardian(&turn));
+    assert!(routes_approval_to_guardian_with_reviewer(
+        &turn,
+        turn.config.approvals_reviewer
+    ));
 }
 
 #[tokio::test]
@@ -1175,7 +1181,10 @@ async fn routes_approval_to_guardian_allows_granular_review_policy() {
         }))
         .expect("test setup should allow updating approval policy");
 
-    assert!(routes_approval_to_guardian(&turn));
+    assert!(routes_approval_to_guardian_with_reviewer(
+        &turn,
+        turn.config.approvals_reviewer
+    ));
 }
 
 #[test]

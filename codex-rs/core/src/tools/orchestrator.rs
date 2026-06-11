@@ -9,7 +9,7 @@ caching).
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
-use crate::guardian::routes_approval_to_guardian;
+use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::flat_tool_name;
@@ -142,8 +142,13 @@ impl ToolOrchestrator {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
+        let approvals_reviewer = tool_ctx
+            .session
+            .approvals_reviewer_for_turn(turn_ctx.config.approvals_reviewer)
+            .await;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
-        let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
+        let use_guardian = routes_approval_to_guardian_with_reviewer(turn_ctx, approvals_reviewer)
+            || strict_auto_review;
 
         // 1) Approval
         let mut already_approved = false;

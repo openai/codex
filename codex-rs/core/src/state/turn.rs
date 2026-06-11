@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use codex_extension_api::ExtensionData;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -93,7 +94,7 @@ pub(crate) struct TurnState {
     pub(crate) pending_input: TurnInputQueue,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
-    strict_auto_review_enabled: bool,
+    approvals_reviewer_override: Option<ApprovalsReviewer>,
     pub(crate) tool_calls: u64,
     pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
@@ -231,11 +232,15 @@ impl TurnState {
             .cloned()
     }
 
-    pub(crate) fn enable_strict_auto_review(&mut self) {
-        self.strict_auto_review_enabled = true;
+    pub(crate) fn strict_auto_review_enabled(&self) -> bool {
+        self.approvals_reviewer_override == Some(ApprovalsReviewer::AutoReview)
     }
 
-    pub(crate) fn strict_auto_review_enabled(&self) -> bool {
-        self.strict_auto_review_enabled
+    pub(crate) fn set_approvals_reviewer_override(&mut self, reviewer: ApprovalsReviewer) {
+        self.approvals_reviewer_override = Some(reviewer);
+    }
+
+    pub(crate) fn approvals_reviewer_override(&self) -> Option<ApprovalsReviewer> {
+        self.approvals_reviewer_override
     }
 }

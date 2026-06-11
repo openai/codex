@@ -152,6 +152,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
             permissions: requested_permissions.clone(),
             scope: PermissionGrantScope::Turn,
             strict_auto_review: false,
+            approvals_reviewer: None,
         })
     );
     assert_eq!(
@@ -400,6 +401,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
                 },
                 scope: PermissionGrantScope::Turn,
                 strict_auto_review: true,
+                approvals_reviewer: None,
             },
             codex_exec_server::LOCAL_ENVIRONMENT_ID,
             Some(&originating_turn_state),

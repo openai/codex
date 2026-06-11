@@ -8,7 +8,7 @@ use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
+use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
@@ -422,7 +422,6 @@ impl CoreShellActionProvider {
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let source = self.tool_name;
-        let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
             .pause_for(async move {
                 // 1) Run PermissionRequest hooks
@@ -457,6 +456,12 @@ impl CoreShellActionProvider {
                 }
 
                 // 2) Route to Guardian if configured
+                let approvals_reviewer = session
+                    .approvals_reviewer_for_turn(turn.config.approvals_reviewer)
+                    .await;
+                let guardian_review_id =
+                    routes_approval_to_guardian_with_reviewer(&turn, approvals_reviewer)
+                        .then(new_guardian_review_id);
                 if let Some(review_id) = guardian_review_id.clone() {
                     let decision = review_approval_request(
                         &session,
