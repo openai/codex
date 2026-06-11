@@ -2613,6 +2613,15 @@ async fn personality_selection_popup_snapshot() {
     assert_chatwidget_snapshot!("personality_selection_popup", popup);
 }
 
+#[tokio::test]
+async fn skills_menu_default_mentions_shortcut_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_skills_menu();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("skills_menu_default_mentions_shortcut", popup);
+}
+
 #[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_audio_selection_popup_snapshot() {
