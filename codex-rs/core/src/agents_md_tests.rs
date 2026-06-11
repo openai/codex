@@ -649,9 +649,14 @@ async fn merges_existing_instructions_with_agents_md() {
 async fn multiple_environment_docs_use_labeled_layout_and_preserve_source_order() {
     let primary = tempfile::tempdir().expect("primary tempdir");
     let secondary = tempfile::tempdir().expect("secondary tempdir");
-    fs::write(primary.path().join("AGENTS.md"), "primary doc").unwrap();
+    fs::create_dir(primary.path().join(".git")).unwrap();
+    fs::write(primary.path().join("AGENTS.md"), "primary root doc").unwrap();
+    let primary_nested = primary.path().join("nested");
+    fs::create_dir(&primary_nested).unwrap();
+    fs::write(primary_nested.join("AGENTS.md"), "primary nested doc").unwrap();
     fs::write(secondary.path().join("AGENTS.md"), "secondary doc").unwrap();
     let mut config = make_config(&primary, /*limit*/ 4096, Some("global instructions")).await;
+    config.cwd = primary_nested.abs();
     let environments = resolved_local_environments([
         ("primary", config.cwd.clone()),
         ("secondary", secondary.abs()),
@@ -662,8 +667,8 @@ async fn multiple_environment_docs_use_labeled_layout_and_preserve_source_order(
         .await
         .expect("instructions expected");
     let inner = format!(
-        "global instructions\n\nfor `primary` with root {}\n\nprimary doc\n\nfor `secondary` with root {}\n\nsecondary doc",
-        primary.path().display(),
+        "global instructions\n\nfor `primary` with root {}\n\nprimary root doc\n\nprimary nested doc\n\nfor `secondary` with root {}\n\nsecondary doc",
+        primary_nested.display(),
         secondary.path().display(),
     );
 
@@ -682,6 +687,7 @@ async fn multiple_environment_docs_use_labeled_layout_and_preserve_source_order(
                 .source
                 .clone(),
             primary.path().join("AGENTS.md").abs(),
+            primary_nested.join("AGENTS.md").abs(),
             secondary.path().join("AGENTS.md").abs(),
         ]
     );
@@ -769,6 +775,8 @@ async fn project_doc_byte_limit_is_applied_independently_per_environment() {
 
 #[tokio::test]
 async fn multiple_environments_can_exceed_single_environment_project_doc_limit() {
+    // TODO(anp): Add an aggregate cap across environments instead of allowing the combined
+    // project instructions to grow by one full per-environment budget for every binding.
     const LIMIT: usize = 8;
     let primary = tempfile::tempdir().expect("primary tempdir");
     let secondary = tempfile::tempdir().expect("secondary tempdir");
@@ -796,8 +804,6 @@ async fn multiple_environments_can_exceed_single_environment_project_doc_limit()
         .map(|entry| entry.contents.len())
         .sum::<usize>();
 
-    // TODO(anp): Add an aggregate cap across environments instead of allowing the combined
-    // project instructions to grow by one full per-environment budget for every binding.
     assert_eq!(project_bytes, LIMIT * 2);
     assert!(project_bytes > config.project_doc_max_bytes);
     assert!(loaded.text().contains(&primary_doc));

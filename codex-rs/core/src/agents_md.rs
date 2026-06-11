@@ -393,6 +393,9 @@ impl LoadedAgentsMd {
                     if has_previous {
                         output.push_str("\n\n");
                     }
+                    // One environment can contribute several hierarchical AGENTS.md files from
+                    // its project root through its cwd. Label that environment once for the
+                    // complete group rather than repeating the label before every file.
                     if previous_environment != Some(environment) {
                         output.push_str(&format!(
                             "for `{}` with root {}\n\n",
