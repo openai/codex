@@ -415,9 +415,9 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn validate_dynamic_tools_rejects_namespace_longer_than_responses_limit() {
+    fn validate_dynamic_tools_rejects_namespace_fields_over_limits() {
         let long_namespace = "a".repeat(65);
-        let tools = vec![dynamic_tool(
+        let mut tools = vec![dynamic_tool(
             Some(&long_namespace),
             "lookup_ticket",
             json!({
@@ -430,6 +430,14 @@ mod thread_processor_behavior_tests {
         let err = validate_dynamic_tools(&tools).expect_err("namespace too long");
         assert!(err.contains("at most 64"), "unexpected error: {err}");
         assert!(err.contains(&long_namespace), "unexpected error: {err}");
+
+        let DynamicToolSpec::Namespace(namespace) = &mut tools[0] else {
+            unreachable!("expected namespace")
+        };
+        namespace.name = "tickets".to_string();
+        namespace.description = "a".repeat(1025);
+        let err = validate_dynamic_tools(&tools).expect_err("namespace description too long");
+        assert!(err.contains("at most 1024"), "unexpected error: {err}");
     }
 
     #[test]

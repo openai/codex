@@ -215,18 +215,13 @@ async fn thread_start_rejects_mixed_dynamic_tool_formats() -> Result<()> {
             Some(json!({
                 "dynamicTools": [
                     {
-                        "type": "namespace",
-                        "name": "canonical",
-                        "description": "Canonical tools",
-                        "tools": [{
-                            "type": "function",
-                            "name": "canonical_tool",
-                            "description": "Canonical tool",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {}
-                            }
-                        }]
+                        "type": "function",
+                        "name": "canonical_tool",
+                        "description": "Canonical tool",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        }
                     },
                     {
                         "namespace": "legacy_app",

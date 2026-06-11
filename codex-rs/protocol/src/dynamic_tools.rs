@@ -93,10 +93,8 @@ pub fn normalize_dynamic_tool_specs(
             || value.get("exposeToContext").is_some()
             || value.get("type").is_none()
     });
-    let has_canonical_namespace = values
-        .iter()
-        .any(|value| value.get("type").and_then(JsonValue::as_str) == Some("namespace"));
-    if has_legacy_format && has_canonical_namespace {
+    let has_canonical_format = values.iter().any(|value| value.get("type").is_some());
+    if has_legacy_format && has_canonical_format {
         return Err(serde_json::Error::custom(
             "dynamic tools must use either canonical or legacy format consistently",
         ));
