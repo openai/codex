@@ -7,7 +7,7 @@ use crate::legacy_core::check_execpolicy_for_warnings;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
-use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
+use crate::legacy_core::config::load_config_toml_and_requirements_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_bootstrap_system_proxy_config;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
@@ -1008,7 +1008,7 @@ pub async fn run_main(
         loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
 
-    let bootstrap_config_toml = load_config_toml_or_exit(
+    let (bootstrap_config_toml, bootstrap_requirements) = load_config_toml_or_exit(
         &codex_home,
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),
@@ -1022,7 +1022,10 @@ pub async fn run_main(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let system_proxy_config = resolve_bootstrap_system_proxy_config(&bootstrap_config_toml);
+    let system_proxy_config = resolve_bootstrap_system_proxy_config(
+        &bootstrap_config_toml,
+        bootstrap_requirements.feature_requirements.as_ref(),
+    )?;
     let auth_route_config =
         bootstrap_auth_route_config_from_system_proxy_config(system_proxy_config.as_ref());
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage_with_auth_route_config(
@@ -1049,7 +1052,7 @@ pub async fn run_main(
             // The first load intentionally skips cloud config so we can read
             // auth/base-url settings needed to fetch the bundle. If OSS mode
             // needs a default provider from config, reload with the bundle.
-            config_toml_with_cloud_config = load_config_toml_or_exit(
+            let (reloaded_config_toml, _) = load_config_toml_or_exit(
                 &codex_home,
                 config_cwd.as_ref(),
                 cli_kv_overrides.clone(),
@@ -1058,6 +1061,7 @@ pub async fn run_main(
                 cloud_config_bundle.clone(),
             )
             .await;
+            config_toml_with_cloud_config = reloaded_config_toml;
             &config_toml_with_cloud_config
         } else {
             &bootstrap_config_toml
@@ -2030,8 +2034,11 @@ async fn load_config_toml_or_exit(
     loader_overrides: LoaderOverrides,
     strict_config: bool,
     cloud_config_bundle: CloudConfigBundleLoader,
-) -> codex_config::config_toml::ConfigToml {
-    match load_config_as_toml_with_cli_and_load_options(
+) -> (
+    codex_config::config_toml::ConfigToml,
+    codex_config::ConfigRequirements,
+) {
+    match load_config_toml_and_requirements_with_cli_and_load_options(
         codex_home,
         cwd,
         cli_kv_overrides,
@@ -2043,7 +2050,7 @@ async fn load_config_toml_or_exit(
     )
     .await
     {
-        Ok(config_toml) => config_toml,
+        Ok(config_toml_and_requirements) => config_toml_and_requirements,
         Err(err) => {
             let config_error = err
                 .get_ref()

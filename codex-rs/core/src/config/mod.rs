@@ -1639,6 +1639,26 @@ pub async fn load_config_as_toml_with_cli_and_load_options(
     cli_overrides: Vec<(String, TomlValue)>,
     options: impl Into<ConfigLoadOptions>,
 ) -> std::io::Result<ConfigToml> {
+    let (config_toml, _) = load_config_toml_and_requirements_with_cli_and_load_options(
+        codex_home,
+        cwd,
+        cli_overrides,
+        options,
+    )
+    .await?;
+    Ok(config_toml)
+}
+
+/// Loads merged config TOML and its normalized managed requirements from one layer stack.
+///
+/// Bootstrap callers use this before cloud config is available so early
+/// decisions can still enforce local managed requirements.
+pub async fn load_config_toml_and_requirements_with_cli_and_load_options(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    options: impl Into<ConfigLoadOptions>,
+) -> std::io::Result<(ConfigToml, ConfigRequirements)> {
     let config_layer_stack = load_config_layers_state(
         LOCAL_FS.as_ref(),
         codex_home,
@@ -1649,13 +1669,14 @@ pub async fn load_config_as_toml_with_cli_and_load_options(
     )
     .await?;
 
+    let requirements = config_layer_stack.requirements().clone();
     let merged_toml = config_layer_stack.effective_config();
     let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
         e
     })?;
 
-    Ok(cfg)
+    Ok((cfg, requirements))
 }
 
 pub fn deserialize_config_toml_with_base(
