@@ -58,6 +58,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<PathUri> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         let response = self
             .run_sandboxed(
                 sandbox,
@@ -78,6 +79,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         let response = self
             .run_sandboxed(
                 sandbox,
@@ -104,6 +106,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::WriteFile(FsWriteFileParams {
@@ -125,6 +128,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::CreateDirectory(FsCreateDirectoryParams {
@@ -145,6 +149,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         let response = self
             .run_sandboxed(
                 sandbox,
@@ -171,6 +176,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         let response = self
             .run_sandboxed(
                 sandbox,
@@ -200,6 +206,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Remove(FsRemoveParams {
@@ -223,6 +230,8 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(source_path)?;
+        validate_native_path(destination_path)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Copy(FsCopyParams {
@@ -237,6 +246,10 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         .map_err(map_sandbox_error)?;
         Ok(())
     }
+}
+
+fn validate_native_path(path: &PathUri) -> FileSystemResult<()> {
+    path.to_abs_path().map(drop)
 }
 
 fn require_platform_sandbox(

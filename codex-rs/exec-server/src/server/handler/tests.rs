@@ -117,17 +117,19 @@ async fn initialized_handler_with_path_format(
 #[tokio::test]
 async fn canonicalize_response_uses_negotiated_path_format() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    let native_path =
+    let canonical_path =
         std::fs::canonicalize(temp_dir.path()).expect("canonical tempdir should exist");
     let path = PathUri::from_path(temp_dir.path()).expect("tempdir path URI");
-    let path_uri = PathUri::from_path(&native_path).expect("canonical path URI");
+    let path_uri = PathUri::from_path(canonical_path).expect("canonical path URI");
+    let legacy_path = path_uri
+        .to_abs_path()
+        .expect("legacy native path")
+        .to_string_lossy()
+        .into_owned();
 
     for (client_path_format, expected_path) in [
         (ClientPathFormat::PathUri, path_uri.to_string()),
-        (
-            ClientPathFormat::LegacyNative,
-            native_path.to_string_lossy().into_owned(),
-        ),
+        (ClientPathFormat::LegacyNative, legacy_path),
     ] {
         let handler = initialized_handler_with_path_format(client_path_format).await;
         let response = handler
