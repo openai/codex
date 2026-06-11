@@ -504,6 +504,12 @@ impl WindowsSandboxWrapperRequestFile {
                 request_dir.display()
             ))
         })?;
+        codex_windows_sandbox::ensure_current_user_cleanup_access(&request_dir).map_err(|err| {
+            internal_error(format!(
+                "failed to grant cleanup access to windows fs sandbox wrapper request dir {}: {err}",
+                request_dir.display()
+            ))
+        })?;
         let path = request_dir.join(format!(
             "fs-helper-wrapper-request-{}.json",
             uuid::Uuid::new_v4()

@@ -1,3 +1,4 @@
+use crate::winutil::resolve_sid;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -416,6 +417,14 @@ pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Resu
     ensure_allow_mask_aces(path, sids, WRITE_ALLOW_MASK)
 }
 
+/// Ensure the current real user can clean up files and child directories under
+/// `path`, even when the parent tree grants write access without delete rights.
+pub fn ensure_current_user_cleanup_access(path: &Path) -> Result<bool> {
+    let real_user = std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
+    let real_user_sid = resolve_sid(&real_user)?;
+    unsafe { ensure_allow_write_aces(path, &[real_user_sid.as_ptr() as *mut c_void]) }
+}
+
 /// Adds an allow ACE granting read/write/execute to the given SID on the target path.
 ///
 /// # Safety
@@ -480,6 +489,30 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         LocalFree(p_sd as HLOCAL);
     }
     Ok(added)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_user_cleanup_access_grants_delete_rights() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new()?;
+        let request_dir = temp_dir.path().join("wrapper-requests");
+        std::fs::create_dir(&request_dir)?;
+
+        ensure_current_user_cleanup_access(&request_dir)?;
+
+        let real_user = std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
+        let real_user_sid = resolve_sid(&real_user)?;
+        assert!(path_mask_allows(
+            &request_dir,
+            &[real_user_sid.as_ptr() as *mut c_void],
+            DELETE | FILE_DELETE_CHILD,
+            /*require_all_bits*/ true,
+        )?);
+        Ok(())
+    }
 }
 
 /// Adds a deny ACE to prevent write/append/delete for the given SID on the target path.
