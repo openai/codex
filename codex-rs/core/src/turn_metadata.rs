@@ -21,6 +21,7 @@ use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
@@ -30,6 +31,8 @@ use codex_protocol::protocol::ThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const MODEL_KEY: &str = "model";
+const AGENT_PATH_KEY: &str = "agent_path";
+const HAS_SPAWNED_SUBAGENT_KEY: &str = "has_spawned_subagent";
 const REASONING_EFFORT_KEY: &str = "reasoning_effort";
 const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
 const USER_INPUT_REQUESTED_DURING_TURN_KEY: &str = "user_input_requested_during_turn";
@@ -41,6 +44,7 @@ const WINDOW_ID_KEY: &str = "window_id";
 pub(crate) struct McpTurnMetadataContext<'a> {
     pub(crate) model: &'a str,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+    pub(crate) has_spawned_subagent: bool,
 }
 
 /// Metadata present only on outbound model requests that perform compaction.
@@ -194,6 +198,8 @@ fn merge_turn_metadata(
                     | "forked_from_thread_id"
                     | "parent_thread_id"
                     | "subagent_kind"
+                    | AGENT_PATH_KEY
+                    | HAS_SPAWNED_SUBAGENT_KEY
                     | REQUEST_KIND_KEY
                     | COMPACTION_KEY
                     | WINDOW_ID_KEY
@@ -249,6 +255,7 @@ pub(crate) struct TurnMetadataState {
     repo_root: Option<String>,
     base_metadata: TurnMetadataBag,
     base_header: Option<String>,
+    agent_path: Option<String>,
     enriched_header: Arc<RwLock<Option<String>>>,
     turn_started_at_unix_ms: Arc<RwLock<Option<i64>>>,
     responsesapi_client_metadata: Arc<RwLock<Option<HashMap<String, String>>>>,
@@ -290,6 +297,13 @@ impl TurnMetadataState {
             | SessionSource::Internal(_)
             | SessionSource::Unknown => None,
         };
+        let agent_path = session_source
+            .get_agent_path()
+            .map(String::from)
+            .or_else(|| {
+                (!matches!(session_source, SessionSource::SubAgent(_)))
+                    .then(|| AgentPath::ROOT.to_string())
+            });
         let base_metadata = TurnMetadataBag {
             request_kind: None,
             session_id: Some(session_id),
@@ -309,6 +323,7 @@ impl TurnMetadataState {
             repo_root,
             base_metadata,
             base_header,
+            agent_path,
             enriched_header: Arc::new(RwLock::new(None)),
             turn_started_at_unix_ms: Arc::new(RwLock::new(None)),
             responsesapi_client_metadata: Arc::new(RwLock::new(None)),
@@ -353,9 +368,21 @@ impl TurnMetadataState {
         let header = self.current_header_value()?;
         let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
         metadata.remove(REQUEST_KIND_KEY);
+        if let Some(agent_path) = self.agent_path.as_ref() {
+            metadata.insert(
+                AGENT_PATH_KEY.to_string(),
+                Value::String(agent_path.clone()),
+            );
+        } else {
+            metadata.remove(AGENT_PATH_KEY);
+        }
         metadata.insert(
             MODEL_KEY.to_string(),
             Value::String(context.model.to_string()),
+        );
+        metadata.insert(
+            HAS_SPAWNED_SUBAGENT_KEY.to_string(),
+            Value::Bool(context.has_spawned_subagent),
         );
         match context.reasoning_effort {
             Some(reasoning_effort) => {

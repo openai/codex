@@ -91,6 +91,7 @@ fn mcp_turn_metadata_context(turn_context: &TurnContext) -> McpTurnMetadataConte
     McpTurnMetadataContext {
         model: turn_context.model_info.slug.as_str(),
         reasoning_effort: turn_context.effective_reasoning_effort(),
+        has_spawned_subagent: false,
     }
 }
 
@@ -1035,6 +1036,7 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
         "custom_server",
         "call-custom",
         /*metadata*/ None,
+        /*has_spawned_subagent*/ false,
     )
     .expect("custom servers should receive turn metadata");
     let turn_metadata = meta
@@ -1077,6 +1079,7 @@ async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
         "custom_server",
         "call-custom",
         /*metadata*/ None,
+        /*has_spawned_subagent*/ false,
     )
     .expect("custom servers should receive turn metadata");
     let turn_metadata = meta
@@ -1088,6 +1091,30 @@ async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
             .get("turn_started_at_unix_ms")
             .and_then(serde_json::Value::as_i64),
         Some(1_700_000_000_123)
+    );
+}
+
+#[tokio::test]
+async fn mcp_tool_call_request_meta_includes_has_spawned_subagent() {
+    let (_, turn_context) = make_session_and_context().await;
+
+    let meta = build_mcp_tool_call_request_meta(
+        &turn_context,
+        "custom_server",
+        "call-custom",
+        /*metadata*/ None,
+        /*has_spawned_subagent*/ true,
+    )
+    .expect("custom servers should receive turn metadata");
+    let turn_metadata = meta
+        .get(crate::X_CODEX_TURN_METADATA_HEADER)
+        .expect("turn metadata should be present");
+
+    assert_eq!(
+        turn_metadata
+            .get("has_spawned_subagent")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
     );
 }
 
@@ -1106,7 +1133,13 @@ async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     metadata.plugin_id = Some("sample@test".to_string());
 
     assert_eq!(
-        build_mcp_tool_call_request_meta(&turn_context, "sample", "call-plugin", Some(&metadata),),
+        build_mcp_tool_call_request_meta(
+            &turn_context,
+            "sample",
+            "call-plugin",
+            Some(&metadata),
+            /*has_spawned_subagent*/ false,
+        ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_PLUGIN_ID_META_KEY: "sample@test",
@@ -1183,6 +1216,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             CODEX_APPS_MCP_SERVER_NAME,
             "call_abc123xyz789",
             Some(&metadata),
+            /*has_spawned_subagent*/ false,
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
@@ -1210,6 +1244,7 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
             CODEX_APPS_MCP_SERVER_NAME,
             "call_abc123xyz789",
             /*metadata*/ None,
+            /*has_spawned_subagent*/ false,
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,

@@ -339,8 +339,14 @@ async fn handle_approved_mcp_tool_call(
     };
     let result = async {
         let rewritten_arguments = rewrite?;
-        let request_meta =
-            build_mcp_tool_call_request_meta(turn_context, &server, call_id, metadata);
+        let has_spawned_subagent = has_spawned_subagent(sess).await;
+        let request_meta = build_mcp_tool_call_request_meta(
+            turn_context,
+            &server,
+            call_id,
+            metadata,
+            has_spawned_subagent,
+        );
         let result = execute_mcp_tool_call(
             sess,
             turn_context,
@@ -1026,6 +1032,7 @@ fn build_mcp_tool_call_request_meta(
     server: &str,
     call_id: &str,
     metadata: Option<&McpToolApprovalMetadata>,
+    has_spawned_subagent: bool,
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
 
@@ -1034,6 +1041,7 @@ fn build_mcp_tool_call_request_meta(
         .current_meta_value_for_mcp_request(McpTurnMetadataContext {
             model: turn_context.model_info.slug.as_str(),
             reasoning_effort: turn_context.effective_reasoning_effort(),
+            has_spawned_subagent,
         })
     {
         request_meta.insert(
@@ -1063,6 +1071,17 @@ fn build_mcp_tool_call_request_meta(
     }
 
     (!request_meta.is_empty()).then_some(serde_json::Value::Object(request_meta))
+}
+
+async fn has_spawned_subagent(sess: &Session) -> bool {
+    let Some(state_db) = sess.services.state_db.as_ref() else {
+        return false;
+    };
+
+    state_db
+        .list_thread_spawn_children(sess.thread_id)
+        .await
+        .is_ok_and(|children| !children.is_empty())
 }
 
 fn with_mcp_tool_call_thread_id_meta(
