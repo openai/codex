@@ -1458,13 +1458,14 @@ The built-in `request_permissions` tool sends an `item/permissions/requestApprov
 }
 ```
 
-The client responds with `result.permissions`, which should be the granted subset of the requested permission profile. It may also set `result.scope` to `"session"` to make the grant persist for later turns in the same session; omitted or `"turn"` keeps the existing turn-scoped behavior:
+The client responds with `result.permissions`, which should be the granted subset of the requested permission profile. It may also set `result.scope` to `"session"` to make the grant persist for later turns in the same session; omitted or `"turn"` keeps the existing turn-scoped behavior. `approvalsReviewer` can be set to `"auto_review"` or `"user"` to choose who reviews later approval prompts for the rest of the current turn. This reviewer override is turn-scoped even when `scope` is `"session"` for the permission grant. Legacy clients may still send `strictAutoReview: true`, which is treated as `approvalsReviewer: "auto_review"` for compatibility:
 
 ```json
 {
   "id": 61,
   "result": {
     "scope": "session",
+    "approvalsReviewer": "auto_review",
     "permissions": {
       "fileSystem": {
         "write": ["/Users/me/project"]

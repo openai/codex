@@ -708,6 +708,7 @@ fn permissions_request_approval_response_defaults_scope_to_turn() {
 
     assert_eq!(response.scope, PermissionGrantScope::Turn);
     assert_eq!(response.strict_auto_review, None);
+    assert_eq!(response.approvals_reviewer, None);
 }
 
 #[test]
@@ -719,6 +720,20 @@ fn permissions_request_approval_response_accepts_strict_auto_review() {
     .expect("response should deserialize");
 
     assert_eq!(response.strict_auto_review, Some(true));
+}
+
+#[test]
+fn permissions_request_approval_response_accepts_approvals_reviewer() {
+    let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+        "permissions": {},
+        "approvalsReviewer": "auto_review",
+    }))
+    .expect("response should deserialize");
+
+    assert_eq!(
+        response.approvals_reviewer,
+        Some(ApprovalsReviewer::AutoReview)
+    );
 }
 
 #[test]
