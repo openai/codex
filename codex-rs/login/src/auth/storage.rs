@@ -101,10 +101,54 @@ pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> 
     }
 }
 
-pub(super) trait AuthStorageBackend: Debug + Send + Sync {
+/// Stores raw Codex auth payloads for one credential lane.
+///
+/// Implementations should persist and return complete [`AuthDotJson`] records.
+/// Cloud hosts may provide non-file-backed implementations, but callers should
+/// keep configured and ephemeral auth stores separate.
+pub trait AuthCredentialStore: Debug + Send + Sync + 'static {
+    /// Loads the stored auth payload, or `None` when this store is empty.
     fn load(&self) -> std::io::Result<Option<AuthDotJson>>;
+    /// Replaces the stored auth payload.
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()>;
+    /// Removes the stored auth payload and reports whether one existed.
     fn delete(&self) -> std::io::Result<bool>;
+}
+
+/// Configured and ephemeral auth stores used by [`crate::auth::AuthManager`].
+///
+/// `configured` owns managed auth loaded by [`crate::auth::AuthManager`], such
+/// as API keys and persisted first-party ChatGPT login. `ephemeral` owns
+/// externally supplied ChatGPT auth tokens that should not be persisted to the
+/// configured store.
+#[derive(Clone)]
+pub struct AuthStores {
+    /// Store for managed auth selected by runtime configuration.
+    pub configured: Arc<dyn AuthCredentialStore>,
+    /// Store for externally supplied ChatGPT auth tokens.
+    pub ephemeral: Arc<dyn AuthCredentialStore>,
+}
+
+impl Debug for AuthStores {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthStores").finish_non_exhaustive()
+    }
+}
+
+impl AuthStores {
+    /// Builds the existing Codex Home backed auth stores for local runtimes.
+    pub fn local(codex_home: PathBuf, mode: AuthCredentialsStoreMode) -> Self {
+        let configured = create_auth_storage(codex_home.clone(), mode);
+        let ephemeral = if mode == AuthCredentialsStoreMode::Ephemeral {
+            Arc::clone(&configured)
+        } else {
+            create_auth_storage(codex_home, AuthCredentialsStoreMode::Ephemeral)
+        };
+        Self {
+            configured,
+            ephemeral,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -129,7 +173,7 @@ impl FileAuthStorage {
     }
 }
 
-impl AuthStorageBackend for FileAuthStorage {
+impl AuthCredentialStore for FileAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         let auth_file = get_auth_file(&self.codex_home);
         let auth_dot_json = match self.try_read_auth_json(&auth_file) {
@@ -224,7 +268,7 @@ impl KeyringAuthStorage {
     }
 }
 
-impl AuthStorageBackend for KeyringAuthStorage {
+impl AuthCredentialStore for KeyringAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         let key = compute_store_key(&self.codex_home)?;
         self.load_from_keyring(&key)
@@ -269,7 +313,7 @@ impl AutoAuthStorage {
     }
 }
 
-impl AuthStorageBackend for AutoAuthStorage {
+impl AuthCredentialStore for AutoAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         match self.keyring_storage.load() {
             Ok(Some(auth)) => Ok(Some(auth)),
@@ -323,7 +367,7 @@ impl EphemeralAuthStorage {
     }
 }
 
-impl AuthStorageBackend for EphemeralAuthStorage {
+impl AuthCredentialStore for EphemeralAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         self.with_store(|store, key| Ok(store.get(&key).cloned()))
     }
@@ -343,7 +387,7 @@ impl AuthStorageBackend for EphemeralAuthStorage {
 pub(super) fn create_auth_storage(
     codex_home: PathBuf,
     mode: AuthCredentialsStoreMode,
-) -> Arc<dyn AuthStorageBackend> {
+) -> Arc<dyn AuthCredentialStore> {
     let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
     create_auth_storage_with_keyring_store(codex_home, mode, keyring_store)
 }
@@ -352,7 +396,7 @@ fn create_auth_storage_with_keyring_store(
     codex_home: PathBuf,
     mode: AuthCredentialsStoreMode,
     keyring_store: Arc<dyn KeyringStore>,
-) -> Arc<dyn AuthStorageBackend> {
+) -> Arc<dyn AuthCredentialStore> {
     match mode {
         AuthCredentialsStoreMode::File => Arc::new(FileAuthStorage::new(codex_home)),
         AuthCredentialsStoreMode::Keyring => {

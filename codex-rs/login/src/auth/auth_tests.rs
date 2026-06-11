@@ -14,6 +14,7 @@ use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::TempDir;
 use tempfile::tempdir;
 use wiremock::Mock;
@@ -26,6 +27,46 @@ use wiremock::matchers::path;
 const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
 const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
 const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
+
+#[derive(Debug, Default)]
+struct FakeAuthCredentialStore {
+    auth: Mutex<Option<AuthDotJson>>,
+    delete_error: Mutex<Option<std::io::ErrorKind>>,
+}
+
+impl FakeAuthCredentialStore {
+    fn with_auth(auth: AuthDotJson) -> Self {
+        Self {
+            auth: Mutex::new(Some(auth)),
+            delete_error: Mutex::new(None),
+        }
+    }
+
+    fn with_delete_error(kind: std::io::ErrorKind) -> Self {
+        Self {
+            auth: Mutex::new(None),
+            delete_error: Mutex::new(Some(kind)),
+        }
+    }
+}
+
+impl AuthCredentialStore for FakeAuthCredentialStore {
+    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+        Ok(self.auth.lock().expect("fake store lock").clone())
+    }
+
+    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+        *self.auth.lock().expect("fake store lock") = Some(auth.clone());
+        Ok(())
+    }
+
+    fn delete(&self) -> std::io::Result<bool> {
+        if let Some(kind) = *self.delete_error.lock().expect("fake store lock") {
+            return Err(std::io::Error::new(kind, "fake delete failure"));
+        }
+        Ok(self.auth.lock().expect("fake store lock").take().is_some())
+    }
+}
 
 #[tokio::test]
 async fn refresh_without_id_token() {
@@ -380,6 +421,99 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
 }
 
 #[tokio::test]
+async fn injected_auth_stores_drive_manager_reads_writes_and_logout() {
+    let initial_auth = AuthDotJson {
+        auth_mode: Some(ApiAuthMode::ApiKey),
+        openai_api_key: Some("sk-initial".to_string()),
+        tokens: None,
+        last_refresh: None,
+        agent_identity: None,
+    };
+    let configured = Arc::new(FakeAuthCredentialStore::with_auth(initial_auth));
+    let ephemeral = Arc::new(FakeAuthCredentialStore::default());
+    let manager = AuthManager::shared_with_stores(
+        AuthStores {
+            configured: configured.clone(),
+            ephemeral: ephemeral.clone(),
+        },
+        /*enable_codex_api_key_env*/ false,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+
+    assert_eq!(manager.get_api_auth_mode(), Some(ApiAuthMode::ApiKey));
+
+    manager
+        .login_with_api_key("sk-updated")
+        .expect("api key login should save");
+    assert_eq!(
+        configured.load().expect("configured load"),
+        Some(AuthDotJson {
+            auth_mode: Some(ApiAuthMode::ApiKey),
+            openai_api_key: Some("sk-updated".to_string()),
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+        })
+    );
+
+    let access_token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("pro".to_string()),
+        chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+    })
+    .expect("external token");
+    manager
+        .login_with_chatgpt_auth_tokens(&access_token, WORKSPACE_ID_ALLOWED, Some("pro"))
+        .expect("external token login should save");
+    let mut stored_external_auth = ephemeral
+        .load()
+        .expect("ephemeral load")
+        .expect("external auth payload should be stored");
+    let mut expected_external_auth =
+        AuthDotJson::from_external_access_token(&access_token, WORKSPACE_ID_ALLOWED, Some("pro"))
+            .expect("external auth payload");
+    assert!(stored_external_auth.last_refresh.is_some());
+    stored_external_auth.last_refresh = None;
+    expected_external_auth.last_refresh = None;
+    assert_eq!(stored_external_auth, expected_external_auth);
+
+    manager.reload().await;
+    assert!(manager.is_external_chatgpt_auth_active());
+    assert!(manager.logout().await.expect("logout should delete"));
+    assert_eq!(configured.load().expect("configured load"), None);
+    assert_eq!(ephemeral.load().expect("ephemeral load"), None);
+    assert_eq!(manager.auth_mode(), None);
+}
+
+#[tokio::test]
+async fn injected_auth_store_logout_clears_configured_store_after_ephemeral_delete_error() {
+    let configured = Arc::new(FakeAuthCredentialStore::with_auth(AuthDotJson {
+        auth_mode: Some(ApiAuthMode::ApiKey),
+        openai_api_key: Some("sk-initial".to_string()),
+        tokens: None,
+        last_refresh: None,
+        agent_identity: None,
+    }));
+    let ephemeral = Arc::new(FakeAuthCredentialStore::with_delete_error(
+        std::io::ErrorKind::Other,
+    ));
+    let manager = AuthManager::shared_with_stores(
+        AuthStores {
+            configured: configured.clone(),
+            ephemeral,
+        },
+        /*enable_codex_api_key_env*/ false,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+
+    assert!(manager.logout().await.is_err());
+    assert_eq!(configured.load().expect("configured load"), None);
+    assert_eq!(manager.auth_mode(), None);
+}
+
+#[tokio::test]
 async fn unauthorized_recovery_reports_mode_and_step_names() {
     let dir = tempdir().unwrap();
     let manager = AuthManager::shared(
@@ -442,9 +576,11 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     updated_tokens.access_token = "new-access-token".to_string();
     updated_tokens.refresh_token = "new-refresh-token".to_string();
     let updated_auth = CodexAuth::from_auth_dot_json(
-        codex_home.path(),
         updated_auth_dot_json,
-        AuthCredentialsStoreMode::File,
+        create_auth_storage(
+            codex_home.path().to_path_buf(),
+            AuthCredentialsStoreMode::File,
+        ),
         /*chatgpt_base_url*/ None,
     )
     .await
