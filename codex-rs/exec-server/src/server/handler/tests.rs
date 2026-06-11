@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -12,21 +10,13 @@ use super::ExecServerHandler;
 use crate::ExecServerRuntimePaths;
 use crate::ProcessId;
 use crate::protocol::ExecParams;
-use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::InitializeParams;
-use crate::protocol::InitializeWireParams;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::rpc::RpcNotificationSender;
 use crate::server::session_registry::SessionRegistry;
-
-#[derive(Clone, Copy)]
-enum ClientPathFormat {
-    PathUri,
-    LegacyNative,
-}
 
 fn exec_params(process_id: &str) -> ExecParams {
     exec_params_with_argv(process_id, sleep_argv())
@@ -86,12 +76,6 @@ fn test_runtime_paths() -> ExecServerRuntimePaths {
 }
 
 async fn initialized_handler() -> Arc<ExecServerHandler> {
-    initialized_handler_with_path_format(ClientPathFormat::PathUri).await
-}
-
-async fn initialized_handler_with_path_format(
-    client_path_format: ClientPathFormat,
-) -> Arc<ExecServerHandler> {
     let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
     let registry = SessionRegistry::new();
     let handler = Arc::new(ExecServerHandler::new(
@@ -100,48 +84,15 @@ async fn initialized_handler_with_path_format(
         test_runtime_paths(),
     ));
     let initialize_response = handler
-        .initialize(InitializeWireParams {
-            params: InitializeParams {
-                client_name: "exec-server-test".to_string(),
-                resume_session_id: None,
-            },
-            filesystem_path_uris: matches!(client_path_format, ClientPathFormat::PathUri),
+        .initialize(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+            resume_session_id: None,
         })
         .await
         .expect("initialize");
-    Uuid::parse_str(&initialize_response.response.session_id).expect("session id should be a UUID");
+    Uuid::parse_str(&initialize_response.session_id).expect("session id should be a UUID");
     handler.initialized().expect("initialized");
     handler
-}
-
-#[tokio::test]
-async fn canonicalize_response_uses_negotiated_path_format() {
-    let temp_dir = tempfile::tempdir().expect("tempdir");
-    let canonical_path =
-        std::fs::canonicalize(temp_dir.path()).expect("canonical tempdir should exist");
-    let path = PathUri::from_path(temp_dir.path()).expect("tempdir path URI");
-    let path_uri = PathUri::from_path(canonical_path).expect("canonical path URI");
-    let legacy_path = path_uri
-        .to_abs_path()
-        .expect("legacy native path")
-        .to_string_lossy()
-        .into_owned();
-
-    for (client_path_format, expected_path) in [
-        (ClientPathFormat::PathUri, path_uri.to_string()),
-        (ClientPathFormat::LegacyNative, legacy_path),
-    ] {
-        let handler = initialized_handler_with_path_format(client_path_format).await;
-        let response = handler
-            .fs_canonicalize(FsCanonicalizeParams {
-                path: path.clone(),
-                sandbox: None,
-            })
-            .await
-            .expect("canonicalize response");
-        assert_eq!(response, json!({ "path": expected_path }));
-        handler.shutdown().await;
-    }
 }
 
 #[tokio::test]
@@ -211,12 +162,9 @@ async fn long_poll_read_fails_after_session_resume() {
         test_runtime_paths(),
     ));
     let initialize_response = first_handler
-        .initialize(InitializeWireParams {
-            params: InitializeParams {
-                client_name: "exec-server-test".to_string(),
-                resume_session_id: None,
-            },
-            filesystem_path_uris: true,
+        .initialize(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+            resume_session_id: None,
         })
         .await
         .expect("initialize");
@@ -254,12 +202,9 @@ async fn long_poll_read_fails_after_session_resume() {
         test_runtime_paths(),
     ));
     second_handler
-        .initialize(InitializeWireParams {
-            params: InitializeParams {
-                client_name: "exec-server-test".to_string(),
-                resume_session_id: Some(initialize_response.response.session_id),
-            },
-            filesystem_path_uris: true,
+        .initialize(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+            resume_session_id: Some(initialize_response.session_id),
         })
         .await
         .expect("initialize second connection");
@@ -290,12 +235,9 @@ async fn active_session_resume_is_rejected() {
         test_runtime_paths(),
     ));
     let initialize_response = first_handler
-        .initialize(InitializeWireParams {
-            params: InitializeParams {
-                client_name: "exec-server-test".to_string(),
-                resume_session_id: None,
-            },
-            filesystem_path_uris: true,
+        .initialize(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+            resume_session_id: None,
         })
         .await
         .expect("initialize");
@@ -307,12 +249,9 @@ async fn active_session_resume_is_rejected() {
         test_runtime_paths(),
     ));
     let err = second_handler
-        .initialize(InitializeWireParams {
-            params: InitializeParams {
-                client_name: "exec-server-test".to_string(),
-                resume_session_id: Some(initialize_response.response.session_id.clone()),
-            },
-            filesystem_path_uris: true,
+        .initialize(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+            resume_session_id: Some(initialize_response.session_id.clone()),
         })
         .await
         .expect_err("active session resume should fail");
@@ -322,7 +261,7 @@ async fn active_session_resume_is_rejected() {
         err.message,
         format!(
             "session {} is already attached to another connection",
-            initialize_response.response.session_id
+            initialize_response.session_id
         )
     );
 
@@ -338,12 +277,9 @@ async fn output_and_exit_are_retained_after_notification_receiver_closes() {
         test_runtime_paths(),
     ));
     handler
-        .initialize(InitializeWireParams {
-            params: InitializeParams {
-                client_name: "exec-server-test".to_string(),
-                resume_session_id: None,
-            },
-            filesystem_path_uris: true,
+        .initialize(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+            resume_session_id: None,
         })
         .await
         .expect("initialize");

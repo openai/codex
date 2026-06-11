@@ -18,23 +18,16 @@ use tokio_tungstenite::tungstenite::Message;
 use super::*;
 use crate::client_api::ExecServerTransportParams;
 use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeResponse;
-use crate::protocol::InitializeWireParams;
-use crate::protocol::InitializeWireResponse;
-
-#[derive(Clone, Copy)]
-enum ServerPathFormat {
-    PathUri,
-    LegacyNative,
-}
 
 #[tokio::test]
 async fn remote_file_system_sends_path_uris_without_native_conversion() {
     let (websocket_url, captured_paths, server) =
-        record_read_file_paths(ServerPathFormat::PathUri, /*expected_requests*/ 2).await;
+        record_read_file_paths(/*expected_requests*/ 2).await;
     let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
         ExecServerTransportParams::websocket_url(websocket_url),
     ));
@@ -53,49 +46,15 @@ async fn remote_file_system_sends_path_uris_without_native_conversion() {
         );
     }
 
-    assert_eq!(
-        captured_paths.await.expect("captured paths"),
-        paths.iter().map(ToString::to_string).collect::<Vec<_>>()
-    );
-    server.await.expect("recording server should succeed");
-}
-
-#[tokio::test]
-async fn remote_file_system_uses_native_paths_with_legacy_servers() {
-    let (websocket_url, captured_paths, server) =
-        record_read_file_paths(ServerPathFormat::LegacyNative, /*expected_requests*/ 1).await;
-    let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
-        ExecServerTransportParams::websocket_url(websocket_url),
-    ));
-    let path = PathUri::from_path(std::env::temp_dir().join("legacy-server.txt"))
-        .expect("native path URI");
-
-    assert_eq!(
-        file_system
-            .read_file(&path, /*sandbox*/ None)
-            .await
-            .expect("remote read should succeed"),
-        Vec::<u8>::new()
-    );
-
-    assert_eq!(
-        captured_paths.await.expect("captured paths"),
-        vec![
-            path.to_abs_path()
-                .expect("native path")
-                .to_string_lossy()
-                .into_owned()
-        ]
-    );
+    assert_eq!(captured_paths.await.expect("captured paths"), paths);
     server.await.expect("recording server should succeed");
 }
 
 async fn record_read_file_paths(
-    server_path_format: ServerPathFormat,
     expected_requests: usize,
 ) -> (
     String,
-    oneshot::Receiver<Vec<String>>,
+    oneshot::Receiver<Vec<PathUri>>,
     tokio::task::JoinHandle<()>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -108,7 +67,7 @@ async fn record_read_file_paths(
         let mut websocket = accept_async(stream)
             .await
             .expect("websocket handshake should succeed");
-        complete_websocket_initialize(&mut websocket, server_path_format).await;
+        complete_websocket_initialize(&mut websocket).await;
 
         let mut captured_paths = Vec::with_capacity(expected_requests);
         for _ in 0..expected_requests {
@@ -118,14 +77,10 @@ async fn record_read_file_paths(
                 }
                 other => panic!("expected fs/readFile request, got {other:?}"),
             };
-            let params = request.params.expect("fs/readFile params should exist");
-            captured_paths.push(
-                params
-                    .get("path")
-                    .and_then(serde_json::Value::as_str)
-                    .expect("fs/readFile path should be a string")
-                    .to_string(),
-            );
+            let params: FsReadFileParams =
+                serde_json::from_value(request.params.expect("fs/readFile params should exist"))
+                    .expect("fs/readFile params should deserialize");
+            captured_paths.push(params.path);
             write_jsonrpc_websocket(
                 &mut websocket,
                 JSONRPCMessage::Response(JSONRPCResponse {
@@ -146,34 +101,19 @@ async fn record_read_file_paths(
     (websocket_url, captured_paths_rx, server)
 }
 
-async fn complete_websocket_initialize(
-    websocket: &mut WebSocketStream<TcpStream>,
-    server_path_format: ServerPathFormat,
-) {
+async fn complete_websocket_initialize(websocket: &mut WebSocketStream<TcpStream>) {
     let request = match read_jsonrpc_websocket(websocket).await {
         JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
         other => panic!("expected initialize request, got {other:?}"),
     };
-    let params: InitializeWireParams =
-        serde_json::from_value(request.params.expect("initialize params should exist"))
-            .expect("initialize params should deserialize");
-    assert!(params.filesystem_path_uris);
-    let response = InitializeResponse {
-        session_id: "session-1".to_string(),
-    };
-    let result = match server_path_format {
-        ServerPathFormat::PathUri => serde_json::to_value(InitializeWireResponse {
-            response,
-            filesystem_path_uris: true,
-        }),
-        ServerPathFormat::LegacyNative => serde_json::to_value(response),
-    }
-    .expect("initialize response should serialize");
     write_jsonrpc_websocket(
         websocket,
         JSONRPCMessage::Response(JSONRPCResponse {
             id: request.id,
-            result,
+            result: serde_json::to_value(InitializeResponse {
+                session_id: "session-1".to_string(),
+            })
+            .expect("initialize response should serialize"),
         }),
     )
     .await;

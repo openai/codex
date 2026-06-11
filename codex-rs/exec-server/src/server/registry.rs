@@ -31,7 +31,7 @@ use crate::protocol::HTTP_REQUEST_METHOD;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
-use crate::protocol::InitializeWireParams;
+use crate::protocol::InitializeParams;
 use crate::protocol::ReadParams;
 use crate::protocol::SignalParams;
 use crate::protocol::TerminateParams;
@@ -49,7 +49,7 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
     );
     router.request(
         INITIALIZE_METHOD,
-        |handler: Arc<ExecServerHandler>, params: InitializeWireParams| async move {
+        |handler: Arc<ExecServerHandler>, params: InitializeParams| async move {
             handler.initialize(params).await
         },
     );

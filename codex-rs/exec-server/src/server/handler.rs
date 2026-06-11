@@ -5,9 +5,6 @@ use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
-use codex_utils_path_uri::PathUri;
-use serde::Serialize;
-use serde_json::Value;
 use serde_json::to_value;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
@@ -21,6 +18,7 @@ use crate::protocol::EnvironmentInfo;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCanonicalizeParams;
+use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
@@ -28,7 +26,9 @@ use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
 use crate::protocol::FsJoinParams;
+use crate::protocol::FsJoinResponse;
 use crate::protocol::FsParentParams;
+use crate::protocol::FsParentResponse;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
@@ -38,9 +38,8 @@ use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HttpRequestParams;
+use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
-use crate::protocol::InitializeWireParams;
-use crate::protocol::InitializeWireResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::SignalParams;
@@ -65,7 +64,6 @@ pub(crate) struct ExecServerHandler {
     background_task_shutdown: CancellationToken,
     background_tasks: TaskTracker,
     file_system: FileSystemHandler,
-    filesystem_path_uris: AtomicBool,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
@@ -84,7 +82,6 @@ impl ExecServerHandler {
             background_task_shutdown: CancellationToken::new(),
             background_tasks: TaskTracker::new(),
             file_system: FileSystemHandler::new(runtime_paths),
-            filesystem_path_uris: AtomicBool::new(false),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
         }
@@ -106,8 +103,8 @@ impl ExecServerHandler {
 
     pub(crate) async fn initialize(
         &self,
-        params: InitializeWireParams,
-    ) -> Result<InitializeWireResponse, JSONRPCErrorError> {
+        params: InitializeParams,
+    ) -> Result<InitializeResponse, JSONRPCErrorError> {
         if self.initialize_requested.swap(true, Ordering::SeqCst) {
             return Err(invalid_request(
                 "initialize may only be sent once per connection".to_string(),
@@ -116,10 +113,7 @@ impl ExecServerHandler {
 
         let session = match self
             .session_registry
-            .attach(
-                params.params.resume_session_id.clone(),
-                self.notifications.clone(),
-            )
+            .attach(params.resume_session_id.clone(), self.notifications.clone())
             .await
         {
             Ok(session) => session,
@@ -138,12 +132,7 @@ impl ExecServerHandler {
             .session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(session);
-        self.filesystem_path_uris
-            .store(params.filesystem_path_uris, Ordering::Relaxed);
-        Ok(InitializeWireResponse {
-            response: InitializeResponse { session_id },
-            filesystem_path_uris: params.filesystem_path_uris,
-        })
+        Ok(InitializeResponse { session_id })
     }
 
     pub(crate) fn initialized(&self) -> Result<(), String> {
@@ -276,25 +265,25 @@ impl ExecServerHandler {
     pub(crate) async fn fs_canonicalize(
         &self,
         params: FsCanonicalizeParams,
-    ) -> Result<Value, JSONRPCErrorError> {
+    ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
-        let response = self.file_system.canonicalize(params).await?;
-        self.serialize_filesystem_response(&response, &[("path", Some(&response.path))])
+        self.file_system.canonicalize(params).await
     }
 
-    pub(crate) async fn fs_join(&self, params: FsJoinParams) -> Result<Value, JSONRPCErrorError> {
+    pub(crate) async fn fs_join(
+        &self,
+        params: FsJoinParams,
+    ) -> Result<FsJoinResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
-        let response = self.file_system.join(params).await?;
-        self.serialize_filesystem_response(&response, &[("path", Some(&response.path))])
+        self.file_system.join(params).await
     }
 
     pub(crate) async fn fs_parent(
         &self,
         params: FsParentParams,
-    ) -> Result<Value, JSONRPCErrorError> {
+    ) -> Result<FsParentResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
-        let response = self.file_system.parent(params).await?;
-        self.serialize_filesystem_response(&response, &[("path", response.path.as_ref())])
+        self.file_system.parent(params).await
     }
 
     pub(crate) async fn fs_read_directory(
@@ -319,34 +308,6 @@ impl ExecServerHandler {
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.copy(params).await
-    }
-
-    fn serialize_filesystem_response<R: Serialize>(
-        &self,
-        response: &R,
-        path_fields: &[(&str, Option<&PathUri>)],
-    ) -> Result<Value, JSONRPCErrorError> {
-        let mut result = to_value(response).map_err(|err| internal_error(err.to_string()))?;
-        if self.filesystem_path_uris.load(Ordering::Relaxed) {
-            return Ok(result);
-        }
-
-        let fields = result.as_object_mut().ok_or_else(|| {
-            internal_error("filesystem response must serialize as an object".to_string())
-        })?;
-        for (field, path) in path_fields {
-            let Some(path) = path else {
-                continue;
-            };
-            let path = path
-                .to_abs_path()
-                .map_err(|err| internal_error(err.to_string()))?;
-            fields.insert(
-                (*field).to_string(),
-                to_value(path).map_err(|err| internal_error(err.to_string()))?,
-            );
-        }
-        Ok(result)
     }
 
     fn require_initialized_for(

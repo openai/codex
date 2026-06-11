@@ -3,14 +3,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
-use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -83,8 +80,6 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
-use crate::protocol::InitializeWireParams;
-use crate::protocol::InitializeWireResponse;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ProcessSignal;
 use crate::protocol::ReadParams;
@@ -194,7 +189,6 @@ struct Inner {
     http_body_stream_failures: ArcSwap<HashMap<String, String>>,
     http_body_streams_write_lock: Mutex<()>,
     http_body_stream_next_id: AtomicU64,
-    filesystem_path_uris: AtomicBool,
     session_id: std::sync::RwLock<Option<String>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
@@ -349,24 +343,17 @@ impl ExecServerClient {
         } = options;
 
         timeout(initialize_timeout, async {
-            let wire_response: InitializeWireResponse = self
+            let response: InitializeResponse = self
                 .inner
                 .client
                 .call(
                     INITIALIZE_METHOD,
-                    &InitializeWireParams {
-                        params: InitializeParams {
-                            client_name,
-                            resume_session_id,
-                        },
-                        filesystem_path_uris: true,
+                    &InitializeParams {
+                        client_name,
+                        resume_session_id,
                     },
                 )
                 .await?;
-            self.inner
-                .filesystem_path_uris
-                .store(wire_response.filesystem_path_uris, Ordering::Relaxed);
-            let response = wire_response.response;
             {
                 let mut session_id = self
                     .inner
@@ -445,85 +432,64 @@ impl ExecServerClient {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, ExecServerError> {
-        self.call_filesystem(FS_READ_FILE_METHOD, &params, &[("path", &params.path)])
-            .await
+        self.call(FS_READ_FILE_METHOD, &params).await
     }
 
     pub async fn fs_write_file(
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, ExecServerError> {
-        self.call_filesystem(FS_WRITE_FILE_METHOD, &params, &[("path", &params.path)])
-            .await
+        self.call(FS_WRITE_FILE_METHOD, &params).await
     }
 
     pub async fn fs_create_directory(
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, ExecServerError> {
-        self.call_filesystem(
-            FS_CREATE_DIRECTORY_METHOD,
-            &params,
-            &[("path", &params.path)],
-        )
-        .await
+        self.call(FS_CREATE_DIRECTORY_METHOD, &params).await
     }
 
     pub async fn fs_get_metadata(
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, ExecServerError> {
-        self.call_filesystem(FS_GET_METADATA_METHOD, &params, &[("path", &params.path)])
-            .await
+        self.call(FS_GET_METADATA_METHOD, &params).await
     }
 
     pub async fn fs_canonicalize(
         &self,
         params: FsCanonicalizeParams,
     ) -> Result<FsCanonicalizeResponse, ExecServerError> {
-        self.call_filesystem(FS_CANONICALIZE_METHOD, &params, &[("path", &params.path)])
-            .await
+        self.call(FS_CANONICALIZE_METHOD, &params).await
     }
 
     pub async fn fs_join(&self, params: FsJoinParams) -> Result<FsJoinResponse, ExecServerError> {
-        self.call_filesystem(FS_JOIN_METHOD, &params, &[("basePath", &params.base_path)])
-            .await
+        self.call(FS_JOIN_METHOD, &params).await
     }
 
     pub async fn fs_parent(
         &self,
         params: FsParentParams,
     ) -> Result<FsParentResponse, ExecServerError> {
-        self.call_filesystem(FS_PARENT_METHOD, &params, &[("path", &params.path)])
-            .await
+        self.call(FS_PARENT_METHOD, &params).await
     }
 
     pub async fn fs_read_directory(
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, ExecServerError> {
-        self.call_filesystem(FS_READ_DIRECTORY_METHOD, &params, &[("path", &params.path)])
-            .await
+        self.call(FS_READ_DIRECTORY_METHOD, &params).await
     }
 
     pub async fn fs_remove(
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, ExecServerError> {
-        self.call_filesystem(FS_REMOVE_METHOD, &params, &[("path", &params.path)])
-            .await
+        self.call(FS_REMOVE_METHOD, &params).await
     }
 
     pub async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, ExecServerError> {
-        self.call_filesystem(
-            FS_COPY_METHOD,
-            &params,
-            &[
-                ("sourcePath", &params.source_path),
-                ("destinationPath", &params.destination_path),
-            ],
-        )
-        .await
+        self.call(FS_COPY_METHOD, &params).await
     }
 
     pub(crate) async fn register_session(
@@ -603,7 +569,6 @@ impl ExecServerClient {
                 http_body_stream_failures: ArcSwap::from_pointee(HashMap::new()),
                 http_body_streams_write_lock: Mutex::new(()),
                 http_body_stream_next_id: AtomicU64::new(1),
-                filesystem_path_uris: AtomicBool::new(false),
                 session_id: std::sync::RwLock::new(None),
                 reader_task,
             }
@@ -650,35 +615,6 @@ impl ExecServerClient {
                 }
             }
         }
-    }
-
-    async fn call_filesystem<P, T>(
-        &self,
-        method: &str,
-        params: &P,
-        path_fields: &[(&str, &PathUri)],
-    ) -> Result<T, ExecServerError>
-    where
-        P: serde::Serialize,
-        T: serde::de::DeserializeOwned,
-    {
-        if self.inner.filesystem_path_uris.load(Ordering::Relaxed) {
-            return self.call(method, params).await;
-        }
-
-        let mut legacy_params = serde_json::to_value(params)?;
-        let fields = legacy_params.as_object_mut().ok_or_else(|| {
-            ExecServerError::Protocol(format!("{method} params must serialize as an object"))
-        })?;
-        for (field, path) in path_fields {
-            let path = path.to_abs_path().map_err(|err| {
-                ExecServerError::Protocol(format!(
-                    "legacy exec-server cannot represent path URI {path}: {err}"
-                ))
-            })?;
-            fields.insert((*field).to_string(), serde_json::to_value(path)?);
-        }
-        self.call(method, &legacy_params).await
     }
 }
 
