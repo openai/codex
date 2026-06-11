@@ -163,7 +163,6 @@ impl App {
                 Err(err) => {
                     self.chat_widget
                         .add_error_message(thread_goal_error_message("read", &err));
-                    self.chat_widget.maybe_send_next_queued_input();
                     return;
                 }
             }
@@ -182,7 +181,6 @@ impl App {
             Err(err) => {
                 if self.current_displayed_thread_id() == Some(thread_id) {
                     self.chat_widget.add_error_message(err.to_string());
-                    self.chat_widget.maybe_send_next_queued_input();
                 }
                 return;
             }
@@ -203,7 +201,6 @@ impl App {
                 }
                 self.chat_widget
                     .add_error_message(thread_goal_error_message("replace", &err));
-                self.chat_widget.maybe_send_next_queued_input();
                 return;
             }
         }
