@@ -2193,6 +2193,88 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_exhausted_model_capacity_failures_do_not_deny() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let selected_model_capacity = "Selected model is at capacity. Please try a different model.";
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse_failed(
+                "resp-selected-model-capacity-1",
+                "server_is_overloaded",
+                selected_model_capacity,
+            ),
+            sse_failed(
+                "resp-selected-model-capacity-2",
+                "server_is_overloaded",
+                selected_model_capacity,
+            ),
+            sse_failed(
+                "resp-selected-model-capacity-3",
+                "server_is_overloaded",
+                selected_model_capacity,
+            ),
+        ],
+    )
+    .await;
+    let (session, turn, rx) = guardian_test_session_turn_and_rx(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-selected-model-capacity".to_string(),
+        guardian_shell_request("shell-selected-model-capacity"),
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::TimedOut);
+    assert_eq!(request_log.requests().len(), 3);
+    let mut statuses = Vec::new();
+    let mut warnings = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event.msg {
+            EventMsg::GuardianAssessment(event) => statuses.push(event.status),
+            EventMsg::GuardianWarning(event) => warnings.push(event.message),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        statuses,
+        vec![
+            GuardianAssessmentStatus::InProgress,
+            GuardianAssessmentStatus::TimedOut,
+        ]
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|message| message.contains(selected_model_capacity)),
+        "warning should preserve the capacity failure"
+    );
+    assert!(
+        warnings
+            .iter()
+            .all(|message| !message.contains("denied (risk:")),
+        "exhausted infrastructure failures should not surface as Guardian denials"
+    );
+    assert!(
+        session
+            .services
+            .guardian_rejections
+            .lock()
+            .await
+            .get("review-selected-model-capacity")
+            .is_none(),
+        "selected model capacity failures must not be stored as a policy denial"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
