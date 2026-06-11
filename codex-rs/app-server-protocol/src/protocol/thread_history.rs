@@ -124,6 +124,14 @@ impl ThreadHistoryBuilder {
             .or_else(|| self.turns.last().cloned())
     }
 
+    pub fn turn_snapshot(&self, turn_id: &str) -> Option<Turn> {
+        self.current_turn
+            .as_ref()
+            .filter(|turn| turn.id == turn_id)
+            .map(Turn::from)
+            .or_else(|| self.turns.iter().find(|turn| turn.id == turn_id).cloned())
+    }
+
     /// Returns the index of the active turn snapshot within the finished turn list.
     ///
     /// When a turn is still open, this is the index it will occupy after

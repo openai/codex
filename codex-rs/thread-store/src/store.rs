@@ -36,11 +36,10 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Reopens an existing thread for live appends.
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()>;
 
-    /// Appends canonical rollout items to a live thread.
+    /// Appends raw rollout items to a live thread.
     ///
-    /// This is the raw history API. It does not infer metadata from item contents. Callers that
-    /// need metadata updates should call [`ThreadStore::update_thread_metadata`] with explicit
-    /// metadata facts prepared above the store.
+    /// Implementations should apply the shared rollout persistence policy before writing durable
+    /// replay history and before updating any implementation-owned projections.
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()>;
 
     /// Materializes the thread if persistence is lazy, then persists all queued items.

@@ -14,6 +14,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_rollout::persisted_rollout_items;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -215,13 +216,17 @@ impl ThreadStore for InMemoryThreadStore {
     }
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
+        let canonical_items = persisted_rollout_items(params.items.as_slice());
+        if canonical_items.is_empty() {
+            return Ok(());
+        }
         let mut state = self.state.lock().await;
         state.calls.append_items += 1;
         state
             .histories
             .entry(params.thread_id)
             .or_default()
-            .extend(params.items);
+            .extend(canonical_items);
         Ok(())
     }
 

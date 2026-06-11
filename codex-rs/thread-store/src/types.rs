@@ -101,11 +101,14 @@ pub struct ResumeThreadParams {
 }
 
 /// Parameters for appending rollout items to a live thread.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct AppendThreadItemsParams {
     /// Thread id to append to.
     pub thread_id: ThreadId,
-    /// Items to append in order.
+    /// Raw rollout items to append in order.
+    ///
+    /// Store implementations are responsible for applying the shared rollout persistence policy
+    /// before writing durable replay history or any implementation-owned projections.
     pub items: Vec<RolloutItem>,
 }
 
@@ -297,6 +300,11 @@ pub struct StoredTurn {
     pub turn_id: String,
     /// Persisted rollout items associated with this turn, according to `items_view`.
     pub items: Vec<RolloutItem>,
+    /// Opaque serialized turn metadata supplied by a projected durable store.
+    pub metadata_json: Option<Vec<u8>>,
+    /// Semantic turn creation timestamp in milliseconds, when supplied by a projected durable
+    /// store.
+    pub turn_created_at_ms: Option<i64>,
     /// Amount of item detail included in `items`.
     pub items_view: StoredTurnItemsView,
     /// Store-owned status for API layer projection.
@@ -339,11 +347,21 @@ pub struct ListItemsParams {
     pub sort_direction: SortDirection,
 }
 
-/// A page of persisted rollout items within a turn.
+/// A projected app-server `ThreadItem` snapshot within a turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredThreadItem {
+    pub turn_id: Option<String>,
+    pub item_key: String,
+    pub item_ordinal: u64,
+    pub item_created_at_ms: i64,
+    pub materialized_thread_item_json: Vec<u8>,
+}
+
+/// A page of persisted items within a turn.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ItemPage {
     /// Items returned for this page.
-    pub items: Vec<RolloutItem>,
+    pub items: Vec<StoredThreadItem>,
     /// Opaque cursor to continue listing.
     pub next_cursor: Option<String>,
     /// Opaque cursor for fetching in the opposite direction.
