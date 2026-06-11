@@ -497,7 +497,6 @@ pub async fn reconcile_rollout(
             items,
             "reconcile_rollout",
             new_thread_memory_mode,
-            /*updated_at_override*/ None,
         )
         .await;
         return;
@@ -623,7 +622,6 @@ pub async fn apply_rollout_items(
     items: &[RolloutItem],
     stage: &str,
     new_thread_memory_mode: Option<&str>,
-    updated_at_override: Option<DateTime<Utc>>,
 ) {
     let Some(ctx) = context else {
         return;
@@ -648,7 +646,7 @@ pub async fn apply_rollout_items(
     builder.rollout_path = rollout_path.to_path_buf();
     builder.cwd = normalize_cwd_for_state_db(&builder.cwd);
     if let Err(err) = ctx
-        .apply_rollout_items(&builder, items, new_thread_memory_mode, updated_at_override)
+        .apply_rollout_items(&builder, items, new_thread_memory_mode)
         .await
     {
         warn!(

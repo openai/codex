@@ -196,5 +196,6 @@ mod tests {
             .expect("thread metadata should exist");
         assert_eq!(updated.rollout_path, restored_path);
         assert_eq!(updated.archived_at, None);
+        assert_eq!(updated.updated_at, metadata.updated_at);
     }
 }

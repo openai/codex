@@ -204,6 +204,7 @@ async fn apply_metadata_update(
                     .map_err(|err| ThreadStoreError::Internal {
                         message: format!("failed to read thread metadata for {thread_id}: {err}"),
                     })?;
+            let advance_updated_at = patch.updated_at.filter(|_| existing.is_some());
             if existing.is_none() && rollout_path.is_none() {
                 let resolved = resolve_rollout_path(store, thread_id, include_archived).await?;
                 rollout_path_archived = resolved.archived;
@@ -257,7 +258,9 @@ async fn apply_metadata_update(
             if let Some(created_at) = patch.created_at {
                 metadata.created_at = created_at;
             }
-            if let Some(updated_at) = patch.updated_at {
+            if existing.is_none()
+                && let Some(updated_at) = patch.updated_at
+            {
                 metadata.updated_at = updated_at;
             }
             if let Some(source) = patch.source {
@@ -310,6 +313,16 @@ async fn apply_metadata_update(
                 .map_err(|err| ThreadStoreError::Internal {
                     message: format!("failed to update thread metadata for {thread_id}: {err}"),
                 })?;
+            if let Some(updated_at) = advance_updated_at {
+                state_db
+                    .touch_thread_updated_at(thread_id, updated_at)
+                    .await
+                    .map_err(|err| ThreadStoreError::Internal {
+                        message: format!(
+                            "failed to advance thread updated_at for {thread_id}: {err}"
+                        ),
+                    })?;
+            }
             if let Some(memory_mode) = patch.memory_mode {
                 state_db
                     .set_thread_memory_mode(thread_id, memory_mode_as_str(memory_mode))

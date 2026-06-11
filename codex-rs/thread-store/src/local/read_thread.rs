@@ -55,6 +55,7 @@ pub(super) async fn read_thread(
             && (params.include_archived || rollout_thread.archived_at.is_none())
             && !rollout_thread.preview.is_empty()
         {
+            rollout_thread.updated_at = thread.updated_at;
             if thread.name.is_some() {
                 rollout_thread.name = thread.name;
             }

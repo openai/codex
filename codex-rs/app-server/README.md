@@ -356,6 +356,8 @@ Like `thread/resume`, experimental clients can pass `excludeTurns: true` to `thr
 - `cursor` — opaque string from a prior response; omit for the first page.
 - `limit` — server defaults to a reasonable page size if unset.
 - `sortKey` — `created_at` (default) or `updated_at`.
+- `updatedAt` is initialized when the thread is created and advances when a turn starts. Persisted
+  output and turn completion do not advance it.
 - `sortDirection` — `desc` (default) or `asc`.
 - `modelProviders` — restrict results to specific providers; unset, null, or an empty array will include all providers.
 - `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`).

@@ -9,7 +9,6 @@ mod extract;
 pub mod log_db;
 mod migrations;
 mod model;
-mod paths;
 mod runtime;
 mod telemetry;
 

@@ -1,6 +1,3 @@
-use std::time::Duration;
-use std::time::Instant;
-
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Utc;
@@ -20,11 +17,6 @@ use crate::ResumeThreadParams;
 use crate::ThreadMetadataPatch;
 
 const IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER: &str = "[Image]";
-#[cfg(not(test))]
-const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
-#[cfg(test)]
-const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_millis(50);
-
 /// Live-thread helper that derives metadata updates from canonical rollout items.
 ///
 /// Stores receive raw history plus explicit metadata patches. This helper keeps append-derived
@@ -38,7 +30,6 @@ pub(crate) struct ThreadMetadataSync {
     title_seen: bool,
     pending_update: Option<ThreadMetadataPatch>,
     pending_update_generation: u64,
-    last_touch_persisted_at: Option<Instant>,
     defer_create_update_until_history_exists: bool,
     defer_resume_update_until_append: bool,
 }
@@ -84,7 +75,6 @@ impl ThreadMetadataSync {
             title_seen: false,
             pending_update: Some(update),
             pending_update_generation: 1,
-            last_touch_persisted_at: None,
             defer_create_update_until_history_exists: true,
             defer_resume_update_until_append: false,
         }
@@ -103,7 +93,6 @@ impl ThreadMetadataSync {
             title_seen: false,
             pending_update: None,
             pending_update_generation: 0,
-            last_touch_persisted_at: None,
             defer_create_update_until_history_exists: false,
             defer_resume_update_until_append: false,
         };
@@ -140,9 +129,6 @@ impl ThreadMetadataSync {
         if self.pending_update_generation == update.generation {
             self.pending_update = None;
         }
-        if update.patch.updated_at.is_some() {
-            self.last_touch_persisted_at = Some(Instant::now());
-        }
     }
 
     pub(crate) fn observe_appended_items(
@@ -154,31 +140,32 @@ impl ThreadMetadataSync {
         let affects_metadata = items
             .iter()
             .any(codex_state::rollout_item_affects_thread_metadata);
+        let advances_updated_at = items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))));
         let update = if affects_metadata {
-            self.observe_items(items)?
-        } else {
-            thread_updated_at_touch()
-        };
-        self.merge_pending_update(Some(update));
-        if !affects_metadata
-            && !self
-                .pending_update
-                .as_ref()
-                .is_some_and(update_has_metadata_facts)
-            && self.last_touch_persisted_at.is_some_and(|last_touch| {
-                Instant::now().duration_since(last_touch) < THREAD_UPDATED_AT_TOUCH_INTERVAL
+            self.observe_items(items, advances_updated_at)
+        } else if advances_updated_at {
+            Some(ThreadMetadataPatch {
+                updated_at: Some(Utc::now()),
+                ..Default::default()
             })
-        {
-            return None;
-        }
+        } else {
+            None
+        };
+        self.merge_pending_update(update);
         self.take_pending_update()
     }
 
-    fn observe_items(&mut self, items: &[RolloutItem]) -> Option<ThreadMetadataPatch> {
+    fn observe_items(
+        &mut self,
+        items: &[RolloutItem],
+        advances_updated_at: bool,
+    ) -> Option<ThreadMetadataPatch> {
         self.observe_items_with_update(
             items,
             ThreadMetadataPatch {
-                updated_at: Some(Utc::now()),
+                updated_at: advances_updated_at.then(Utc::now),
                 ..Default::default()
             },
         )
@@ -331,36 +318,6 @@ fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
     None
 }
 
-fn thread_updated_at_touch() -> ThreadMetadataPatch {
-    ThreadMetadataPatch {
-        updated_at: Some(Utc::now()),
-        ..Default::default()
-    }
-}
-
-fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
-    update.rollout_path.is_some()
-        || update.preview.is_some()
-        || update.title.is_some()
-        || update.model_provider.is_some()
-        || update.model.is_some()
-        || update.reasoning_effort.is_some()
-        || update.created_at.is_some()
-        || update.source.is_some()
-        || update.thread_source.is_some()
-        || update.agent_nickname.is_some()
-        || update.agent_role.is_some()
-        || update.agent_path.is_some()
-        || update.cwd.is_some()
-        || update.cli_version.is_some()
-        || update.approval_mode.is_some()
-        || update.permission_profile.is_some()
-        || update.token_usage.is_some()
-        || update.first_user_message.is_some()
-        || update.git_info.is_some()
-        || update.memory_mode.is_some()
-}
-
 fn git_info_patch_from_observation(git_info: GitInfo) -> GitInfoPatch {
     GitInfoPatch {
         sha: git_info.commit_hash.map(|sha| Some(sha.0)),
@@ -378,6 +335,7 @@ mod tests {
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
 
@@ -464,11 +422,11 @@ mod tests {
         assert_eq!(update.patch.preview, None);
         assert_eq!(update.patch.title, None);
         assert_eq!(update.patch.first_user_message, None);
-        assert!(update.patch.updated_at.is_some());
+        assert_eq!(update.patch.updated_at, None);
     }
 
     #[test]
-    fn metadata_irrelevant_items_coalesce_updated_at_touches() {
+    fn metadata_irrelevant_items_do_not_advance_updated_at() {
         let thread_id = ThreadId::new();
         let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()));
         let item = RolloutItem::Compacted(CompactedItem {
@@ -477,21 +435,27 @@ mod tests {
             window_id: None,
         });
 
-        let first = sync
-            .observe_appended_items(std::slice::from_ref(&item))
-            .expect("first touch should apply immediately");
-        assert!(first.patch.updated_at.is_some());
-        sync.mark_pending_update_applied(&first);
+        assert!(sync.observe_appended_items(&[item]).is_none());
+    }
 
-        assert!(
-            sync.observe_appended_items(std::slice::from_ref(&item))
-                .is_none(),
-            "second touch inside the coalescing window should wait for a barrier"
-        );
-        assert!(
-            sync.take_pending_update().is_some(),
-            "coalesced touches still flush at the next barrier"
-        );
+    #[test]
+    fn turn_start_advances_updated_at() {
+        let thread_id = ThreadId::new();
+        let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()));
+
+        let update = sync
+            .observe_appended_items(&[RolloutItem::EventMsg(EventMsg::TurnStarted(
+                TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                },
+            ))])
+            .expect("turn start should produce a metadata update");
+
+        assert!(update.patch.updated_at.is_some());
     }
 
     #[test]

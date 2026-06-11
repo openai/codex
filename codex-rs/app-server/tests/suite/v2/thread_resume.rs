@@ -2199,8 +2199,24 @@ async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     .await??;
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
-    assert_eq!(thread.updated_at, before_resume.updated_at);
     assert_eq!(thread.status, ThreadStatus::Idle);
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread_id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse {
+        thread: after_resume,
+        ..
+    } = to_response::<ThreadReadResponse>(read_resp)?;
+    assert_eq!(after_resume.updated_at, before_resume.updated_at);
 
     let after_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
     assert_eq!(after_modified, rollout.before_modified);

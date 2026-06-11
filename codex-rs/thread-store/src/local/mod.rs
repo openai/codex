@@ -302,10 +302,16 @@ mod tests {
 
     use codex_protocol::ThreadId;
     use codex_protocol::models::BaseInstructions;
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::models::MessagePhase;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::AgentMessageEvent;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadMemoryMode;
+    use codex_protocol::protocol::TurnCompleteEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use tempfile::TempDir;
 
@@ -435,6 +441,78 @@ mod tests {
         );
         assert_eq!(metadata.preview.as_deref(), Some("observed append"));
         assert_eq!(metadata.title, "observed append");
+    }
+
+    #[tokio::test]
+    async fn live_thread_output_does_not_advance_updated_at() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let live_thread = LiveThread::create(store, create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+
+        live_thread
+            .append_items(&[RolloutItem::EventMsg(EventMsg::TurnStarted(
+                TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                },
+            ))])
+            .await
+            .expect("append turn start");
+        live_thread.flush().await.expect("flush thread");
+        let after_turn_start = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata")
+            .updated_at;
+
+        live_thread
+            .append_items(&[
+                RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                    message: "commentary".to_string(),
+                    phase: Some(MessagePhase::Commentary),
+                    memory_citation: None,
+                })),
+                RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                    call_id: "call-1".to_string(),
+                    output: FunctionCallOutputPayload::from_text("tool output".to_string()),
+                }),
+                RolloutItem::EventMsg(EventMsg::TokenCount(
+                    codex_protocol::protocol::TokenCountEvent {
+                        info: None,
+                        rate_limits: None,
+                    },
+                )),
+                RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: "turn-1".to_string(),
+                    last_agent_message: None,
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                })),
+            ])
+            .await
+            .expect("append post-start items");
+        live_thread.flush().await.expect("flush thread");
+        let completed = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(completed.updated_at, after_turn_start);
     }
 
     #[tokio::test]

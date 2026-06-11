@@ -680,7 +680,7 @@ WHERE id = ?
         metadata: &crate::ThreadMetadata,
         creation_memory_mode: Option<&str>,
     ) -> anyhow::Result<()> {
-        let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
+        let insert_updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
         let preview = metadata_preview(metadata);
         // Backfill/reconcile callers merge existing git info before upserting, but that
         // read/modify/write is not atomic. Preserve non-null SQLite git fields here so
@@ -720,9 +720,9 @@ INSERT INTO threads (
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
-    updated_at = excluded.updated_at,
+    updated_at = threads.updated_at,
     created_at_ms = excluded.created_at_ms,
-    updated_at_ms = excluded.updated_at_ms,
+    updated_at_ms = threads.updated_at_ms,
     source = excluded.source,
     thread_source = excluded.thread_source,
     agent_nickname = excluded.agent_nickname,
@@ -749,9 +749,9 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.id.to_string())
         .bind(metadata.rollout_path.display().to_string())
         .bind(datetime_to_epoch_seconds(metadata.created_at))
-        .bind(datetime_to_epoch_seconds(updated_at))
+        .bind(datetime_to_epoch_seconds(insert_updated_at))
         .bind(datetime_to_epoch_millis(metadata.created_at))
-        .bind(datetime_to_epoch_millis(updated_at))
+        .bind(datetime_to_epoch_millis(insert_updated_at))
         .bind(metadata.source.as_str())
         .bind(
             metadata
@@ -797,7 +797,6 @@ ON CONFLICT(id) DO UPDATE SET
         builder: &ThreadMetadataBuilder,
         items: &[RolloutItem],
         new_thread_memory_mode: Option<&str>,
-        updated_at_override: Option<DateTime<Utc>>,
     ) -> anyhow::Result<()> {
         if items.is_empty() {
             return Ok(());
@@ -812,13 +811,6 @@ ON CONFLICT(id) DO UPDATE SET
         }
         if let Some(existing_metadata) = existing_metadata.as_ref() {
             metadata.prefer_existing_git_info(existing_metadata);
-        }
-        let updated_at = match updated_at_override {
-            Some(updated_at) => Some(updated_at),
-            None => file_modified_time_utc(builder.rollout_path.as_path()).await,
-        };
-        if let Some(updated_at) = updated_at {
-            metadata.updated_at = updated_at;
         }
         let upsert_result = if existing_metadata.is_none() {
             self.upsert_thread_with_creation_memory_mode(&metadata, new_thread_memory_mode)
@@ -849,9 +841,6 @@ ON CONFLICT(id) DO UPDATE SET
         };
         metadata.archived_at = Some(archived_at);
         metadata.rollout_path = rollout_path.to_path_buf();
-        if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
-            metadata.updated_at = updated_at;
-        }
         if metadata.id != thread_id {
             warn!(
                 "thread id mismatch during archive: expected {thread_id}, got {}",
@@ -872,9 +861,6 @@ ON CONFLICT(id) DO UPDATE SET
         };
         metadata.archived_at = None;
         metadata.rollout_path = rollout_path.to_path_buf();
-        if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
-            metadata.updated_at = updated_at;
-        }
         if metadata.id != thread_id {
             warn!(
                 "thread id mismatch during unarchive: expected {thread_id}, got {}",
@@ -1773,10 +1759,7 @@ mod tests {
         })];
 
         runtime
-            .apply_rollout_items(
-                &builder, &items, /*new_thread_memory_mode*/ None,
-                /*updated_at_override*/ None,
-            )
+            .apply_rollout_items(&builder, &items, /*new_thread_memory_mode*/ None)
             .await
             .expect("apply_rollout_items should succeed");
 
@@ -1838,10 +1821,7 @@ mod tests {
         })];
 
         runtime
-            .apply_rollout_items(
-                &builder, &items, /*new_thread_memory_mode*/ None,
-                /*updated_at_override*/ None,
-            )
+            .apply_rollout_items(&builder, &items, /*new_thread_memory_mode*/ None)
             .await
             .expect("apply_rollout_items should succeed");
 
@@ -2142,13 +2122,19 @@ mod tests {
             .expect("touch should succeed");
         assert!(touched);
 
+        metadata.title = "title from stale snapshot".to_string();
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("stale metadata upsert should succeed");
+
         let persisted = runtime
             .get_thread(thread_id)
             .await
             .expect("thread should load")
             .expect("thread should exist");
         assert_eq!(persisted.updated_at, touched_at);
-        assert_eq!(persisted.title, "original title");
+        assert_eq!(persisted.title, "title from stale snapshot");
         assert_eq!(
             persisted.first_user_message.as_deref(),
             Some("first-user-message")
@@ -2255,7 +2241,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_rollout_items_uses_override_updated_at_when_provided() {
+    async fn apply_rollout_items_does_not_advance_updated_at() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -2291,16 +2277,8 @@ mod tests {
                 rate_limits: None,
             },
         ))];
-        let override_updated_at =
-            DateTime::<Utc>::from_timestamp(1_700_001_234, 0).expect("timestamp");
-
         runtime
-            .apply_rollout_items(
-                &builder,
-                &items,
-                /*new_thread_memory_mode*/ None,
-                Some(override_updated_at),
-            )
+            .apply_rollout_items(&builder, &items, /*new_thread_memory_mode*/ None)
             .await
             .expect("apply_rollout_items should succeed");
 
@@ -2310,7 +2288,7 @@ mod tests {
             .expect("thread should load")
             .expect("thread should exist");
         assert_eq!(persisted.tokens_used, 321);
-        assert_eq!(persisted.updated_at, override_updated_at);
+        assert_eq!(persisted.updated_at, metadata.updated_at);
     }
 
     #[tokio::test]
