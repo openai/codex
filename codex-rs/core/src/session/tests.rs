@@ -6391,6 +6391,83 @@ async fn empty_turn_environments_clear_primary_environment() {
 }
 
 #[tokio::test]
+async fn unknown_turn_environment_returns_error() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let original_configuration = {
+        let state = session.state.lock().await;
+        state.session_configuration.clone()
+    };
+
+    let err = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                environments: Some(TurnEnvironmentSelections::new(
+                    original_configuration.cwd().clone(),
+                    vec![TurnEnvironmentSelection {
+                        environment_id: "missing".to_string(),
+                        cwd: original_configuration.cwd().clone(),
+                        workspace_roots: Vec::new(),
+                    }],
+                )),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("unknown environment should fail");
+
+    let current_configuration = {
+        let state = session.state.lock().await;
+        state.session_configuration.clone()
+    };
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    assert!(err.to_string().contains("missing"));
+    assert_eq!(current_configuration.cwd(), original_configuration.cwd());
+    assert_eq!(
+        current_configuration.environment_selections(),
+        original_configuration.environment_selections()
+    );
+}
+
+#[tokio::test]
+async fn duplicate_turn_environment_returns_error_without_mutating_session() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let original_configuration = {
+        let state = session.state.lock().await;
+        state.session_configuration.clone()
+    };
+
+    let err = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                environments: Some(TurnEnvironmentSelections::new(
+                    original_configuration.cwd().clone(),
+                    vec![
+                        local(original_configuration.cwd().clone()),
+                        local(original_configuration.cwd().join("second")),
+                    ],
+                )),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("duplicate environment should fail");
+
+    let current_configuration = {
+        let state = session.state.lock().await;
+        state.session_configuration.clone()
+    };
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    assert!(err.to_string().contains("duplicate"));
+    assert_eq!(current_configuration.cwd(), original_configuration.cwd());
+    assert_eq!(
+        current_configuration.environment_selections(),
+        original_configuration.environment_selections()
+    );
+}
+
+#[tokio::test]
 async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     struct TraceCaptureTask {
         captured_trace: Arc<std::sync::Mutex<Option<W3cTraceContext>>>,
@@ -8185,7 +8262,7 @@ async fn update_runtime_workspace_persists_resume_and_fork_baseline() {
     let expected_context_item =
         turn_context.to_turn_context_item_with_runtime_workspace(&runtime_workspace);
 
-    assert_eq!(snapshot.cwd, updated_cwd);
+    assert_eq!(snapshot.cwd(), &updated_cwd);
     assert_eq!(snapshot.workspace_roots, updated_roots);
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)

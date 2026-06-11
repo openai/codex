@@ -281,6 +281,7 @@ mod tests {
     use crate::tools::context::ToolInvocation;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::protocol::TurnEnvironmentSelections;
     use core_test_support::TempDirExt;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -398,9 +399,11 @@ mod tests {
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::Disabled;
+        let environments =
+            TurnEnvironmentSelections::new(image_cwd.clone(), turn.environments.to_selections());
         session
             .update_settings(crate::session::session::SessionSettingsUpdate {
-                cwd: Some(image_cwd.to_path_buf()),
+                environments: Some(environments),
                 workspace_roots: Some(Vec::new()),
                 permission_profile: Some(PermissionProfile::Disabled),
                 ..Default::default()

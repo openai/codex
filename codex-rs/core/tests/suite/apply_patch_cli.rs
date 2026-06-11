@@ -1638,6 +1638,7 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: shared_cwd.clone(),
+            workspace_roots: Vec::new(),
         },
     ];
     test.codex
