@@ -87,10 +87,6 @@ pub mod legacy_core {
         }
     }
 
-    pub mod test_support {
-        pub use codex_core::test_support::*;
-    }
-
     pub mod windows_sandbox {
         pub use codex_core::windows_sandbox::*;
     }
