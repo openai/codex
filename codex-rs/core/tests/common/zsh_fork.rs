@@ -8,9 +8,7 @@ use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SessionSource;
 
-use crate::streaming_sse::StreamingSseServer;
 use crate::test_codex::TestCodex;
 use crate::test_codex::test_codex;
 
@@ -89,30 +87,11 @@ where
     F: FnOnce(&Path) + Send + 'static,
 {
     let mut builder = test_codex()
-        .with_session_source(SessionSource::Cli)
         .with_pre_build_hook(pre_build_hook)
         .with_config(move |config| {
             runtime.apply_to_config(config, approval_policy, permission_profile);
         });
     builder.build(server).await
-}
-
-pub async fn build_zsh_fork_streaming_test<F>(
-    server: &StreamingSseServer,
-    runtime: ZshForkRuntime,
-    approval_policy: AskForApproval,
-    permission_profile: PermissionProfile,
-    pre_build_hook: F,
-) -> Result<TestCodex>
-where
-    F: FnOnce(&Path) + Send + 'static,
-{
-    let mut builder = test_codex()
-        .with_pre_build_hook(pre_build_hook)
-        .with_config(move |config| {
-            runtime.apply_to_config(config, approval_policy, permission_profile);
-        });
-    builder.build_with_streaming_server(server).await
 }
 
 pub async fn build_unified_exec_zsh_fork_test<F>(
