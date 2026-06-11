@@ -124,6 +124,7 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "orchestrator skills are disabled until /ps/mcp serves complete skill packages"]
 async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, apps_server_handle) = start_resource_apps_mcp_server().await?;
