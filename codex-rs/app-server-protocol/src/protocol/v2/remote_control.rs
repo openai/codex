@@ -11,8 +11,6 @@ pub struct RemoteControlEnableParams {
     pub ephemeral: bool,
 }
 
-pub type NullableRemoteControlEnableParams = Option<RemoteControlEnableParams>;
-
 /// Current remote-control connection status and remote identity exposed to clients.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

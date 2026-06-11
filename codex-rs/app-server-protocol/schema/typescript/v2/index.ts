@@ -325,7 +325,6 @@ export type { ReasoningSummaryPartAddedNotification } from "./ReasoningSummaryPa
 export type { ReasoningSummaryTextDeltaNotification } from "./ReasoningSummaryTextDeltaNotification";
 export type { ReasoningTextDeltaNotification } from "./ReasoningTextDeltaNotification";
 export type { RemoteControlConnectionStatus } from "./RemoteControlConnectionStatus";
-export type { RemoteControlEnableParams } from "./RemoteControlEnableParams";
 export type { RemoteControlStatusChangedNotification } from "./RemoteControlStatusChangedNotification";
 export type { RequestPermissionProfile } from "./RequestPermissionProfile";
 export type { ResidencyRequirement } from "./ResidencyRequirement";
