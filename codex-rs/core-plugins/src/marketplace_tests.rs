@@ -281,6 +281,36 @@ fn normalize_relative_git_plugin_source_url_rejects_parent_traversal() {
 }
 
 #[test]
+fn git_source_validation_does_not_echo_invalid_values() {
+    let tmp = tempdir().unwrap();
+    let marketplace_path =
+        AbsolutePathBuf::try_from(tmp.path().join("repo/.agents/plugins/marketplace.json"))
+            .unwrap();
+
+    let invalid_url = "rippling-private-source";
+    let err = normalize_git_plugin_source_url(&marketplace_path, invalid_url).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "invalid marketplace file `{}`: invalid git plugin source url format",
+            marketplace_path.display()
+        )
+    );
+    assert!(!err.to_string().contains(invalid_url));
+
+    let invalid_ref = Some("private-ref\nsecond-line".to_string());
+    let err = normalize_optional_git_selector(&marketplace_path, "ref", &invalid_ref).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "invalid marketplace file `{}`: git plugin source ref must not contain control characters",
+            marketplace_path.display()
+        )
+    );
+    assert!(!err.to_string().contains("private-ref"));
+}
+
+#[test]
 fn find_marketplace_plugin_skips_root_equivalent_git_subdir_paths() {
     for path in [".", "./", "plugins/.."] {
         let tmp = tempdir().unwrap();
@@ -1553,4 +1583,36 @@ fn find_installable_marketplace_plugin_rejects_explicit_empty_products() {
         err.to_string(),
         "plugin `disabled-plugin` is not available for install in marketplace `codex-curated`"
     );
+}
+
+#[test]
+fn diagnose_marketplace_preserves_results_after_malformed_entries() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let marketplace_path = write_alternate_marketplace(
+        &repo_root,
+        r#"{
+  "name": "diagnostic",
+  "plugins": [
+    { "name": "valid", "source": "./plugins/valid" },
+    { "name": "missing-source" },
+    { "name": "invalid-source", "source": "plugins/invalid" }
+  ]
+}"#,
+    );
+
+    let diagnostics = diagnose_marketplace(&marketplace_path).unwrap();
+
+    assert_eq!(diagnostics.name, "diagnostic");
+    assert_eq!(diagnostics.plugins.len(), 3);
+    assert!(diagnostics.plugins[0].result.is_ok());
+    assert_eq!(
+        diagnostics.plugins[1].result.as_ref().unwrap_err().code,
+        "invalid_entry"
+    );
+    assert_eq!(
+        diagnostics.plugins[2].result.as_ref().unwrap_err().code,
+        "invalid_source"
+    );
+    assert!(load_marketplace(&marketplace_path).is_err());
 }

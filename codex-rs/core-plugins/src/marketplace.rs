@@ -66,6 +66,30 @@ pub struct MarketplacePlugin {
     pub keywords: Vec<String>,
 }
 
+/// One raw marketplace entry resolved independently for support diagnostics.
+///
+/// Unlike [`load_marketplace`], this preserves a result for malformed entries instead of
+/// rejecting or silently skipping them with the rest of the marketplace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplacePluginDiagnostic {
+    pub index: usize,
+    pub name: Option<String>,
+    pub source_kind: &'static str,
+    pub result: Result<ResolvedMarketplacePlugin, MarketplacePluginDiagnosticError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplacePluginDiagnosticError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplaceDiagnostics {
+    pub name: String,
+    pub plugins: Vec<MarketplacePluginDiagnostic>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarketplacePluginSource {
     Local {
@@ -327,6 +351,197 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
     })
 }
 
+/// Resolve every raw plugin entry without allowing one malformed entry to hide the others.
+///
+/// This is intentionally separate from the normal marketplace loader: callers can compare this
+/// output with [`load_marketplace`] to explain both whole-file failures and per-entry skips.
+#[doc(hidden)]
+pub fn diagnose_marketplace(
+    path: &AbsolutePathBuf,
+) -> Result<MarketplaceDiagnostics, MarketplaceError> {
+    let contents = fs::read_to_string(path.as_path()).map_err(|err| {
+        if err.kind() == io::ErrorKind::NotFound {
+            MarketplaceError::MarketplaceNotFound {
+                path: path.to_path_buf(),
+            }
+        } else {
+            MarketplaceError::io("failed to read marketplace file", err)
+        }
+    })?;
+    let value = serde_json::from_str::<JsonValue>(&contents).map_err(|err| {
+        MarketplaceError::InvalidMarketplaceFile {
+            path: path.to_path_buf(),
+            message: err.to_string(),
+        }
+    })?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| MarketplaceError::InvalidMarketplaceFile {
+            path: path.to_path_buf(),
+            message: "expected a JSON object".to_string(),
+        })?;
+    let name = object
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| MarketplaceError::InvalidMarketplaceFile {
+            path: path.to_path_buf(),
+            message: "marketplace name must be a non-empty string".to_string(),
+        })?
+        .to_string();
+    let raw_plugins = object
+        .get("plugins")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| MarketplaceError::InvalidMarketplaceFile {
+            path: path.to_path_buf(),
+            message: "marketplace plugins must be an array".to_string(),
+        })?;
+
+    let plugins = raw_plugins
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, value)| diagnose_marketplace_plugin_entry(path, &name, index, value))
+        .collect();
+    Ok(MarketplaceDiagnostics { name, plugins })
+}
+
+fn diagnose_marketplace_plugin_entry(
+    marketplace_path: &AbsolutePathBuf,
+    marketplace_name: &str,
+    index: usize,
+    value: JsonValue,
+) -> MarketplacePluginDiagnostic {
+    let name = value
+        .as_object()
+        .and_then(|object| object.get("name"))
+        .and_then(JsonValue::as_str)
+        .map(str::to_string);
+    let source_kind = diagnostic_source_kind(&value);
+    let plugin = match serde_json::from_value::<RawMarketplaceManifestPlugin>(value) {
+        Ok(plugin) => plugin,
+        Err(err) => {
+            return MarketplacePluginDiagnostic {
+                index,
+                name,
+                source_kind,
+                result: Err(MarketplacePluginDiagnosticError {
+                    code: "invalid_entry",
+                    message: err.to_string(),
+                }),
+            };
+        }
+    };
+    let RawMarketplaceManifestPlugin {
+        name: plugin_name,
+        source,
+        policy,
+        category,
+    } = plugin;
+    let source = match source {
+        RawMarketplaceManifestPluginSource::Unsupported(value) => {
+            return MarketplacePluginDiagnostic {
+                index,
+                name: Some(plugin_name),
+                source_kind,
+                result: Err(MarketplacePluginDiagnosticError {
+                    code: "unsupported_source",
+                    message: format!(
+                        "unsupported plugin source value type: {}",
+                        json_value_type(&value)
+                    ),
+                }),
+            };
+        }
+        source => match resolve_plugin_source(marketplace_path, source) {
+            Ok(source) => source,
+            Err(err) => {
+                return MarketplacePluginDiagnostic {
+                    index,
+                    name: Some(plugin_name),
+                    source_kind,
+                    result: Err(MarketplacePluginDiagnosticError {
+                        code: "invalid_source",
+                        message: err.to_string(),
+                    }),
+                };
+            }
+        },
+    };
+    let plugin_id = match PluginId::new(plugin_name.clone(), marketplace_name.to_string()) {
+        Ok(plugin_id) => plugin_id,
+        Err(PluginIdError::Invalid(message)) => {
+            return MarketplacePluginDiagnostic {
+                index,
+                name: Some(plugin_name),
+                source_kind,
+                result: Err(MarketplacePluginDiagnosticError {
+                    code: "invalid_plugin_id",
+                    message,
+                }),
+            };
+        }
+    };
+    let manifest = match &source {
+        MarketplacePluginSource::Local { path } => load_plugin_manifest(path.as_path()),
+        MarketplacePluginSource::Git { .. } => None,
+    };
+    let interface = plugin_interface_with_marketplace_category(
+        manifest
+            .as_ref()
+            .and_then(|manifest| manifest.interface.clone()),
+        category,
+    );
+
+    MarketplacePluginDiagnostic {
+        index,
+        name: Some(plugin_name),
+        source_kind,
+        result: Ok(ResolvedMarketplacePlugin {
+            plugin_id,
+            source,
+            policy: MarketplacePluginPolicy {
+                installation: policy.installation,
+                authentication: policy.authentication,
+                products: policy.products,
+            },
+            interface,
+            manifest,
+        }),
+    }
+}
+
+fn diagnostic_source_kind(value: &JsonValue) -> &'static str {
+    let Some(source) = value.as_object().and_then(|object| object.get("source")) else {
+        return "missing";
+    };
+    match source {
+        JsonValue::String(_) => "local_path",
+        JsonValue::Object(object) => match object.get("source").and_then(JsonValue::as_str) {
+            Some("local") => "local",
+            Some("url") => "git_url",
+            Some("git-subdir") => "git_subdir",
+            Some(_) => "unsupported_object",
+            None => "object_without_source_type",
+        },
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::Array(_) => "array",
+    }
+}
+
+fn json_value_type(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }
+}
+
 pub(crate) fn load_raw_marketplace_plugin_names(
     path: &AbsolutePathBuf,
 ) -> Result<HashSet<String>, MarketplaceError> {
@@ -509,8 +724,8 @@ fn resolve_plugin_source(
                 .as_deref()
                 .map(|path| normalize_remote_plugin_subdir(marketplace_path, path))
                 .transpose()?,
-            ref_name: normalize_optional_git_selector(&ref_name),
-            sha: normalize_optional_git_selector(&sha),
+            ref_name: normalize_optional_git_selector(marketplace_path, "ref", &ref_name)?,
+            sha: normalize_optional_git_selector(marketplace_path, "sha", &sha)?,
         }),
         RawMarketplaceManifestPluginSource::Object(
             RawMarketplaceManifestPluginSourceObject::GitSubdir {
@@ -522,8 +737,8 @@ fn resolve_plugin_source(
         ) => Ok(MarketplacePluginSource::Git {
             url: normalize_git_plugin_source_url(marketplace_path, &url)?,
             path: Some(normalize_remote_plugin_subdir(marketplace_path, &path)?),
-            ref_name: normalize_optional_git_selector(&ref_name),
-            sha: normalize_optional_git_selector(&sha),
+            ref_name: normalize_optional_git_selector(marketplace_path, "ref", &ref_name)?,
+            sha: normalize_optional_git_selector(marketplace_path, "sha", &sha)?,
         }),
         RawMarketplaceManifestPluginSource::Unsupported(_) => {
             unreachable!("unsupported plugin sources should be filtered before resolution")
@@ -576,6 +791,12 @@ fn normalize_remote_plugin_subdir(
             message: "git plugin source path must not be empty".to_string(),
         });
     }
+    if path.chars().any(char::is_control) {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "git plugin source path must not contain control characters".to_string(),
+        });
+    }
     let relative_path = Path::new(path);
     if relative_path
         .components()
@@ -600,6 +821,12 @@ fn normalize_git_plugin_source_url(
             message: "git plugin source url must not be empty".to_string(),
         });
     }
+    if url.chars().any(char::is_control) {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "git plugin source url must not contain control characters".to_string(),
+        });
+    }
     if url.starts_with("http://") || url.starts_with("https://") {
         return Ok(normalize_github_git_url(url));
     }
@@ -622,7 +849,7 @@ fn normalize_git_plugin_source_url(
 
     Err(MarketplaceError::InvalidMarketplaceFile {
         path: marketplace_path.to_path_buf(),
-        message: format!("invalid git plugin source url: {url}"),
+        message: "invalid git plugin source url format".to_string(),
     })
 }
 
@@ -649,12 +876,26 @@ fn normalize_relative_git_plugin_source_url(
     Ok(normalized.display().to_string())
 }
 
-fn normalize_optional_git_selector(value: &Option<String>) -> Option<String> {
-    value
+fn normalize_optional_git_selector(
+    marketplace_path: &AbsolutePathBuf,
+    field: &str,
+    value: &Option<String>,
+) -> Result<Option<String>, MarketplaceError> {
+    let value = value
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
+        .map(str::to_string);
+    if value
+        .as_deref()
+        .is_some_and(|value| value.chars().any(char::is_control))
+    {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: format!("git plugin source {field} must not contain control characters"),
+        });
+    }
+    Ok(value)
 }
 
 fn normalize_github_git_url(url: &str) -> String {

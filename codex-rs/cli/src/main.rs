@@ -50,6 +50,7 @@ mod doctor;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod plugin_cmd;
+mod plugin_import_diagnostic;
 mod remote_control_cmd;
 #[cfg(target_os = "windows")]
 mod sandbox_setup;
@@ -235,6 +236,10 @@ enum DebugSubcommand {
     /// Internal: reset local memory state for a fresh start.
     #[clap(hide = true)]
     ClearMemories,
+
+    /// Internal: produce a redacted, per-plugin marketplace import report.
+    #[clap(hide = true)]
+    MarketplaceImportDiagnostic(plugin_import_diagnostic::MarketplaceImportDiagnosticCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -1469,6 +1474,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     "debug clear-memories",
                 )?;
                 run_debug_clear_memories_command(&root_config_overrides).await?;
+            }
+            DebugSubcommand::MarketplaceImportDiagnostic(cmd) => {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "debug marketplace-import-diagnostic",
+                )?;
+                plugin_import_diagnostic::run(cmd).await?;
             }
         },
         Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {

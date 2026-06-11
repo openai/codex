@@ -15,6 +15,7 @@ use codex_config::HooksFile;
 use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
 use codex_config::types::PluginMcpServerConfig;
+use codex_core_skills::SkillError;
 use codex_core_skills::SkillMetadata;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::resolve_disabled_skill_paths;
@@ -755,6 +756,7 @@ fn apply_plugin_mcp_server_policy(config: &mut McpServerConfig, policy: &PluginM
 #[derive(Debug, Clone)]
 pub struct ResolvedPluginSkills {
     pub skills: Vec<SkillMetadata>,
+    pub errors: Vec<SkillError>,
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub had_errors: bool,
 }
@@ -788,6 +790,7 @@ pub async fn load_plugin_skills(
         .collect::<Vec<_>>();
     let outcome = load_skills_from_roots(roots).await;
     let had_errors = !outcome.errors.is_empty();
+    let errors = outcome.errors;
     let skills = outcome
         .skills
         .into_iter()
@@ -797,6 +800,7 @@ pub async fn load_plugin_skills(
 
     ResolvedPluginSkills {
         skills,
+        errors,
         disabled_skill_paths,
         had_errors,
     }
@@ -849,13 +853,31 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
 
 pub async fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
     if let Some(manifest) = load_plugin_manifest(plugin_root) {
-        return load_apps_from_paths(
-            plugin_root,
-            plugin_app_config_paths(plugin_root, &manifest.paths),
-        )
-        .await;
+        return diagnose_plugin_apps(plugin_root, &manifest.paths)
+            .await
+            .connector_ids;
     }
-    load_apps_from_paths(plugin_root, default_app_config_paths(plugin_root)).await
+    load_apps_from_paths(plugin_root, default_app_config_paths(plugin_root))
+        .await
+        .connector_ids
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginAppLoadDiagnostics {
+    pub config_paths: Vec<AbsolutePathBuf>,
+    pub connector_ids: Vec<AppConnectorId>,
+    pub issues: Vec<String>,
+}
+
+pub async fn diagnose_plugin_apps(
+    plugin_root: &Path,
+    manifest_paths: &PluginManifestPaths,
+) -> PluginAppLoadDiagnostics {
+    load_apps_from_paths(
+        plugin_root,
+        plugin_app_config_paths(plugin_root, manifest_paths),
+    )
+    .await
 }
 
 fn plugin_app_config_paths(
@@ -994,11 +1016,19 @@ fn append_plugin_hook_file(
 async fn load_apps_from_paths(
     plugin_root: &Path,
     app_config_paths: Vec<AbsolutePathBuf>,
-) -> Vec<AppConnectorId> {
+) -> PluginAppLoadDiagnostics {
     let mut connector_ids = Vec::new();
-    for app_config_path in app_config_paths {
-        let Ok(contents) = tokio::fs::read_to_string(app_config_path.as_path()).await else {
-            continue;
+    let mut issues = Vec::new();
+    for app_config_path in &app_config_paths {
+        let contents = match tokio::fs::read_to_string(app_config_path.as_path()).await {
+            Ok(contents) => contents,
+            Err(err) => {
+                issues.push(format!(
+                    "failed to read plugin app config {}: {err}",
+                    app_config_path.display()
+                ));
+                continue;
+            }
         };
         let parsed = match serde_json::from_str::<PluginAppFile>(&contents) {
             Ok(parsed) => parsed,
@@ -1007,6 +1037,10 @@ async fn load_apps_from_paths(
                     path = %app_config_path.display(),
                     "failed to parse plugin app config: {err}"
                 );
+                issues.push(format!(
+                    "failed to parse plugin app config {}: {err}",
+                    app_config_path.display()
+                ));
                 continue;
             }
         };
@@ -1017,6 +1051,7 @@ async fn load_apps_from_paths(
                     plugin = %plugin_root.display(),
                     "plugin app config is missing an app id"
                 );
+                issues.push("plugin app config is missing an app id".to_string());
                 None
             } else {
                 Some(AppConnectorId(app.id))
@@ -1025,7 +1060,11 @@ async fn load_apps_from_paths(
     }
     let mut seen_connector_ids = HashSet::new();
     connector_ids.retain(|connector_id| seen_connector_ids.insert(connector_id.0.clone()));
-    connector_ids
+    PluginAppLoadDiagnostics {
+        config_paths: app_config_paths,
+        connector_ids,
+        issues,
+    }
 }
 
 pub async fn plugin_telemetry_metadata_from_root(
@@ -1063,7 +1102,8 @@ pub async fn plugin_telemetry_metadata_from_root(
                 plugin_root.as_path(),
                 plugin_app_config_paths(plugin_root.as_path(), manifest_paths),
             )
-            .await,
+            .await
+            .connector_ids,
         }),
     }
 }
@@ -1082,6 +1122,35 @@ pub async fn load_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String, McpS
     }
 
     mcp_servers
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginMcpLoadDiagnostics {
+    pub config_paths: Vec<AbsolutePathBuf>,
+    pub server_names: Vec<String>,
+    pub issues: Vec<String>,
+}
+
+pub async fn diagnose_plugin_mcp_servers(
+    plugin_root: &Path,
+    manifest_paths: &PluginManifestPaths,
+) -> PluginMcpLoadDiagnostics {
+    let config_paths = plugin_mcp_config_paths(plugin_root, manifest_paths);
+    let mut server_names = Vec::new();
+    let mut issues = Vec::new();
+    for path in &config_paths {
+        let discovery = load_mcp_servers_from_file(plugin_root, path).await;
+        server_names.extend(discovery.mcp_servers.into_keys());
+        issues.extend(discovery.issues);
+    }
+    server_names.sort_unstable();
+    server_names.dedup();
+
+    PluginMcpLoadDiagnostics {
+        config_paths,
+        server_names,
+        issues,
+    }
 }
 
 pub async fn installed_plugin_telemetry_metadata(
@@ -1106,8 +1175,17 @@ async fn load_mcp_servers_from_file(
     plugin_root: &Path,
     mcp_config_path: &AbsolutePathBuf,
 ) -> PluginMcpDiscovery {
-    let Ok(contents) = tokio::fs::read_to_string(mcp_config_path.as_path()).await else {
-        return PluginMcpDiscovery::default();
+    let contents = match tokio::fs::read_to_string(mcp_config_path.as_path()).await {
+        Ok(contents) => contents,
+        Err(err) => {
+            return PluginMcpDiscovery {
+                issues: vec![format!(
+                    "failed to read plugin MCP config {}: {err}",
+                    mcp_config_path.display()
+                )],
+                ..Default::default()
+            };
+        }
     };
     let parsed = match serde_json::from_str::<PluginMcpFile>(&contents) {
         Ok(parsed) => parsed,
@@ -1116,7 +1194,13 @@ async fn load_mcp_servers_from_file(
                 path = %mcp_config_path.display(),
                 "failed to parse plugin MCP config: {err}"
             );
-            return PluginMcpDiscovery::default();
+            return PluginMcpDiscovery {
+                issues: vec![format!(
+                    "failed to parse plugin MCP config {}: {err}",
+                    mcp_config_path.display()
+                )],
+                ..Default::default()
+            };
         }
     };
     normalize_plugin_mcp_servers(
@@ -1132,9 +1216,11 @@ fn normalize_plugin_mcp_servers(
     source: &str,
 ) -> PluginMcpDiscovery {
     let mut mcp_servers = HashMap::new();
+    let mut issues = Vec::new();
 
     for (name, config_value) in plugin_mcp_servers {
-        let normalized = normalize_plugin_mcp_server_value(plugin_root, config_value);
+        let normalized =
+            normalize_plugin_mcp_server_value(plugin_root, &name, config_value, &mut issues);
         match serde_json::from_value::<McpServerConfig>(JsonValue::Object(normalized)) {
             Ok(config) => {
                 mcp_servers.insert(name, config);
@@ -1145,16 +1231,24 @@ fn normalize_plugin_mcp_servers(
                     server = name,
                     "failed to parse plugin MCP server from {source}: {err}"
                 );
+                issues.push(format!(
+                    "failed to parse plugin MCP server `{name}` from {source}: {err}"
+                ));
             }
         }
     }
 
-    PluginMcpDiscovery { mcp_servers }
+    PluginMcpDiscovery {
+        mcp_servers,
+        issues,
+    }
 }
 
 fn normalize_plugin_mcp_server_value(
     plugin_root: &Path,
+    server_name: &str,
     value: JsonValue,
+    issues: &mut Vec<String>,
 ) -> JsonMap<String, JsonValue> {
     let mut object = match value {
         JsonValue::Object(object) => object,
@@ -1171,6 +1265,9 @@ fn normalize_plugin_mcp_server_value(
                     transport = other,
                     "plugin MCP server uses an unknown transport type"
                 );
+                issues.push(format!(
+                    "plugin MCP server `{server_name}` uses an unknown transport type"
+                ));
             }
         }
     }
@@ -1181,6 +1278,9 @@ fn normalize_plugin_mcp_server_value(
                 plugin = %plugin_root.display(),
                 "plugin MCP server OAuth callbackPort is ignored; Codex uses global MCP OAuth callback settings"
             );
+            issues.push(format!(
+                "plugin MCP server `{server_name}` OAuth callbackPort is ignored"
+            ));
         }
 
         if let Some(client_id) = oauth.remove("clientId") {
@@ -1207,6 +1307,7 @@ fn normalize_plugin_mcp_server_value(
 #[derive(Debug, Default)]
 struct PluginMcpDiscovery {
     mcp_servers: HashMap<String, McpServerConfig>,
+    issues: Vec<String>,
 }
 
 #[derive(Debug)]
