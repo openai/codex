@@ -529,8 +529,8 @@ async fn build_harness_inner(
         if hooks {
             trust_discovered_hooks(config);
         }
-        if mode == Mode::V2 {
-            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        if mode == Mode::Legacy {
+            let _ = config.features.disable(Feature::RemoteCompactionV2);
         }
     }))
     .await

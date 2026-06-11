@@ -177,10 +177,14 @@ async fn responses_lite_compact_request_uses_lite_transport_contract() -> Result
     let compact_mock =
         responses::mount_compact_json_once(&server, serde_json::json!({ "output": [] })).await;
 
-    let mut builder = test_codex().with_model_info_override("gpt-5.4", |model_info| {
-        model_info.use_responses_lite = true;
-        model_info.supports_parallel_tool_calls = true;
-    });
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+            model_info.supports_parallel_tool_calls = true;
+        })
+        .with_config(|config| {
+            let _ = config.features.disable(Feature::RemoteCompactionV2);
+        });
     let test = builder.build(&server).await?;
 
     test.submit_turn("Compact this conversation").await?;
