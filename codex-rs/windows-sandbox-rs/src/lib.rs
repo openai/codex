@@ -78,6 +78,8 @@ mod wfp_setup;
 mod winutil;
 #[cfg(target_os = "windows")]
 mod workspace_acl;
+#[cfg(target_os = "windows")]
+mod wrapper;
 
 mod deny_read_resolver;
 
@@ -177,6 +179,8 @@ pub use filesystem_overrides::resolve_windows_restricted_token_filesystem_overri
 pub use filesystem_overrides::unsupported_windows_restricted_token_sandbox_reason;
 #[cfg(target_os = "windows")]
 pub use helper_materialization::resolve_current_exe_for_launch;
+#[cfg(target_os = "windows")]
+pub use helper_materialization::resolve_exe_for_launch;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_current_user_profile_dir;
 #[cfg(target_os = "windows")]
@@ -320,6 +324,16 @@ pub use winutil::string_from_sid_bytes;
 pub use winutil::to_wide;
 #[cfg(target_os = "windows")]
 pub use workspace_acl::is_command_cwd_root;
+#[cfg(target_os = "windows")]
+pub use wrapper::CODEX_WINDOWS_SANDBOX_ARG1;
+#[cfg(target_os = "windows")]
+pub use wrapper::WindowsSandboxWrapperRequest;
+#[cfg(target_os = "windows")]
+pub use wrapper::create_windows_sandbox_command_args_for_request_file;
+#[cfg(target_os = "windows")]
+pub use wrapper::create_windows_sandbox_wrapper_request_for_permission_profile;
+#[cfg(target_os = "windows")]
+pub use wrapper::run_windows_sandbox_wrapper_main;
 
 #[cfg(not(target_os = "windows"))]
 pub use stub::CaptureResult;
@@ -477,13 +491,14 @@ mod windows_impl {
         codex_home: &Path,
         command: Vec<String>,
         cwd: &Path,
-        mut env_map: HashMap<String, String>,
+        env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
         cancellation: Option<WindowsSandboxCancellationToken>,
         additional_deny_read_paths: &[AbsolutePathBuf],
         additional_deny_write_paths: &[AbsolutePathBuf],
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
+        let mut env_map = env_map;
         let additional_deny_read_paths = additional_deny_read_paths
             .iter()
             .map(AbsolutePathBuf::to_path_buf)

@@ -2202,6 +2202,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
+ "codex-windows-sandbox",
  "dotenvy",
  "pretty_assertions",
  "tempfile",
