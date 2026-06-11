@@ -297,7 +297,12 @@
           "$ref": "#/definitions/CollaborationMode"
         },
         "cwd": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Current working directory. Existing local paths are returned in canonical form."
         },
         "effort": {
           "anyOf": [

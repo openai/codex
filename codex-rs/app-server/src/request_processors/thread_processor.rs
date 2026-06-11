@@ -1202,7 +1202,7 @@ impl ThreadRequestProcessor {
             &config_snapshot.permission_profile,
             config_snapshot.cwd().as_path(),
         );
-        let cwd = config_snapshot.cwd().clone();
+        let cwd = thread_response_cwd(&config_snapshot);
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
 
@@ -2712,6 +2712,7 @@ impl ThreadRequestProcessor {
                     &config_snapshot.permission_profile,
                     config_snapshot.cwd().as_path(),
                 );
+                let cwd = thread_response_cwd(&config_snapshot);
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
                 );
@@ -2745,7 +2746,7 @@ impl ThreadRequestProcessor {
                     model: session_configured.model,
                     model_provider: session_configured.model_provider_id,
                     service_tier: session_configured.service_tier,
-                    cwd: session_configured.cwd,
+                    cwd,
                     runtime_workspace_roots: config_snapshot.workspace_roots,
                     instruction_sources,
                     approval_policy: session_configured.approval_policy.into(),
@@ -3452,6 +3453,7 @@ impl ThreadRequestProcessor {
             &config_snapshot.permission_profile,
             config_snapshot.cwd().as_path(),
         );
+        let cwd = thread_response_cwd(&config_snapshot);
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
 
@@ -3460,7 +3462,7 @@ impl ThreadRequestProcessor {
             model: session_configured.model,
             model_provider: session_configured.model_provider_id,
             service_tier: session_configured.service_tier,
-            cwd: session_configured.cwd,
+            cwd,
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
             approval_policy: session_configured.approval_policy.into(),
@@ -4320,7 +4322,7 @@ fn build_thread_from_snapshot(
         updated_at: now,
         status: ThreadStatus::NotLoaded,
         path,
-        cwd: config_snapshot.cwd().clone(),
+        cwd: thread_response_cwd(config_snapshot),
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
         agent_nickname: config_snapshot.session_source.get_nickname(),
         agent_role: config_snapshot.session_source.get_agent_role(),

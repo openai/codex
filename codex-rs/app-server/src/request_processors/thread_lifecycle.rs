@@ -628,7 +628,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     }
 
     let config_snapshot = pending.config_snapshot;
-    let cwd = config_snapshot.cwd().clone();
+    let cwd = thread_response_cwd(&config_snapshot);
     let ThreadConfigSnapshot {
         model,
         model_provider_id,

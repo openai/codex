@@ -50,7 +50,8 @@ status: ThreadStatus,
  */
 path: string | null,
 /**
- * Working directory captured for the thread.
+ * Working directory captured for the thread. Existing local paths are best-effort
+ * canonicalized with symbolic links resolved; unresolved paths are unchanged.
  */
 cwd: AbsolutePathBuf,
 /**

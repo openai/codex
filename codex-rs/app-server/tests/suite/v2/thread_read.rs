@@ -68,6 +68,8 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -130,6 +132,109 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
     assert_eq!(thread.git_info, None);
     assert_eq!(thread.turns.len(), 0);
     assert_eq!(thread.status, ThreadStatus::NotLoaded);
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn local_thread_apis_return_one_canonical_cwd() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let workspace_home = TempDir::new()?;
+    let workspace = workspace_home.path().join("CEO Core");
+    let workspace_alias = workspace_home.path().join("CEO Core Alias");
+    std::fs::create_dir(&workspace)?;
+    symlink(&workspace, &workspace_alias)?;
+    let canonical_cwd = workspace.canonicalize()?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace_alias.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, cwd, .. } = to_response(start_resp)?;
+    assert_eq!(cwd.as_path(), canonical_cwd);
+    assert_eq!(thread.cwd.as_path(), canonical_cwd);
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Persist this thread".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let thread_id = thread.id;
+    drop(mcp);
+    std::fs::remove_file(&workspace_alias)?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let list_id = mcp
+        .send_thread_list_request(ThreadListParams {
+            cursor: None,
+            limit: Some(50),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: None,
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only: true,
+            search_term: None,
+        })
+        .await?;
+    let list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let ThreadListResponse { data, .. } = to_response(list_resp)?;
+    let listed = data
+        .iter()
+        .find(|thread| thread.id == thread_id)
+        .expect("thread/list should return the persisted thread");
+    assert_eq!(listed.cwd.as_path(), canonical_cwd);
+
+    for include_turns in [false, true] {
+        let read_id = mcp
+            .send_thread_read_request(ThreadReadParams {
+                thread_id: thread_id.clone(),
+                include_turns,
+            })
+            .await?;
+        let read_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+        )
+        .await??;
+        let ThreadReadResponse { thread, .. } = to_response(read_resp)?;
+        assert_eq!(thread.cwd.as_path(), canonical_cwd);
+    }
 
     Ok(())
 }

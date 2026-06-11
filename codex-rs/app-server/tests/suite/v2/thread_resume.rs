@@ -2230,7 +2230,8 @@ async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     )
     .await??;
     let ThreadResumeResponse { cwd, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(cwd, AbsolutePathBuf::from_absolute_path(codex_home.path())?);
+    let expected_cwd = codex_utils_path::normalize_for_path_comparison(codex_home.path())?;
+    assert_eq!(cwd.as_path(), expected_cwd.as_path());
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {

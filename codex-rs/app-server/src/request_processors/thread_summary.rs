@@ -189,13 +189,14 @@ pub(crate) fn thread_response_sandbox_policy(
 pub(crate) fn thread_settings_from_config_snapshot(
     config_snapshot: &ThreadConfigSnapshot,
 ) -> ThreadSettings {
+    let cwd = thread_response_cwd(config_snapshot);
     ThreadSettings {
-        cwd: config_snapshot.cwd().clone(),
+        cwd: cwd.clone(),
         approval_policy: config_snapshot.approval_policy.into(),
         approvals_reviewer: config_snapshot.approvals_reviewer.into(),
         sandbox_policy: thread_response_sandbox_policy(
             &config_snapshot.permission_profile,
-            config_snapshot.cwd().as_path(),
+            cwd.as_path(),
         ),
         active_permission_profile: thread_response_active_permission_profile(
             config_snapshot.active_permission_profile.clone(),
@@ -212,6 +213,7 @@ pub(crate) fn thread_settings_from_config_snapshot(
 
 pub(crate) fn thread_settings_from_core_snapshot(
     snapshot: codex_protocol::protocol::ThreadSettingsSnapshot,
+    config_snapshot: &ThreadConfigSnapshot,
 ) -> ThreadSettings {
     let codex_protocol::protocol::ThreadSettingsSnapshot {
         model,
@@ -227,6 +229,7 @@ pub(crate) fn thread_settings_from_core_snapshot(
         personality,
         collaboration_mode,
     } = snapshot;
+    let cwd = thread_response_cwd_for_path(cwd, config_snapshot);
     let sandbox_policy = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     ThreadSettings {
         sandbox_policy,

@@ -1235,8 +1235,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ThreadSettingsApplied(thread_settings_event) => {
-            let thread_settings =
-                thread_settings_from_core_snapshot(thread_settings_event.thread_settings);
+            let config_snapshot = conversation.config_snapshot().await;
+            let thread_settings = thread_settings_from_core_snapshot(
+                thread_settings_event.thread_settings,
+                &config_snapshot,
+            );
             let changed = {
                 let mut state = thread_state.lock().await;
                 state.note_thread_settings(thread_settings.clone())

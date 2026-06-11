@@ -555,8 +555,10 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
         vec![second_filtered_id.as_str(), first_filtered_id.as_str()]
     );
     assert!(!filtered_ids.contains(&unfiltered_id.as_str()));
-    assert_eq!(data[0].cwd.as_path(), second_target_cwd.as_path());
-    assert_eq!(data[1].cwd.as_path(), first_target_cwd.as_path());
+    let expected_second_cwd = codex_utils_path::normalize_for_path_comparison(&second_target_cwd)?;
+    let expected_first_cwd = codex_utils_path::normalize_for_path_comparison(&first_target_cwd)?;
+    assert_eq!(data[0].cwd.as_path(), expected_second_cwd.as_path());
+    assert_eq!(data[1].cwd.as_path(), expected_first_cwd.as_path());
 
     Ok(())
 }

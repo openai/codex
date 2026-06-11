@@ -15,6 +15,7 @@ use codex_state::ThreadMetadata;
 use super::LocalThreadStore;
 use super::helpers::distinct_thread_metadata_title;
 use super::helpers::git_info_from_parts;
+use super::helpers::normalize_thread_cwd;
 use super::helpers::permission_profile_from_metadata_value;
 use super::helpers::rollout_path_is_archived;
 use super::helpers::set_thread_name_from_title;
@@ -55,6 +56,13 @@ pub(super) async fn read_thread(
             && (params.include_archived || rollout_thread.archived_at.is_none())
             && !rollout_thread.preview.is_empty()
         {
+            // SQLite observes and normalizes cwd updates as they are persisted. Prefer its
+            // stable value while it still resolves, so a missing or retargeted rollout alias
+            // cannot change the cwd returned by thread/read. If SQLite is stale or missing,
+            // retain the rollout cwd as before.
+            if codex_utils_path::normalize_for_path_comparison(thread.cwd.as_path()).is_ok() {
+                rollout_thread.cwd = thread.cwd.clone();
+            }
             if thread.name.is_some() {
                 rollout_thread.name = thread.name;
             }
@@ -321,8 +329,9 @@ async fn stored_thread_from_sqlite_metadata(
         .clone()
         .or_else(|| metadata.first_user_message.clone())
         .unwrap_or_default();
+    let cwd = normalize_thread_cwd(metadata.cwd);
     let permission_profile =
-        permission_profile_from_metadata_value(&metadata.sandbox_policy, metadata.cwd.as_path());
+        permission_profile_from_metadata_value(&metadata.sandbox_policy, cwd.as_path());
     StoredThread {
         thread_id: metadata.id,
         extra_config: None,
@@ -341,7 +350,7 @@ async fn stored_thread_from_sqlite_metadata(
         created_at: metadata.created_at,
         updated_at: metadata.updated_at,
         archived_at: metadata.archived_at,
-        cwd: metadata.cwd,
+        cwd,
         cli_version: metadata.cli_version,
         source: parse_session_source(&metadata.source),
         thread_source: metadata.thread_source,
@@ -389,6 +398,7 @@ fn stored_thread_from_meta_line(
         .map(DateTime::<Utc>::from)
         .unwrap_or(created_at);
     let rollout_path = codex_rollout::plain_rollout_path(path.as_path());
+    let cwd = normalize_thread_cwd(meta_line.meta.cwd);
     StoredThread {
         thread_id: meta_line.meta.id,
         extra_config: None,
@@ -407,7 +417,7 @@ fn stored_thread_from_meta_line(
         created_at,
         updated_at,
         archived_at: archived.then_some(updated_at),
-        cwd: meta_line.meta.cwd,
+        cwd,
         cli_version: meta_line.meta.cli_version,
         source: meta_line.meta.source,
         thread_source: meta_line.meta.thread_source,
@@ -447,7 +457,8 @@ fn parse_rfc3339_non_optional(value: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-    use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
 
     use chrono::Utc;
     use codex_protocol::ThreadId;
@@ -806,7 +817,9 @@ mod tests {
         std::fs::create_dir_all(&day_dir).expect("sessions dir");
         let rollout_path = day_dir.join(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl"));
         let mut file = std::fs::File::create(&rollout_path).expect("session file");
-        let rollout_cwd = PathBuf::from("/");
+        let rollout_cwd = home.path().join("rollout-workspace");
+        std::fs::create_dir(&rollout_cwd).expect("rollout workspace dir");
+        let expected_rollout_cwd = normalize_thread_cwd(rollout_cwd.clone());
         let meta = serde_json::json!({
             "timestamp": "2025-01-03T12:00:00Z",
             "type": "session_meta",
@@ -863,7 +876,7 @@ mod tests {
         assert_eq!(thread.preview, "Hello from rollout");
         assert_eq!(thread.name, Some("Saved title".to_string()));
         assert_eq!(thread.model_provider, "rollout-provider");
-        assert_eq!(thread.cwd, rollout_cwd);
+        assert_eq!(thread.cwd, expected_rollout_cwd);
         let legacy_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
             network_access: false,
@@ -874,9 +887,80 @@ mod tests {
             thread.permission_profile,
             PermissionProfile::from_legacy_sandbox_policy_for_cwd(
                 &legacy_policy,
-                rollout_cwd.as_path()
+                expected_rollout_cwd.as_path()
             )
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_thread_returns_same_canonical_cwd_from_rollout_and_sqlite() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let uuid = Uuid::from_u128(240);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let target_cwd = home.path().join("workspace");
+        let alias_cwd = home.path().join("workspace-alias");
+        std::fs::create_dir(&target_cwd).expect("workspace dir");
+        symlink(&target_cwd, &alias_cwd).expect("workspace alias");
+
+        let day_dir = home.path().join("sessions/2025/01/03");
+        std::fs::create_dir_all(&day_dir).expect("sessions dir");
+        let rollout_path = day_dir.join(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl"));
+        let mut file = std::fs::File::create(&rollout_path).expect("session file");
+        let meta = serde_json::json!({
+            "timestamp": "2025-01-03T12:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": uuid,
+                "timestamp": "2025-01-03T12:00:00Z",
+                "cwd": alias_cwd,
+                "originator": "test_originator",
+                "cli_version": "test_version",
+                "source": "cli",
+                "model_provider": "rollout-provider"
+            },
+        });
+        writeln!(file, "{meta}").expect("write session meta");
+        let user_event = serde_json::json!({
+            "timestamp": "2025-01-03T12:00:00Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "Hello from rollout",
+                "kind": "plain",
+            },
+        });
+        writeln!(file, "{user_event}").expect("write user event");
+
+        let mut builder =
+            ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
+        builder.cwd = target_cwd.clone();
+        runtime
+            .upsert_thread(&builder.build(config.default_model_provider_id.as_str()))
+            .await
+            .expect("state db upsert should succeed");
+
+        let canonical_cwd = target_cwd.canonicalize().expect("canonical workspace");
+        std::fs::remove_file(&alias_cwd).expect("remove workspace alias");
+        for include_history in [false, true] {
+            let thread = store
+                .read_thread(ReadThreadParams {
+                    thread_id,
+                    include_archived: false,
+                    include_history,
+                })
+                .await
+                .expect("read thread");
+            assert_eq!(thread.cwd, canonical_cwd);
+        }
     }
 
     #[tokio::test]
@@ -1112,7 +1196,10 @@ mod tests {
         );
         assert!(thread.updated_at >= thread.created_at);
         assert_eq!(thread.archived_at, None);
-        assert_eq!(thread.cwd, home.path());
+        assert_eq!(
+            thread.cwd,
+            home.path().canonicalize().expect("canonical cwd")
+        );
         assert_eq!(thread.cli_version, "test_version");
         assert_eq!(thread.source, SessionSource::Cli);
         let history = thread.history.expect("history should load");

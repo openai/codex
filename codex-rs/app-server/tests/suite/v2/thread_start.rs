@@ -229,7 +229,8 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
         ..
     } = to_response::<ThreadStartResponse>(resp)?;
 
-    assert_eq!(response_cwd, cwd.abs());
+    let canonical_cwd = codex_utils_path::normalize_for_path_comparison(&cwd)?;
+    assert_eq!(response_cwd.as_path(), canonical_cwd.as_path());
     assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
 
     Ok(())

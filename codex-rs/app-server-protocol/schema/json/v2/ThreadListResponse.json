@@ -814,7 +814,7 @@
               "$ref": "#/definitions/AbsolutePathBuf"
             }
           ],
-          "description": "Working directory captured for the thread."
+          "description": "Working directory captured for the thread. Existing local paths are best-effort canonicalized with symbolic links resolved; unresolved paths are unchanged."
         },
         "ephemeral": {
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",

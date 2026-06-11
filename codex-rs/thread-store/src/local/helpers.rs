@@ -96,6 +96,10 @@ pub(super) fn touch_modified_time(path: &Path) -> std::io::Result<()> {
     OpenOptions::new().append(true).open(path)?.set_times(times)
 }
 
+pub(super) fn normalize_thread_cwd(cwd: PathBuf) -> PathBuf {
+    codex_utils_path::normalize_for_path_comparison(cwd.as_path()).unwrap_or(cwd)
+}
+
 pub(super) fn stored_thread_from_rollout_item(
     item: ThreadItem,
     archived: bool,
@@ -119,6 +123,7 @@ pub(super) fn stored_thread_from_rollout_item(
         .or_else(|| item.first_user_message.clone())
         .unwrap_or_default();
     let rollout_path = codex_rollout::plain_rollout_path(item.path.as_path());
+    let cwd = normalize_thread_cwd(item.cwd.unwrap_or_default());
 
     Some(StoredThread {
         thread_id,
@@ -137,7 +142,7 @@ pub(super) fn stored_thread_from_rollout_item(
         created_at,
         updated_at,
         archived_at,
-        cwd: item.cwd.unwrap_or_default(),
+        cwd,
         cli_version: item.cli_version.unwrap_or_default(),
         source,
         thread_source: None,
@@ -241,6 +246,9 @@ fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
     use codex_rollout::ThreadItem;
     use pretty_assertions::assert_eq;
     use uuid::Uuid;
@@ -269,5 +277,35 @@ mod tests {
                 compressed_path.with_file_name(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl"))
             )
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stored_thread_from_rollout_item_canonicalizes_cwd() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let target = home.path().join("target");
+        let alias = home.path().join("alias");
+        std::fs::create_dir(&target).expect("target dir");
+        symlink(&target, &alias).expect("cwd symlink");
+        let uuid = Uuid::from_u128(2);
+
+        let thread = stored_thread_from_rollout_item(
+            ThreadItem {
+                path: home.path().join(format!("rollout-{uuid}.jsonl")),
+                cwd: Some(alias),
+                ..Default::default()
+            },
+            /*archived*/ false,
+            "test-provider",
+        )
+        .expect("stored thread");
+
+        assert_eq!(thread.cwd, target.canonicalize().expect("canonical target"));
+    }
+
+    #[test]
+    fn normalize_thread_cwd_preserves_missing_path() {
+        let missing = PathBuf::from("/definitely/missing/codex-thread-cwd");
+        assert_eq!(normalize_thread_cwd(missing.clone()), missing);
     }
 }

@@ -15893,7 +15893,7 @@
                 "$ref": "#/definitions/v2/AbsolutePathBuf"
               }
             ],
-            "description": "Working directory captured for the thread."
+            "description": "Working directory captured for the thread. Existing local paths are best-effort canonicalized with symbolic links resolved; unresolved paths are unchanged."
           },
           "ephemeral": {
             "description": "Whether the thread is ephemeral and should not be materialized on disk.",
@@ -16249,7 +16249,12 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Current working directory. Existing local paths are returned in canonical form."
           },
           "instructionSources": {
             "default": [],
@@ -17927,7 +17932,12 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Current working directory. Existing local paths are returned in canonical form."
           },
           "instructionSources": {
             "default": [],
@@ -18080,7 +18090,12 @@
             "$ref": "#/definitions/v2/CollaborationMode"
           },
           "cwd": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Current working directory. Existing local paths are returned in canonical form."
           },
           "effort": {
             "anyOf": [
@@ -18343,7 +18358,12 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Current working directory. Existing local paths are returned in canonical form."
           },
           "instructionSources": {
             "default": [],

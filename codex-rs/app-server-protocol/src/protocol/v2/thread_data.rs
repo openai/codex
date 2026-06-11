@@ -156,7 +156,8 @@ pub struct Thread {
     pub status: ThreadStatus,
     /// [UNSTABLE] Path to the thread on disk.
     pub path: Option<PathBuf>,
-    /// Working directory captured for the thread.
+    /// Working directory captured for the thread. Existing local paths are best-effort
+    /// canonicalized with symbolic links resolved; unresolved paths are unchanged.
     pub cwd: AbsolutePathBuf,
     /// Version of the CLI that created the thread.
     pub cli_version: String,

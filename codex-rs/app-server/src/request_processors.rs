@@ -531,6 +531,28 @@ fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, 
     .transpose()
 }
 
+fn thread_response_cwd_for_path(
+    cwd: AbsolutePathBuf,
+    config_snapshot: &ThreadConfigSnapshot,
+) -> AbsolutePathBuf {
+    let primary_environment_is_local = config_snapshot
+        .environment_selections()
+        .first()
+        .is_none_or(|environment| environment.environment_id == LOCAL_ENVIRONMENT_ID);
+    if !primary_environment_is_local {
+        return cwd;
+    }
+
+    let Ok(canonical) = codex_utils_path::normalize_for_path_comparison(cwd.as_path()) else {
+        return cwd;
+    };
+    AbsolutePathBuf::from_absolute_path(canonical).unwrap_or(cwd)
+}
+
+fn thread_response_cwd(config_snapshot: &ThreadConfigSnapshot) -> AbsolutePathBuf {
+    thread_response_cwd_for_path(config_snapshot.cwd().clone(), config_snapshot)
+}
+
 fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
     let mut resolved_roots = Vec::new();
     for root in workspace_roots {

@@ -8,7 +8,10 @@ import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
 
-export type ThreadResumeResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, cwd: AbsolutePathBuf, /**
+export type ThreadResumeResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, /**
+ * Current working directory. Existing local paths are returned in canonical form.
+ */
+cwd: AbsolutePathBuf, /**
  * Instruction source files currently loaded for this thread.
  */
 instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval, /**

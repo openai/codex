@@ -18,6 +18,7 @@ use tracing::warn;
 
 use super::LocalThreadStore;
 use super::helpers::git_info_from_parts;
+use super::helpers::normalize_thread_cwd;
 use super::helpers::permission_profile_to_metadata_value;
 use super::live_writer;
 use crate::GitInfoPatch;
@@ -225,7 +226,11 @@ async fn apply_metadata_update(
                 builder.agent_nickname = patch.agent_nickname.clone().flatten();
                 builder.agent_role = patch.agent_role.clone().flatten();
                 builder.agent_path = patch.agent_path.clone().flatten();
-                builder.cwd = patch.cwd.clone().map(normalize_cwd).unwrap_or_default();
+                builder.cwd = patch
+                    .cwd
+                    .clone()
+                    .map(normalize_thread_cwd)
+                    .unwrap_or_default();
                 builder.cli_version = patch.cli_version.clone();
                 let mut metadata = builder.build(store.config.default_model_provider_id.as_str());
                 if rollout_path_archived {
@@ -276,7 +281,7 @@ async fn apply_metadata_update(
                 metadata.agent_path = agent_path;
             }
             if let Some(cwd) = patch.cwd {
-                metadata.cwd = normalize_cwd(cwd);
+                metadata.cwd = normalize_thread_cwd(cwd);
             }
             if let Some(cli_version) = patch.cli_version {
                 metadata.cli_version = cli_version;
@@ -402,10 +407,6 @@ fn enum_to_string<T: serde::Serialize>(value: &T) -> String {
         Ok(other) => other.to_string(),
         Err(_) => String::new(),
     }
-}
-
-fn normalize_cwd(cwd: PathBuf) -> PathBuf {
-    codex_utils_path::normalize_for_path_comparison(cwd.as_path()).unwrap_or(cwd)
 }
 
 async fn apply_thread_git_info(

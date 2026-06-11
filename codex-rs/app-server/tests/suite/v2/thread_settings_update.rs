@@ -43,10 +43,18 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
     create_config_toml(codex_home.path(), &server.uri())?;
     write_models_cache(codex_home.path())?;
     let (model_id, service_tier_id) = service_tier_model_and_tier_id()?;
+    let workspace = codex_home.path().join("workspace");
+    let workspace_child = workspace.join("child");
+    std::fs::create_dir_all(&workspace_child)?;
+    let workspace_alias = workspace_child.join("..");
+    let canonical_cwd = workspace.canonicalize()?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-    let thread = start_thread(&mut mcp).await?.thread;
+    let thread = start_thread_with_cwd(&mut mcp, workspace_alias)
+        .await?
+        .thread;
+    assert_eq!(thread.cwd.as_path(), canonical_cwd);
 
     send_thread_settings_update(
         &mut mcp,
@@ -67,6 +75,7 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
 
     let updated = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(updated.thread_id, thread.id);
+    assert_eq!(updated.thread_settings.cwd.as_path(), canonical_cwd);
     assert_eq!(updated.thread_settings.model, model_id);
     assert_eq!(
         updated.thread_settings.service_tier.as_deref(),
@@ -324,9 +333,24 @@ async fn start_text_turn(mcp: &mut TestAppServer, thread_id: String) -> Result<(
 }
 
 async fn start_thread(mcp: &mut TestAppServer) -> Result<ThreadStartResponse> {
+    start_thread_with_params(mcp, /*cwd*/ None).await
+}
+
+async fn start_thread_with_cwd(
+    mcp: &mut TestAppServer,
+    cwd: std::path::PathBuf,
+) -> Result<ThreadStartResponse> {
+    start_thread_with_params(mcp, Some(cwd.to_string_lossy().into_owned())).await
+}
+
+async fn start_thread_with_params(
+    mcp: &mut TestAppServer,
+    cwd: Option<String>,
+) -> Result<ThreadStartResponse> {
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            cwd,
             ..Default::default()
         })
         .await?;
