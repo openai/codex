@@ -125,8 +125,9 @@ mod tests {
                 .join("goal-objective.md"),
         )
         .expect("absolute path");
-        let objective =
-            crate::goal_files::objective_file_reference(&path).expect("goal file reference");
+        let path_for_goal = crate::goal_files::GoalFilePath::from_local(&path);
+        let objective = crate::goal_files::objective_file_reference(&path_for_goal)
+            .expect("goal file reference");
         let mut goal = test_thread_goal(/*token_budget*/ None, /*tokens_used*/ 0);
         goal.objective = objective;
 
