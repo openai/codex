@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
-use codex_core::config::Config;
 use codex_core_skills::HostLoadedSkills;
-use codex_core_skills::SkillInstructions;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
-use codex_core_skills::injection::SkillInjection;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
@@ -26,10 +23,12 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
 
+use crate::SkillsExtensionConfig;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
+use crate::fragments::SkillInstructions;
 use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
@@ -40,22 +39,21 @@ use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
 use crate::selection::collect_explicit_skill_mentions;
 use crate::sources::SkillProviders;
-use crate::state::SkillsExtensionConfig;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
 use crate::tools::skill_tools;
 
-#[derive(Clone)]
-struct SkillsExtension {
+struct SkillsExtension<C> {
     providers: SkillProviders,
     event_sink: Arc<dyn ExtensionEventSink>,
+    config_from_host: Arc<dyn Fn(&C) -> SkillsExtensionConfig + Send + Sync>,
 }
 
-impl ThreadLifecycleContributor<Config> for SkillsExtension {
-    fn on_thread_start<'a>(
-        &'a self,
-        input: ThreadStartInput<'a, Config>,
-    ) -> ExtensionFuture<'a, ()> {
+impl<C> ThreadLifecycleContributor<C> for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let selected_roots = input
                 .thread_store
@@ -63,22 +61,25 @@ impl ThreadLifecycleContributor<Config> for SkillsExtension {
                 .map(|selected_roots| selected_roots.as_ref().clone())
                 .unwrap_or_default();
             input.thread_store.insert(SkillsThreadState::new(
-                SkillsExtensionConfig::from_config(input.config),
+                (self.config_from_host)(input.config),
                 selected_roots,
             ));
         })
     }
 }
 
-impl ConfigContributor<Config> for SkillsExtension {
+impl<C> ConfigContributor<C> for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
     fn on_config_changed(
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
-        _previous_config: &Config,
-        new_config: &Config,
+        _previous_config: &C,
+        new_config: &C,
     ) {
-        let next_config = SkillsExtensionConfig::from_config(new_config);
+        let next_config = (self.config_from_host)(new_config);
         if let Some(state) = thread_store.get::<SkillsThreadState>() {
             state.set_config(next_config);
         } else {
@@ -87,7 +88,10 @@ impl ConfigContributor<Config> for SkillsExtension {
     }
 }
 
-impl ContextContributor for SkillsExtension {
+impl<C> ContextContributor for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
     fn contribute<'a>(
         &'a self,
         session_store: &'a ExtensionData,
@@ -126,7 +130,10 @@ impl ContextContributor for SkillsExtension {
     }
 }
 
-impl ToolContributor for SkillsExtension {
+impl<C> ToolContributor for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
     fn tools(
         &self,
         session_store: &ExtensionData,
@@ -143,7 +150,10 @@ impl ToolContributor for SkillsExtension {
     }
 }
 
-impl TurnInputContributor for SkillsExtension {
+impl<C> TurnInputContributor for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext,
@@ -204,7 +214,7 @@ impl TurnInputContributor for SkillsExtension {
                             self.emit_warning(&input.turn_id, warning.clone());
                             warnings.push(warning);
                         }
-                        let injection = SkillInjection {
+                        let fragment = SkillInstructions {
                             name: truncate_utf8_to_bytes(&entry.name, MAX_SKILL_NAME_BYTES).0,
                             path: truncate_utf8_to_bytes(
                                 entry.rendered_path(),
@@ -213,7 +223,7 @@ impl TurnInputContributor for SkillsExtension {
                             .0,
                             contents,
                         };
-                        fragments.push(Box::new(SkillInstructions::from(&injection)));
+                        fragments.push(Box::new(fragment));
                         main_prompts_injected = true;
                         if entry.authority.kind == SkillSourceKind::Host {
                             injected_host_skill_prompts.insert_path(entry.main_prompt.as_str());
@@ -259,7 +269,7 @@ impl TurnInputContributor for SkillsExtension {
     }
 }
 
-impl SkillsExtension {
+impl<C> SkillsExtension<C> {
     async fn list_skills(
         &self,
         mut query: SkillListQuery,
@@ -308,20 +318,30 @@ impl SkillsExtension {
     }
 }
 
-pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
+pub fn install<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    config_from_host: impl Fn(&C) -> SkillsExtensionConfig + Send + Sync + 'static,
+) where
+    C: Send + Sync + 'static,
+{
     install_with_providers(
         registry,
         SkillProviders::new().with_host_provider(Arc::new(HostSkillProvider::new())),
+        config_from_host,
     );
 }
 
-pub fn install_with_providers(
-    registry: &mut ExtensionRegistryBuilder<Config>,
+pub fn install_with_providers<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
     providers: SkillProviders,
-) {
+    config_from_host: impl Fn(&C) -> SkillsExtensionConfig + Send + Sync + 'static,
+) where
+    C: Send + Sync + 'static,
+{
     let extension = Arc::new(SkillsExtension {
         providers,
         event_sink: registry.event_sink(),
+        config_from_host: Arc::new(config_from_host),
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());

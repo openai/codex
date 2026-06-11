@@ -1,9 +1,9 @@
-use codex_core::context::AvailableSkillsInstructions;
 use codex_utils_string::take_bytes_at_char_boundary;
 
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillSourceKind;
+use crate::fragments::AvailableSkillsInstructions;
 
 const MAX_AVAILABLE_SKILLS_BYTES: usize = 8_000;
 const MAX_MAIN_PROMPT_BYTES: usize = 8_000;

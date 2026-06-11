@@ -1,5 +1,7 @@
 pub mod catalog;
+mod config;
 mod extension;
+mod fragments;
 pub mod provider;
 mod render;
 mod selection;
@@ -7,6 +9,7 @@ mod sources;
 mod state;
 mod tools;
 
+pub use config::SkillsExtensionConfig;
 pub use extension::install;
 pub use extension::install_with_providers;
 pub use provider::ExecutorSkillProvider;
