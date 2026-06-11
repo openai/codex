@@ -364,6 +364,7 @@ pub enum CompactionReason {
     UserRequested,
     ContextLimit,
     ModelDownshift,
+    CompHashChanged,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

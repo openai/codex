@@ -3047,7 +3047,6 @@ name = "codex-goal-extension"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "chrono",
  "codex-analytics",
  "codex-core",
@@ -3101,7 +3100,6 @@ dependencies = [
 name = "codex-image-generation-extension"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-api",
  "codex-core",
  "codex-extension-api",
@@ -3301,7 +3299,6 @@ dependencies = [
 name = "codex-memories-extension"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-core",
  "codex-extension-api",
  "codex-features",
@@ -3916,7 +3913,6 @@ dependencies = [
 name = "codex-tools"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-app-server-protocol",
  "codex-code-mode",
  "codex-features",
@@ -4297,7 +4293,6 @@ dependencies = [
 name = "codex-web-search-extension"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-api",
  "codex-core",
  "codex-extension-api",

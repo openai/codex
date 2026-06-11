@@ -26,7 +26,6 @@ use super::serialize_function_output;
 
 pub struct ListMcpResourcesHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("list_mcp_resources")
@@ -40,7 +39,13 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ListMcpResourcesHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
