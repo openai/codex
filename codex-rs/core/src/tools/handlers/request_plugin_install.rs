@@ -11,7 +11,6 @@ use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
 use codex_tools::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
-use codex_tools::REQUEST_PLUGIN_INSTALL_FLAT_CATEGORY_ID;
 use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
 use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
@@ -324,7 +323,6 @@ impl RequestPluginInstallHandler {
             .iter()
             .filter(|entry| entry.completed)
             .map(|entry| RequestPluginInstallInstalledEntry {
-                category_id: entry.category_id.clone(),
                 entry_id: entry.entry_id.clone(),
                 tool_id: entry.tool_id.clone(),
                 tool_type: entry.tool_type,
@@ -395,7 +393,6 @@ impl CoreToolRuntime for RequestPluginInstallHandler {}
 
 #[derive(Clone)]
 struct RequestedPickerInstallEntry {
-    category_id: String,
     entry_id: String,
     tool: DiscoverableTool,
 }
@@ -403,7 +400,6 @@ struct RequestedPickerInstallEntry {
 impl RequestedPickerInstallEntry {
     fn result(&self, completed: bool) -> RequestPluginInstallEntryResult {
         RequestPluginInstallEntryResult {
-            category_id: self.category_id.clone(),
             entry_id: self.entry_id.clone(),
             tool_type: self.tool.tool_type(),
             tool_id: self.tool.id().to_string(),
@@ -425,52 +421,20 @@ fn validate_request_plugin_install_picker_args<'a>(
     app_server_client_name: Option<&str>,
 ) -> Result<Vec<RequestPluginInstallResolvedPickerEntry<'a>>, FunctionCallError> {
     let mut resolved_entries = Vec::new();
-    let mut seen_entry_keys = HashSet::new();
+    let mut seen_entry_ids = HashSet::new();
 
-    if let Some(entries) = args.entries.as_ref() {
-        for entry in entries {
-            resolved_entries.push(validate_request_plugin_install_picker_entry(
-                None,
-                entry,
-                discoverable_tools,
-                app_server_client_name,
-                &mut seen_entry_keys,
-            )?);
-        }
-    }
-
-    if let Some(categories) = args.categories.as_ref() {
-        for category in categories {
-            if category.id.trim().is_empty() {
-                return Err(FunctionCallError::RespondToModel(
-                    "categories[].id must not be empty".to_string(),
-                ));
-            }
-            if category.title.trim().is_empty() {
-                return Err(FunctionCallError::RespondToModel(
-                    "categories[].title must not be empty".to_string(),
-                ));
-            }
-            if category.entries.is_empty() {
-                return Err(FunctionCallError::RespondToModel(
-                    "categories[].entries must include at least one install candidate".to_string(),
-                ));
-            }
-            for entry in &category.entries {
-                resolved_entries.push(validate_request_plugin_install_picker_entry(
-                    Some(category.id.as_str()),
-                    entry,
-                    discoverable_tools,
-                    app_server_client_name,
-                    &mut seen_entry_keys,
-                )?);
-            }
-        }
+    for entry in &args.entries {
+        resolved_entries.push(validate_request_plugin_install_picker_entry(
+            entry,
+            discoverable_tools,
+            app_server_client_name,
+            &mut seen_entry_ids,
+        )?);
     }
 
     if resolved_entries.is_empty() {
         return Err(FunctionCallError::RespondToModel(
-            "picker install requests must include at least one entry or category".to_string(),
+            "picker install requests must include at least one entry".to_string(),
         ));
     }
 
@@ -478,11 +442,10 @@ fn validate_request_plugin_install_picker_args<'a>(
 }
 
 fn validate_request_plugin_install_picker_entry<'a>(
-    category_id: Option<&'a str>,
     entry: &'a RequestPluginInstallPickerEntry,
     discoverable_tools: &'a [DiscoverableTool],
     app_server_client_name: Option<&str>,
-    seen_entry_keys: &mut HashSet<(String, String)>,
+    seen_entry_ids: &mut HashSet<String>,
 ) -> Result<RequestPluginInstallResolvedPickerEntry<'a>, FunctionCallError> {
     if entry.id.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
@@ -502,12 +465,9 @@ fn validate_request_plugin_install_picker_entry<'a>(
         ));
     }
 
-    let category_key = category_id
-        .unwrap_or(REQUEST_PLUGIN_INSTALL_FLAT_CATEGORY_ID)
-        .to_string();
-    if !seen_entry_keys.insert((category_key, entry.id.clone())) {
+    if !seen_entry_ids.insert(entry.id.clone()) {
         return Err(FunctionCallError::RespondToModel(
-            "entries[].id must be unique within each picker category".to_string(),
+            "entries[].id must be unique within each picker".to_string(),
         ));
     }
 
@@ -518,10 +478,9 @@ fn validate_request_plugin_install_picker_entry<'a>(
             FunctionCallError::RespondToModel(format!(
                 "entries[].tool_id must match one of the discoverable tools returned by {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}"
             ))
-        })?;
+    })?;
 
     Ok(RequestPluginInstallResolvedPickerEntry {
-        category_id,
         entry_id: entry.id.as_str(),
         tool,
     })
@@ -533,10 +492,6 @@ fn requested_picker_install_entries(
     resolved_entries
         .iter()
         .map(|entry| RequestedPickerInstallEntry {
-            category_id: entry
-                .category_id
-                .unwrap_or(REQUEST_PLUGIN_INSTALL_FLAT_CATEGORY_ID)
-                .to_string(),
             entry_id: entry.entry_id.to_string(),
             tool: entry.tool.clone(),
         })
@@ -742,8 +697,7 @@ fn response_reports_picker_entry_completed(
     requested_entry: &RequestedPickerInstallEntry,
 ) -> bool {
     response_installed_entries.iter().any(|installed_entry| {
-        installed_entry.category_id == requested_entry.category_id
-            && installed_entry.entry_id == requested_entry.entry_id
+        installed_entry.entry_id == requested_entry.entry_id
             && installed_entry.tool_id == requested_entry.tool.id()
             && installed_entry.tool_type == requested_entry.tool.tool_type()
     })

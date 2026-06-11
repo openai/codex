@@ -134,16 +134,15 @@ fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
 fn build_request_plugin_install_picker_elicitation_request_uses_flat_entries_shape() {
     let args = RequestPluginInstallPickerArgs {
         action_type: DiscoverableToolAction::Install,
-        suggest_reason: "Connect tools for this request".to_string(),
+        suggest_reason: "Connect tools for better results".to_string(),
         title: Some("Connect tools".to_string()),
-        entries: Some(vec![RequestPluginInstallPickerEntry {
+        entries: vec![RequestPluginInstallPickerEntry {
             id: "calendar".to_string(),
             tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
             tool_name: "Calendar".to_string(),
             tool_type: DiscoverableToolType::Connector,
             description: None,
-        }]),
-        categories: None,
+        }],
     };
     let connector = DiscoverableTool::Connector(Box::new(AppInfo {
         id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
@@ -164,7 +163,6 @@ fn build_request_plugin_install_picker_elicitation_request_uses_flat_entries_sha
         plugin_display_names: Vec::new(),
     }));
     let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
-        category_id: None,
         entry_id: "calendar",
         tool: &connector,
     }];
@@ -174,7 +172,7 @@ fn build_request_plugin_install_picker_elicitation_request_uses_flat_entries_sha
         "thread-1".to_string(),
         "turn-1".to_string(),
         &args,
-        "Connect tools for this request",
+        "Connect tools for better results",
         &resolved_entries,
     )
     .expect("picker request");
@@ -189,9 +187,9 @@ fn build_request_plugin_install_picker_elicitation_request_uses_flat_entries_sha
                 meta: Some(json!(RequestPluginInstallPickerMeta {
                     codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
                     suggest_type: DiscoverableToolAction::Install,
-                    suggest_reason: "Connect tools for this request",
+                    suggest_reason: "Connect tools for better results",
                     title: Some("Connect tools"),
-                    entries: Some(vec![RequestPluginInstallPickerEntryMeta {
+                    entries: vec![RequestPluginInstallPickerEntryMeta {
                         id: "calendar",
                         tool_id: "connector_2128aebfecb84f64a069897515042a44",
                         tool_name: "Google Calendar",
@@ -202,98 +200,9 @@ fn build_request_plugin_install_picker_elicitation_request_uses_flat_entries_sha
                         ),
                         remote_plugin_id: None,
                         app_connector_ids: None,
-                    }]),
-                    categories: None,
+                    }],
                 })),
-                message: "Connect tools for this request".to_string(),
-                requested_schema: McpElicitationSchema {
-                    schema_uri: None,
-                    type_: McpElicitationObjectType::Object,
-                    properties: BTreeMap::new(),
-                    required: None,
-                },
-            },
-        },
-    );
-}
-
-#[test]
-fn build_request_plugin_install_picker_elicitation_request_injects_category_metadata() {
-    let args = RequestPluginInstallPickerArgs {
-        action_type: DiscoverableToolAction::Install,
-        suggest_reason: "Connect the requested tools".to_string(),
-        title: None,
-        entries: None,
-        categories: Some(vec![RequestPluginInstallPickerCategory {
-            id: "sales".to_string(),
-            title: "Sales tools".to_string(),
-            required: Some(true),
-            min_installed: Some(1),
-            entries: vec![RequestPluginInstallPickerEntry {
-                id: "hubspot".to_string(),
-                tool_id: "hubspot@openai-curated-remote".to_string(),
-                tool_name: "HubSpot".to_string(),
-                tool_type: DiscoverableToolType::Plugin,
-                description: Some("Use HubSpot CRM context.".to_string()),
-            }],
-        }]),
-    };
-    let plugin = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
-        id: "hubspot@openai-curated-remote".to_string(),
-        remote_plugin_id: Some("plugins~Plugin_hubspot".to_string()),
-        name: "HubSpot".to_string(),
-        description: Some("CRM records and sales workflows.".to_string()),
-        has_skills: true,
-        mcp_server_names: vec!["hubspot".to_string()],
-        app_connector_ids: vec!["connector_hubspot".to_string()],
-    }));
-    let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
-        category_id: Some("sales"),
-        entry_id: "hubspot",
-        tool: &plugin,
-    }];
-
-    let request = build_request_plugin_install_picker_elicitation_request(
-        "codex-apps",
-        "thread-1".to_string(),
-        "turn-1".to_string(),
-        &args,
-        "Connect the requested tools",
-        &resolved_entries,
-    )
-    .expect("picker request");
-
-    assert_eq!(
-        request,
-        McpServerElicitationRequestParams {
-            thread_id: "thread-1".to_string(),
-            turn_id: Some("turn-1".to_string()),
-            server_name: "codex-apps".to_string(),
-            request: McpServerElicitationRequest::Form {
-                meta: Some(json!(RequestPluginInstallPickerMeta {
-                    codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
-                    suggest_type: DiscoverableToolAction::Install,
-                    suggest_reason: "Connect the requested tools",
-                    title: None,
-                    entries: None,
-                    categories: Some(vec![RequestPluginInstallPickerCategoryMeta {
-                        id: "sales",
-                        title: "Sales tools",
-                        required: Some(true),
-                        min_installed: Some(1),
-                        entries: vec![RequestPluginInstallPickerEntryMeta {
-                            id: "hubspot",
-                            tool_id: "hubspot@openai-curated-remote",
-                            tool_name: "HubSpot",
-                            tool_type: DiscoverableToolType::Plugin,
-                            description: Some("Use HubSpot CRM context."),
-                            install_url: None,
-                            remote_plugin_id: Some("plugins~Plugin_hubspot"),
-                            app_connector_ids: Some(&["connector_hubspot".to_string()]),
-                        }],
-                    }]),
-                })),
-                message: "Connect the requested tools".to_string(),
+                message: "Connect tools for better results".to_string(),
                 requested_schema: McpElicitationSchema {
                     schema_uri: None,
                     type_: McpElicitationObjectType::Object,
