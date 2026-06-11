@@ -27,7 +27,4 @@ model?: string | null, modelProvider?: string | null, serviceTier?: string | nul
 approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, ephemeral?: boolean, /**
  * Optional client-supplied analytics source classification for this forked thread.
  */
-threadSource?: ThreadSource | null, /**
- * When true, disable multi-agent collaboration tools for the forked thread.
- */
-disableMultiAgentTools?: boolean};
+threadSource?: ThreadSource | null};

@@ -566,8 +566,12 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let multi_agent_version =
-            resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
+        let configured_multi_agent_version = config.multi_agent_version_from_features();
+        let multi_agent_version = if configured_multi_agent_version == MultiAgentVersion::Disabled {
+            Some(MultiAgentVersion::Disabled)
+        } else {
+            resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version)
+        };
         config
             .validate_multi_agent_v2_config()
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;

@@ -409,12 +409,6 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    pub(crate) fn thread_capabilities_read(&self) -> ThreadCapabilitiesReadResponse {
-        ThreadCapabilitiesReadResponse {
-            fork_disable_multi_agent_tools: true,
-        }
-    }
-
     pub(crate) async fn thread_resume(
         &self,
         request_id: ConnectionRequestId,
@@ -3265,7 +3259,6 @@ impl ThreadRequestProcessor {
             developer_instructions,
             ephemeral,
             thread_source,
-            disable_multi_agent_tools,
             exclude_turns,
         } = params;
         let include_turns = !exclude_turns;
@@ -3347,7 +3340,7 @@ impl ThreadRequestProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread_from_history_with_runtime_override(
+            .fork_thread_from_history(
                 ForkSnapshot::Interrupted,
                 config,
                 InitialHistory::Resumed(ResumedHistory {
@@ -3355,11 +3348,6 @@ impl ThreadRequestProcessor {
                     history: history_items.clone(),
                     rollout_path: source_thread.rollout_path.clone(),
                 }),
-                if disable_multi_agent_tools {
-                    MultiAgentRuntimeOverride::Disabled
-                } else {
-                    MultiAgentRuntimeOverride::Inherit
-                },
                 thread_source.map(Into::into),
                 self.request_trace_context(&request_id).await,
             )
@@ -3469,8 +3457,6 @@ impl ThreadRequestProcessor {
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
-            multi_agent_tools_disabled: forked_thread.multi_agent_version()
-                == Some(MultiAgentVersion::Disabled),
             model: session_configured.model,
             model_provider: session_configured.model_provider_id,
             service_tier: session_configured.service_tier,

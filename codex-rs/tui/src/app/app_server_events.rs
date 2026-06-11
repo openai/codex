@@ -62,16 +62,6 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
-        let target = server_notification_thread_target(&notification);
-        if matches!(
-            &target,
-            ServerNotificationThreadTarget::Thread(thread_id)
-                if app_server_client.is_rejected_fork_thread(*thread_id)
-        ) {
-            tracing::debug!("ignoring notification for rejected app-server fork");
-            return;
-        }
-
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
                 if let Some(request) = self
@@ -136,7 +126,7 @@ impl App {
             _ => {}
         }
 
-        match target {
+        match server_notification_thread_target(&notification) {
             ServerNotificationThreadTarget::Thread(thread_id) => {
                 let result = if self.primary_thread_id == Some(thread_id)
                     || self.primary_thread_id.is_none()
@@ -177,23 +167,6 @@ impl App {
         app_server_client: &AppServerSession,
         request: ServerRequest,
     ) {
-        let request_thread_id = server_request_thread_id(&request);
-        if request_thread_id
-            .is_some_and(|thread_id| app_server_client.is_rejected_fork_thread(thread_id))
-        {
-            if let Err(err) = self
-                .reject_app_server_request(
-                    app_server_client,
-                    request.id().clone(),
-                    "request belongs to a rejected app-server fork".to_string(),
-                )
-                .await
-            {
-                tracing::warn!("{err}");
-            }
-            return;
-        }
-
         if let Some(unsupported) = self
             .pending_app_server_requests
             .note_server_request(&request)
@@ -218,7 +191,7 @@ impl App {
             return;
         }
 
-        let Some(thread_id) = request_thread_id else {
+        let Some(thread_id) = server_request_thread_id(&request) else {
             tracing::warn!("ignoring threadless app-server request");
             return;
         };

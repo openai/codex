@@ -21,6 +21,10 @@ const SIDE_NO_STARTED_CONVERSATION_MESSAGE: &str = concat!(
 );
 const SIDE_ALREADY_OPEN_MESSAGE: &str =
     "A side conversation is already open. Press Ctrl+C to return before starting another.";
+pub(super) const SIDE_REMOTE_UNSUPPORTED_MESSAGE: &str =
+    "'/side' is unavailable when connected to a remote app server.";
+const SIDE_DISABLED_MULTI_AGENT_FEATURES: [Feature; 3] =
+    [Feature::SpawnCsv, Feature::Collab, Feature::MultiAgentV2];
 const SIDE_BOUNDARY_PROMPT: &str = r#"Side conversation boundary.
 
 Everything before this boundary is inherited history from the parent thread. It is reference context only. It is not your current task.
@@ -456,7 +460,7 @@ impl App {
         }
     }
 
-    pub(super) fn side_fork_config(&self) -> Config {
+    pub(super) fn side_fork_config(&self) -> Result<Config> {
         let mut fork_config = self.chat_widget.config_ref().clone();
         let parent_model = self.chat_widget.current_model();
         if !parent_model.trim().is_empty() {
@@ -468,7 +472,25 @@ impl App {
         fork_config.developer_instructions = Some(Self::side_developer_instructions(
             fork_config.developer_instructions.as_deref(),
         ));
-        fork_config
+        // Fanout implies collaboration during feature normalization, so disable it first.
+        for feature in SIDE_DISABLED_MULTI_AGENT_FEATURES {
+            fork_config.features.disable(feature).map_err(|err| {
+                color_eyre::eyre::eyre!(
+                    "side conversation could not disable `features.{}`: {err}",
+                    feature.key()
+                )
+            })?;
+        }
+        if let Some(feature) = SIDE_DISABLED_MULTI_AGENT_FEATURES
+            .into_iter()
+            .find(|feature| fork_config.features.enabled(*feature))
+        {
+            return Err(color_eyre::eyre::eyre!(
+                "side conversation requires `features.{}` to be disabled",
+                feature.key()
+            ));
+        }
+        Ok(fork_config)
     }
 
     pub(super) fn side_start_block_message(&self) -> Option<&'static str> {
@@ -554,6 +576,13 @@ impl App {
             self.chat_widget.add_error_message(message.to_string());
             return Ok(AppRunControl::Continue);
         }
+        if !app_server.uses_embedded_app_server() {
+            self.restore_side_user_message(user_message.take());
+            self.sync_side_thread_ui();
+            self.chat_widget
+                .add_error_message(SIDE_REMOTE_UNSUPPORTED_MESSAGE.to_string());
+            return Ok(AppRunControl::Continue);
+        }
 
         self.session_telemetry.counter(
             "codex.thread.side",
@@ -563,15 +592,11 @@ impl App {
         self.refresh_in_memory_config_from_disk_best_effort("starting a side conversation")
             .await;
 
-        let fork_config = self.side_fork_config();
-        match app_server
-            .fork_thread(
-                fork_config,
-                parent_thread_id,
-                MultiAgentToolsOverride::Disabled,
-            )
-            .await
-        {
+        let fork = match self.side_fork_config() {
+            Ok(fork_config) => app_server.fork_thread(fork_config, parent_thread_id).await,
+            Err(err) => Err(err),
+        };
+        match fork {
             Ok(forked) => {
                 let child_thread_id = forked.session.thread_id;
                 let channel = self.ensure_thread_channel(child_thread_id);

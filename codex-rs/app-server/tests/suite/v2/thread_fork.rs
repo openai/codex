@@ -86,24 +86,9 @@ async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
 
 #[tokio::test]
 async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
-    const ROOT_USAGE_HINT: &str = "disabled forks must not receive root multi-agent guidance";
-
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
-    let config_path = codex_home.path().join("config.toml");
-    let mut config_toml = std::fs::read_to_string(&config_path)?;
-    config_toml.push_str(&format!(
-        r#"
-[features]
-enable_fanout = true
-
-[features.multi_agent_v2]
-enabled = true
-root_agent_usage_hint_text = "{ROOT_USAGE_HINT}"
-"#,
-    ));
-    std::fs::write(config_path, config_toml)?;
 
     let preview = "Saved user message";
     let conversation_id = create_fake_rollout(
@@ -130,7 +115,7 @@ root_agent_usage_hint_text = "{ROOT_USAGE_HINT}"
         original_path.display()
     );
     let mut session_meta = read_session_meta_line(&original_path).await?;
-    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);
+    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V1);
     append_rollout_item_to_path(&original_path, &RolloutItem::SessionMeta(session_meta)).await?;
     let original_contents = std::fs::read_to_string(&original_path)?;
 
@@ -141,7 +126,6 @@ root_agent_usage_hint_text = "{ROOT_USAGE_HINT}"
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id.clone(),
             thread_source: Some(ThreadSource::User),
-            disable_multi_agent_tools: true,
             ..Default::default()
         })
         .await?;
@@ -151,12 +135,7 @@ root_agent_usage_hint_text = "{ROOT_USAGE_HINT}"
     )
     .await??;
     let fork_result = fork_resp.result.clone();
-    let ThreadForkResponse {
-        thread,
-        multi_agent_tools_disabled,
-        ..
-    } = to_response::<ThreadForkResponse>(fork_resp)?;
-    assert!(multi_agent_tools_disabled);
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
 
     // Wire contract: thread title field is `name`, serialized as null when unset.
     let thread_json = fork_result
@@ -191,7 +170,6 @@ root_agent_usage_hint_text = "{ROOT_USAGE_HINT}"
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
     assert_eq!(thread.status, ThreadStatus::Idle);
-    let fork_thread_id = thread.id.clone();
     let thread_path = thread.path.clone().expect("thread path");
     assert!(thread_path.as_path().is_absolute());
     assert_ne!(thread_path.as_path(), original_path);
@@ -199,31 +177,6 @@ root_agent_usage_hint_text = "{ROOT_USAGE_HINT}"
     assert_eq!(thread.source, SessionSource::VsCode);
     assert_eq!(thread.thread_source, Some(ThreadSource::User));
     assert_eq!(thread.name, None);
-    assert_eq!(
-        read_session_meta_line(&thread_path)
-            .await?
-            .meta
-            .multi_agent_version,
-        Some(MultiAgentVersion::Disabled),
-        "fork should persist the disabled runtime"
-    );
-    let forked_history = RolloutRecorder::get_rollout_history(&thread_path).await?;
-    let forked_items = forked_history.get_rollout_items();
-    let interrupted_index = forked_items
-        .iter()
-        .position(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnAborted(_))))
-        .expect("fork should persist an interrupted-turn boundary");
-    let interrupted_marker = interrupted_index
-        .checked_sub(1)
-        .and_then(|index| forked_items.get(index))
-        .expect("interrupted-turn event should follow its model-visible marker");
-    assert!(
-        matches!(
-            interrupted_marker,
-            RolloutItem::ResponseItem(ResponseItem::Message { role, .. }) if role == "developer"
-        ),
-        "disabled target should preserve the V2 source's developer interruption marker"
-    );
 
     assert_eq!(
         thread.turns.len(),
@@ -296,9 +249,93 @@ root_agent_usage_hint_text = "{ROOT_USAGE_HINT}"
     expected_started_thread.turns.clear();
     assert_eq!(started.thread, expected_started_thread);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_config_disable_overrides_inherited_multi_agent_runtime() -> Result<()> {
+    const ROOT_USAGE_HINT: &str = "disabled forks must not receive multi-agent guidance";
+
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[features]
+enable_fanout = true
+
+[features.multi_agent_v2]
+enabled = true
+root_agent_usage_hint_text = "{ROOT_USAGE_HINT}"
+"#,
+    ));
+    std::fs::write(config_path, config_toml)?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-01",
+        "2025-01-05T12:00:01Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let original_path = codex_home
+        .path()
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("05")
+        .join(format!(
+            "rollout-2025-01-05T12-00-01-{conversation_id}.jsonl"
+        ));
+    let mut session_meta = read_session_meta_line(&original_path).await?;
+    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);
+    append_rollout_item_to_path(&original_path, &RolloutItem::SessionMeta(session_meta)).await?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            config: Some(std::collections::HashMap::from([
+                ("features.enable_fanout".to_string(), json!(false)),
+                ("features.multi_agent".to_string(), json!(false)),
+                ("features.multi_agent_v2".to_string(), json!(false)),
+            ])),
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+    let thread_path = thread.path.as_ref().expect("forked thread path");
+    assert_eq!(
+        read_session_meta_line(thread_path)
+            .await?
+            .meta
+            .multi_agent_version,
+        Some(MultiAgentVersion::Disabled)
+    );
+    let forked_history = RolloutRecorder::get_rollout_history(thread_path).await?;
+    let forked_items = forked_history.get_rollout_items();
+    let interrupted_index = forked_items
+        .iter()
+        .position(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnAborted(_))))
+        .expect("fork should persist an interrupted-turn boundary");
+    assert!(matches!(
+        forked_items.get(interrupted_index.saturating_sub(1)),
+        Some(RolloutItem::ResponseItem(ResponseItem::Message { role, .. })) if role == "developer"
+    ));
+
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: fork_thread_id,
+            thread_id: thread.id,
             client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "which tools are available?".to_string(),
@@ -338,28 +375,23 @@ root_agent_usage_hint_text = "{ROOT_USAGE_HINT}"
             tool.get("name")
                 .or_else(|| tool.get("type"))
                 .and_then(Value::as_str)
-                .map(str::to_string)
         })
         .collect::<Vec<_>>();
-    assert!(tool_names.contains(&"update_plan".to_string()));
-    assert_eq!(
-        tool_names
-            .into_iter()
-            .filter(|tool| {
-                matches!(
-                    tool.as_str(),
-                    "spawn_agent"
-                        | "send_message"
-                        | "followup_task"
-                        | "wait_agent"
-                        | "interrupt_agent"
-                        | "list_agents"
-                        | "spawn_agents_on_csv"
-                )
-            })
-            .collect::<Vec<_>>(),
-        Vec::<String>::new()
-    );
+    assert!(tool_names.contains(&"update_plan"));
+    assert!(tool_names.into_iter().all(|tool| !matches!(
+        tool,
+        "multi_agent_v1"
+            | "spawn_agent"
+            | "send_message"
+            | "followup_task"
+            | "resume_agent"
+            | "wait_agent"
+            | "interrupt_agent"
+            | "list_agents"
+            | "close_agent"
+            | "spawn_agents_on_csv"
+            | "report_agent_job_result"
+    )));
 
     Ok(())
 }

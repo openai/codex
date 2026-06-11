@@ -182,7 +182,6 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
 fn sample_thread_fork_response() -> ClientResponsePayload {
     ClientResponsePayload::ThreadFork(ThreadForkResponse {
         thread: sample_thread("thread-3"),
-        multi_agent_tools_disabled: false,
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,

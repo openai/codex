@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests.rs
+expression: rendered
+---
+■ '/side' is unavailable when connected to a remote app server.

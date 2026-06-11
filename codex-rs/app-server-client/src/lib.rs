@@ -43,7 +43,6 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ThreadCapabilitiesReadResponse;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
@@ -94,9 +93,6 @@ pub mod legacy_core {
 }
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-const JSONRPC_INVALID_REQUEST: i64 = -32600;
-const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
-const THREAD_CAPABILITIES_READ_METHOD: &str = "thread/capabilities/read";
 
 /// Runs the embedded app-server personality migration.
 ///
@@ -854,40 +850,6 @@ impl AppServerRequestHandle {
 }
 
 impl AppServerClient {
-    /// Returns whether the connected server supports disabling multi-agent
-    /// collaboration when forking a thread.
-    ///
-    /// In-process clients always match this crate version. Remote clients
-    /// probe the additive capability RPC and treat older servers as
-    /// unsupported before any mutating fork request is sent.
-    pub async fn supports_thread_fork_disable_multi_agent_tools(
-        &self,
-        request_id: RequestId,
-    ) -> Result<bool, TypedRequestError> {
-        let Self::Remote(client) = self else {
-            return Ok(true);
-        };
-        match client
-            .request_typed::<ThreadCapabilitiesReadResponse>(
-                ClientRequest::ThreadCapabilitiesRead {
-                    request_id,
-                    params: None,
-                },
-            )
-            .await
-        {
-            Ok(response) => Ok(response.fork_disable_multi_agent_tools),
-            Err(TypedRequestError::Server { source, .. })
-                if source.code == JSONRPC_METHOD_NOT_FOUND
-                    || (source.code == JSONRPC_INVALID_REQUEST
-                        && source.message.contains(THREAD_CAPABILITIES_READ_METHOD)) =>
-            {
-                Ok(false)
-            }
-            Err(err) => Err(err),
-        }
-    }
-
     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
         match self {
             Self::InProcess(client) => client.request(request).await,
@@ -976,7 +938,6 @@ mod tests {
     use codex_app_server_protocol::AccountUpdatedNotification;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::GetAccountResponse;
-    use codex_app_server_protocol::JSONRPCError;
     use codex_app_server_protocol::JSONRPCMessage;
     use codex_app_server_protocol::JSONRPCRequest;
     use codex_app_server_protocol::JSONRPCResponse;
@@ -1500,45 +1461,6 @@ mod tests {
             .await
             .expect("typed request should succeed");
         assert_eq!(response.account, None);
-
-        client.shutdown().await.expect("shutdown should complete");
-    }
-
-    #[tokio::test]
-    async fn remote_disabled_fork_capability_probe_fails_closed_on_old_server() {
-        let websocket_url = start_test_remote_server(|mut websocket| async move {
-            expect_remote_initialize(&mut websocket).await;
-            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
-            else {
-                panic!("expected thread capability request");
-            };
-            assert_eq!(request.method, THREAD_CAPABILITIES_READ_METHOD);
-            write_websocket_message(
-                &mut websocket,
-                JSONRPCMessage::Error(JSONRPCError {
-                    id: request.id,
-                    error: JSONRPCErrorError {
-                        code: JSONRPC_METHOD_NOT_FOUND,
-                        message: "method not found".to_string(),
-                        data: None,
-                    },
-                }),
-            )
-            .await;
-        })
-        .await;
-        let client = AppServerClient::Remote(
-            RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
-                .await
-                .expect("remote client should connect"),
-        );
-
-        assert!(
-            !client
-                .supports_thread_fork_disable_multi_agent_tools(RequestId::Integer(1))
-                .await
-                .expect("old-server capability probe should fail closed")
-        );
 
         client.shutdown().await.expect("shutdown should complete");
     }

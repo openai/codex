@@ -8,11 +8,7 @@ import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
 
-export type ThreadForkResponse = {thread: Thread, /**
- * Whether multi-agent collaboration tools are disabled for the forked thread.
- * Older app-server versions omit this field, which deserializes to `false`.
- */
-multiAgentToolsDisabled: boolean, model: string, modelProvider: string, serviceTier: string | null, cwd: AbsolutePathBuf, /**
+export type ThreadForkResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, cwd: AbsolutePathBuf, /**
  * Instruction source files currently loaded for this thread.
  */
 instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval, /**

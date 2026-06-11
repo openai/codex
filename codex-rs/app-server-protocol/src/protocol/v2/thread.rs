@@ -542,9 +542,6 @@ pub struct ThreadForkParams {
     /// Optional client-supplied analytics source classification for this forked thread.
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,
-    /// When true, disable multi-agent collaboration tools for the forked thread.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub disable_multi_agent_tools: bool,
     /// When true, return only thread metadata and live fork state without
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after forking.
@@ -558,10 +555,6 @@ pub struct ThreadForkParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadForkResponse {
     pub thread: Thread,
-    /// Whether multi-agent collaboration tools are disabled for the forked thread.
-    /// Older app-server versions omit this field, which deserializes to `false`.
-    #[serde(default)]
-    pub multi_agent_tools_disabled: bool,
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<String>,
@@ -587,14 +580,6 @@ pub struct ThreadForkResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadCapabilitiesReadResponse {
-    /// Whether `thread/fork` supports disabling multi-agent collaboration.
-    pub fork_disable_multi_agent_tools: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

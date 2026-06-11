@@ -183,7 +183,7 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
+async fn remote_multi_agent_selector_resolves_config_and_model_precedence() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut v2_model = remote_model("test-multi-agent-v2");
@@ -201,6 +201,23 @@ async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
     })
     .await?;
     assert!(tool_names(&v2_body).contains(&"send_message".to_string()));
+
+    let mut config_disabled_model = remote_model("test-multi-agent-config-disabled");
+    config_disabled_model.multi_agent_version = Some(MultiAgentVersion::V2);
+    let config_disabled_body = response_body_for_remote_model(config_disabled_model, |config| {
+        for feature in [Feature::SpawnCsv, Feature::Collab, Feature::MultiAgentV2] {
+            config
+                .features
+                .disable(feature)
+                .expect("test config should allow feature update");
+        }
+    })
+    .await?;
+    let config_disabled_tools = tool_names(&config_disabled_body);
+    assert!(config_disabled_tools.iter().all(|name| !matches!(
+        name.as_str(),
+        "multi_agent_v1" | "spawn_agent" | "send_message" | "wait_agent" | "list_agents"
+    )));
 
     let mut disabled_model = remote_model("test-multi-agent-disabled");
     disabled_model.multi_agent_version = Some(MultiAgentVersion::Disabled);

@@ -1249,29 +1249,6 @@
             },
             "method": {
               "enum": [
-                "thread/capabilities/read"
-              ],
-              "title": "Thread/capabilities/readRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "Thread/capabilities/readRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
                 "thread/archive"
               ],
               "title": "Thread/archiveRequestMethod",
@@ -13909,20 +13886,6 @@
       "title": "ThreadArchivedNotification",
       "type": "object"
     },
-    "ThreadCapabilitiesReadResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "forkDisableMultiAgentTools": {
-          "description": "Whether `thread/fork` supports disabling multi-agent collaboration.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "forkDisableMultiAgentTools"
-      ],
-      "title": "ThreadCapabilitiesReadResponse",
-      "type": "object"
-    },
     "ThreadClosedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -14035,10 +13998,6 @@
             "null"
           ]
         },
-        "disableMultiAgentTools": {
-          "description": "When true, disable multi-agent collaboration tools for the forked thread.",
-          "type": "boolean"
-        },
         "ephemeral": {
           "type": "boolean"
         },
@@ -14122,11 +14081,6 @@
         },
         "modelProvider": {
           "type": "string"
-        },
-        "multiAgentToolsDisabled": {
-          "default": false,
-          "description": "Whether multi-agent collaboration tools are disabled for the forked thread. Older app-server versions omit this field, which deserializes to `false`.",
-          "type": "boolean"
         },
         "reasoningEffort": {
           "anyOf": [

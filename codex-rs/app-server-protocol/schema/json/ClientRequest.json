@@ -3263,10 +3263,6 @@
             "null"
           ]
         },
-        "disableMultiAgentTools": {
-          "description": "When true, disable multi-agent collaboration tools for the forked thread.",
-          "type": "boolean"
-        },
         "ephemeral": {
           "type": "boolean"
         },
@@ -4503,29 +4499,6 @@
         "params"
       ],
       "title": "Thread/forkRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "thread/capabilities/read"
-          ],
-          "title": "Thread/capabilities/readRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "type": "null"
-        }
-      },
-      "required": [
-        "id",
-        "method"
-      ],
-      "title": "Thread/capabilities/readRequest",
       "type": "object"
     },
     {
