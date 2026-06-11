@@ -9843,6 +9843,28 @@ enabled = true
     Ok(())
 }
 
+#[test]
+fn multi_agent_v2_default_usage_hints_use_configured_thread_cap() {
+    let config_toml = toml::from_str(
+        r#"[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 17
+"#,
+    )
+    .expect("multi-agent v2 config should parse");
+
+    let config = resolve_multi_agent_v2_config(&config_toml);
+    let concurrency_guidance = "There are 17 available concurrency slots, meaning that up to 17 agents can be active at once, including you.";
+    assert!(
+        [
+            config.root_agent_usage_hint_text,
+            config.subagent_usage_hint_text,
+        ]
+        .into_iter()
+        .all(|hint| hint.is_some_and(|hint| hint.ends_with(concurrency_guidance)))
+    );
+}
+
 #[tokio::test]
 async fn multi_agent_v2_empty_usage_hint_overrides_clear_default_hints() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
