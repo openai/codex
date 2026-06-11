@@ -25,7 +25,11 @@ use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use core_test_support::zsh_fork::build_zsh_fork_streaming_test;
+use core_test_support::zsh_fork::restrictive_workspace_write_profile;
+use core_test_support::zsh_fork::zsh_fork_runtime;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -167,6 +171,153 @@ async fn guardian_timeout_falls_back_to_manual_approval_end_to_end() -> Result<(
         }
     }
     assert_eq!(fs::read_to_string(&output_file)?, "guardian-manual");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guardian_timeout_falls_back_to_manual_approval_for_execve_intercept() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("Guardian execve timeout fallback test")? else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::OnRequest;
+    let permission_profile = restrictive_workspace_write_profile();
+    let output_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let output_file = output_dir
+        .path()
+        .join("guardian-execve-timeout-fallback.txt");
+    let output_file_arg = shlex::try_join([output_file.to_string_lossy().as_ref()])?;
+    let script_path = output_dir.path().join("guardian-execve-timeout-script");
+    fs::write(
+        &script_path,
+        format!("#!/usr/bin/env zsh\ntouch {output_file_arg}\nprint -r -- execve-complete\n"),
+    )?;
+    fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755))?;
+    let script_literal = serde_json::to_string(script_path.to_string_lossy().as_ref())?;
+    let python_script = format!(
+        "import subprocess; subprocess.run([{script_literal}], check=True, close_fds=False)"
+    );
+    let command = shlex::try_join(["python3", "-c", python_script.as_str()])?;
+    let rules = r#"prefix_rule(pattern=["touch"], decision="prompt")"#.to_string();
+
+    let (_guardian_gate_tx, guardian_gate_rx) = oneshot::channel();
+    let tool_args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::UseDefault,
+    });
+    let (server, _completions) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: parent_tool_response("execve-parent-call", &tool_args),
+        }],
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![ev_response_created("resp-guardian-execve-timeout")]),
+            },
+            StreamingSseChunk {
+                gate: Some(guardian_gate_rx),
+                body: sse(vec![ev_completed("resp-guardian-execve-timeout")]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: parent_done_response(),
+        }],
+    ])
+    .await;
+
+    let output_file_for_hook = output_file.clone();
+    let test = build_zsh_fork_streaming_test(
+        &server,
+        runtime,
+        approval_policy,
+        permission_profile.clone(),
+        move |home| {
+            let _ = fs::remove_file(&output_file_for_hook);
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).unwrap();
+            fs::write(rules_dir.join("default.rules"), &rules).unwrap();
+        },
+    )
+    .await?;
+
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.cwd.path());
+    tokio::time::pause();
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run a command that triggers execve Guardian timeout".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    server.wait_for_request_count(/*count*/ 2).await;
+    tokio::time::advance(Duration::from_secs(91)).await;
+    tokio::time::resume();
+
+    let approval = loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::ExecApprovalRequest(approval) => break approval,
+            EventMsg::TurnComplete(_) => {
+                panic!("expected execve manual approval request before completion")
+            }
+            _ => {}
+        }
+    };
+    assert!(
+        approval.command.iter().any(|arg| arg.ends_with("/touch"))
+            && approval
+                .command
+                .iter()
+                .any(|arg| arg == output_file.to_string_lossy().as_ref()),
+        "expected approval for intercepted touch command, got: {:?}",
+        approval.command
+    );
+    assert!(
+        approval
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Automatic approval review timed out"))
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    loop {
+        if matches!(
+            wait_for_event(&test.codex, |_| true).await,
+            EventMsg::TurnComplete(_)
+        ) {
+            break;
+        }
+    }
+    assert!(output_file.exists());
+
+    server.shutdown().await;
 
     Ok(())
 }
