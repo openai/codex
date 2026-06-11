@@ -4,6 +4,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use codex_utils_image::PromptImageMode;
+use codex_utils_image::data_url_from_bytes;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -1088,24 +1089,7 @@ pub fn local_image_content_items_with_label_number(
     };
 
     match load_for_prompt_bytes(path, file_bytes, mode) {
-        Ok(image) => {
-            let mut items = Vec::with_capacity(3);
-            if let Some(label_number) = label_number {
-                items.push(ContentItem::InputText {
-                    text: local_image_open_tag_text_with_path(label_number, path),
-                });
-            }
-            items.push(ContentItem::InputImage {
-                image_url: image.into_data_url(),
-                detail: Some(detail),
-            });
-            if label_number.is_some() {
-                items.push(ContentItem::InputText {
-                    text: LOCAL_IMAGE_CLOSE_TAG.to_string(),
-                });
-            }
-            items
-        }
+        Ok(image) => local_image_content_items(path, image.into_data_url(), label_number, detail),
         Err(err) => match &err {
             ImageProcessingError::Read { .. }
             | ImageProcessingError::Encode { .. }
@@ -1124,6 +1108,36 @@ pub fn local_image_content_items_with_label_number(
             }
         },
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalImagePreparation {
+    Process,
+    Defer,
+}
+
+fn local_image_content_items(
+    path: &std::path::Path,
+    image_url: String,
+    label_number: Option<usize>,
+    detail: ImageDetail,
+) -> Vec<ContentItem> {
+    let mut items = Vec::with_capacity(3);
+    if let Some(label_number) = label_number {
+        items.push(ContentItem::InputText {
+            text: local_image_open_tag_text_with_path(label_number, path),
+        });
+    }
+    items.push(ContentItem::InputImage {
+        image_url,
+        detail: Some(detail),
+    });
+    if label_number.is_some() {
+        items.push(ContentItem::InputText {
+            text: LOCAL_IMAGE_CLOSE_TAG.to_string(),
+        });
+    }
+    items
 }
 
 impl From<ResponseInputItem> for ResponseItem {
@@ -1238,6 +1252,15 @@ pub enum ReasoningItemContent {
 
 impl From<Vec<UserInput>> for ResponseInputItem {
     fn from(items: Vec<UserInput>) -> Self {
+        Self::from_user_input(items, LocalImagePreparation::Process)
+    }
+}
+
+impl ResponseInputItem {
+    pub fn from_user_input(
+        items: Vec<UserInput>,
+        local_image_preparation: LocalImagePreparation,
+    ) -> Self {
         let mut image_index = 0;
         Self::Message {
             role: "user".to_string(),
@@ -1259,12 +1282,22 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                         image_index += 1;
                         let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
                         match std::fs::read(&path) {
-                            Ok(file_bytes) => local_image_content_items_with_label_number(
-                                &path,
-                                file_bytes,
-                                Some(image_index),
-                                detail,
-                            ),
+                            Ok(file_bytes) => match local_image_preparation {
+                                LocalImagePreparation::Process => {
+                                    local_image_content_items_with_label_number(
+                                        &path,
+                                        file_bytes,
+                                        Some(image_index),
+                                        detail,
+                                    )
+                                }
+                                LocalImagePreparation::Defer => local_image_content_items(
+                                    &path,
+                                    data_url_from_bytes("application/octet-stream", &file_bytes),
+                                    Some(image_index),
+                                    detail,
+                                ),
+                            },
                             Err(err) => vec![local_image_error_placeholder(&path, err)],
                         }
                     }

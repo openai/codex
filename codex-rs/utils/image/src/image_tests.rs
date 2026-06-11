@@ -105,8 +105,7 @@ async fn preserves_large_image_in_original_mode() {
 async fn data_url_processing_preserves_supported_source_bytes() {
     let image = ImageBuffer::from_pixel(64, 32, Rgba([10u8, 20, 30, 255]));
     let original_bytes = image_bytes(&image, ImageFormat::Png);
-    let encoded = BASE64_STANDARD.encode(&original_bytes);
-    let image_url = format!("data:image/png;base64,{encoded}")
+    let image_url = data_url_from_bytes("image/png", &original_bytes)
         .replacen("data:", "DATA:", 1)
         .replacen(";base64,", ";BASE64,", 1);
 
@@ -123,8 +122,7 @@ async fn data_url_processing_preserves_supported_source_bytes() {
 async fn data_url_processing_converts_gif_to_png() {
     let image = ImageBuffer::from_pixel(64, 32, Rgba([10u8, 20, 30, 255]));
     let gif_bytes = image_bytes(&image, ImageFormat::Gif);
-    let encoded = BASE64_STANDARD.encode(&gif_bytes);
-    let image_url = format!("data:image/gif;base64,{encoded}");
+    let image_url = data_url_from_bytes("image/gif", &gif_bytes);
 
     let processed = load_data_url_for_prompt(&image_url, PromptImageMode::ResizeToFit)
         .expect("process GIF data URL");
