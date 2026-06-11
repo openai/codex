@@ -48,6 +48,7 @@ message ModelProvider {
   optional uint64 websocket_connect_timeout_ms = 15;
   bool requires_openai_auth = 16;
   bool supports_websockets = 17;
+  ModelCatalogPolicy model_catalog_policy = 18;
 }
 
 message StringMap {
@@ -65,4 +66,10 @@ message ModelProviderAuthInfo {
 enum WireApi {
   WIRE_API_UNSPECIFIED = 0;
   WIRE_API_RESPONSES = 1;
+}
+
+enum ModelCatalogPolicy {
+  MODEL_CATALOG_POLICY_UNSPECIFIED = 0;
+  MODEL_CATALOG_POLICY_AUTO = 1;
+  MODEL_CATALOG_POLICY_REMOTE_AUTHORITATIVE = 2;
 }

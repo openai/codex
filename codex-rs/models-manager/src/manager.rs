@@ -5,7 +5,9 @@ use crate::model_info;
 use async_trait::async_trait;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
+use codex_model_provider_info::ModelCatalogPolicy;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -14,8 +16,11 @@ use codex_protocol::openai_models::ModelsResponse;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::sync::Semaphore;
 use tokio::sync::TryLockError;
 use tracing::Instrument as _;
 use tracing::error;
@@ -31,6 +36,11 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 /// this endpoint only when it decides a remote refresh should happen.
 #[async_trait]
 pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
+    /// Returns the provider's explicit policy for remote model metadata.
+    fn model_catalog_policy(&self) -> ModelCatalogPolicy {
+        ModelCatalogPolicy::Auto
+    }
+
     /// Returns whether this provider can authenticate command-scoped requests.
     fn has_command_auth(&self) -> bool;
 
@@ -76,6 +86,16 @@ type SharedModelsEndpointClient = Arc<dyn ModelsEndpointClient>;
 /// Coordinates model discovery plus cached metadata on disk.
 #[async_trait]
 pub trait ModelsManager: fmt::Debug + Send + Sync {
+    /// Ensure required provider-owned model metadata is available before a session starts.
+    async fn ensure_model_catalog(&self, _refresh_strategy: RefreshStrategy) -> CoreResult<()> {
+        Ok(())
+    }
+
+    /// Ensure the selected model exists when the provider owns the complete catalog.
+    async fn ensure_model_available(&self, _model: &str) -> CoreResult<()> {
+        Ok(())
+    }
+
     /// List all available models, refreshing according to the specified strategy.
     ///
     /// Returns model presets sorted by priority and filtered by auth mode and visibility.
@@ -105,6 +125,11 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     /// Return the auth manager used for picker filtering.
     fn auth_manager(&self) -> Option<&AuthManager>;
 
+    /// Returns whether the active catalog is already filtered for the current account.
+    fn catalog_is_account_scoped(&self) -> bool {
+        false
+    }
+
     /// Build picker-ready presets from the active catalog snapshot.
     fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
         remote_models.sort_by_key(|model| model.priority);
@@ -112,7 +137,8 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let uses_codex_backend = self
             .auth_manager()
-            .is_some_and(AuthManager::current_auth_uses_codex_backend);
+            .is_some_and(AuthManager::current_auth_uses_codex_backend)
+            || self.catalog_is_account_scoped();
         presets = ModelPreset::filter_by_auth(presets, uses_codex_backend);
 
         ModelPreset::mark_default_by_picker_visibility(&mut presets);
@@ -185,6 +211,9 @@ pub struct OpenAiModelsManager {
     cache_manager: ModelsCacheManager,
     endpoint_client: SharedModelsEndpointClient,
     auth_manager: Option<Arc<AuthManager>>,
+    authoritative_catalog_generation: AtomicU64,
+    authoritative_refreshes_completed: AtomicU64,
+    authoritative_catalog_refresh: Semaphore,
 }
 
 /// Static model manager backed by an authoritative in-process catalog.
@@ -210,6 +239,9 @@ impl OpenAiModelsManager {
             cache_manager,
             endpoint_client,
             auth_manager,
+            authoritative_catalog_generation: AtomicU64::new(0),
+            authoritative_refreshes_completed: AtomicU64::new(0),
+            authoritative_catalog_refresh: Semaphore::new(1),
         }
     }
 }
@@ -226,9 +258,50 @@ impl StaticModelsManager {
 
 #[async_trait]
 impl ModelsManager for OpenAiModelsManager {
+    async fn ensure_model_catalog(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
+        if !self.catalog_is_account_scoped() {
+            return Ok(());
+        }
+        match refresh_strategy {
+            RefreshStrategy::Online | RefreshStrategy::OnlineIfUncached => {
+                self.refresh_authoritative_catalog().await
+            }
+            RefreshStrategy::Offline if self.authoritative_catalog_is_loaded() => Ok(()),
+            RefreshStrategy::Offline => Err(CodexErr::Fatal(
+                "authoritative model catalog is unavailable offline".to_string(),
+            )),
+        }
+    }
+
+    async fn ensure_model_available(&self, model: &str) -> CoreResult<()> {
+        if !self.catalog_is_account_scoped() {
+            return Ok(());
+        }
+        let models = self.remote_models.read().await;
+        let namespaced_suffix = model.split_once('/').and_then(|(namespace, suffix)| {
+            (!suffix.contains('/')
+                && !namespace.is_empty()
+                && namespace
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .then_some(suffix)
+        });
+        if models.iter().any(|candidate| {
+            candidate.slug == model || namespaced_suffix == Some(candidate.slug.as_str())
+        }) {
+            return Ok(());
+        }
+        Err(CodexErr::InvalidRequest(format!(
+            "model `{model}` is not available in the provider's authoritative catalog"
+        )))
+    }
+
     async fn raw_model_catalog(&self, refresh_strategy: RefreshStrategy) -> ModelsResponse {
         if let Err(err) = self.refresh_available_models(refresh_strategy).await {
             error!("failed to refresh available models: {err}");
+        }
+        if self.catalog_is_account_scoped() && !self.authoritative_catalog_is_loaded() {
+            return ModelsResponse { models: Vec::new() };
         }
         ModelsResponse {
             models: self.get_remote_models().await,
@@ -247,11 +320,21 @@ impl ModelsManager for OpenAiModelsManager {
         self.auth_manager.as_deref()
     }
 
+    fn catalog_is_account_scoped(&self) -> bool {
+        self.endpoint_client.model_catalog_policy() == ModelCatalogPolicy::RemoteAuthoritative
+    }
+
     fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
         builtin_collaboration_mode_presets()
     }
 
     async fn refresh_if_new_etag(&self, etag: String) {
+        if self.catalog_is_account_scoped() {
+            if let Err(err) = self.refresh_authoritative_catalog_for_etag(&etag).await {
+                error!("failed to refresh available models: {err}");
+            }
+            return;
+        }
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             if let Err(err) = self.cache_manager.renew_cache_ttl().await {
@@ -268,6 +351,19 @@ impl ModelsManager for OpenAiModelsManager {
 impl OpenAiModelsManager {
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
+        if self.catalog_is_account_scoped() {
+            return match refresh_strategy {
+                RefreshStrategy::Online => self.refresh_authoritative_catalog().await,
+                RefreshStrategy::Offline if self.authoritative_catalog_is_loaded() => Ok(()),
+                RefreshStrategy::Offline => Err(CodexErr::Fatal(
+                    "authoritative model catalog is unavailable offline".to_string(),
+                )),
+                RefreshStrategy::OnlineIfUncached if self.authoritative_catalog_is_loaded() => {
+                    Ok(())
+                }
+                RefreshStrategy::OnlineIfUncached => self.refresh_authoritative_catalog().await,
+            };
+        }
         if !self.should_refresh_models().await {
             if matches!(
                 refresh_strategy,
@@ -303,11 +399,44 @@ impl OpenAiModelsManager {
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let client_version = crate::client_version_to_whole();
         let (models, etag) = self.endpoint_client.list_models(&client_version).await?;
+        self.apply_fetched_models(models, etag, client_version)
+            .await
+    }
+
+    async fn fetch_and_update_models_for_etag(&self, expected_etag: &str) -> CoreResult<()> {
+        let client_version = crate::client_version_to_whole();
+        let (models, etag) = self.endpoint_client.list_models(&client_version).await?;
+        if etag.as_deref() != Some(expected_etag) {
+            return Err(CodexErr::Fatal(format!(
+                "authoritative model catalog returned ETag {etag:?}; expected {expected_etag}"
+            )));
+        }
+        self.apply_fetched_models(models, etag, client_version)
+            .await
+    }
+
+    async fn apply_fetched_models(
+        &self,
+        models: Vec<ModelInfo>,
+        etag: Option<String>,
+        client_version: String,
+    ) -> CoreResult<()> {
+        let authoritative = self.catalog_is_account_scoped();
+        if authoritative && models.is_empty() {
+            return Err(CodexErr::Fatal(
+                "authoritative model catalog is empty".to_string(),
+            ));
+        }
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
-        self.cache_manager
-            .persist_cache(&models, etag, client_version)
-            .await;
+        if authoritative {
+            self.authoritative_catalog_generation
+                .fetch_add(1, Ordering::AcqRel);
+        } else {
+            self.cache_manager
+                .persist_cache(&models, etag, client_version)
+                .await;
+        }
         Ok(())
     }
 
@@ -319,20 +448,77 @@ impl OpenAiModelsManager {
         self.etag.read().await.clone()
     }
 
+    fn authoritative_catalog_is_loaded(&self) -> bool {
+        self.authoritative_catalog_generation
+            .load(Ordering::Acquire)
+            > 0
+    }
+
+    async fn refresh_authoritative_catalog(&self) -> CoreResult<()> {
+        let observed_generation = self
+            .authoritative_catalog_generation
+            .load(Ordering::Acquire);
+        let observed_refreshes = self
+            .authoritative_refreshes_completed
+            .load(Ordering::Acquire);
+        let _refresh_permit = self
+            .authoritative_catalog_refresh
+            .acquire()
+            .await
+            .map_err(|_| CodexErr::Fatal("model catalog refresh coordinator closed".to_string()))?;
+        if self
+            .authoritative_refreshes_completed
+            .load(Ordering::Acquire)
+            != observed_refreshes
+        {
+            return if self
+                .authoritative_catalog_generation
+                .load(Ordering::Acquire)
+                != observed_generation
+            {
+                Ok(())
+            } else {
+                Err(CodexErr::Fatal(
+                    "concurrent authoritative model catalog refresh failed".to_string(),
+                ))
+            };
+        }
+        let result = self.fetch_and_update_models().await;
+        self.authoritative_refreshes_completed
+            .fetch_add(1, Ordering::AcqRel);
+        result
+    }
+
+    async fn refresh_authoritative_catalog_for_etag(&self, expected_etag: &str) -> CoreResult<()> {
+        let _refresh_permit = self
+            .authoritative_catalog_refresh
+            .acquire()
+            .await
+            .map_err(|_| CodexErr::Fatal("model catalog refresh coordinator closed".to_string()))?;
+        if self.get_etag().await.as_deref() == Some(expected_etag) {
+            return Ok(());
+        }
+        let result = self.fetch_and_update_models_for_etag(expected_etag).await;
+        self.authoritative_refreshes_completed
+            .fetch_add(1, Ordering::AcqRel);
+        result
+    }
+
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
-        // Use the remote models list as the source of truth if it contains at least one
-        // non-hidden model and the user is using ChatGPT auth.
-        let should_use_remote_models_only = !models.is_empty()
-            && models
-                .iter()
-                .any(|model| model.visibility == ModelVisibility::List)
-            && self.auth_manager.as_ref().is_some_and(|auth_manager| {
-                matches!(
-                    auth_manager.auth_mode(),
-                    Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens)
-                )
-            });
+        // Authoritative providers replace bundled models; preserve automatic ChatGPT behavior.
+        let should_use_remote_models_only = self.endpoint_client.model_catalog_policy()
+            == ModelCatalogPolicy::RemoteAuthoritative
+            || (!models.is_empty()
+                && models
+                    .iter()
+                    .any(|model| model.visibility == ModelVisibility::List)
+                && self.auth_manager.as_ref().is_some_and(|auth_manager| {
+                    matches!(
+                        auth_manager.auth_mode(),
+                        Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens)
+                    )
+                }));
         if should_use_remote_models_only {
             *self.remote_models.write().await = models;
             return;

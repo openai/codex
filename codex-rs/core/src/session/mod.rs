@@ -538,6 +538,9 @@ impl Codex {
         } else {
             codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
         };
+        models_manager
+            .ensure_model_catalog(refresh_strategy)
+            .await?;
         if config.model.is_none()
             || !matches!(
                 refresh_strategy,
@@ -549,6 +552,7 @@ impl Codex {
         let model = models_manager
             .get_default_model(&config.model, refresh_strategy)
             .await;
+        models_manager.ensure_model_available(&model).await?;
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override

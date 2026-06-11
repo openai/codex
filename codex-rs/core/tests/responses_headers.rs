@@ -67,6 +67,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         stream_idle_timeout_ms: Some(5_000),
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: Default::default(),
         supports_websockets: false,
     };
 
@@ -195,6 +196,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         stream_idle_timeout_ms: Some(5_000),
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: Default::default(),
         supports_websockets: false,
     };
 
@@ -308,6 +310,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         stream_idle_timeout_ms: Some(5_000),
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: Default::default(),
         supports_websockets: false,
     };
 

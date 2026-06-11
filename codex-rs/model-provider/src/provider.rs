@@ -6,6 +6,7 @@ use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelCatalogPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -240,22 +241,23 @@ impl ModelProvider for ConfiguredModelProvider {
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+        if let Some(model_catalog) = config_model_catalog
+            && self.info.model_catalog_policy != ModelCatalogPolicy::RemoteAuthoritative
+        {
+            Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
-            )),
-            None => {
-                let endpoint = Arc::new(OpenAiModelsEndpoint::new(
-                    self.info.clone(),
-                    self.auth_manager.clone(),
-                ));
-                Arc::new(OpenAiModelsManager::new(
-                    codex_home,
-                    endpoint,
-                    self.auth_manager.clone(),
-                ))
-            }
+            ))
+        } else {
+            let endpoint = Arc::new(OpenAiModelsEndpoint::new(
+                self.info.clone(),
+                self.auth_manager.clone(),
+            ));
+            Arc::new(OpenAiModelsManager::new(
+                codex_home,
+                endpoint,
+                self.auth_manager.clone(),
+            ))
         }
     }
 }
@@ -320,6 +322,7 @@ mod tests {
             stream_idle_timeout_ms: Some(5_000),
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
+            model_catalog_policy: ModelCatalogPolicy::Auto,
             supports_websockets: false,
         }
     }
@@ -414,6 +417,20 @@ mod tests {
             Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
                 "openai-api-key",
             ))),
+        );
+
+        assert!(provider.auth_manager().is_none());
+    }
+
+    #[test]
+    fn remote_authoritative_provider_does_not_inherit_openai_auth_manager() {
+        let mut provider_info = provider_for("https://example.test/v1".to_string());
+        provider_info.model_catalog_policy = ModelCatalogPolicy::RemoteAuthoritative;
+        let provider = create_model_provider(
+            provider_info,
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            )),
         );
 
         assert!(provider.auth_manager().is_none());

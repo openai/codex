@@ -312,6 +312,7 @@ mod tests {
             stream_idle_timeout_ms: None,
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
+            model_catalog_policy: Default::default(),
             supports_websockets: true,
         }
     }

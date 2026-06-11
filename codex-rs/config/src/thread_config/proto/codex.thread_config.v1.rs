@@ -75,6 +75,8 @@ pub struct ModelProvider {
     pub requires_openai_auth: bool,
     #[prost(bool, tag = "17")]
     pub supports_websockets: bool,
+    #[prost(enumeration = "ModelCatalogPolicy", tag = "18")]
+    pub model_catalog_policy: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StringMap {
@@ -117,6 +119,35 @@ impl WireApi {
         match value {
             "WIRE_API_UNSPECIFIED" => Some(Self::Unspecified),
             "WIRE_API_RESPONSES" => Some(Self::Responses),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ModelCatalogPolicy {
+    Unspecified = 0,
+    Auto = 1,
+    RemoteAuthoritative = 2,
+}
+impl ModelCatalogPolicy {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "MODEL_CATALOG_POLICY_UNSPECIFIED",
+            Self::Auto => "MODEL_CATALOG_POLICY_AUTO",
+            Self::RemoteAuthoritative => "MODEL_CATALOG_POLICY_REMOTE_AUTHORITATIVE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "MODEL_CATALOG_POLICY_UNSPECIFIED" => Some(Self::Unspecified),
+            "MODEL_CATALOG_POLICY_AUTO" => Some(Self::Auto),
+            "MODEL_CATALOG_POLICY_REMOTE_AUTHORITATIVE" => Some(Self::RemoteAuthoritative),
             _ => None,
         }
     }

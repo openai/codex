@@ -63,6 +63,7 @@ async fn retries_on_early_close() {
         stream_idle_timeout_ms: Some(2000),
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: Default::default(),
         supports_websockets: false,
     };
 

@@ -1403,6 +1403,25 @@
       },
       "type": "object"
     },
+    "ModelCatalogPolicy": {
+      "description": "Controls how Codex obtains model metadata for a configured provider.",
+      "oneOf": [
+        {
+          "description": "Preserve the default behavior inferred from the provider's authentication mode.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Treat the provider's `/models` response as the authoritative account-scoped catalog.",
+          "enum": [
+            "remote_authoritative"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ModelProviderAuthInfo": {
       "additionalProperties": false,
       "description": "Configuration for obtaining a provider bearer token from a command.",
@@ -1511,6 +1530,14 @@
           },
           "description": "Additional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and value.",
           "type": "object"
+        },
+        "model_catalog_policy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelCatalogPolicy"
+            }
+          ],
+          "description": "Determines whether this provider supplies authoritative model metadata remotely."
         },
         "name": {
           "default": "",

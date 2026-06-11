@@ -79,6 +79,24 @@ impl<'de> Deserialize<'de> for WireApi {
     }
 }
 
+/// Controls how Codex obtains model metadata for a configured provider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCatalogPolicy {
+    /// Preserve the default behavior inferred from the provider's authentication mode.
+    #[default]
+    Auto,
+    /// Treat the provider's `/models` response as the authoritative account-scoped catalog.
+    RemoteAuthoritative,
+}
+
+impl ModelCatalogPolicy {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
 /// Serializable representation of a provider definition.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -131,6 +149,9 @@ pub struct ModelProviderInfo {
     /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
+    /// Determines whether this provider supplies authoritative model metadata remotely.
+    #[serde(default, skip_serializing_if = "ModelCatalogPolicy::is_auto")]
+    pub model_catalog_policy: ModelCatalogPolicy,
     /// Whether this provider supports the Responses API WebSocket transport.
     #[serde(default)]
     pub supports_websockets: bool,
@@ -176,6 +197,15 @@ impl ModelProviderInfo {
                     conflicts.join(", ")
                 ));
             }
+        }
+
+        if self.model_catalog_policy == ModelCatalogPolicy::RemoteAuthoritative
+            && self.requires_openai_auth
+        {
+            return Err(
+                "remote_authoritative model catalogs require provider-owned authentication"
+                    .to_string(),
+            );
         }
 
         let Some(auth) = self.auth.as_ref() else {
@@ -349,6 +379,7 @@ impl ModelProviderInfo {
             stream_idle_timeout_ms: None,
             websocket_connect_timeout_ms: None,
             requires_openai_auth: true,
+            model_catalog_policy: ModelCatalogPolicy::Auto,
             supports_websockets: true,
         }
     }
@@ -379,6 +410,7 @@ impl ModelProviderInfo {
             stream_idle_timeout_ms: None,
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
+            model_catalog_policy: ModelCatalogPolicy::Auto,
             supports_websockets: false,
         }
     }
@@ -510,6 +542,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
+        model_catalog_policy: ModelCatalogPolicy::Auto,
         supports_websockets: false,
     }
 }

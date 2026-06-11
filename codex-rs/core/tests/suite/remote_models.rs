@@ -2,6 +2,7 @@
 #![allow(clippy::expect_used)]
 use anyhow::Result;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelCatalogPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
@@ -758,7 +759,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     };
-    mount_models_once(
+    let models_mock = mount_models_once(
         &server,
         ModelsResponse {
             models: vec![remote_model],
@@ -776,30 +777,12 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.model = Some("gpt-5.2".to_string());
-        });
-    let TestCodex {
-        codex,
-        cwd,
-        config,
-        thread_manager,
-        ..
-    } = builder.build(&server).await?;
-
-    let models_manager = thread_manager.get_models_manager();
-    wait_for_model_available(&models_manager, model).await;
-
-    core_test_support::submit_thread_settings(
-        &codex,
-        codex_protocol::protocol::ThreadSettingsOverrides {
-            model: Some(model.to_string()),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = Some(model.to_string());
+        config.model_provider.requires_openai_auth = false;
+        config.model_provider.model_catalog_policy = ModelCatalogPolicy::RemoteAuthoritative;
+    });
+    let TestCodex { codex, cwd, .. } = builder.build(&server).await?;
 
     let cwd_path = cwd.path().to_path_buf();
     let (sandbox_policy, permission_profile) =
@@ -827,12 +810,9 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let base_model_info = models_manager
-        .get_model_info("gpt-5.2", &config.to_models_manager_config())
-        .await;
     let body = response_mock.single_request().body_json();
-    let instructions = body["instructions"].as_str().unwrap();
-    assert_eq!(instructions, base_model_info.base_instructions);
+    assert_eq!(body["instructions"].as_str(), Some(remote_base));
+    assert_eq!(models_mock.requests().len(), 1);
 
     Ok(())
 }
