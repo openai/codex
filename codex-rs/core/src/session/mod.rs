@@ -2991,6 +2991,7 @@ impl Session {
         {
             developer_sections.push(
                 crate::context::TokenBudgetContext::new(
+                    self.thread_id(),
                     auto_compact_window_id,
                     model_context_window,
                 )
