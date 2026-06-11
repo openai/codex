@@ -297,9 +297,7 @@ fn canonicalize_json_snapshot_value(value: &mut Value, options: &ContextSnapshot
 fn format_snapshot_json_string(text: &str, options: &ContextSnapshotOptions) -> String {
     let normalized = match options.render_mode {
         ContextSnapshotRenderMode::RedactedText
-        | ContextSnapshotRenderMode::KindWithTextPrefix { .. } => normalize_snapshot_uuids(
-            &normalize_snapshot_line_endings(&canonicalize_snapshot_text(text)),
-        ),
+        | ContextSnapshotRenderMode::KindWithTextPrefix { .. } => redacted_snapshot_text(text),
         ContextSnapshotRenderMode::FullText => normalize_snapshot_line_endings(text),
         ContextSnapshotRenderMode::KindOnly => unreachable!(),
     };
@@ -343,14 +341,13 @@ fn format_changed_lines_diff(
 fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
     match options.render_mode {
         ContextSnapshotRenderMode::RedactedText => {
-            normalize_snapshot_line_endings(&canonicalize_snapshot_text(text)).replace('\n', "\\n")
+            redacted_snapshot_text(text).replace('\n', "\\n")
         }
         ContextSnapshotRenderMode::FullText => {
             normalize_snapshot_line_endings(text).replace('\n', "\\n")
         }
         ContextSnapshotRenderMode::KindWithTextPrefix { max_chars } => {
-            let normalized = normalize_snapshot_line_endings(&canonicalize_snapshot_text(text))
-                .replace('\n', "\\n");
+            let normalized = redacted_snapshot_text(text).replace('\n', "\\n");
             if normalized.chars().count() <= max_chars {
                 normalized
             } else {
@@ -360,6 +357,12 @@ fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String 
         }
         ContextSnapshotRenderMode::KindOnly => unreachable!(),
     }
+}
+
+fn redacted_snapshot_text(text: &str) -> String {
+    normalize_snapshot_uuids(&normalize_snapshot_line_endings(
+        &canonicalize_snapshot_text(text),
+    ))
 }
 
 fn normalize_snapshot_line_endings(text: &str) -> String {
@@ -517,6 +520,25 @@ mod tests {
         );
 
         assert_eq!(rendered, "00:message/user:<AGENTS_MD>");
+    }
+
+    #[test]
+    fn redacted_text_mode_normalizes_uuids() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": "Thread id 019eb543-d2ec-79a2-9e19-0ab23c5f27ff."
+            }]
+        })];
+
+        let rendered = format_response_items_snapshot(
+            &items,
+            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
+        );
+
+        assert_eq!(rendered, "00:message/developer:Thread id <UUID>.");
     }
 
     #[test]
