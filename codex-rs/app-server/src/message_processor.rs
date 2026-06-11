@@ -336,6 +336,7 @@ impl MessageProcessor {
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::clone(&goal_service),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
+                        thread_store: Arc::clone(&thread_store),
                     },
                 ),
                 Some(analytics_events_client.clone()),
@@ -400,7 +401,7 @@ impl MessageProcessor {
             Arc::clone(&thread_manager),
             Arc::clone(&config),
             feedback,
-            log_db,
+            log_db.clone(),
             state_db.clone(),
         );
         let git_processor = GitRequestProcessor::new();
@@ -454,6 +455,7 @@ impl MessageProcessor {
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
             state_db,
+            log_db,
             Arc::clone(&skills_watcher),
         );
         let turn_processor = TurnRequestProcessor::new(
@@ -1071,6 +1073,11 @@ impl MessageProcessor {
                     .thread_archive(request_id.clone(), params)
                     .await
             }
+            ClientRequest::ThreadDelete { params, .. } => {
+                self.thread_processor
+                    .thread_delete(request_id.clone(), params)
+                    .await
+            }
             ClientRequest::ThreadIncrementElicitation { params, .. } => {
                 self.thread_processor
                     .thread_increment_elicitation(params)
@@ -1124,6 +1131,16 @@ impl MessageProcessor {
             ClientRequest::ThreadBackgroundTerminalsClean { params, .. } => {
                 self.thread_processor
                     .thread_background_terminals_clean(&request_id, params)
+                    .await
+            }
+            ClientRequest::ThreadBackgroundTerminalsList { params, .. } => {
+                self.thread_processor
+                    .thread_background_terminals_list(params)
+                    .await
+            }
+            ClientRequest::ThreadBackgroundTerminalsTerminate { params, .. } => {
+                self.thread_processor
+                    .thread_background_terminals_terminate(params)
                     .await
             }
             ClientRequest::ThreadRollback { params, .. } => {

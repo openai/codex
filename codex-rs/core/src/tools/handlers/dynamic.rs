@@ -33,7 +33,6 @@ pub struct DynamicToolHandler {
     tool_name: ToolName,
     spec: ToolSpec,
     exposure: ToolExposure,
-    search_text: String,
 }
 
 impl DynamicToolHandler {
@@ -56,12 +55,10 @@ impl DynamicToolHandler {
             } else {
                 ToolExposure::Direct
             },
-            search_text: build_dynamic_search_text(tool),
         })
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
     fn tool_name(&self) -> ToolName {
         self.tool_name.clone()
@@ -76,8 +73,7 @@ impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
     }
 
     fn search_info(&self) -> Option<ToolSearchInfo> {
-        ToolSearchInfo::from_spec(
-            self.search_text.clone(),
+        ToolSearchInfo::from_tool_spec(
             self.spec(),
             Some(ToolSearchSourceInfo {
                 name: "Dynamic tools".to_string(),
@@ -86,11 +82,8 @@ impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
         )
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        self.handle_call(invocation).await
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
     }
 }
 
@@ -221,27 +214,3 @@ async fn request_dynamic_tool(
 
     response
 }
-
-fn build_dynamic_search_text(tool: &DynamicToolSpec) -> String {
-    let mut schema_properties = tool
-        .input_schema
-        .get("properties")
-        .and_then(serde_json::Value::as_object)
-        .map(|map| map.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
-    schema_properties.sort();
-    let mut parts = vec![
-        tool.name.clone(),
-        tool.name.replace('_', " "),
-        tool.description.clone(),
-    ];
-    if let Some(namespace) = &tool.namespace {
-        parts.push(namespace.clone());
-    }
-    parts.extend(schema_properties);
-    parts.join(" ")
-}
-
-#[cfg(test)]
-#[path = "dynamic_tests.rs"]
-mod tests;

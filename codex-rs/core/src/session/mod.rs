@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -31,6 +32,7 @@ use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
+use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session_prefix::format_subagent_notification_message;
@@ -63,6 +65,7 @@ use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
+use codex_mcp::McpResourceClient;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_models_manager::manager::RefreshStrategy;
@@ -205,6 +208,7 @@ mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+mod token_budget;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
 use self::config_lock::export_config_lock_if_configured;
@@ -273,10 +277,12 @@ impl SteerInputError {
 /// Conceptually this is the same role that `previous_model` used to fill, but
 /// it can carry other prior-turn settings that matter when constructing
 /// sensible state-change diffs or full-context reinjection, such as model
-/// switches or detecting a prior `realtime_active -> false` transition.
+/// switches, compaction compatibility, or detecting a prior
+/// `realtime_active -> false` transition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PreviousTurnSettings {
     pub(crate) model: String,
+    pub(crate) comp_hash: Option<String>,
     pub(crate) realtime_active: Option<bool>,
 }
 
@@ -326,6 +332,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::LocalImagePreparation;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -1300,13 +1307,20 @@ impl Session {
         rollout_items: &[RolloutItem],
     ) -> Option<PreviousTurnSettings> {
         let rollout_reconstruction::RolloutReconstruction {
-            history,
+            mut history,
             previous_turn_settings,
             reference_context_item,
             window_id,
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
+        if turn_context.features.enabled(Feature::ResizeAllImages) {
+            // Keep the recorded rollout unchanged. Prepare its reconstructed history before
+            // installing it, so legacy images are processed once for this resume or fork and
+            // will be processed again if the rollout is reconstructed in a future session.
+            // This meets image resizing requirements without modifying persisted rollouts.
+            prepare_response_items(&mut history);
+        }
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
@@ -1796,9 +1810,7 @@ impl Session {
         let Some(text) = realtime_text_for_event(msg) else {
             return;
         };
-        if self.conversation.running_state().await.is_none()
-            || self.conversation.active_handoff_id().await.is_none()
-        {
+        if self.conversation.running_state().await.is_none() {
             return;
         }
         if let Err(err) = self.conversation.handoff_out(text).await {
@@ -2585,11 +2597,43 @@ impl Session {
 
     /// Records conversation items: append to history, persist to rollout, and
     /// notify clients observing raw response items.
+    pub(crate) fn prepare_conversation_items_for_history<'a>(
+        &self,
+        turn_context: &TurnContext,
+        items: &'a [ResponseItem],
+    ) -> Cow<'a, [ResponseItem]> {
+        if !turn_context.features.enabled(Feature::ResizeAllImages) {
+            return Cow::Borrowed(items);
+        }
+
+        let mut prepared_items = items.to_vec();
+        prepare_response_items(&mut prepared_items);
+        Cow::Owned(prepared_items)
+    }
+
+    pub(crate) fn response_item_from_user_input(
+        &self,
+        turn_context: &TurnContext,
+        input: Vec<UserInput>,
+    ) -> ResponseItem {
+        let local_image_preparation = if turn_context.features.enabled(Feature::ResizeAllImages) {
+            LocalImagePreparation::Defer
+        } else {
+            LocalImagePreparation::Process
+        };
+        ResponseItem::from(ResponseInputItem::from_user_input(
+            input,
+            local_image_preparation,
+        ))
+    }
+
     pub(crate) async fn record_conversation_items(
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
+        let items = self.prepare_conversation_items_for_history(turn_context, items);
+        let items = items.as_ref();
         {
             let mut state = self.state.lock().await;
             state.record_items(items.iter(), turn_context.truncation_policy);
@@ -2672,14 +2716,12 @@ impl Session {
         &self,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
-        mut compacted_item: CompactedItem,
+        compacted_item: CompactedItem,
     ) {
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
         }
-
-        compacted_item.window_id = Some(self.advance_auto_compact_window_id().await);
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
             .await;
@@ -2765,6 +2807,7 @@ impl Session {
             collaboration_mode,
             base_instructions,
             session_source,
+            auto_compact_window_id,
         ) = {
             let state = self.state.lock().await;
             (
@@ -2773,6 +2816,7 @@ impl Session {
                 state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
                 state.session_configuration.session_source.clone(),
+                state.auto_compact_window_id(),
             )
         };
         if let Some(model_switch_message) =
@@ -2922,6 +2966,18 @@ impl Session {
                 .render(),
             );
         }
+        // This is full-context metadata. Steady-state context diffs should not re-emit it.
+        if turn_context.features.enabled(Feature::TokenBudget)
+            && let Some(model_context_window) = turn_context.model_context_window()
+        {
+            developer_sections.push(
+                crate::context::TokenBudgetContext::new(
+                    auto_compact_window_id,
+                    model_context_window,
+                )
+                .render(),
+            );
+        }
         if turn_context.config.include_environment_context {
             let shell = self.user_shell();
             let subagents = self
@@ -3000,9 +3056,47 @@ impl Session {
         format!("{thread_id}:{window_id}")
     }
 
-    async fn advance_auto_compact_window_id(&self) -> u64 {
+    pub(crate) async fn advance_auto_compact_window_id(&self) -> u64 {
         let mut state = self.state.lock().await;
         state.advance_auto_compact_window_id()
+    }
+
+    pub(crate) async fn request_new_context_window(&self) {
+        let mut state = self.state.lock().await;
+        state.request_new_context_window();
+    }
+
+    pub(crate) async fn maybe_start_new_context_window(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<u64> {
+        let window_id = {
+            let mut state = self.state.lock().await;
+            state.start_new_context_window_if_requested()
+        };
+        let window_id = window_id?;
+        let context_items = self.build_initial_context(turn_context).await;
+        let turn_context_item = turn_context.to_turn_context_item();
+        let replacement_history = context_items;
+        {
+            let mut state = self.state.lock().await;
+            state.replace_history(replacement_history.clone(), Some(turn_context_item.clone()));
+        };
+        self.persist_rollout_items(&[
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: Some(replacement_history),
+                window_id: Some(window_id),
+            }),
+            RolloutItem::TurnContext(turn_context_item),
+        ])
+        .await;
+        {
+            let mut state = self.state.lock().await;
+            state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
+        }
+        self.recompute_token_usage(turn_context).await;
+        Some(window_id)
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
@@ -3213,7 +3307,7 @@ impl Session {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
-        let response_item = ResponseItem::from(ResponseInputItem::from(input.to_vec()));
+        let response_item = self.response_item_from_user_input(turn_context, input.to_vec());
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
         let mut user_message_item = UserMessageItem::new(input);

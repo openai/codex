@@ -5,6 +5,7 @@ use std::any::Any;
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
+use crate::DeleteThreadParams;
 use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListThreadsParams;
@@ -119,4 +120,7 @@ pub trait ThreadStore: Any + Send + Sync {
         &self,
         params: ArchiveThreadParams,
     ) -> ThreadStoreResult<StoredThread>;
+
+    /// Deletes a thread's persisted rollout data and associated metadata.
+    async fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreResult<()>;
 }

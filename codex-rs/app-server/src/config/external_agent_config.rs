@@ -1147,7 +1147,7 @@ fn configured_marketplace_plugins(
 ) -> io::Result<BTreeMap<String, HashSet<String>>> {
     let plugins_input = config.plugins_config_input();
     let marketplaces = plugins_manager
-        .list_marketplaces_for_config(&plugins_input, &[])
+        .list_marketplaces_for_config(&plugins_input, &[], /*include_openai_curated*/ true)
         .map_err(|err| {
             invalid_data_error(format!("failed to list configured marketplaces: {err}"))
         })?;

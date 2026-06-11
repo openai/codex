@@ -37,6 +37,7 @@ use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
 use codex_utils_cli::SharedCliOptions;
 use owo_colors::OwoColorize;
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Write;
 use std::path::PathBuf;
@@ -178,6 +179,9 @@ enum Subcommand {
 
     /// Archive a saved session by id or session name.
     Archive(SessionArchiveCommand),
+
+    /// Permanently delete a saved session by id or session name.
+    Delete(DeleteCommand),
 
     /// Unarchive a saved session by id or session name.
     Unarchive(SessionArchiveCommand),
@@ -351,6 +355,16 @@ struct SessionArchiveConfigOverrides {
 
     #[clap(flatten)]
     config_overrides: CliConfigOverrides,
+}
+
+#[derive(Debug, Args)]
+struct DeleteCommand {
+    #[clap(flatten)]
+    session: SessionArchiveCommand,
+
+    /// Delete without prompting. SESSION must be a UUID.
+    #[arg(long, default_value_t = false)]
+    force: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -835,6 +849,17 @@ async fn run_session_archive_cli_command(
     .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
+fn delete_action(target: &str, force: bool) -> anyhow::Result<codex_tui::SessionArchiveAction> {
+    if force && codex_protocol::ThreadId::from_string(target).is_err() {
+        anyhow::bail!("--force requires a session UUID; names must be confirmed interactively");
+    }
+    let confirmation = match force {
+        true => codex_tui::DeleteConfirmation::Skip,
+        false => codex_tui::DeleteConfirmation::Prompt,
+    };
+    Ok(codex_tui::SessionArchiveAction::Delete(confirmation))
+}
+
 async fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
     match cmd.subcommand {
         DebugAppServerSubcommand::SendMessageV2(cmd) => {
@@ -1239,6 +1264,20 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             .await?;
             println!("{output}");
         }
+        Some(Subcommand::Delete(DeleteCommand { session, force })) => {
+            let action = delete_action(&session.target, force)?;
+            let output = run_session_archive_cli_command(
+                action,
+                session,
+                interactive,
+                root_config_overrides.clone(),
+                root_remote.clone(),
+                root_remote_auth_token_env.clone(),
+                arg0_paths.clone(),
+            )
+            .await?;
+            println!("{output}");
+        }
         Some(Subcommand::Unarchive(cmd)) => {
             let output = run_session_archive_cli_command(
                 codex_tui::SessionArchiveAction::Unarchive,
@@ -1603,6 +1642,7 @@ fn profile_v2_for_subcommand<'a>(
         | Subcommand::Review(_)
         | Subcommand::Resume(_)
         | Subcommand::Archive(_)
+        | Subcommand::Delete(_)
         | Subcommand::Unarchive(_)
         | Subcommand::Fork(_)
         | Subcommand::Mcp(_)
@@ -1611,7 +1651,7 @@ fn profile_v2_for_subcommand<'a>(
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
         ),
     }
 }
@@ -2032,6 +2072,7 @@ fn unsupported_subcommand_name_for_strict_config(
         | Some(Subcommand::ExecServer(_))
         | Some(Subcommand::Resume(_))
         | Some(Subcommand::Archive(_))
+        | Some(Subcommand::Delete(_))
         | Some(Subcommand::Unarchive(_))
         | Some(Subcommand::Fork(_))
         | Some(Subcommand::Doctor(_)) => None,
@@ -2195,7 +2236,7 @@ async fn run_interactive_tui(
             remote_endpoint.clone(),
         )
     };
-    let mut attempted_repair = false;
+    let mut attempted_backups = HashSet::new();
     loop {
         let err = match start_tui().await {
             Ok(exit_info) => return Ok(exit_info),
@@ -2208,25 +2249,25 @@ async fn run_interactive_tui(
             local_state_db::print_locked_guidance(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
-        if attempted_repair {
+        if !local_state_db::is_auto_backup_recoverable(startup_error) {
             local_state_db::print_diagnostic_guidance(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
-        if !local_state_db::confirm_repair(startup_error)? {
+        if !attempted_backups.insert(startup_error.database_path().to_path_buf()) {
             local_state_db::print_diagnostic_guidance(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
 
-        match local_state_db::repair_files(startup_error).await {
-            Ok(backups) => local_state_db::print_repair_backups(&backups),
-            Err(repair_err) => {
+        local_state_db::print_auto_backup_start(startup_error);
+        match local_state_db::backup_files_for_fresh_start(startup_error).await {
+            Ok(backups) => local_state_db::confirm_fresh_start_rebuild(startup_error, &backups)?,
+            Err(backup_err) => {
                 local_state_db::print_diagnostic_guidance(startup_error);
                 return Ok(AppExitInfo::fatal(format!(
-                    "failed to repair Codex local data automatically: {repair_err}"
+                    "failed to move damaged Codex local database files into a backup folder automatically: {backup_err}"
                 )));
             }
         }
-        attempted_repair = true;
     }
 }
 
@@ -2607,6 +2648,14 @@ mod tests {
     }
 
     #[test]
+    fn import_remains_an_interactive_prompt() {
+        let cli = MultitoolCli::try_parse_from(["codex", "import"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("import"));
+    }
+
+    #[test]
     fn profile_v2_rejects_non_plain_names_at_parse_time() {
         assert!(
             MultitoolCli::try_parse_from(["codex", "--profile", "nested/work", "resume"]).is_err()
@@ -2864,6 +2913,17 @@ mod tests {
         );
         assert!(interactive.strict_config);
         assert!(interactive.bypass_hook_trust);
+    }
+
+    #[test]
+    fn delete_force_requires_uuid() {
+        assert!(delete_action("123e4567-e89b-12d3-a456-426614174000", true).is_ok());
+
+        let err = delete_action("my-thread", true).expect_err("name should require prompt");
+        assert_eq!(
+            err.to_string(),
+            "--force requires a session UUID; names must be confirmed interactively"
+        );
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]

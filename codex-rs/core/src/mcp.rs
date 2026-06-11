@@ -45,6 +45,12 @@ impl McpManager {
     /// runtime-only extension overlays.
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
         let mut mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
+        let disabled_server_names = mcp_config
+            .configured_mcp_servers
+            .iter()
+            .filter(|(_, server)| !server.enabled)
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
         if mcp_config.apps_enabled {
             mcp_config.configured_mcp_servers.insert(
                 CODEX_APPS_MCP_SERVER_NAME.to_string(),
@@ -60,6 +66,11 @@ impl McpManager {
         }
         let contributions = self.contributions(config).await;
         Self::apply_to_configured_servers(&contributions, &mut mcp_config.configured_mcp_servers);
+        for name in disabled_server_names {
+            if let Some(server) = mcp_config.configured_mcp_servers.get_mut(&name) {
+                server.enabled = false;
+            }
+        }
         mcp_config
     }
 
