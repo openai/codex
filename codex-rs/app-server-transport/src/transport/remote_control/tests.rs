@@ -1823,6 +1823,123 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
 }
 
 #[tokio::test]
+async fn persisted_enable_does_not_follow_auth_to_an_account_without_a_preference() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    save_auth(
+        codex_home.path(),
+        &remote_control_auth_dot_json(Some("account_a")),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("account A auth should save");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let remote_control_target =
+        normalize_remote_control_url(&remote_control_url).expect("target should parse");
+    let enrollment = RemoteControlEnrollment {
+        remote_control_target: remote_control_target.clone(),
+        account_id: "account_a".to_string(),
+        environment_id: "env_a".to_string(),
+        server_id: "srv_e_a".to_string(),
+        server_name: "server-a".to_string(),
+        remote_control_token: None,
+        expires_at: None,
+    };
+    update_persisted_remote_control_enrollment(
+        Some(state_db.as_ref()),
+        &remote_control_target,
+        "account_a",
+        /*app_server_client_name*/ None,
+        Some(&enrollment),
+        /*remote_control_enabled*/ Some(true),
+    )
+    .await
+    .expect("account A enrollment should save");
+
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(state_db.clone()),
+        auth_manager.clone(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        RemoteControlStartupMode::ResolvePersisted,
+    )
+    .await
+    .expect("remote control should start");
+
+    let refresh_request = accept_http_request(&listener).await;
+    assert_eq!(
+        refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    respond_with_json(
+        refresh_request.stream,
+        remote_control_server_token_response(
+            &enrollment.server_id,
+            &enrollment.environment_id,
+            TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    let (_handshake_request, mut websocket) =
+        accept_remote_control_backend_connection(&listener).await;
+
+    save_auth(
+        codex_home.path(),
+        &remote_control_auth_dot_json(Some("account_b")),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("account B auth should save");
+    auth_manager.reload().await;
+    websocket
+        .close(None)
+        .await
+        .expect("backend websocket should close");
+
+    let mut desired_state_rx = remote_handle.desired_state_tx.subscribe();
+    timeout(
+        Duration::from_secs(1),
+        desired_state_rx.wait_for(|state| *state == RemoteControlDesiredState::Disabled),
+    )
+    .await
+    .expect("account B missing preference should disable remote control")
+    .expect("desired state channel should stay open");
+    timeout(Duration::from_millis(100), listener.accept())
+        .await
+        .expect_err("disabled account B should not enroll");
+    assert_eq!(
+        state_db
+            .get_remote_control_enrollment(
+                &remote_control_target.websocket_url,
+                "account_b",
+                /*app_server_client_name*/ None,
+            )
+            .await
+            .expect("account B enrollment should load"),
+        None
+    );
+
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}
+
+#[tokio::test]
 async fn remote_control_http_mode_reenrolls_when_refresh_reports_stale_enrollment() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

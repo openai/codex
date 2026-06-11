@@ -35,6 +35,7 @@ use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_core::util::backoff;
 use codex_login::AuthManager;
 use codex_login::UnauthorizedRecovery;
+use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
@@ -392,7 +393,7 @@ pub(super) struct RemoteControlConnectOptions<'a> {
     server_name: &'a str,
     subscribe_cursor: Option<&'a str>,
     app_server_client_name: Option<&'a str>,
-    desired_state_rx: &'a watch::Receiver<RemoteControlDesiredState>,
+    desired_state_tx: &'a watch::Sender<RemoteControlDesiredState>,
     desired_state_persistence_lock: &'a Semaphore,
 }
 
@@ -635,16 +636,7 @@ impl RemoteControlWebsocket {
                     continue;
                 }
             };
-            let desired_state = if enrollment
-                .and_then(|enrollment| enrollment.remote_control_enabled)
-                == Some(true)
-            {
-                RemoteControlDesiredState::Enabled {
-                    persistence_preference: Some(true),
-                }
-            } else {
-                RemoteControlDesiredState::Disabled
-            };
+            let desired_state = desired_state_from_persisted_enrollment(enrollment);
             self.transition_unknown_to(desired_state);
             return true;
         }
@@ -726,7 +718,7 @@ impl RemoteControlWebsocket {
                 server_name: &self.server_name,
                 subscribe_cursor: subscribe_cursor.as_deref(),
                 app_server_client_name,
-                desired_state_rx: &self.desired_state_rx,
+                desired_state_tx: &self.desired_state_tx,
                 desired_state_persistence_lock: &self.desired_state_persistence_lock,
             };
             let auth_context = RemoteControlAuthContext {
@@ -1465,6 +1457,14 @@ async fn prepare_remote_control_enrollment(
     };
     let enrollment_account_id = enrollment.as_ref().map(|enrollment| &enrollment.account_id);
     if enrollment_account_id.is_some_and(|account_id| account_id != &auth.account_id) {
+        resolve_desired_state_after_account_change(
+            state_db,
+            remote_control_target,
+            auth_context.auth_manager,
+            &auth.account_id,
+            connect_options,
+        )
+        .await?;
         info!(
             "clearing in-memory remote control enrollment because account id changed: websocket_url={}, previous_account_id={:?}, current_account_id={:?}",
             remote_control_target.websocket_url,
@@ -1475,6 +1475,12 @@ async fn prepare_remote_control_enrollment(
         );
         *enrollment = None;
         status_publisher.publish_environment_id(/*environment_id*/ None);
+        if !connect_options.desired_state_tx.borrow().is_enabled() {
+            return Err(io::Error::new(
+                ErrorKind::Interrupted,
+                "remote control disabled after account changed",
+            ));
+        }
     }
     if let Some(enrollment) = enrollment.as_mut() {
         enrollment.remote_control_target = remote_control_target.clone();
@@ -1579,6 +1585,63 @@ async fn prepare_remote_control_enrollment(
     Ok(auth)
 }
 
+async fn resolve_desired_state_after_account_change(
+    state_db: &StateRuntime,
+    remote_control_target: &RemoteControlTarget,
+    auth_manager: &Arc<AuthManager>,
+    account_id: &str,
+    connect_options: RemoteControlConnectOptions<'_>,
+) -> io::Result<()> {
+    let durable_enabled = RemoteControlDesiredState::Enabled {
+        persistence_preference: Some(true),
+    };
+    if *connect_options.desired_state_tx.borrow() != durable_enabled {
+        return Ok(());
+    }
+
+    let _persistence =
+        acquire_persistence_lock(connect_options.desired_state_persistence_lock).await;
+    if *connect_options.desired_state_tx.borrow() != durable_enabled {
+        return Ok(());
+    }
+    let enrollment = state_db
+        .get_remote_control_enrollment(
+            &remote_control_target.websocket_url,
+            account_id,
+            connect_options.app_server_client_name,
+        )
+        .await
+        .map_err(io::Error::other)?;
+    let current_auth = load_remote_control_auth(auth_manager).await?;
+    if current_auth.account_id != account_id {
+        return Err(io::Error::new(
+            ErrorKind::WouldBlock,
+            "remote control account changed while resolving persisted preference",
+        ));
+    }
+    let resolved_state = desired_state_from_persisted_enrollment(enrollment);
+    connect_options.desired_state_tx.send_if_modified(|state| {
+        if *state != durable_enabled || *state == resolved_state {
+            return false;
+        }
+        *state = resolved_state;
+        true
+    });
+    Ok(())
+}
+
+fn desired_state_from_persisted_enrollment(
+    enrollment: Option<RemoteControlEnrollmentRecord>,
+) -> RemoteControlDesiredState {
+    if enrollment.and_then(|enrollment| enrollment.remote_control_enabled) == Some(true) {
+        RemoteControlDesiredState::Enabled {
+            persistence_preference: Some(true),
+        }
+    } else {
+        RemoteControlDesiredState::Disabled
+    }
+}
+
 fn websocket_response_reports_missing_remote_app_server(
     response: &tungstenite::http::Response<Option<Vec<u8>>>,
 ) -> bool {
@@ -1657,7 +1720,7 @@ async fn enroll_and_persist_remote_control_server(
         }
         RemoteControlEnrollmentSelection::ReplaceExisting => {}
     }
-    if !connect_options.desired_state_rx.borrow().is_enabled() {
+    if !connect_options.desired_state_tx.borrow().is_enabled() {
         return Err(io::Error::new(
             ErrorKind::Interrupted,
             "remote control disabled before enrollment",
@@ -1695,7 +1758,7 @@ async fn enroll_and_persist_remote_control_server(
     };
     let _persistence =
         acquire_persistence_lock(connect_options.desired_state_persistence_lock).await;
-    let persistence_preference = match *connect_options.desired_state_rx.borrow() {
+    let persistence_preference = match *connect_options.desired_state_tx.borrow() {
         RemoteControlDesiredState::Enabled {
             persistence_preference,
         } => persistence_preference,
@@ -1891,11 +1954,11 @@ mod tests {
         (RemoteControlStatusPublisher::new(status_tx), status_rx)
     }
 
-    fn enabled_desired_state_receiver() -> watch::Receiver<RemoteControlDesiredState> {
+    fn enabled_desired_state_sender() -> watch::Sender<RemoteControlDesiredState> {
         watch::channel(RemoteControlDesiredState::Enabled {
             persistence_preference: None,
         })
-        .1
+        .0
     }
 
     #[test]
@@ -2035,7 +2098,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
-                desired_state_rx: &enabled_desired_state_receiver(),
+                desired_state_tx: &enabled_desired_state_sender(),
                 desired_state_persistence_lock: &Semaphore::new(1),
             },
             &status_publisher,
@@ -2101,7 +2164,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
-                desired_state_rx: &enabled_desired_state_receiver(),
+                desired_state_tx: &enabled_desired_state_sender(),
                 desired_state_persistence_lock: &Semaphore::new(1),
             },
             &status_publisher,
@@ -2185,7 +2248,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
-                desired_state_rx: &enabled_desired_state_receiver(),
+                desired_state_tx: &enabled_desired_state_sender(),
                 desired_state_persistence_lock: &Semaphore::new(1),
             },
             &status_publisher,
@@ -2281,7 +2344,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
-                desired_state_rx: &enabled_desired_state_receiver(),
+                desired_state_tx: &enabled_desired_state_sender(),
                 desired_state_persistence_lock: &Semaphore::new(1),
             },
             &status_publisher,
@@ -2348,7 +2411,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
-                desired_state_rx: &enabled_desired_state_receiver(),
+                desired_state_tx: &enabled_desired_state_sender(),
                 desired_state_persistence_lock: &Semaphore::new(1),
             },
             &status_publisher,
@@ -2400,7 +2463,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
-                desired_state_rx: &enabled_desired_state_receiver(),
+                desired_state_tx: &enabled_desired_state_sender(),
                 desired_state_persistence_lock: &Semaphore::new(1),
             },
             &status_publisher,
