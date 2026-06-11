@@ -69,7 +69,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
                 num_last_images_to_include: None,
             },
             &[],
-            &[],
+            /*environments*/ None,
         )
         .await
         .expect("generation request should build"),
@@ -142,7 +142,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
                 num_last_images_to_include: Some(4),
             },
             &history,
-            &[],
+            /*environments*/ None,
         )
         .await
         .expect("history-backed edit request should build"),
@@ -166,7 +166,7 @@ async fn conflicting_image_selectors_return_tool_error() {
             num_last_images_to_include: Some(1),
         },
         &[],
-        &[],
+        /*environments*/ None,
     )
     .await
     .expect_err("conflicting selectors should fail");
@@ -194,7 +194,7 @@ async fn too_many_referenced_image_paths_return_tool_error() {
             num_last_images_to_include: None,
         },
         &[],
-        &[],
+        /*environments*/ None,
     )
     .await
     .expect_err("too many paths should fail before reading files");
@@ -219,7 +219,7 @@ async fn recent_image_fallback_requires_requested_count() {
             content: vec![input_image("only-image")],
             phase: None,
         }],
-        &[],
+        /*environments*/ None,
     )
     .await
     .expect_err("history-backed edit should require the requested image count");
@@ -245,7 +245,7 @@ async fn referenced_image_uses_environment_file_system_and_sandbox() {
                 num_last_images_to_include: None,
             },
             &[],
-            &[environment],
+            Some(&[environment]),
         )
         .await
         .expect("referenced image request should build"),
@@ -278,7 +278,7 @@ async fn referenced_image_read_failure_returns_tool_error() {
             num_last_images_to_include: None,
         },
         &[],
-        &[environment],
+        Some(&[environment]),
     )
     .await
     .expect_err("denied image read should fail");
