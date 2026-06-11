@@ -147,7 +147,7 @@ async fn guardian_timeout_falls_back_to_manual_approval_end_to_end() -> Result<(
         approval
             .reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("did not finish before its deadline"))
+            .is_some_and(|reason| reason.contains("Automatic approval review timed out"))
     );
 
     test.codex
