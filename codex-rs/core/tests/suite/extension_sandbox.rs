@@ -296,10 +296,15 @@ async fn extension_tool_uses_granted_turn_permissions() -> Result<()> {
     let request = response_mock
         .last_request()
         .context("missing request containing extension output")?;
-    let (output, success) = request
-        .function_call_output_content_and_success(image_call_id)
-        .context("missing image extension output")?;
-    assert_eq!((output, success), (None, Some(true)));
+    let output = request.function_call_output(image_call_id);
+    assert_eq!(
+        output["output"][0],
+        json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,cG5n",
+            "detail": "auto",
+        })
+    );
 
     Ok(())
 }
