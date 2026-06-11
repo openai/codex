@@ -134,6 +134,7 @@ pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
+const TURN_ID_CLIENT_METADATA_KEY: &str = "turn_id";
 pub const X_CODEX_PARENT_THREAD_ID_HEADER: &str = "x-codex-parent-thread-id";
 pub const X_CODEX_WINDOW_ID_HEADER: &str = "x-codex-window-id";
 pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
@@ -645,6 +646,7 @@ impl ModelClient {
         &self,
         window_id: &str,
         turn_metadata_header: Option<&str>,
+        turn_id: Option<&str>,
         use_responses_lite: bool,
     ) -> HashMap<String, String> {
         let mut client_metadata = HashMap::new();
@@ -669,6 +671,9 @@ impl ModelClient {
                 X_CODEX_TURN_METADATA_HEADER.to_string(),
                 turn_metadata.to_string(),
             );
+        }
+        if let Some(turn_id) = turn_id {
+            client_metadata.insert(TURN_ID_CLIENT_METADATA_KEY.to_string(), turn_id.to_string());
         }
         if use_responses_lite {
             client_metadata.insert(
@@ -1369,6 +1374,7 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
         turn_metadata_header: Option<&str>,
+        turn_id: Option<&str>,
         warmup: bool,
         request_trace: Option<W3cTraceContext>,
         inference_trace: &InferenceTraceContext,
@@ -1410,6 +1416,7 @@ impl ModelClientSession {
                     Some(self.client.build_ws_client_metadata(
                         window_id,
                         turn_metadata_header,
+                        turn_id,
                         model_info.use_responses_lite,
                     )),
                     request_trace.as_ref(),
@@ -1571,6 +1578,7 @@ impl ModelClientSession {
                 summary,
                 service_tier,
                 turn_metadata_header,
+                /*turn_id*/ None,
                 /*warmup*/ true,
                 current_span_w3c_trace_context(),
                 &disabled_trace,
@@ -1615,6 +1623,7 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
         turn_metadata_header: Option<&str>,
+        turn_id: Option<&str>,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
@@ -1632,6 +1641,7 @@ impl ModelClientSession {
                             summary,
                             service_tier.clone(),
                             turn_metadata_header,
+                            turn_id,
                             /*warmup*/ false,
                             request_trace,
                             inference_trace,

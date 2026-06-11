@@ -347,6 +347,7 @@ async fn run_remote_compaction_request_v2(
                 turn_context.reasoning_summary,
                 turn_context.config.service_tier.clone(),
                 turn_metadata_header,
+                Some(turn_context.sub_id.as_str()),
                 &InferenceTraceContext::disabled(),
             )
             .await

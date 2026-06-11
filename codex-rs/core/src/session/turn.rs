@@ -1833,6 +1833,7 @@ async fn try_run_sampling_request(
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             turn_metadata_header,
+            Some(turn_context.sub_id.as_str()),
             &inference_trace,
         )
         .instrument(trace_span!("stream_request"))

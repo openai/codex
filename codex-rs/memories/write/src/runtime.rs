@@ -254,6 +254,7 @@ impl MemoryStartupContext {
                 context.reasoning_summary,
                 context.service_tier.clone(),
                 context.turn_metadata_header.as_deref(),
+                /*turn_id*/ None,
                 &InferenceTraceContext::disabled(),
             )
             .await?;

@@ -296,6 +296,7 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
     let client_metadata = client.build_ws_client_metadata(
         &window_id,
         Some(r#"{"turn_id":"turn-123"}"#),
+        Some("turn-123"),
         /*use_responses_lite*/ false,
     );
     assert_eq!(
@@ -321,6 +322,7 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
                 X_CODEX_TURN_METADATA_HEADER.to_string(),
                 r#"{"turn_id":"turn-123"}"#.to_string(),
             ),
+            ("turn_id".to_string(), "turn-123".to_string()),
         ])
     );
 }
