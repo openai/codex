@@ -153,6 +153,9 @@ impl App {
             AppEvent::ArchiveCurrentThread => {
                 return Ok(self.archive_current_thread(app_server).await);
             }
+            AppEvent::DeleteCurrentThread => {
+                return Ok(self.delete_current_thread(app_server).await);
+            }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
                     "codex.thread.fork",
@@ -2269,6 +2272,33 @@ impl App {
             Err(err) => {
                 self.chat_widget
                     .add_error_message(format!("Failed to archive current thread: {err}"));
+                AppRunControl::Continue
+            }
+        }
+    }
+
+    pub(super) async fn delete_current_thread(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> AppRunControl {
+        let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
+            self.chat_widget
+                .add_error_message("A thread must start before it can be deleted.".to_string());
+            return AppRunControl::Continue;
+        };
+        if self.side_threads.contains_key(&thread_id) {
+            self.chat_widget.add_error_message(
+                "'/delete' is unavailable in side conversations. Press Ctrl+C to return to the main thread first."
+                    .to_string(),
+            );
+            return AppRunControl::Continue;
+        }
+
+        match app_server.thread_delete(thread_id).await {
+            Ok(()) => AppRunControl::Exit(ExitReason::UserRequested),
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to delete current thread: {err}"));
                 AppRunControl::Continue
             }
         }
