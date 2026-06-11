@@ -26,8 +26,6 @@ pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
-pub const FS_JOIN_METHOD: &str = "fs/join";
-pub const FS_PARENT_METHOD: &str = "fs/parent";
 pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
 pub const FS_REMOVE_METHOD: &str = "fs/remove";
 pub const FS_COPY_METHOD: &str = "fs/copy";
@@ -261,33 +259,6 @@ pub struct FsCanonicalizeParams {
 #[serde(rename_all = "camelCase")]
 pub struct FsCanonicalizeResponse {
     pub path: PathUri,
-}
-
-// TODO(anp): remove fs/join from the protocol.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsJoinParams {
-    pub base_path: PathUri,
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsJoinResponse {
-    pub path: PathUri,
-}
-
-// TODO(anp): remove fs/parent from the protocol.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsParentParams {
-    pub path: PathUri,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsParentResponse {
-    pub path: Option<PathUri>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
