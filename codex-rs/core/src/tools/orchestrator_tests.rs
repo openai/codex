@@ -86,7 +86,7 @@ async fn guardian_timeout_falls_back_to_manual_approval() {
     };
     let mut runtime = TimeoutThenManualRuntime::default();
 
-    let approval_decision = ToolOrchestrator::request_approval_with_manual_fallback(
+    let approval_decision = ToolOrchestrator::request_approval(
         &mut runtime,
         &(),
         "permission-request-1",
@@ -145,7 +145,7 @@ async fn guardian_timeout_stays_terminal_when_manual_fallback_is_disabled() {
     };
     let mut runtime = TimeoutThenManualRuntime::default();
 
-    let approval_decision = ToolOrchestrator::request_approval_with_manual_fallback(
+    let approval_decision = ToolOrchestrator::request_approval(
         &mut runtime,
         &(),
         "permission-request-1",
