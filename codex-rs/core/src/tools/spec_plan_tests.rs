@@ -400,6 +400,7 @@ fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> Dyn
 fn discoverable_plugin(id: &str, name: &str) -> DiscoverableTool {
     DiscoverablePluginInfo {
         id: id.to_string(),
+        remote_plugin_id: None,
         name: name.to_string(),
         description: Some(format!("{name} plugin")),
         has_skills: false,
@@ -1014,7 +1015,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         ToolSpec::Function(tool) => tool.description.as_str(),
         other => panic!("expected spawn_agent function spec, got {other:?}"),
     };
-    assert!(spawn_agent_description.contains("max_concurrent_threads_per_session = 17"));
+    assert!(!spawn_agent_description.contains("max_concurrent_threads_per_session"));
 
     let direct_model_only = probe(|turn| {
         set_features(

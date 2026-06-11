@@ -292,6 +292,14 @@ async fn plugin_install_writes_remote_plugin_to_cloud_and_cache() -> Result<()> 
 async fn plugin_install_uses_remote_apps_needing_auth_response() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
+    let remote_app_manifest = json!({
+        "apps": {
+            "alpha": {
+                "id": "alpha",
+                "category": "Developer Tools"
+            }
+        }
+    });
     let bundle_url = mount_remote_plugin_bundle(
         &server,
         /*status_code*/ 200,
@@ -299,7 +307,14 @@ async fn plugin_install_uses_remote_apps_needing_auth_response() -> Result<()> {
     )
     .await;
     configure_remote_plugin_with_apps_test(codex_home.path(), &server)?;
-    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_remote_plugin_detail_with_app_manifest(
+        &server,
+        REMOTE_PLUGIN_ID,
+        "1.2.3",
+        Some(&bundle_url),
+        remote_app_manifest,
+    )
+    .await;
     mount_empty_remote_installed_plugins(&server).await;
     mount_remote_plugin_install_with_apps_needing_auth(&server, REMOTE_PLUGIN_ID, &["alpha"]).await;
 
@@ -327,7 +342,7 @@ async fn plugin_install_uses_remote_apps_needing_auth_response() -> Result<()> {
                 name: "alpha".to_string(),
                 description: None,
                 install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
-                needs_auth: true,
+                category: Some("Developer Tools".to_string()),
             }],
         }
     );
@@ -1001,7 +1016,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
                 name: "Alpha".to_string(),
                 description: Some("Alpha connector".to_string()),
                 install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
-                needs_auth: true,
+                category: None,
             }],
         }
     );
@@ -1089,7 +1104,7 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
                 name: "Alpha".to_string(),
                 description: Some("Alpha connector".to_string()),
                 install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
-                needs_auth: true,
+                category: None,
             }],
         }
     );

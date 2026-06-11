@@ -348,6 +348,10 @@ impl McpConnectionManager {
         !self.clients.is_empty()
     }
 
+    pub(crate) fn contains_server(&self, server_name: &str) -> bool {
+        self.clients.contains_key(server_name)
+    }
+
     /// Stop all MCP clients owned by this manager and terminate stdio server processes.
     pub async fn shutdown(&self) {
         self.startup_cancellation_token.cancel();
