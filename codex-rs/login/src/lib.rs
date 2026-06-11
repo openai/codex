@@ -43,6 +43,7 @@ pub use auth::load_auth_dot_json;
 pub use auth::login_with_access_token;
 pub use auth::login_with_access_token_with_auth_route_config;
 pub use auth::login_with_api_key;
+pub use auth::login_with_bedrock_api_key;
 pub use auth::logout;
 pub use auth::logout_with_revoke;
 pub use auth::read_codex_access_token_from_env;

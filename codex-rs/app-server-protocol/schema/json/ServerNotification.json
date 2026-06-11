@@ -532,6 +532,13 @@
             "personalAccessToken"
           ],
           "type": "string"
+        },
+        {
+          "description": "Amazon Bedrock bearer token managed by Codex.",
+          "enum": [
+            "bedrockApiKey"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -3523,6 +3530,17 @@
       ],
       "type": "object"
     },
+    "ThreadDeletedNotification": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadGoal": {
       "properties": {
         "createdAt": {
@@ -5445,6 +5463,26 @@
         "params"
       ],
       "title": "Thread/archivedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/deleted"
+          ],
+          "title": "Thread/deletedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadDeletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/deletedNotification",
       "type": "object"
     },
     {

@@ -884,17 +884,117 @@ ON CONFLICT(id) DO UPDATE SET
         self.upsert_thread(&metadata).await
     }
 
-    /// Delete a thread metadata row by id.
+    /// Delete a thread and all associated state by id.
     pub async fn delete_thread(&self, thread_id: ThreadId) -> anyhow::Result<u64> {
-        let result = sqlx::query("DELETE FROM threads WHERE id = ?")
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
-            .await?;
-        let rows_affected = result.rows_affected();
-        self.memories.delete_thread_memory(thread_id).await?;
-        if rows_affected > 0 {
-            let _ = self.thread_goals.delete_thread_goal(thread_id).await?;
+        self.delete_threads_strict(&[thread_id]).await
+    }
+
+    /// Delete a set of threads and all associated state.
+    ///
+    /// Spawn edges and thread rows are deleted last so a failed delete can be retried with enough
+    /// state left to rediscover the same spawned subtree.
+    pub async fn delete_threads_strict(&self, thread_ids: &[ThreadId]) -> anyhow::Result<u64> {
+        if thread_ids.is_empty() {
+            return Ok(0);
         }
+
+        let thread_id_strings = thread_ids
+            .iter()
+            .map(ThreadId::to_string)
+            .collect::<Vec<_>>();
+        for (thread_id, thread_id_string) in thread_ids.iter().zip(&thread_id_strings) {
+            sqlx::query("DELETE FROM logs WHERE thread_id = ?")
+                .bind(thread_id_string)
+                .execute(self.logs_pool.as_ref())
+                .await?;
+            self.memories.delete_thread_memory(*thread_id).await?;
+            self.thread_goals.delete_thread_goal(*thread_id).await?;
+        }
+
+        let now = Utc::now().timestamp();
+        let mut tx = self.pool.begin().await?;
+        for thread_id_string in &thread_id_strings {
+            for parent_thread_id_string in &thread_id_strings {
+                // If both the job runner and worker are being deleted, requeueing
+                // the worker item would leave a running job with no loop to consume it.
+                sqlx::query(
+                    r#"
+UPDATE agent_jobs
+SET status = ?, updated_at = ?, completed_at = ?, last_error = ?
+WHERE status IN (?, ?)
+  AND id IN (
+    SELECT item.job_id
+    FROM agent_job_items AS item
+    JOIN thread_spawn_edges AS edge ON edge.child_thread_id = item.assigned_thread_id
+    WHERE item.status = ? AND item.assigned_thread_id = ? AND edge.parent_thread_id = ?
+  )
+                    "#,
+                )
+                .bind(AgentJobStatus::Cancelled.as_str())
+                .bind(now)
+                .bind(now)
+                .bind("agent job runner thread was deleted")
+                .bind(AgentJobStatus::Pending.as_str())
+                .bind(AgentJobStatus::Running.as_str())
+                .bind(AgentJobItemStatus::Running.as_str())
+                .bind(thread_id_string)
+                .bind(parent_thread_id_string)
+                .execute(&mut *tx)
+                .await?;
+            }
+            sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
+                .bind(thread_id_string)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                r#"
+UPDATE agent_job_items
+SET
+    status = ?,
+    assigned_thread_id = NULL,
+    updated_at = ?,
+    last_error = ?
+WHERE assigned_thread_id = ? AND status = ?
+            "#,
+            )
+            .bind(AgentJobItemStatus::Pending.as_str())
+            .bind(now)
+            .bind("assigned thread was deleted")
+            .bind(thread_id_string)
+            .bind(AgentJobItemStatus::Running.as_str())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                r#"
+UPDATE agent_job_items
+SET assigned_thread_id = NULL, updated_at = ?
+WHERE assigned_thread_id = ?
+            "#,
+            )
+            .bind(now)
+            .bind(thread_id_string)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for thread_id_string in &thread_id_strings {
+            sqlx::query(
+                "DELETE FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?",
+            )
+            .bind(thread_id_string)
+            .bind(thread_id_string)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let mut rows_affected = 0;
+        for thread_id_string in &thread_id_strings {
+            rows_affected += sqlx::query("DELETE FROM threads WHERE id = ?")
+                .bind(thread_id_string)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        }
+        tx.commit().await?;
+
         Ok(rows_affected)
     }
 }
@@ -1136,12 +1236,14 @@ mod tests {
     use crate::DirectionalThreadSpawnEdgeStatus;
     use crate::runtime::test_support::test_thread_metadata;
     use crate::runtime::test_support::unique_temp_dir;
+    use anyhow::Result;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::GitInfo;
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::path::PathBuf;
 
     #[tokio::test]
@@ -1180,6 +1282,180 @@ mod tests {
                 .await
                 .expect("memory mode should remain readable");
         assert_eq!(memory_mode, "disabled");
+    }
+
+    #[tokio::test]
+    async fn delete_thread_cleans_associated_state() -> Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string()).await?;
+        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000401")?;
+        let child_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000402")?;
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.clone(),
+            ))
+            .await?;
+        seed_thread_cleanup_state(&runtime, thread_id, child_thread_id).await?;
+        sqlx::query("INSERT INTO thread_dynamic_tools (thread_id, position, name, description, input_schema) VALUES (?, ?, ?, ?, ?)")
+        .bind(thread_id.to_string())
+        .bind(0_i64)
+        .bind("test_tool")
+        .bind("test dynamic tool")
+        .bind("{}")
+        .execute(runtime.pool.as_ref())
+        .await?;
+        runtime
+            .create_agent_job(
+                &AgentJobCreateParams {
+                    id: "job-1".to_string(),
+                    name: "test-job".to_string(),
+                    instruction: "Return a result".to_string(),
+                    auto_export: true,
+                    max_runtime_seconds: None,
+                    output_schema_json: None,
+                    input_headers: vec!["path".to_string()],
+                    input_csv_path: "/tmp/in.csv".to_string(),
+                    output_csv_path: "/tmp/out.csv".to_string(),
+                },
+                &[AgentJobItemCreateParams {
+                    item_id: "item-1".to_string(),
+                    row_index: 0,
+                    source_id: None,
+                    row_json: json!({"path": "file-1"}),
+                }],
+            )
+            .await?;
+        runtime.mark_agent_job_running("job-1").await?;
+        runtime
+            .mark_agent_job_item_running_with_thread(
+                "job-1",
+                "item-1",
+                &child_thread_id.to_string(),
+            )
+            .await?;
+
+        let rows = runtime
+            .delete_threads_strict(&[thread_id, child_thread_id])
+            .await?;
+
+        assert_eq!(rows, 1);
+        assert!(runtime.get_thread(thread_id).await?.is_none());
+        let dynamic_tool_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM thread_dynamic_tools WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await?;
+        assert_eq!(dynamic_tool_count, 0);
+        assert_thread_cleanup_state(&runtime, thread_id).await?;
+        let job_item = runtime
+            .get_agent_job_item("job-1", "item-1")
+            .await?
+            .expect("job item should exist");
+        assert_eq!(job_item.status, AgentJobItemStatus::Pending);
+        assert_eq!(job_item.assigned_thread_id, None);
+        assert_eq!(
+            job_item.last_error,
+            Some("assigned thread was deleted".to_string())
+        );
+        let job = runtime
+            .get_agent_job("job-1")
+            .await?
+            .expect("job should exist");
+        assert_eq!(job.status, AgentJobStatus::Cancelled);
+
+        let missing_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000403")?;
+        let missing_child_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000404")?;
+        seed_thread_cleanup_state(&runtime, missing_thread_id, missing_child_thread_id).await?;
+
+        assert_eq!(runtime.delete_thread(missing_thread_id).await?, 0);
+        assert_thread_cleanup_state(&runtime, missing_thread_id).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_thread_keeps_retry_graph_on_cleanup_failure() -> Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string()).await?;
+        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000405")?;
+        let child_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000406")?;
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.clone(),
+            ))
+            .await?;
+        seed_thread_cleanup_state(&runtime, thread_id, child_thread_id).await?;
+
+        runtime.logs_pool.close().await;
+        runtime
+            .delete_thread(thread_id)
+            .await
+            .expect_err("closed log db should fail deletion");
+
+        assert!(runtime.get_thread(thread_id).await?.is_some());
+        assert_eq!(
+            runtime.list_thread_spawn_descendants(thread_id).await?,
+            vec![child_thread_id]
+        );
+        Ok(())
+    }
+
+    async fn seed_thread_cleanup_state(
+        runtime: &StateRuntime,
+        thread_id: ThreadId,
+        child_thread_id: ThreadId,
+    ) -> Result<()> {
+        runtime
+            .upsert_thread_spawn_edge(
+                thread_id,
+                child_thread_id,
+                DirectionalThreadSpawnEdgeStatus::Closed,
+            )
+            .await?;
+        runtime
+            .thread_goals()
+            .replace_thread_goal(
+                thread_id,
+                "test goal",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await?;
+        sqlx::query("INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES (1, 0, 'INFO', 'test', 'feedback log', ?)")
+            .bind(thread_id.to_string())
+            .execute(runtime.logs_pool.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn assert_thread_cleanup_state(
+        runtime: &StateRuntime,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        let spawn_edge_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?",
+        )
+        .bind(thread_id.to_string())
+        .bind(thread_id.to_string())
+        .fetch_one(runtime.pool.as_ref())
+        .await?;
+        assert_eq!(spawn_edge_count, 0);
+        assert_eq!(
+            runtime.thread_goals().get_thread_goal(thread_id).await?,
+            None
+        );
+        let logs = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec![thread_id.to_string()],
+                ..Default::default()
+            })
+            .await?;
+        assert!(logs.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
