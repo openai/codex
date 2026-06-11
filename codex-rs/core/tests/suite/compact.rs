@@ -2198,9 +2198,12 @@ async fn pre_sampling_compact_skips_when_either_comp_hash_is_missing() {
         &server,
         ModelsResponse {
             models: vec![
-                model_info_with_optional_comp_hash(model_without_hash, None),
+                model_info_with_optional_comp_hash(model_without_hash, /*comp_hash*/ None),
                 model_info_with_optional_comp_hash(model_with_hash, Some("hash-a")),
-                model_info_with_optional_comp_hash(next_model_without_hash, None),
+                model_info_with_optional_comp_hash(
+                    next_model_without_hash,
+                    /*comp_hash*/ None,
+                ),
             ],
         },
     )
@@ -2650,7 +2653,7 @@ async fn pre_sampling_compact_skips_missing_comp_hash_after_resume() {
         &server,
         ModelsResponse {
             models: vec![
-                model_info_with_optional_comp_hash(previous_model, None),
+                model_info_with_optional_comp_hash(previous_model, /*comp_hash*/ None),
                 model_info_with_optional_comp_hash(next_model, Some("hash-b")),
             ],
         },
