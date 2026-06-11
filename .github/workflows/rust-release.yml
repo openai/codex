@@ -1355,19 +1355,15 @@ jobs:
             other_tarballs+=("${tarball}")
           done
 
-          # Publish the platform packages before the root CLI wrapper. The root
-          # wrapper advances @openai/codex@latest, so it should only publish
-          # after the optional dependency versions it references exist.
-          tarballs=(
-            "${platform_tarballs[@]}"
-            "${other_tarballs[@]}"
-            "${root_tarball}"
-          )
-          if [[ -f "${sdk_tarball}" ]]; then
-            tarballs+=("${sdk_tarball}")
-          fi
+          publish_tarball() {
+            local tarball="$1"
+            local filename
+            local tag
+            local platform
+            local publish_output
+            local publish_status
+            local -a publish_cmd
 
-          for tarball in "${tarballs[@]}"; do
             filename="$(basename "${tarball}")"
             tag=""
 
@@ -1382,7 +1378,7 @@ jobs:
                 ;;
               *)
                 echo "Unexpected npm tarball: ${filename}"
-                exit 1
+                return 1
                 ;;
             esac
 
@@ -1399,16 +1395,34 @@ jobs:
 
             echo "${publish_output}"
             if [[ ${publish_status} -eq 0 ]]; then
-              continue
+              return 0
             fi
 
             if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
               echo "Skipping already-published package version for ${filename}"
-              continue
+              return 0
             fi
 
-            exit "${publish_status}"
-          done
+            return "${publish_status}"
+          }
+
+          # Publish independent packages concurrently, but wait for all of
+          # them before publishing the root CLI wrapper.
+          independent_tarballs=(
+            "${platform_tarballs[@]}"
+            "${other_tarballs[@]}"
+          )
+
+          export prefix
+          export -f publish_tarball
+          printf '%s\0' "${independent_tarballs[@]}" |
+            xargs -0 -n1 -P0 bash -c "publish_tarball \"\$1\"" _
+
+          publish_tarball "${root_tarball}"
+          # The SDK depends on this exact root package version.
+          if [[ -f "${sdk_tarball}" ]]; then
+            publish_tarball "${sdk_tarball}"
+          fi
 
   deploy-dev-website:
     name: Trigger developers.openai.com deploy
