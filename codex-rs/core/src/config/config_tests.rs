@@ -9341,9 +9341,9 @@ sandbox_private_desktop = true
         r#"
 cli_auth_credentials_store = "keyring"
 chatgpt_base_url = "https://managed.example/backend-api"
-sqlite_home = "{}"
-log_dir = "{}"
-model_catalog_json = "{}"
+sqlite_home = {:?}
+log_dir = {:?}
+model_catalog_json = {:?}
 check_for_update_on_startup = false
 allow_login_shell = false
 

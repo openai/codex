@@ -2198,9 +2198,12 @@ mod tests {
                 sqlite_home: Some(Sourced::new(sqlite_home, source.clone())),
                 log_dir: Some(Sourced::new(log_dir, source.clone())),
                 model_catalog_json: Some(Sourced::new(model_catalog_json, source.clone(),)),
-                check_for_update_on_startup: Some(Sourced::new(false, source.clone())),
+                check_for_update_on_startup: Some(Sourced::new(
+                    /*value*/ false,
+                    source.clone(),
+                )),
                 otel: Some(Sourced::new(otel, source.clone())),
-                allow_login_shell: Some(Sourced::new(false, source.clone())),
+                allow_login_shell: Some(Sourced::new(/*value*/ false, source.clone())),
                 shell_environment_policy: Some(Sourced::new(
                     shell_environment_policy,
                     source.clone(),
