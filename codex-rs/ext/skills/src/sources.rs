@@ -101,6 +101,12 @@ impl SkillProviders {
         self
     }
 
+    pub(crate) fn has_orchestrator_provider(&self) -> bool {
+        self.sources
+            .iter()
+            .any(|source| source.kind == SkillSourceKind::Orchestrator)
+    }
+
     pub(crate) async fn list_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
         self.list_matching(&query, |source| source.should_list(&query))
             .await

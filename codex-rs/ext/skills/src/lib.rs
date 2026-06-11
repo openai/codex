@@ -5,6 +5,7 @@ mod render;
 mod selection;
 mod sources;
 mod state;
+mod tools;
 
 pub use extension::install;
 pub use extension::install_with_providers;
