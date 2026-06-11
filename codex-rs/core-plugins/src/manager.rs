@@ -207,9 +207,20 @@ fn featured_plugin_ids_cache_key(
 
 fn project_plugin_load_outcome_for_auth(
     outcome: PluginLoadOutcome,
-    _auth_mode: Option<AuthMode>,
+    auth_mode: Option<AuthMode>,
 ) -> PluginLoadOutcome {
-    outcome
+    let apps_route_available = auth_mode.is_some_and(AuthMode::uses_codex_backend);
+    let mut plugins = outcome.plugins().to_vec();
+    for plugin in &mut plugins {
+        if apps_route_available {
+            if plugin.is_active() && !plugin.apps.is_empty() {
+                plugin.mcp_servers.clear();
+            }
+        } else {
+            plugin.apps.clear();
+        }
+    }
+    PluginLoadOutcome::from_plugins(plugins)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
