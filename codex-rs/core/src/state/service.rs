@@ -41,7 +41,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
     /// The latest manager; callers retain an owned handle while performing MCP I/O.
-    pub(crate) mcp_connection_manager: ArcSwap<McpConnectionManager>,
+    pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]

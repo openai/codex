@@ -24,6 +24,7 @@ members = [
     "code-mode-client",
     "code-mode-host",
     "code-mode-protocol",
+    "codex-home",
     "cloud-config",
     "cloud-tasks",
     "cloud-tasks-client",
@@ -162,6 +163,7 @@ codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
 codex-code-mode-client = { path = "code-mode-client" }
 codex-code-mode-protocol = { path = "code-mode-protocol" }
+codex-home = { path = "codex-home" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-context-fragments = { path = "context-fragments" }
@@ -242,6 +244,7 @@ codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-oss = { path = "utils/oss" }
 codex-utils-output-truncation = { path = "utils/output-truncation" }
 codex-utils-path = { path = "utils/path-utils" }
+codex-utils-path-uri = { path = "utils/path-uri" }
 codex-utils-plugins = { path = "utils/plugins" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }

@@ -6416,6 +6416,12 @@
       "AppSummary": {
         "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
         "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": [
               "string",
@@ -6433,21 +6439,23 @@
           },
           "name": {
             "type": "string"
-          },
-          "needsAuth": {
-            "type": "boolean"
           }
         },
         "required": [
           "id",
-          "name",
-          "needsAuth"
+          "name"
         ],
         "type": "object"
       },
       "AppTemplateSummary": {
         "properties": {
           "canonicalConnectorId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
             "type": [
               "string",
               "null"
@@ -6726,6 +6734,13 @@
             "description": "Programmatic Codex auth backed by a personal access token.",
             "enum": [
               "personalAccessToken"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Amazon Bedrock bearer token managed by Codex.",
+            "enum": [
+              "bedrockApiKey"
             ],
             "type": "string"
           }

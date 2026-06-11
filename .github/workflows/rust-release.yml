@@ -1111,30 +1111,20 @@ jobs:
 
           echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Download target artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
+          pattern: "{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc}"
+
+      - name: Download supplemental release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: "{*-symbols,argument-comment-lint-*,codex-zsh-*,python-runtime-wheel-*}"
 
       - name: List
         run: ls -R dist/
-
-      - name: Delete entries from dist/ that should not go in the release
-        run: |
-          rm -rf dist/windows-binaries*
-          rm -rf dist/*-apple-darwin*-signed-binaries
-          rm -rf dist/*-apple-darwin*-packaged
-          rm -rf dist/*-apple-darwin*-unsigned-dmg
-          rm -rf dist/*-apple-darwin*-signed-dmg
-          rm -rf dist/*-apple-darwin*-binary-signing-verification
-          rm -rf dist/*-apple-darwin*-dmg-signing-verification
-          rm -rf dist/*-apple-darwin*-unsigned
-          # cargo-timing.html appears under multiple target-specific directories.
-          # If included in files: dist/**, release upload races on duplicate
-          # asset names and can fail with 404s.
-          find dist -type f -name 'cargo-timing.html' -delete
-          find dist -type d -empty -delete
-
-          ls -R dist/
 
       - name: Add Codex package checksum manifest
         run: |
@@ -1234,6 +1224,18 @@ jobs:
           # Mark as prerelease only when the version has a suffix after x.y.z
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
+
+  publish-dotslash:
+    name: publish-dotslash
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         env:
@@ -1363,14 +1365,15 @@ jobs:
             other_tarballs+=("${tarball}")
           done
 
-          # Publish the platform packages before the root CLI wrapper. The root
-          # wrapper advances @openai/codex@latest, so it should only publish
-          # after the optional dependency versions it references exist.
+          # npm returns HTTP 409 when concurrent publishes update the same
+          # packument. Every platform tarball is a version of @openai/codex,
+          # so publish all tarballs serially.
           tarballs=(
             "${platform_tarballs[@]}"
             "${other_tarballs[@]}"
             "${root_tarball}"
           )
+          # The SDK depends on this exact root package version.
           if [[ -f "${sdk_tarball}" ]]; then
             tarballs+=("${sdk_tarball}")
           fi

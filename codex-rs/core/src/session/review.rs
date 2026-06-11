@@ -114,6 +114,7 @@ pub(super) async fn spawn_review_thread(
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
+        comp_hash: model_info.comp_hash.clone(),
         tool_mode,
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,

@@ -42,7 +42,9 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelServiceTier;
@@ -1641,6 +1643,114 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
     assert_eq!(expected, history.raw_items());
 }
 
+#[tokio::test]
+async fn resize_all_images_prepares_failures_before_history_insertion() {
+    let (session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            let _ = config.features.enable(Feature::ResizeAllImages);
+        },
+    )
+    .await;
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-1".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::ContentItems(vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "before".to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,%%%".to_string(),
+                    detail: Some(ImageDetail::High),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "https://example.com/image.png".to_string(),
+                    detail: Some(ImageDetail::High),
+                },
+            ]),
+            success: Some(true),
+        },
+    };
+
+    session
+        .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&item))
+        .await;
+
+    assert_eq!(
+        session.state.lock().await.clone_history().raw_items(),
+        &[ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "before".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: "image content omitted because it could not be processed".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "https://example.com/image.png".to_string(),
+                        detail: Some(ImageDetail::High),
+                    },
+                ]),
+                success: Some(true),
+            },
+        }]
+    );
+}
+
+#[tokio::test]
+async fn resize_all_images_prepares_resumed_history_before_installing_it() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            let _ = config.features.enable(Feature::ResizeAllImages);
+        },
+    )
+    .await;
+    let resumed_item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputImage {
+                image_url: "data:image/png;base64,%%%".to_string(),
+                detail: Some(ImageDetail::High),
+            },
+            ContentItem::InputText {
+                text: "keep me".to_string(),
+            },
+        ],
+        phase: None,
+    };
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: vec![RolloutItem::ResponseItem(resumed_item)],
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
+        }))
+        .await;
+
+    assert_eq!(
+        session.state.lock().await.clone_history().raw_items(),
+        &[ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "image content omitted because it could not be processed".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "keep me".to_string(),
+                },
+            ],
+            phase: None,
+        }]
+    );
+}
+
 #[test]
 fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
     let thread_id = ThreadId::default();
@@ -2559,6 +2669,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
+        comp_hash: None,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
@@ -2611,6 +2722,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         session.previous_turn_settings().await,
         Some(PreviousTurnSettings {
             model: previous_model.to_string(),
+            comp_hash: None,
             realtime_active: Some(turn_context.realtime_active),
         })
     );
@@ -2653,6 +2765,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
     sess.persist_rollout_items(&rollout_items).await;
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
         model: "stale-model".to_string(),
+        comp_hash: None,
         realtime_active: Some(tc.realtime_active),
     }))
     .await;
@@ -2835,6 +2948,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
     .await;
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
         model: "stale-model".to_string(),
+        comp_hash: None,
         realtime_active: None,
     }))
     .await;
@@ -2851,6 +2965,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         sess.previous_turn_settings().await,
         Some(PreviousTurnSettings {
             model: tc.model_info.slug.clone(),
+            comp_hash: None,
             realtime_active: Some(tc.realtime_active),
         })
     );
@@ -2951,6 +3066,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         RolloutItem::TurnContext(TurnContextItem {
             turn_id: Some(rolled_back_turn_id.clone()),
             model: "rolled-back-model".to_string(),
+            comp_hash: None,
             ..first_context_item.clone()
         }),
         RolloutItem::ResponseItem(user_message("turn 2 user")),
@@ -3170,7 +3286,7 @@ async fn set_rate_limits_retains_previous_credits() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -3277,7 +3393,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -3809,7 +3925,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4661,7 +4777,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4770,7 +4886,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4825,13 +4941,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let services = SessionServices {
-        mcp_connection_manager: arc_swap::ArcSwap::from_pointee(
+        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
                 config.prefix_mcp_tool_names(),
             ),
-        ),
+        )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -5007,7 +5123,7 @@ async fn make_session_with_config_and_rx(
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5110,7 +5226,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -6855,7 +6971,7 @@ where
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -6910,13 +7026,13 @@ where
     );
 
     let services = SessionServices {
-        mcp_connection_manager: arc_swap::ArcSwap::from_pointee(
+        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
                 config.prefix_mcp_tool_names(),
             ),
-        ),
+        )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -7360,6 +7476,7 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
     previous_context_item.realtime_active = None;
     let previous_turn_settings = PreviousTurnSettings {
         model: previous_context.model_info.slug.clone(),
+        comp_hash: None,
         realtime_active: Some(true),
     };
     let mut current_context = previous_context
@@ -7953,6 +8070,7 @@ async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_turn_settings = PreviousTurnSettings {
         model: turn_context.model_info.slug.clone(),
+        comp_hash: None,
         realtime_active: Some(true),
     };
 
@@ -7975,6 +8093,7 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
     turn_context.realtime_active = true;
     let previous_turn_settings = PreviousTurnSettings {
         model: turn_context.model_info.slug.clone(),
+        comp_hash: None,
         realtime_active: Some(true),
     };
 
@@ -8006,6 +8125,18 @@ fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSy
         access: FileSystemAccessMode::Deny,
     });
     policy
+}
+
+#[tokio::test]
+async fn turn_context_item_uses_turn_context_comp_hash_snapshot() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    turn_context.comp_hash = Some("turn-context-hash".to_string());
+    turn_context.model_info.comp_hash = Some("model-info-hash".to_string());
+
+    assert_eq!(
+        turn_context.to_turn_context_item().comp_hash.as_deref(),
+        Some("turn-context-hash")
+    );
 }
 
 #[tokio::test]
@@ -8199,6 +8330,7 @@ async fn build_initial_context_prepends_model_switch_message() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_turn_settings = PreviousTurnSettings {
         model: "previous-regular-model".to_string(),
+        comp_hash: None,
         realtime_active: None,
     };
 
@@ -8251,6 +8383,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
     session
         .set_previous_turn_settings(Some(PreviousTurnSettings {
             model: previous_context.model_info.slug.clone(),
+            comp_hash: None,
             realtime_active: Some(previous_context.realtime_active),
         }))
         .await;

@@ -36,6 +36,7 @@ codex-cloud-config = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
+codex-home = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-external-agent-migration = { workspace = true }
@@ -76,6 +77,7 @@ codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }

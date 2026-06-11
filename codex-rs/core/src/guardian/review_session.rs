@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionKind;
+use codex_extension_api::UserInstructions;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
@@ -31,7 +32,6 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::LoadedAgentsMd;
 use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
@@ -152,7 +152,7 @@ struct GuardianReviewSessionReuseKey {
     permissions: Permissions,
     developer_instructions: Option<String>,
     base_instructions: Option<String>,
-    user_instructions: Option<LoadedAgentsMd>,
+    user_instructions: Option<UserInstructions>,
     compact_prompt: Option<String>,
     cwd: AbsolutePathBuf,
     mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
@@ -164,7 +164,10 @@ struct GuardianReviewSessionReuseKey {
 }
 
 impl GuardianReviewSessionReuseKey {
-    fn from_spawn_config(spawn_config: &Config) -> Self {
+    fn from_spawn_config(
+        spawn_config: &Config,
+        user_instructions: Option<UserInstructions>,
+    ) -> Self {
         Self {
             model: spawn_config.model.clone(),
             model_provider_id: spawn_config.model_provider_id.clone(),
@@ -177,7 +180,7 @@ impl GuardianReviewSessionReuseKey {
             permissions: spawn_config.permissions.clone(),
             developer_instructions: spawn_config.developer_instructions.clone(),
             base_instructions: spawn_config.base_instructions.clone(),
-            user_instructions: spawn_config.user_instructions.clone(),
+            user_instructions,
             compact_prompt: spawn_config.compact_prompt.clone(),
             cwd: spawn_config.cwd.clone(),
             mcp_servers: spawn_config.mcp_servers.clone(),
@@ -318,7 +321,10 @@ impl GuardianReviewSessionManager {
         params: GuardianReviewSessionParams,
     ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
         let deadline = params.deadline;
-        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &params.spawn_config,
+            params.parent_session.user_instructions().await,
+        );
         let mut stale_trunk_to_shutdown = None;
         let mut spawned_trunk = false;
         let trunk_candidate = match run_before_review_deadline(
@@ -441,6 +447,7 @@ impl GuardianReviewSessionManager {
     pub(crate) async fn cache_for_test(&self, codex: Codex) {
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
             codex.session.get_config().await.as_ref(),
+            codex.session.user_instructions().await,
         );
         self.state.lock().await.trunk = Some(Arc::new(GuardianReviewSession {
             reuse_key,
@@ -459,6 +466,7 @@ impl GuardianReviewSessionManager {
     pub(crate) async fn register_ephemeral_for_test(&self, codex: Codex) {
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
             codex.session.get_config().await.as_ref(),
+            codex.session.user_instructions().await,
         );
         self.state
             .lock()
@@ -1075,8 +1083,10 @@ mod tests {
         let (tx_event, rx_event) = async_channel::unbounded();
         let (_agent_status_tx, agent_status) =
             tokio::sync::watch::channel(AgentStatus::PendingInit);
-        let reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(session.get_config().await.as_ref());
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            session.get_config().await.as_ref(),
+            session.user_instructions().await,
+        );
 
         (
             GuardianReviewSession {
@@ -1179,8 +1189,10 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("cached guardian config");
-        let cached_reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config);
+        let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &cached_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         let mut changed_parent_config = parent_config;
         changed_parent_config.model_provider.base_url =
@@ -1192,12 +1204,18 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("next guardian config");
-        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config);
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &next_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         assert_ne!(cached_reuse_key, next_reuse_key);
         assert_eq!(
             cached_reuse_key,
-            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config)
+            GuardianReviewSessionReuseKey::from_spawn_config(
+                &cached_spawn_config,
+                /*user_instructions*/ None,
+            )
         );
     }
 
@@ -1251,8 +1269,10 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("cached guardian config");
-        let cached_reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config);
+        let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &cached_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         let mut changed_parent_config = parent_config;
         changed_parent_config.model_auto_compact_token_limit_scope =
@@ -1264,7 +1284,10 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("next guardian config");
-        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config);
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &next_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         assert_ne!(cached_reuse_key, next_reuse_key);
     }
@@ -1495,8 +1518,10 @@ mod tests {
     async fn run_review_removes_trunk_when_event_stream_is_broken() {
         let (mut review_session, tx_event, _rx_sub) = test_review_session().await;
         let params = test_review_params().await;
-        review_session.reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
+        review_session.reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &params.spawn_config,
+            params.parent_session.user_instructions().await,
+        );
         let manager = GuardianReviewSessionManager {
             state: Arc::new(Mutex::new(GuardianReviewSessionState {
                 trunk: Some(Arc::new(review_session)),

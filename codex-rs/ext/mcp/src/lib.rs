@@ -9,6 +9,10 @@ use codex_mcp::hosted_plugin_runtime_mcp_server_config;
 struct HostedPluginRuntimeExtension;
 
 impl McpServerContributor<Config> for HostedPluginRuntimeExtension {
+    fn id(&self) -> &'static str {
+        "hosted_plugin_runtime"
+    }
+
     fn contribute<'a>(
         &'a self,
         config: &'a Config,
