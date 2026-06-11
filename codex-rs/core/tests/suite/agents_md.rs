@@ -393,8 +393,9 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
         .with_home(Arc::clone(&home))
         .with_user_instructions_provider(provider.clone())
         .with_workspace_setup(|cwd, fs| async move {
+            let project_agents_uri = PathUri::from_path(cwd.join(GLOBAL_AGENTS_FILENAME))?;
             fs.write_file(
-                &cwd.join(GLOBAL_AGENTS_FILENAME),
+                &project_agents_uri,
                 PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
                 /*sandbox*/ None,
             )

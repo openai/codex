@@ -15,6 +15,7 @@ use codex_exec_server::RemoveOptions;
 use codex_extension_api::UserInstructions;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use core_test_support::create_directory_symlink;
@@ -42,30 +43,18 @@ struct FailingFileSystem {
 impl ExecutorFileSystem for FailingFileSystem {
     async fn canonicalize(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
-    ) -> io::Result<AbsolutePathBuf> {
+    ) -> io::Result<PathUri> {
         unreachable!("canonicalize should not be called")
-    }
-
-    async fn join(
-        &self,
-        _base_path: &AbsolutePathBuf,
-        _path: &Path,
-    ) -> io::Result<AbsolutePathBuf> {
-        unreachable!("join should not be called")
-    }
-
-    async fn parent(&self, _path: &AbsolutePathBuf) -> io::Result<Option<AbsolutePathBuf>> {
-        unreachable!("parent should not be called")
     }
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<Vec<u8>> {
-        if path == &self.path
+        if path.to_abs_path()? == self.path
             && let InjectedFailure::Read(kind) = self.failure
         {
             return Err(io::Error::new(kind, "injected read failure"));
@@ -75,7 +64,7 @@ impl ExecutorFileSystem for FailingFileSystem {
 
     async fn write_file(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _contents: Vec<u8>,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<()> {
@@ -84,7 +73,7 @@ impl ExecutorFileSystem for FailingFileSystem {
 
     async fn create_directory(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _create_directory_options: CreateDirectoryOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<()> {
@@ -93,10 +82,10 @@ impl ExecutorFileSystem for FailingFileSystem {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<FileMetadata> {
-        if path == &self.path
+        if path.to_abs_path()? == self.path
             && let InjectedFailure::Metadata(kind) = self.failure
         {
             return Err(io::Error::new(kind, "injected metadata failure"));
@@ -106,7 +95,7 @@ impl ExecutorFileSystem for FailingFileSystem {
 
     async fn read_directory(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<Vec<ReadDirectoryEntry>> {
         unreachable!("read_directory should not be called")
@@ -114,7 +103,7 @@ impl ExecutorFileSystem for FailingFileSystem {
 
     async fn remove(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _remove_options: RemoveOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<()> {
@@ -123,8 +112,8 @@ impl ExecutorFileSystem for FailingFileSystem {
 
     async fn copy(
         &self,
-        _source_path: &AbsolutePathBuf,
-        _destination_path: &AbsolutePathBuf,
+        _source_path: &PathUri,
+        _destination_path: &PathUri,
         _copy_options: CopyOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<()> {

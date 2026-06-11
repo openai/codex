@@ -174,12 +174,12 @@ async fn agents_md_paths(
             for marker in &project_root_markers {
                 let marker_path = ancestor.join(marker);
                 let marker_path_uri = PathUri::from_abs_path(&marker_path)?;
-                let marker_exists =
-                    match fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await {
-                        Ok(_) => true,
-                        Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-                        Err(err) => return Err(err),
-                    };
+                let marker_exists = match fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await
+                {
+                    Ok(_) => true,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                    Err(err) => return Err(err),
+                };
                 if marker_exists {
                     project_root = Some(ancestor.clone());
                     break;
