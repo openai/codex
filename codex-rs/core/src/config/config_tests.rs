@@ -9852,7 +9852,7 @@ enabled = true
             .root_agent_usage_hint_text
             .as_deref()
             .unwrap_or_default()
-            .contains("maximum concurrency"),
+            .contains("available concurrency slots"),
     );
     assert_eq!(
         config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
@@ -9864,7 +9864,7 @@ enabled = true
             .subagent_usage_hint_text
             .as_deref()
             .unwrap_or_default()
-            .contains("maximum concurrency"),
+            .contains("available concurrency slots"),
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(config.multi_agent_v2.non_code_mode_only);

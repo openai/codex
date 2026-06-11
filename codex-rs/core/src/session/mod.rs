@@ -2954,9 +2954,7 @@ impl Session {
         }
         if let Some(usage_hint_text) = multi_agent_v2_usage_hint_text
             && let Some(usage_hint_message) =
-                crate::context_manager::updates::build_developer_update_item(vec![
-                    usage_hint_text.to_string(),
-                ])
+                crate::context_manager::updates::build_developer_update_item(vec![usage_hint_text])
         {
             items.push(usage_hint_message);
         }
