@@ -605,16 +605,16 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_servers = mcp_manager_for_mcp
-                .effective_servers(&config_for_mcp, auth.as_ref())
-                .await;
+            let mcp_config = mcp_manager_for_mcp.runtime_config(&config_for_mcp).await;
+            let mcp_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
+            let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
                 auth.as_ref(),
             )
             .await;
-            (auth, mcp_servers, auth_statuses)
+            (auth, mcp_servers, auth_statuses, tool_plugin_provenance)
         }
         .instrument(info_span!(
             "session_init.auth_mcp",
@@ -637,7 +637,7 @@ impl Session {
         let (
             thread_persistence_result,
             state_db_ctx,
-            (auth, mcp_servers, auth_statuses),
+            (auth, mcp_servers, auth_statuses, tool_plugin_provenance),
             plugin_skill_errors,
         ) = tokio::join!(
             thread_persistence_fut,
@@ -1104,7 +1104,6 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
             let host_owned_codex_apps_enabled = config
                 .features
                 .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));

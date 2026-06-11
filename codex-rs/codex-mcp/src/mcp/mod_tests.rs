@@ -1,4 +1,5 @@
 use super::*;
+use crate::McpServerRegistration;
 use codex_config::Constrained;
 use codex_config::types::AppToolApproval;
 use codex_login::CodexAuth;
@@ -28,8 +29,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         apps_enabled: false,
         prefix_mcp_tool_names: true,
         client_elicitation_capability: ElicitationCapability::default(),
-        configured_mcp_servers: HashMap::new(),
-        plugin_ids_by_mcp_server_name: HashMap::new(),
+        mcp_server_catalog: ResolvedMcpCatalog::default(),
         plugin_capability_summaries: Vec::new(),
     }
 }
@@ -122,16 +122,24 @@ fn mcp_prompt_auto_approval_rejects_auto_mode_in_default_permission_mode() {
 #[test]
 fn tool_plugin_provenance_collects_app_and_mcp_sources() {
     let mut config = test_mcp_config(PathBuf::new());
-    config.plugin_ids_by_mcp_server_name =
-        HashMap::from([("alpha".to_string(), "alpha@test".to_string())]);
+    let mut catalog = ResolvedMcpCatalog::builder();
+    catalog.register(McpServerRegistration::from_plugin(
+        "alpha".to_string(),
+        "alpha@test".to_string(),
+        /*plugin_order*/ 0,
+        codex_apps_mcp_server_config("https://alpha.example", /*apps_mcp_product_sku*/ None),
+    ));
+    config.mcp_server_catalog = catalog.build();
     config.plugin_capability_summaries = vec![
         PluginCapabilitySummary {
+            config_name: "alpha@test".to_string(),
             display_name: "alpha-plugin".to_string(),
             app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
             mcp_server_names: vec!["alpha".to_string()],
             ..PluginCapabilitySummary::default()
         },
         PluginCapabilitySummary {
+            config_name: "beta@test".to_string(),
             display_name: "beta-plugin".to_string(),
             app_connector_ids: vec![
                 AppConnectorId("connector_example".to_string()),
@@ -156,10 +164,10 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
                     vec!["beta-plugin".to_string()],
                 ),
             ]),
-            plugin_display_names_by_mcp_server_name: HashMap::from([
-                ("alpha".to_string(), vec!["alpha-plugin".to_string()]),
-                ("beta".to_string(), vec!["beta-plugin".to_string()]),
-            ]),
+            plugin_display_names_by_mcp_server_name: HashMap::from([(
+                "alpha".to_string(),
+                vec!["alpha-plugin".to_string()],
+            )]),
             plugin_ids_by_mcp_server_name: HashMap::from([(
                 "alpha".to_string(),
                 "alpha@test".to_string(),
@@ -235,7 +243,8 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
     config.apps_enabled = true;
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
-    config.configured_mcp_servers.insert(
+    let mut catalog = ResolvedMcpCatalog::builder();
+    catalog.register(McpServerRegistration::from_config(
         "sample".to_string(),
         McpServerConfig {
             transport: McpServerTransportConfig::StreamableHttp {
@@ -259,8 +268,8 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
             oauth_resource: None,
             tools: HashMap::new(),
         },
-    );
-    config.configured_mcp_servers.insert(
+    ));
+    catalog.register(McpServerRegistration::from_config(
         "docs".to_string(),
         McpServerConfig {
             transport: McpServerTransportConfig::StreamableHttp {
@@ -284,14 +293,15 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
             oauth_resource: None,
             tools: HashMap::new(),
         },
-    );
-    config.configured_mcp_servers.insert(
+    ));
+    catalog.register(McpServerRegistration::from_config(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         codex_apps_mcp_server_config(
             &config.chatgpt_base_url,
             config.apps_mcp_product_sku.as_deref(),
         ),
-    );
+    ));
+    config.mcp_server_catalog = catalog.build();
 
     let effective = effective_mcp_servers(&config, Some(&auth));
 
