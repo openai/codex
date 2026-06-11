@@ -4123,7 +4123,6 @@ async fn turn_event_counts_completed_tool_items() {
         arguments: json!({}),
         connector_id: None,
         mcp_app_resource_uri: None,
-        link_id: None,
         plugin_id: Some("sample@test".to_string()),
         result: None,
         error: None,

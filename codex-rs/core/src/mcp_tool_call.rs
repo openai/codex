@@ -308,7 +308,6 @@ pub(crate) struct HandledMcpToolCall {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct McpToolCallItemMetadata {
     connector_id: Option<String>,
-    link_id: Option<String>,
     mcp_app_resource_uri: Option<String>,
     plugin_id: Option<String>,
 }
@@ -323,7 +322,6 @@ impl McpToolCallItemMetadata {
         Self {
             connector_id: trusted_mcp_app_metadata
                 .and_then(|metadata| metadata.connector_id.clone()),
-            link_id: trusted_mcp_app_metadata.and_then(|metadata| metadata.link_id.clone()),
             mcp_app_resource_uri: metadata
                 .and_then(|metadata| metadata.mcp_app_resource_uri.clone()),
             plugin_id: metadata.and_then(|metadata| metadata.plugin_id.clone()),
@@ -907,7 +905,6 @@ async fn notify_mcp_tool_call_started(
         arguments: arguments.unwrap_or(JsonValue::Null),
         connector_id: item_metadata.connector_id,
         mcp_app_resource_uri: item_metadata.mcp_app_resource_uri,
-        link_id: item_metadata.link_id,
         plugin_id: item_metadata.plugin_id,
         status: McpToolCallStatus::InProgress,
         result: None,
@@ -949,7 +946,6 @@ async fn notify_mcp_tool_call_completed(
         arguments: arguments.unwrap_or(JsonValue::Null),
         connector_id: item_metadata.connector_id,
         mcp_app_resource_uri: item_metadata.mcp_app_resource_uri,
-        link_id: item_metadata.link_id,
         plugin_id: item_metadata.plugin_id,
         status,
         result,
@@ -1015,7 +1011,6 @@ enum McpToolApprovalDecision {
 pub(crate) struct McpToolApprovalMetadata {
     annotations: Option<ToolAnnotations>,
     connector_id: Option<String>,
-    link_id: Option<String>,
     connector_name: Option<String>,
     connector_description: Option<String>,
     plugin_id: Option<String>,
@@ -1028,7 +1023,6 @@ pub(crate) struct McpToolApprovalMetadata {
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
-const MCP_TOOL_LINK_ID_META_KEY: &str = "link_id";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
@@ -1512,13 +1506,6 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     Some(McpToolApprovalMetadata {
         annotations: tool_info.tool.annotations,
         connector_id: tool_info.connector_id,
-        link_id: tool_info
-            .tool
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.get(MCP_TOOL_LINK_ID_META_KEY))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
         connector_name: tool_info.connector_name,
         connector_description,
         plugin_id,

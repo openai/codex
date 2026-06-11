@@ -78,7 +78,6 @@ fn approval_metadata(
     McpToolApprovalMetadata {
         annotations: None,
         connector_id: connector_id.map(str::to_string),
-        link_id: None,
         connector_name: connector_name.map(str::to_string),
         connector_description: connector_description.map(str::to_string),
         plugin_id: None,
@@ -1159,7 +1158,6 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
         Some("Create event"),
         /*tool_description*/ None,
     );
-    metadata.link_id = Some("link_fedcba9876543210fedcba9876543210".to_string());
     metadata.mcp_app_resource_uri = Some("ui://widget/calendar-create-event.html".to_string());
     metadata.codex_apps_meta = Some(
         serde_json::json!({
@@ -1175,7 +1173,6 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
         McpToolCallItemMetadata::from_tool_metadata(CODEX_APPS_MCP_SERVER_NAME, Some(&metadata),),
         McpToolCallItemMetadata {
             connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
-            link_id: Some("link_fedcba9876543210fedcba9876543210".to_string()),
             mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".to_string()),
             plugin_id: Some("sample@test".to_string()),
         }
@@ -1184,7 +1181,6 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
         McpToolCallItemMetadata::from_tool_metadata("custom_server", Some(&metadata)),
         McpToolCallItemMetadata {
             connector_id: None,
-            link_id: None,
             mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".to_string()),
             plugin_id: Some("sample@test".to_string()),
         }
@@ -1196,7 +1192,6 @@ async fn mcp_tool_call_items_include_snapshotted_metadata() {
     let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
     let item_metadata = McpToolCallItemMetadata {
         connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
-        link_id: Some("link_fedcba9876543210fedcba9876543210".to_string()),
         mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".to_string()),
         plugin_id: Some("sample@test".to_string()),
     };
@@ -1232,7 +1227,6 @@ async fn mcp_tool_call_items_include_snapshotted_metadata() {
         tool: "calendar_create_event".to_string(),
         arguments: serde_json::json!({"title": "Lunch"}),
         connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
-        link_id: Some("link_fedcba9876543210fedcba9876543210".to_string()),
         mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".to_string()),
         plugin_id: Some("sample@test".to_string()),
         status: McpToolCallStatus::InProgress,
@@ -1293,7 +1287,6 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
     let metadata = McpToolApprovalMetadata {
         annotations: None,
         connector_id: Some("calendar".to_string()),
-        link_id: None,
         connector_name: Some("Calendar".to_string()),
         connector_description: Some("Manage events".to_string()),
         plugin_id: None,
@@ -1762,7 +1755,6 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
         connector_id: None,
-        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2428,7 +2420,6 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
             /*open_world*/ None,
         )),
         connector_id: None,
-        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2503,7 +2494,6 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
             /*open_world*/ None,
         )),
         connector_id: None,
-        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2561,7 +2551,6 @@ async fn permission_request_hook_allows_mcp_tool_call() {
             /*open_world*/ None,
         )),
         connector_id: None,
-        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2698,7 +2687,6 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
             /*open_world*/ None,
         )),
         connector_id: None,
-        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2786,7 +2774,6 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
         connector_id: None,
-        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2841,7 +2828,6 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
             /*open_world*/ None,
         )),
         connector_id: None,
-        link_id: None,
         connector_name: None,
         connector_description: None,
         plugin_id: None,
@@ -2897,7 +2883,6 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
         connector_id: Some("calendar".to_string()),
-        link_id: None,
         connector_name: Some("Calendar".to_string()),
         connector_description: Some("Manage events".to_string()),
         plugin_id: None,
@@ -2951,7 +2936,6 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
         connector_id: Some("calendar".to_string()),
-        link_id: None,
         connector_name: Some("Calendar".to_string()),
         connector_description: Some("Manage events".to_string()),
         plugin_id: None,

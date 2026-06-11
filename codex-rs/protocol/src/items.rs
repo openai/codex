@@ -194,9 +194,6 @@ pub struct McpToolCallItem {
     pub mcp_app_resource_uri: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub link_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub plugin_id: Option<String>,
     pub status: McpToolCallStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -573,7 +570,6 @@ impl McpToolCallItem {
             },
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
             connector_id: self.connector_id.clone(),
-            link_id: self.link_id.clone(),
             plugin_id: self.plugin_id.clone(),
             duration: self.duration?,
             result,
