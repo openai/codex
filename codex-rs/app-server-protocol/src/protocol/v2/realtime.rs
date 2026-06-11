@@ -80,6 +80,10 @@ pub struct ThreadRealtimeStartParams {
     #[ts(optional = nullable)]
     pub prompt: Option<Option<String>>,
     #[ts(optional = nullable)]
+    pub realtime_start_instructions: Option<String>,
+    #[ts(optional = nullable)]
+    pub realtime_end_instructions: Option<String>,
+    #[ts(optional = nullable)]
     pub realtime_session_id: Option<String>,
     #[ts(optional = nullable)]
     pub transport: Option<ThreadRealtimeStartTransport>,

@@ -391,6 +391,10 @@ pub struct ConfigToml {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
+    /// Experimental / do not use. Replaces the built-in realtime end
+    /// instructions inserted into developer messages when realtime becomes
+    /// inactive.
+    pub experimental_realtime_end_instructions: Option<String>,
 
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.

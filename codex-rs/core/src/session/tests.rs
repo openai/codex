@@ -3178,6 +3178,8 @@ async fn set_rate_limits_retains_previous_credits() {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
@@ -3285,6 +3287,8 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
@@ -3817,6 +3821,8 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
@@ -4669,6 +4675,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
@@ -4777,6 +4785,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
@@ -5009,6 +5019,8 @@ async fn make_session_with_config_and_rx(
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
@@ -5111,6 +5123,8 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
@@ -6855,6 +6869,8 @@ where
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
@@ -7285,6 +7301,80 @@ async fn build_settings_update_items_omits_environment_item_when_disabled() {
 }
 
 #[tokio::test]
+async fn realtime_instruction_overrides_are_stored_for_future_turns() {
+    let (session, _) = make_session_and_context().await;
+
+    session
+        .set_realtime_instruction_overrides(
+            Some("request realtime start".to_string()),
+            Some("request realtime end".to_string()),
+        )
+        .await;
+
+    let state = session.state.lock().await;
+    assert_eq!(
+        state.session_configuration.realtime_start_instructions,
+        Some("request realtime start".to_string())
+    );
+    assert_eq!(
+        state.session_configuration.realtime_end_instructions,
+        Some("request realtime end".to_string())
+    );
+
+    let per_turn_config = Session::build_per_turn_config(
+        &state.session_configuration,
+        state.session_configuration.cwd().clone(),
+    );
+    assert_eq!(
+        per_turn_config
+            .experimental_realtime_start_instructions
+            .as_deref(),
+        Some("request realtime start")
+    );
+    assert_eq!(
+        per_turn_config
+            .experimental_realtime_end_instructions
+            .as_deref(),
+        Some("request realtime end")
+    );
+}
+
+#[tokio::test]
+async fn local_realtime_instruction_config_takes_precedence_over_request_overrides() {
+    let session = make_session_with_config(|config| {
+        config.experimental_realtime_start_instructions = Some("local realtime start".to_string());
+        config.experimental_realtime_end_instructions = Some("local realtime end".to_string());
+    })
+    .await
+    .expect("create session");
+
+    session
+        .set_realtime_instruction_overrides(
+            Some("request realtime start".to_string()),
+            Some("request realtime end".to_string()),
+        )
+        .await;
+
+    let state = session.state.lock().await;
+    let per_turn_config = Session::build_per_turn_config(
+        &state.session_configuration,
+        state.session_configuration.cwd().clone(),
+    );
+    assert_eq!(
+        per_turn_config
+            .experimental_realtime_start_instructions
+            .as_deref(),
+        Some("local realtime start")
+    );
+    assert_eq!(
+        per_turn_config
+            .experimental_realtime_end_instructions
+            .as_deref(),
+        Some("local realtime end")
+    );
+}
+
+#[tokio::test]
 async fn build_settings_update_items_emits_realtime_start_when_session_becomes_live() {
     let (session, previous_context) = make_session_and_context().await;
     let previous_context = Arc::new(previous_context);
@@ -7294,6 +7384,8 @@ async fn build_settings_update_items_emits_realtime_start_when_session_becomes_l
             &session.services.models_manager,
         )
         .await;
+    Arc::make_mut(&mut current_context.config).experimental_realtime_start_instructions =
+        Some("custom realtime start instructions".to_string());
     current_context.realtime_active = true;
 
     let update_items = session
@@ -7307,7 +7399,7 @@ async fn build_settings_update_items_emits_realtime_start_when_session_becomes_l
     assert!(
         developer_texts
             .iter()
-            .any(|text| text.contains("<realtime_conversation>")),
+            .any(|text| text.contains("custom realtime start instructions")),
         "expected a realtime start update, got {developer_texts:?}"
     );
 }
@@ -7322,6 +7414,8 @@ async fn build_settings_update_items_emits_realtime_end_when_session_stops_being
             &session.services.models_manager,
         )
         .await;
+    Arc::make_mut(&mut current_context.config).experimental_realtime_end_instructions =
+        Some("custom realtime end instructions".to_string());
     current_context.realtime_active = false;
 
     let update_items = session
@@ -7335,7 +7429,7 @@ async fn build_settings_update_items_emits_realtime_end_when_session_stops_being
     assert!(
         developer_texts
             .iter()
-            .any(|text| text.contains("Reason: inactive")),
+            .any(|text| text.contains("custom realtime end instructions")),
         "expected a realtime end update, got {developer_texts:?}"
     );
 }

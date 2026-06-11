@@ -10515,6 +10515,35 @@ experimental_realtime_start_instructions = "start instructions from config"
 }
 
 #[tokio::test]
+async fn experimental_realtime_end_instructions_load_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+experimental_realtime_end_instructions = "end instructions from config"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.experimental_realtime_end_instructions.as_deref(),
+        Some("end instructions from config")
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.experimental_realtime_end_instructions.as_deref(),
+        Some("end instructions from config")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn experimental_thread_config_endpoint_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
         r#"

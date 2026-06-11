@@ -937,6 +937,8 @@ impl TurnRequestProcessor {
                 model: params.model,
                 output_modality: params.output_modality,
                 prompt: params.prompt,
+                realtime_start_instructions: params.realtime_start_instructions,
+                realtime_end_instructions: params.realtime_end_instructions,
                 realtime_session_id: params.realtime_session_id,
                 transport: params.transport.map(|transport| match transport {
                     ThreadRealtimeStartTransport::Websocket => {

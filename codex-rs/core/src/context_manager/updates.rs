@@ -100,7 +100,7 @@ pub(crate) fn build_realtime_update_item(
         previous.and_then(|item| item.realtime_active),
         next.realtime_active,
     ) {
-        (Some(true), false) => Some(RealtimeEndInstructions::new("inactive").render()),
+        (Some(true), false) => Some(render_realtime_end(next)),
         (Some(false), true) | (None, true) => Some(
             if let Some(instructions) = next
                 .config
@@ -116,7 +116,20 @@ pub(crate) fn build_realtime_update_item(
         (None, false) => previous_turn_settings
             .and_then(|settings| settings.realtime_active)
             .filter(|realtime_active| *realtime_active)
-            .map(|_| RealtimeEndInstructions::new("inactive").render()),
+            .map(|_| render_realtime_end(next)),
+    }
+}
+
+fn render_realtime_end(next: &TurnContext) -> String {
+    match next
+        .config
+        .experimental_realtime_end_instructions
+        .as_deref()
+    {
+        Some(instructions) => {
+            RealtimeEndInstructions::with_instructions("inactive", instructions).render()
+        }
+        None => RealtimeEndInstructions::new("inactive").render(),
     }
 }
 

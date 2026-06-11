@@ -83,6 +83,8 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
             model: None,
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("hello".to_string())),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
             realtime_session_id: None,
             transport: None,
             version: None,
@@ -191,6 +193,8 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
             model: None,
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("hello".to_string())),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
             realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),

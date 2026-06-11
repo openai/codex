@@ -4478,6 +4478,10 @@
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
+    "experimental_realtime_end_instructions": {
+      "description": "Experimental / do not use. Replaces the built-in realtime end instructions inserted into developer messages when realtime becomes inactive.",
+      "type": "string"
+    },
     "experimental_realtime_start_instructions": {
       "description": "Experimental / do not use. Replaces the built-in realtime start instructions inserted into developer messages when realtime becomes active.",
       "type": "string"

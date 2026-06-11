@@ -614,6 +614,8 @@ pub(crate) async fn handle_start(
 struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     extra_headers: Option<HeaderMap>,
+    realtime_end_instructions: Option<String>,
+    realtime_start_instructions: Option<String>,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
@@ -671,6 +673,8 @@ async fn prepare_realtime_start(
     Ok(PreparedRealtimeConversationStart {
         api_provider,
         extra_headers,
+        realtime_end_instructions: params.realtime_end_instructions,
+        realtime_start_instructions: params.realtime_start_instructions,
         requested_realtime_session_id,
         version,
         session_config,
@@ -787,6 +791,8 @@ async fn handle_start_inner(
     let PreparedRealtimeConversationStart {
         api_provider,
         extra_headers,
+        realtime_end_instructions,
+        realtime_start_instructions,
         requested_realtime_session_id,
         version,
         session_config,
@@ -805,6 +811,8 @@ async fn handle_start_inner(
         sdp,
     };
     let start_output = sess.conversation.start(start).await?;
+    sess.set_realtime_instruction_overrides(realtime_start_instructions, realtime_end_instructions)
+        .await;
 
     info!("realtime conversation started");
 

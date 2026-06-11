@@ -188,6 +188,8 @@ pub struct ConversationStartParams {
     /// Selects whether the realtime session should produce text or audio output.
     pub output_modality: RealtimeOutputModality,
     pub prompt: Option<Option<String>>,
+    pub realtime_start_instructions: Option<String>,
+    pub realtime_end_instructions: Option<String>,
     pub realtime_session_id: Option<String>,
     pub transport: Option<ConversationStartTransport>,
     /// Overrides the configured realtime protocol version for this session only.

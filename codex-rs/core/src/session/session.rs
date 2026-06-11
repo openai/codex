@@ -68,6 +68,9 @@ pub(crate) struct SessionConfiguration {
     /// Compact prompt override.
     pub(super) compact_prompt: Option<String>,
 
+    pub(super) realtime_start_instructions: Option<String>,
+    pub(super) realtime_end_instructions: Option<String>,
+
     /// When to escalate for approval for execution
     pub(super) approval_policy: Constrained<AskForApproval>,
     pub(super) approvals_reviewer: ApprovalsReviewer,

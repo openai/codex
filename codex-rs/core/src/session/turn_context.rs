@@ -405,6 +405,20 @@ impl Session {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
+        if per_turn_config
+            .experimental_realtime_start_instructions
+            .is_none()
+        {
+            per_turn_config.experimental_realtime_start_instructions =
+                session_configuration.realtime_start_instructions.clone();
+        }
+        if per_turn_config
+            .experimental_realtime_end_instructions
+            .is_none()
+        {
+            per_turn_config.experimental_realtime_end_instructions =
+                session_configuration.realtime_end_instructions.clone();
+        }
         per_turn_config.cwd = cwd;
         per_turn_config.workspace_roots = session_configuration.workspace_roots.clone();
         per_turn_config

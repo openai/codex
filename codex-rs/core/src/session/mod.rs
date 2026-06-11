@@ -601,6 +601,8 @@ impl Codex {
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
             permission_profile_state: session_permission_profile_state_from_config(&config)?,
@@ -1491,6 +1493,16 @@ impl Session {
             .session_configuration
             .original_config_do_not_use
             .clone()
+    }
+
+    pub(crate) async fn set_realtime_instruction_overrides(
+        &self,
+        realtime_start_instructions: Option<String>,
+        realtime_end_instructions: Option<String>,
+    ) {
+        let mut state = self.state.lock().await;
+        state.session_configuration.realtime_start_instructions = realtime_start_instructions;
+        state.session_configuration.realtime_end_instructions = realtime_end_instructions;
     }
 
     pub(crate) async fn provider(&self) -> ModelProviderInfo {
