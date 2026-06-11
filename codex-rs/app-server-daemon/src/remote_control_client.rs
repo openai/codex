@@ -504,7 +504,10 @@ mod tests {
                 &JSONRPCMessage::Response(JSONRPCResponse {
                     id: REMOTE_CONTROL_DISABLE_REQUEST_ID,
                     result: serde_json::to_value(RemoteControlDisableResponse::from(
-                        remote_control_status(RemoteControlConnectionStatus::Disabled, None),
+                        remote_control_status(
+                            RemoteControlConnectionStatus::Disabled,
+                            /*environment_id*/ None,
+                        ),
                     ))?,
                 }),
             )
