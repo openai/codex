@@ -34,6 +34,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
 use rmcp::model::ElicitationCapability;
+use rmcp::model::ExtensionCapabilities;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use serde_json::Value;
@@ -49,6 +50,11 @@ pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct McpClientCapabilities {
+    pub extensions: ExtensionCapabilities,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum McpSnapshotDetail {
@@ -305,6 +311,7 @@ pub async fn read_mcp_resource(
         host_owned_codex_apps_enabled,
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
+        McpClientCapabilities::default(),
         tool_plugin_provenance(config),
         auth,
         /*elicitation_reviewer*/ None,
@@ -379,6 +386,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         host_owned_codex_apps_enabled,
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
+        McpClientCapabilities::default(),
         tool_plugin_provenance,
         auth,
         /*elicitation_reviewer*/ None,

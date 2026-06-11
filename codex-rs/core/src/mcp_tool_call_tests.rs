@@ -1279,6 +1279,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         /*host_owned_codex_apps_enabled*/ true,
         turn_context.config.prefix_mcp_tool_names(),
         rmcp::model::ElicitationCapability::default(),
+        codex_mcp::McpClientCapabilities::default(),
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,

@@ -523,6 +523,7 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
                 version: "0.1.0".to_string(),
             },
             capabilities: None,
+            mcp_client_capabilities: None,
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })

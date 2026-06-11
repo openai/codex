@@ -1687,6 +1687,7 @@ mod tests {
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     fn absolute_path_string(path: &str) -> String {
@@ -2007,6 +2008,7 @@ mod tests {
                     version: "0.1.0".to_string(),
                 },
                 capabilities: None,
+                mcp_client_capabilities: None,
             },
         };
         assert_eq!(initialize.serialization_scope(), None);
@@ -2167,6 +2169,14 @@ mod tests {
                         "item/agentMessage/delta".to_string(),
                     ]),
                 }),
+                mcp_client_capabilities: Some(v1::McpClientCapabilities {
+                    extensions: Some(BTreeMap::from([(
+                        "openai/form".to_string(),
+                        serde_json::from_value(json!({
+                            "fieldTypes": ["openai/file"]
+                        }))?,
+                    )])),
+                }),
             },
         };
 
@@ -2187,6 +2197,13 @@ mod tests {
                             "thread/started",
                             "item/agentMessage/delta"
                         ]
+                    },
+                    "mcpClientCapabilities": {
+                        "extensions": {
+                            "openai/form": {
+                                "fieldTypes": ["openai/file"]
+                            }
+                        }
                     }
                 }
             }),
@@ -2213,6 +2230,13 @@ mod tests {
                         "thread/started",
                         "item/agentMessage/delta"
                     ]
+                },
+                "mcpClientCapabilities": {
+                    "extensions": {
+                        "openai/form": {
+                            "fieldTypes": ["openai/file"]
+                        }
+                    }
                 }
             }
         }))?;
@@ -2234,6 +2258,14 @@ mod tests {
                             "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),
                         ]),
+                    }),
+                    mcp_client_capabilities: Some(v1::McpClientCapabilities {
+                        extensions: Some(BTreeMap::from([(
+                            "openai/form".to_string(),
+                            serde_json::from_value(json!({
+                                "fieldTypes": ["openai/file"]
+                            }))?,
+                        )])),
                     }),
                 },
             }

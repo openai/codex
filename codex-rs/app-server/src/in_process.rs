@@ -791,6 +791,7 @@ mod tests {
                     version: "0.0.0".to_string(),
                 },
                 capabilities: None,
+                mcp_client_capabilities: None,
             },
             channel_capacity,
         };

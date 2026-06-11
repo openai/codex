@@ -599,6 +599,7 @@ pub(super) async fn send_initialize_request(
             version: "0.1.0".to_string(),
         },
         capabilities: None,
+        mcp_client_capabilities: None,
     };
     send_request(
         stream,

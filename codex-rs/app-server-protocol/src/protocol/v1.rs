@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -30,6 +31,10 @@ pub struct InitializeParams {
     pub client_info: ClientInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<InitializeCapabilities>,
+    /// MCP client capabilities that app-server may advertise to downstream MCP servers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub mcp_client_capabilities: Option<McpClientCapabilities>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -54,6 +59,15 @@ pub struct InitializeCapabilities {
     /// connection (for example `thread/started`).
     #[ts(optional = nullable)]
     pub opt_out_notification_methods: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpClientCapabilities {
+    /// MCP extension identifiers mapped to their client-provided settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable, type = "Record<string, Record<string, unknown>>")]
+    pub extensions: Option<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -94,6 +94,7 @@ where
             } else {
                 None
             },
+            mcp_client_capabilities: None,
         })?),
         trace: None,
     });

@@ -1296,6 +1296,17 @@
         },
         "clientInfo": {
           "$ref": "#/definitions/ClientInfo"
+        },
+        "mcpClientCapabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpClientCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "MCP client capabilities that app-server may advertise to downstream MCP servers."
         }
       },
       "required": [
@@ -1540,6 +1551,22 @@
         "marketplaceName": {
           "type": [
             "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "McpClientCapabilities": {
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "description": "MCP extension identifiers mapped to their client-provided settings.",
+          "type": [
+            "object",
             "null"
           ]
         }

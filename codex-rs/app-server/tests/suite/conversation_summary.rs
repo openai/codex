@@ -170,6 +170,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
                 experimental_api: true,
                 ..Default::default()
             }),
+            mcp_client_capabilities: None,
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })

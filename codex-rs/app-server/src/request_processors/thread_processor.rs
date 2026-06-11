@@ -418,6 +418,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
         request_context: RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_start_inner(
@@ -425,6 +426,7 @@ impl ThreadRequestProcessor {
             params,
             app_server_client_name,
             app_server_client_version,
+            mcp_client_capabilities,
             request_context,
         )
         .await
@@ -447,12 +449,14 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_resume_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            mcp_client_capabilities,
         )
         .await
         .map(|()| None)
@@ -464,12 +468,14 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_fork_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            mcp_client_capabilities,
         )
         .await
         .map(|()| None)
@@ -875,6 +881,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadStartParams {
@@ -945,6 +952,7 @@ impl ThreadRequestProcessor {
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
+                mcp_client_capabilities,
                 config,
                 typesafe_overrides,
                 dynamic_tools,
@@ -1018,6 +1026,7 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -1123,6 +1132,7 @@ impl ThreadRequestProcessor {
             thread_extension_init.insert(selected_capability_roots);
             codex_mcp_extension::initialize_executor_plugin_thread_data(&mut thread_extension_init);
         }
+        insert_mcp_client_capabilities(&mut thread_extension_init, mcp_client_capabilities);
         let create_thread_started_at = std::time::Instant::now();
         let NewThread {
             thread_id,
@@ -2519,6 +2529,7 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
@@ -2658,11 +2669,12 @@ impl ThreadRequestProcessor {
 
         match self
             .thread_manager
-            .resume_thread_with_history(
+            .resume_thread_with_history_and_extension_data(
                 config,
                 thread_history,
                 self.auth_manager.clone(),
                 self.request_trace_context(&request_id).await,
+                mcp_client_extension_data(mcp_client_capabilities),
             )
             .await
         {
@@ -3280,6 +3292,7 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadForkParams {
             thread_id,
@@ -3379,7 +3392,7 @@ impl ThreadRequestProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread_from_history(
+            .fork_thread_from_history_with_extension_data(
                 ForkSnapshot::Interrupted,
                 config,
                 InitialHistory::Resumed(ResumedHistory {
@@ -3389,6 +3402,7 @@ impl ThreadRequestProcessor {
                 }),
                 thread_source.map(Into::into),
                 self.request_trace_context(&request_id).await,
+                mcp_client_extension_data(mcp_client_capabilities),
             )
             .await
             .map_err(|err| match err {
@@ -3691,6 +3705,23 @@ impl ThreadRequestProcessor {
         }
 
         Ok((items, next_cursor))
+    }
+}
+
+fn mcp_client_extension_data(capabilities: Option<McpClientCapabilities>) -> ExtensionDataInit {
+    let mut extension_data = ExtensionDataInit::new();
+    insert_mcp_client_capabilities(&mut extension_data, capabilities);
+    extension_data
+}
+
+fn insert_mcp_client_capabilities(
+    extension_data: &mut ExtensionDataInit,
+    capabilities: Option<McpClientCapabilities>,
+) {
+    if let Some(extensions) = capabilities.and_then(|capabilities| capabilities.extensions)
+        && !extensions.is_empty()
+    {
+        extension_data.insert(codex_mcp::McpClientCapabilities { extensions });
     }
 }
 

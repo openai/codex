@@ -314,6 +314,7 @@ async fn start_in_process_client(
                 version: "0.1.0".to_string(),
             },
             capabilities: None,
+            mcp_client_capabilities: None,
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })
