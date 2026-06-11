@@ -17,11 +17,13 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
+use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
 
+use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
@@ -84,7 +86,7 @@ impl ConfigContributor<Config> for SkillsExtension {
 impl ContextContributor for SkillsExtension {
     fn contribute<'a>(
         &'a self,
-        _session_store: &'a ExtensionData,
+        session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
@@ -92,19 +94,22 @@ impl ContextContributor for SkillsExtension {
                 return Vec::new();
             };
             let config = thread_state.config();
-            if !config.include_instructions || thread_state.selected_roots().is_empty() {
+            if !config.include_instructions {
                 return Vec::new();
             }
             let catalog = self
-                .providers
-                .list_for_turn(SkillListQuery {
-                    turn_id: thread_store.level_id().to_string(),
-                    executor_roots: thread_state.selected_roots().to_vec(),
-                    host: None,
-                    include_host_skills: false,
-                    include_bundled_skills: config.bundled_skills_enabled,
-                    include_remote_skills: false,
-                })
+                .list_skills(
+                    SkillListQuery {
+                        turn_id: thread_store.level_id().to_string(),
+                        executor_roots: thread_state.selected_roots().to_vec(),
+                        host: None,
+                        include_host_skills: false,
+                        include_bundled_skills: config.bundled_skills_enabled,
+                        include_orchestrator_skills: true,
+                        mcp_resources: session_store.get::<McpResourceClient>(),
+                    },
+                    &thread_state,
+                )
                 .await;
             for warning in &catalog.warnings {
                 self.emit_warning(thread_store.level_id(), warning.clone());
@@ -121,7 +126,7 @@ impl TurnInputContributor for SkillsExtension {
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext,
-        _session_store: &'a ExtensionData,
+        session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>> {
@@ -138,9 +143,10 @@ impl TurnInputContributor for SkillsExtension {
                 host: host_loaded_skills.clone(),
                 include_host_skills: true,
                 include_bundled_skills: config.bundled_skills_enabled,
-                include_remote_skills: true,
+                include_orchestrator_skills: true,
+                mcp_resources: session_store.get::<McpResourceClient>(),
             };
-            let catalog = self.providers.list_for_turn(query).await;
+            let catalog = self.list_skills(query, &thread_state).await;
             for warning in &catalog.warnings {
                 self.emit_warning(&input.turn_id, warning.clone());
             }
@@ -149,9 +155,10 @@ impl TurnInputContributor for SkillsExtension {
             let mut fragments: Vec<Box<dyn ContextualUserFragment + Send>> = Vec::new();
             if config.include_instructions {
                 let mut turn_catalog = catalog.clone();
-                turn_catalog
-                    .entries
-                    .retain(|entry| entry.authority.kind != SkillSourceKind::Executor);
+                turn_catalog.entries.retain(|entry| {
+                    entry.authority.kind != SkillSourceKind::Executor
+                        && entry.authority.kind != SkillSourceKind::Orchestrator
+                });
                 if let Some(fragment) = available_skills_fragment(&turn_catalog) {
                     fragments.push(Box::new(fragment));
                 }
@@ -162,7 +169,7 @@ impl TurnInputContributor for SkillsExtension {
             let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
             for entry in &selected_entries {
                 match self
-                    .read_main_prompt(entry, host_loaded_skills.clone())
+                    .read_main_prompt(entry, host_loaded_skills.clone(), session_store)
                     .await
                 {
                     Ok(read_result) => {
@@ -232,10 +239,36 @@ impl TurnInputContributor for SkillsExtension {
 }
 
 impl SkillsExtension {
+    async fn list_skills(
+        &self,
+        mut query: SkillListQuery,
+        thread_state: &SkillsThreadState,
+    ) -> SkillCatalog {
+        let include_orchestrator_skills = query.include_orchestrator_skills;
+        let orchestrator_query = query.clone();
+        query.include_orchestrator_skills = false;
+
+        let mut catalog = self.providers.list_for_turn(query).await;
+        if include_orchestrator_skills {
+            match thread_state
+                .orchestrator_catalog_snapshot(
+                    self.providers
+                        .list_orchestrator_for_turn(orchestrator_query),
+                )
+                .await
+            {
+                Ok(orchestrator_catalog) => catalog.extend(orchestrator_catalog),
+                Err(err) => catalog.warnings.push(err.message),
+            }
+        }
+        catalog
+    }
+
     async fn read_main_prompt(
         &self,
         entry: &SkillCatalogEntry,
         host_loaded_skills: Option<Arc<HostLoadedSkills>>,
+        session_store: &ExtensionData,
     ) -> Result<SkillReadResult, String> {
         self.providers
             .read(SkillReadRequest {
@@ -243,6 +276,7 @@ impl SkillsExtension {
                 package: entry.id.clone(),
                 resource: entry.main_prompt.clone(),
                 host: host_loaded_skills,
+                mcp_resources: session_store.get::<McpResourceClient>(),
             })
             .await
             .map_err(|err| err.message)

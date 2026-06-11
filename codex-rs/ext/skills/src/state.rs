@@ -1,9 +1,12 @@
 use codex_core::config::Config;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use std::future::Future;
 use std::sync::Mutex;
+use tokio::sync::OnceCell;
 
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
+use crate::catalog::SkillProviderError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SkillsExtensionConfig {
@@ -24,6 +27,7 @@ impl SkillsExtensionConfig {
 pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     selected_roots: Vec<SelectedCapabilityRoot>,
+    orchestrator_catalog: OnceCell<SkillCatalog>,
 }
 
 impl SkillsThreadState {
@@ -34,6 +38,7 @@ impl SkillsThreadState {
         Self {
             config: Mutex::new(config),
             selected_roots,
+            orchestrator_catalog: OnceCell::new(),
         }
     }
 
@@ -53,6 +58,16 @@ impl SkillsThreadState {
 
     pub(crate) fn selected_roots(&self) -> &[SelectedCapabilityRoot] {
         &self.selected_roots
+    }
+
+    pub(crate) async fn orchestrator_catalog_snapshot(
+        &self,
+        initialize: impl Future<Output = Result<SkillCatalog, SkillProviderError>> + Send,
+    ) -> Result<SkillCatalog, SkillProviderError> {
+        self.orchestrator_catalog
+            .get_or_try_init(|| initialize)
+            .await
+            .cloned()
     }
 }
 
