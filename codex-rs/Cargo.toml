@@ -514,8 +514,8 @@ split-debuginfo = "off"
 # sidecar symbols and stripped the binaries.
 strip = false
 
-# See https://github.com/openai/codex/issues/1411 for details.
-codegen-units = 1
+# Balance parallel release code generation against binary size.
+codegen-units = 4
 
 [profile.profiling]
 inherits = "release"
