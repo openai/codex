@@ -3139,7 +3139,6 @@ dependencies = [
 name = "codex-internal-persistent-mode"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-core",
  "codex-exec-server",
  "codex-extension-api",
