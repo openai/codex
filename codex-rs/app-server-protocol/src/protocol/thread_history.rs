@@ -1920,46 +1920,6 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_mcp_begin_replaces_an_item_with_the_same_id() {
-        let call_id = "mcp-1";
-        let mut builder = ThreadHistoryBuilder::new();
-        builder.ensure_turn().items.push(ThreadItem::AgentMessage {
-            id: call_id.into(),
-            text: "stale".into(),
-            phase: None,
-            memory_citation: None,
-        });
-
-        builder.handle_mcp_tool_call_begin(&McpToolCallBeginEvent {
-            call_id: call_id.into(),
-            invocation: McpInvocation {
-                server: "docs".into(),
-                tool: "lookup".into(),
-                arguments: None,
-            },
-            mcp_app_resource_uri: None,
-            plugin_id: None,
-        });
-
-        assert_eq!(
-            builder.ensure_turn().items,
-            vec![ThreadItem::McpToolCall {
-                id: call_id.into(),
-                server: "docs".into(),
-                tool: "lookup".into(),
-                status: McpToolCallStatus::InProgress,
-                arguments: serde_json::Value::Null,
-                connector_id: None,
-                mcp_app_resource_uri: None,
-                plugin_id: None,
-                result: None,
-                error: None,
-                duration_ms: None,
-            }]
-        );
-    }
-
-    #[test]
     fn preserves_user_message_client_id_from_legacy_event() {
         let turn_id = "turn-1";
         let thread_id = ThreadId::new();

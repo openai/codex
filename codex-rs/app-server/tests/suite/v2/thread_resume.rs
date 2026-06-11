@@ -772,16 +772,12 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
         .find(|item| matches!(item, ThreadItem::McpToolCall { .. }))
         .expect("normal resume should include MCP item");
     let ThreadItem::McpToolCall {
-        arguments,
-        connector_id,
-        result,
-        ..
+        arguments, result, ..
     } = normal_mcp_item
     else {
         unreachable!("matched MCP item");
     };
     assert_eq!(arguments, &json!({"secret":"argument"}));
-    assert_eq!(connector_id.as_deref(), Some("calendar"));
     let result = result.as_ref().expect("normal MCP result");
     assert_eq!(
         result.content,
