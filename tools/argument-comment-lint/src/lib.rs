@@ -88,6 +88,8 @@ rustc_session::declare_lint! {
     ///
     /// Requires a `/*param*/` comment before anonymous literal-like
     /// arguments such as `None`, booleans, and numeric literals.
+    /// A method's sole non-self argument is exempt when its name matches the
+    /// method name.
     ///
     /// ### Why is this bad?
     ///
