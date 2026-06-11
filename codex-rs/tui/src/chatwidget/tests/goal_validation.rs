@@ -14,12 +14,6 @@ fn complete_turn_with_message(chat: &mut ChatWidget, turn_id: &str, message: Opt
     handle_turn_completed(chat, turn_id, /*duration_ms*/ None);
 }
 
-fn submit_composer_text(chat: &mut ChatWidget, text: &str) {
-    chat.bottom_pane
-        .set_composer_text(text.to_string(), Vec::new(), Vec::new());
-    submit_current_composer(chat);
-}
-
 fn submit_current_composer(chat: &mut ChatWidget) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -46,46 +40,6 @@ fn next_goal_draft(
             return draft;
         }
     }
-}
-
-#[test]
-fn sentinel_like_objective_is_plain_text() {
-    let objective = concat!(
-        "Codex goal objective file: ",
-        "/tmp/attachments/00000000-0000-4000-8000-000000000000/goal-objective.md\n",
-        "Read that file before continuing."
-    );
-
-    assert_eq!(crate::goal_files::objective_file_path(objective), None);
-}
-
-#[tokio::test]
-async fn goal_slash_command_accepts_objective_at_limit() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS);
-    let command = format!("/goal {objective}");
-
-    submit_composer_text(&mut chat, &command);
-
-    assert_eq!(next_goal_draft(&mut rx, thread_id).objective, objective);
-    assert_no_submit_op(&mut op_rx);
-}
-
-#[tokio::test]
-async fn goal_slash_command_accepts_multiline_objective_after_blank_first_line() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    let objective = "follow these instructions\npreserve this detail";
-
-    submit_composer_text(&mut chat, &format!("/goal \n\n{objective}"));
-
-    assert_eq!(next_goal_draft(&mut rx, thread_id).objective, objective);
-    assert_no_submit_op(&mut op_rx);
 }
 
 #[tokio::test]
@@ -154,16 +108,8 @@ async fn queued_goal_slash_command_emits_oversized_objective_and_stops_queue() {
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
 
-    let (actual_thread_id, actual_objective) = loop {
-        match rx.try_recv().expect("expected goal objective event") {
-            AppEvent::SetThreadGoalDraft {
-                thread_id, draft, ..
-            } => break (thread_id, draft.objective),
-            _ => continue,
-        }
-    };
-    assert_eq!(actual_thread_id, thread_id);
-    assert_eq!(actual_objective, objective);
+    let draft = next_goal_draft(&mut rx, thread_id);
+    assert_eq!(draft.objective, objective);
     assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_no_submit_op(&mut op_rx);
 }

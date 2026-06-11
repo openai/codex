@@ -47,7 +47,7 @@ impl ChatWidget {
         objective: String,
     ) {
         let subtitle = if let Some(path) = goal_files::objective_file_path(&objective) {
-            format!("Goal file: {}", path.display())
+            format!("Goal file: {path}")
         } else {
             format!("Goal: {objective}")
         };
@@ -131,10 +131,7 @@ fn goal_summary_lines(goal: &AppThreadGoal) -> Vec<Line<'static>> {
 
 fn goal_objective_line(objective: &str) -> Line<'static> {
     if let Some(path) = goal_files::objective_file_path(objective) {
-        Line::from(vec![
-            "Objective file: ".dim(),
-            path.display().to_string().into(),
-        ])
+        Line::from(vec!["Objective file: ".dim(), path.into()])
     } else {
         Line::from(vec!["Objective: ".dim(), objective.to_string().into()])
     }

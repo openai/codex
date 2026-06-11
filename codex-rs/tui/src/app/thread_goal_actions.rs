@@ -290,7 +290,7 @@ impl App {
     fn show_replace_thread_goal_confirmation(&mut self, thread_id: ThreadId, objective: String) {
         let replace_objective = objective.clone();
         let subtitle = if let Some(path) = goal_files::objective_file_path(&objective) {
-            format!("New objective file: {}", path.display())
+            format!("New objective file: {path}")
         } else {
             format!("New objective: {objective}")
         };

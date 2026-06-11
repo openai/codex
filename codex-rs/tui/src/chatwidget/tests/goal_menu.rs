@@ -84,7 +84,7 @@ async fn goal_menu_managed_file_snapshot() {
         .join("attachments")
         .join("00000000-0000-4000-8000-000000000000")
         .join("goal-objective.md");
-    let goal_path = crate::goal_files::GoalFilePath::from_local(&path);
+    let goal_path = path.display().to_string();
     goal.objective = crate::goal_files::objective_file_reference(&goal_path)
         .expect("goal objective file reference");
 

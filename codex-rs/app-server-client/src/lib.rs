@@ -38,7 +38,6 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
@@ -848,16 +847,6 @@ impl AppServerClient {
         }
     }
 
-    pub async fn request_json_rpc(&self, request: JSONRPCRequest) -> IoResult<RequestResult> {
-        match self {
-            Self::InProcess(_) => Err(IoError::new(
-                ErrorKind::InvalidInput,
-                "raw JSON-RPC requests are only supported by the remote app-server client",
-            )),
-            Self::Remote(client) => client.request_json_rpc(request).await,
-        }
-    }
-
     pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
     where
         T: DeserializeOwned,
@@ -908,20 +897,6 @@ impl AppServerClient {
         match self {
             Self::InProcess(client) => client.shutdown().await,
             Self::Remote(client) => client.shutdown().await,
-        }
-    }
-
-    pub fn remote_codex_home(&self) -> Option<&str> {
-        match self {
-            Self::InProcess(_) => None,
-            Self::Remote(client) => client.codex_home(),
-        }
-    }
-
-    pub fn remote_platform_family(&self) -> Option<&str> {
-        match self {
-            Self::InProcess(_) => None,
-            Self::Remote(client) => client.platform_family(),
         }
     }
 
@@ -1131,8 +1106,6 @@ mod tests {
                 result: serde_json::json!({
                     "userAgent": "codex_cli_rs/9.8.7-test (Test OS; x86_64) rust",
                     "codexHome": "/server/.codex",
-                    "platformFamily": "unix",
-                    "platformOs": "linux",
                 }),
             }),
         )
@@ -1470,7 +1443,6 @@ mod tests {
 
         assert_eq!(client.server_version(), Some("9.8.7-test"));
         assert_eq!(client.codex_home(), Some("/server/.codex"));
-        assert_eq!(client.platform_family(), Some("unix"));
         let response: GetAccountResponse = client
             .request_typed(ClientRequest::GetAccount {
                 request_id: RequestId::Integer(1),

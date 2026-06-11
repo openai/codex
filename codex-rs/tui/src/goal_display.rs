@@ -43,7 +43,7 @@ pub(crate) fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
 
 pub(crate) fn goal_usage_summary(goal: &ThreadGoal) -> String {
     let objective = if let Some(path) = crate::goal_files::objective_file_path(&goal.objective) {
-        format!("Objective file: {}", path.display())
+        format!("Objective file: {path}")
     } else {
         format!("Objective: {}", goal.objective)
     };
@@ -111,29 +111,6 @@ mod tests {
                 /*tokens_used*/ 63_876,
             )),
             "Objective: Complete the task described in ../gameboy-long-running-prompt5.txt Time: 2m. Tokens: 63.9K/50K."
-        );
-    }
-
-    #[test]
-    fn goal_usage_summary_formats_managed_file_objective() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let path = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path_checked(
-            temp_dir
-                .path()
-                .join("attachments")
-                .join("00000000-0000-4000-8000-000000000000")
-                .join("goal-objective.md"),
-        )
-        .expect("absolute path");
-        let path_for_goal = crate::goal_files::GoalFilePath::from_local(&path);
-        let objective = crate::goal_files::objective_file_reference(&path_for_goal)
-            .expect("goal file reference");
-        let mut goal = test_thread_goal(/*token_budget*/ None, /*tokens_used*/ 0);
-        goal.objective = objective;
-
-        assert_eq!(
-            goal_usage_summary(&goal),
-            format!("Objective file: {} Time: 2m.", path.display())
         );
     }
 }
