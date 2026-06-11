@@ -209,6 +209,37 @@ async fn restricted_token_fs_helper_uses_configured_helper_path() -> Result<()> 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial(codex_home)]
+async fn restricted_token_fs_helper_rejects_split_read_restrictions() -> Result<()> {
+    let sandboxed = sandboxed_file_system()?;
+    let (_workspace_dir, workspace) = temp_workspace()?;
+    let readable_dir = workspace.join("readable");
+    std::fs::create_dir(&readable_dir)?;
+    let blocked_path = workspace.join("blocked.txt");
+    std::fs::write(&blocked_path, b"blocked")?;
+    let sandbox = sandbox_from_entries(
+        workspace,
+        WindowsSandboxLevel::RestrictedToken,
+        vec![path_entry(readable_dir, FileSystemAccessMode::Read)],
+    );
+
+    let error = sandboxed
+        .file_system
+        .read_file(&blocked_path, Some(&sandbox))
+        .await
+        .expect_err("restricted-token fs helper should reject split read restrictions");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot enforce split filesystem read restrictions"),
+        "unexpected split-read sandbox error: {error}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(codex_home)]
 async fn restricted_token_fs_helper_rejects_missing_read_only_carveout() -> Result<()> {
     let sandboxed = sandboxed_file_system()?;
     let (_workspace_dir, workspace) = temp_workspace()?;
