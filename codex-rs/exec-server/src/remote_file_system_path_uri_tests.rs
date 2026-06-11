@@ -1,123 +1,59 @@
 #![allow(clippy::expect_used)]
 
-#[cfg(windows)]
 use codex_app_server_protocol::JSONRPCMessage;
-#[cfg(windows)]
 use codex_app_server_protocol::JSONRPCResponse;
-#[cfg(windows)]
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
-#[cfg(windows)]
 use futures::SinkExt;
-#[cfg(windows)]
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
-use tokio::io;
-#[cfg(windows)]
 use tokio::net::TcpListener;
-#[cfg(windows)]
 use tokio::net::TcpStream;
-#[cfg(windows)]
 use tokio::sync::oneshot;
-#[cfg(windows)]
 use tokio::time::Duration;
-#[cfg(windows)]
 use tokio::time::timeout;
-#[cfg(windows)]
 use tokio_tungstenite::WebSocketStream;
-#[cfg(windows)]
 use tokio_tungstenite::accept_async;
-#[cfg(windows)]
 use tokio_tungstenite::tungstenite::Message;
 
 use super::*;
 use crate::client_api::ExecServerTransportParams;
-#[cfg(windows)]
 use crate::protocol::FS_READ_FILE_METHOD;
-#[cfg(windows)]
 use crate::protocol::FsReadFileParams;
-#[cfg(windows)]
 use crate::protocol::FsReadFileResponse;
-#[cfg(windows)]
 use crate::protocol::INITIALIZE_METHOD;
-#[cfg(windows)]
 use crate::protocol::INITIALIZED_METHOD;
-#[cfg(windows)]
 use crate::protocol::InitializeResponse;
 
 #[tokio::test]
-async fn non_native_uri_is_rejected_before_connecting() {
-    let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
-        ExecServerTransportParams::websocket_url("not a websocket URL".to_string()),
-    ));
-
-    let error = file_system
-        .read_file(&non_native_uri(), /*sandbox*/ None)
-        .await
-        .expect_err("non-native URI should be rejected");
-
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-}
-
-#[cfg(windows)]
-#[tokio::test]
-async fn remote_file_system_sends_explicit_windows_native_paths() {
+async fn remote_file_system_sends_path_uris_without_native_conversion() {
     let (websocket_url, captured_paths, server) = record_read_file_paths(2).await;
     let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
         ExecServerTransportParams::websocket_url(websocket_url),
     ));
     let paths = vec![
-        (
-            PathUri::parse("file:///C:/Users/Alice/src/main.rs").expect("valid drive URI"),
-            absolute_windows_path(r"C:\Users\Alice\src\main.rs"),
-        ),
-        (
-            PathUri::parse("file://server/share/src/main.rs").expect("valid UNC URI"),
-            absolute_windows_path(r"\\server\share\src\main.rs"),
-        ),
+        PathUri::parse("file:///C:/Users/Alice/src/main.rs").expect("valid drive URI"),
+        PathUri::parse("file://server/share/src/main.rs").expect("valid UNC URI"),
     ];
-    let expected_paths = paths
-        .iter()
-        .map(|(_, expected_path)| expected_path.clone())
-        .collect::<Vec<_>>();
 
-    for (path, _) in paths {
+    for path in &paths {
         assert_eq!(
             file_system
-                .read_file(&path, /*sandbox*/ None)
+                .read_file(path, /*sandbox*/ None)
                 .await
                 .expect("remote read should succeed"),
             Vec::<u8>::new()
         );
     }
 
-    assert_eq!(
-        captured_paths.await.expect("captured paths"),
-        expected_paths
-    );
+    assert_eq!(captured_paths.await.expect("captured paths"), paths);
     server.await.expect("recording server should succeed");
 }
 
-fn non_native_uri() -> PathUri {
-    #[cfg(unix)]
-    let uri = "file://server/share/file.txt";
-    #[cfg(windows)]
-    let uri = "file:///usr/local/file.txt";
-
-    PathUri::parse(uri).expect("valid non-native URI")
-}
-
-#[cfg(windows)]
-fn absolute_windows_path(path: &str) -> AbsolutePathBuf {
-    AbsolutePathBuf::from_absolute_path_checked(path).expect("absolute Windows path")
-}
-
-#[cfg(windows)]
 async fn record_read_file_paths(
     expected_requests: usize,
 ) -> (
     String,
-    oneshot::Receiver<Vec<AbsolutePathBuf>>,
+    oneshot::Receiver<Vec<PathUri>>,
     tokio::task::JoinHandle<()>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -164,7 +100,6 @@ async fn record_read_file_paths(
     (websocket_url, captured_paths_rx, server)
 }
 
-#[cfg(windows)]
 async fn complete_websocket_initialize(websocket: &mut WebSocketStream<TcpStream>) {
     let request = match read_jsonrpc_websocket(websocket).await {
         JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
@@ -189,7 +124,6 @@ async fn complete_websocket_initialize(websocket: &mut WebSocketStream<TcpStream
     }
 }
 
-#[cfg(windows)]
 async fn read_jsonrpc_websocket(websocket: &mut WebSocketStream<TcpStream>) -> JSONRPCMessage {
     loop {
         match timeout(Duration::from_secs(1), websocket.next())
@@ -212,7 +146,6 @@ async fn read_jsonrpc_websocket(websocket: &mut WebSocketStream<TcpStream>) -> J
     }
 }
 
-#[cfg(windows)]
 async fn write_jsonrpc_websocket(
     websocket: &mut WebSocketStream<TcpStream>,
     message: JSONRPCMessage,

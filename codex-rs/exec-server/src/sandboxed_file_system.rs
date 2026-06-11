@@ -62,14 +62,14 @@ impl ExecutorFileSystem for SandboxedFileSystem {
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::Canonicalize(FsCanonicalizeParams {
-                    path: path.to_abs_path()?,
+                    path: path.clone(),
                     sandbox: None,
                 }),
             )
             .await?
             .expect_canonicalize()
             .map_err(map_sandbox_error)?;
-        PathUri::from_abs_path(&response.path)
+        Ok(response.path)
     }
 
     async fn read_file(
@@ -82,7 +82,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::ReadFile(FsReadFileParams {
-                    path: path.to_abs_path()?,
+                    path: path.clone(),
                     sandbox: None,
                 }),
             )
@@ -107,7 +107,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::WriteFile(FsWriteFileParams {
-                path: path.to_abs_path()?,
+                path: path.clone(),
                 data_base64: STANDARD.encode(contents),
                 sandbox: None,
             }),
@@ -128,7 +128,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::CreateDirectory(FsCreateDirectoryParams {
-                path: path.to_abs_path()?,
+                path: path.clone(),
                 recursive: Some(options.recursive),
                 sandbox: None,
             }),
@@ -149,7 +149,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::GetMetadata(FsGetMetadataParams {
-                    path: path.to_abs_path()?,
+                    path: path.clone(),
                     sandbox: None,
                 }),
             )
@@ -175,7 +175,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::ReadDirectory(FsReadDirectoryParams {
-                    path: path.to_abs_path()?,
+                    path: path.clone(),
                     sandbox: None,
                 }),
             )
@@ -203,7 +203,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Remove(FsRemoveParams {
-                path: path.to_abs_path()?,
+                path: path.clone(),
                 recursive: Some(remove_options.recursive),
                 force: Some(remove_options.force),
                 sandbox: None,
@@ -226,8 +226,8 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Copy(FsCopyParams {
-                source_path: source_path.to_abs_path()?,
-                destination_path: destination_path.to_abs_path()?,
+                source_path: source_path.clone(),
+                destination_path: destination_path.clone(),
                 recursive: options.recursive,
                 sandbox: None,
             }),
