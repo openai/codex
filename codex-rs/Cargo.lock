@@ -3660,6 +3660,7 @@ dependencies = [
  "codex-exec-server",
  "codex-keyring-store",
  "codex-protocol",
+ "codex-secrets",
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
  "codex-utils-pty",
