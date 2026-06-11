@@ -493,13 +493,6 @@ impl App {
         };
         if write_response.status == WriteStatus::OkOverridden {
             let message = overridden_write_message(&write_response);
-            tracing::warn!(
-                message,
-                "feature flag config write was overridden by effective config"
-            );
-            self.chat_widget.add_error_message(format!(
-                "Experimental feature changes were saved but not applied: {message}"
-            ));
             if let Some(effective_config) = self
                 .read_effective_config_after_overridden_write(
                     app_server,
@@ -507,10 +500,55 @@ impl App {
                 )
                 .await
             {
+                let guardian_disabled_as_requested = feature_updates_to_apply
+                    .iter()
+                    .any(|(feature, enabled)| *feature == Feature::GuardianApproval && !*enabled)
+                    && !feature_enabled_from_effective_config(
+                        &effective_config,
+                        Feature::GuardianApproval,
+                    );
+                if !guardian_disabled_as_requested {
+                    tracing::warn!(
+                        message,
+                        "feature flag config write was overridden by effective config"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Experimental feature changes were saved but not applied: {message}"
+                    ));
+                }
                 self.sync_feature_state_from_effective_config(
                     &effective_config,
                     &feature_updates_to_apply,
                 );
+                let guardian_disabled = feature_updates_to_apply
+                    .iter()
+                    .any(|(feature, enabled)| *feature == Feature::GuardianApproval && !*enabled)
+                    && !self.config.features.enabled(Feature::GuardianApproval);
+                if guardian_disabled {
+                    self.sync_active_thread_permission_settings_to_cached_session()
+                        .await;
+                    let op = AppCommand::override_turn_context(
+                        /*cwd*/ None,
+                        /*approval_policy*/ None,
+                        Some(self.config.approvals_reviewer),
+                        /*permission_profile*/ None,
+                        /*active_permission_profile*/ None,
+                        /*windows_sandbox_level*/ None,
+                        /*model*/ None,
+                        /*effort*/ None,
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        /*personality*/ None,
+                    );
+                    let replay_state_op = ThreadEventStore::op_can_change_pending_replay_state(&op)
+                        .then(|| op.clone());
+                    let submitted = self.chat_widget.submit_op(op);
+                    if submitted && let Some(op) = replay_state_op.as_ref() {
+                        self.note_active_thread_outbound_op(op).await;
+                        self.refresh_pending_thread_approvals().await;
+                    }
+                }
                 self.sync_auto_review_runtime_state_from_effective_config(
                     &effective_config,
                     &feature_updates_to_apply,
@@ -518,6 +556,12 @@ impl App {
                 .await;
                 if windows_sandbox_changed {
                     self.propagate_windows_sandbox_turn_context();
+                }
+                if guardian_disabled_as_requested && let Some(label) = permissions_history_label {
+                    self.chat_widget.add_info_message(
+                        format!("Permissions updated to {label}"),
+                        /*hint*/ None,
+                    );
                 }
             }
             return;
