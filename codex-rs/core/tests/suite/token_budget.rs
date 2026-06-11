@@ -82,8 +82,16 @@ async fn token_budget_context_is_only_emitted_with_full_context() -> Result<()> 
     let expected = vec![format!(
         "<token_budget>\nCurrent context window 0.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
     )];
-    assert_eq!(token_budget_texts(&requests[0]), expected);
-    assert_eq!(token_budget_texts(&requests[1]), expected);
+    assert_eq!(
+        token_budget_texts(&requests[0]),
+        expected,
+        "initial full context should report context window 0"
+    );
+    assert_eq!(
+        token_budget_texts(&requests[1]),
+        expected,
+        "steady-state context update should not advance the context window"
+    );
 
     Ok(())
 }
@@ -98,22 +106,18 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_assistant_message("msg-1", "noted"),
                 ev_completed_with_tokens("resp-1", /*total_tokens*/ 2_500),
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_assistant_message("msg-2", "two"),
                 ev_completed_with_tokens("resp-2", /*total_tokens*/ 3_000),
             ]),
             sse(vec![
                 ev_response_created("resp-3"),
-                ev_assistant_message("msg-3", "three"),
                 ev_completed_with_tokens("resp-3", /*total_tokens*/ 5_000),
             ]),
             sse(vec![
                 ev_response_created("resp-4"),
-                ev_assistant_message("msg-4", "four"),
                 ev_completed_with_tokens("resp-4", /*total_tokens*/ 8_000),
             ]),
             sse(vec![ev_response_created("resp-5"), ev_completed("resp-5")]),
@@ -356,7 +360,8 @@ async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
         token_budget_texts(&requests[2]),
         vec![format!(
             "<token_budget>\nCurrent context window 1.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
-        )]
+        )],
+        "post-compaction full context should report context window 1"
     );
 
     Ok(())
