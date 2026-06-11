@@ -208,29 +208,6 @@ async fn recent_image_fallback_requires_requested_count() {
     );
 }
 
-#[tokio::test]
-async fn referenced_image_requires_environment() {
-    let path = "/virtual/image.png"
-        .try_into()
-        .expect("test path should be absolute");
-    let error = request_for_call_args(
-        &ImagegenArgs {
-            prompt: "change the lighting".to_string(),
-            referenced_image_paths: Some(vec![path]),
-            num_last_images_to_include: None,
-        },
-        &[],
-        &[],
-    )
-    .await
-    .expect_err("referenced image should require an environment");
-
-    assert_eq!(
-        error.to_string(),
-        "referenced image paths are unavailable in this session"
-    );
-}
-
 #[test]
 fn generated_output_returns_image_input_and_output_hint() {
     let output_hint =

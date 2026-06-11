@@ -176,97 +176,6 @@ async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()>
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
-#[tokio::test]
-async fn standalone_image_edit_applies_sandbox_read_denies() -> Result<()> {
-    let call_id = "image-edit-denied";
-    let server = responses::start_mock_server().await;
-    let codex_home = TempDir::new()?;
-    let image_path = codex_home.path().join("denied.png");
-    std::fs::write(&image_path, TINY_PNG_BYTES)?;
-
-    let response_mock = responses::mount_sse_sequence(
-        &server,
-        vec![
-            responses::sse(vec![
-                responses::ev_response_created("resp-1"),
-                responses::ev_function_call_with_namespace(
-                    call_id,
-                    "image_gen",
-                    "imagegen",
-                    &json!({
-                        "prompt": "add a red hat",
-                        "referenced_image_paths": [image_path.display().to_string()],
-                    })
-                    .to_string(),
-                ),
-                responses::ev_completed("resp-1"),
-            ]),
-            responses::sse(vec![
-                responses::ev_assistant_message("msg-1", "Done"),
-                responses::ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    create_config_toml(codex_home.path(), &server.uri(), ImagegenTestMode::Direct)?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    let image_path_key = format!("{:?}", image_path.display().to_string());
-    std::fs::write(
-        config_path,
-        format!(
-            r#"{config}
-
-[permissions.image_denied.filesystem]
-":root" = "read"
-{image_path_key} = "deny"
-"#
-        ),
-    )?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("access-chatgpt"),
-        AuthCredentialsStoreMode::File,
-    )?;
-
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    start_turn(
-        &mut mcp,
-        vec![V2UserInput::Text {
-            text: "Edit the image".to_string(),
-            text_elements: Vec::new(),
-        }],
-        Some("image_denied".to_string()),
-    )
-    .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    let request = response_mock
-        .last_request()
-        .context("missing request containing image extension output")?;
-    let output = request
-        .function_call_output_content_and_success(call_id)
-        .and_then(|(content, _)| content)
-        .context("image extension error text should be present")?;
-    assert!(
-        output.starts_with(&format!(
-            "unable to read referenced image at `{}`:",
-            image_path.display()
-        )),
-        "unexpected image extension error: {output}"
-    );
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn standalone_image_edit_uses_recent_pathless_image() -> Result<()> {
     let image_url = "https://example.com/reference.png";
@@ -421,7 +330,6 @@ async fn start_image_generation_turn(mcp: &mut TestAppServer) -> Result<()> {
             text: "Generate an image".to_string(),
             text_elements: Vec::new(),
         }],
-        /*permissions*/ None,
     )
     .await
 }
@@ -466,7 +374,7 @@ async fn run_image_edit_test(
     let mut mcp =
         TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    start_turn(&mut mcp, input, /*permissions*/ None).await?;
+    start_turn(&mut mcp, input).await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         wait_for_image_generation_completed(&mut mcp),
@@ -490,11 +398,7 @@ async fn run_image_edit_test(
         .body_json::<serde_json::Value>()?)
 }
 
-async fn start_turn(
-    mcp: &mut TestAppServer,
-    input: Vec<V2UserInput>,
-    permissions: Option<String>,
-) -> Result<()> {
+async fn start_turn(mcp: &mut TestAppServer, input: Vec<V2UserInput>) -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams::default())
         .await?;
@@ -510,7 +414,6 @@ async fn start_turn(
             thread_id: thread.id,
             client_user_message_id: None,
             input,
-            permissions,
             ..Default::default()
         })
         .await?;
