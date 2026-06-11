@@ -13,7 +13,9 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::Instrument;
 use tracing::debug;
+use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -84,6 +86,13 @@ where
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
+    let stream_span = tracing::debug_span!(
+        "noise_relay.stream",
+        noise_side = "harness",
+        environment_id = %environment_id,
+        executor_registration_id = %executor_registration_id,
+        stream_id = %stream_id,
+    );
 
     let websocket_task = tokio::spawn(async move {
         let mut websocket = stream;
@@ -214,7 +223,14 @@ where
                         }
                     };
                     match initiator_handshake.finish(&response) {
-                        Ok(transport) => break transport,
+                        Ok(transport) => {
+                            info!(
+                                noise_event = "handshake",
+                                noise_outcome = "ok",
+                                "Noise harness handshake completed"
+                            );
+                            break transport;
+                        }
                         Err(error) => {
                             send_disconnected(
                                 &incoming_tx,
@@ -378,7 +394,8 @@ where
             }
         }
         let _ = disconnected_tx.send(true);
-    });
+    }
+    .instrument(stream_span));
 
     JsonRpcConnection {
         outgoing_tx,

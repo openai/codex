@@ -18,6 +18,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::debug;
+use tracing::info;
 use tracing::warn;
 
 use crate::ExecServerError;
@@ -59,6 +60,15 @@ pub(crate) trait HarnessKeyValidator: Send + Sync {
 ///
 /// Parsing the first Noise message authenticates the harness key. Only a
 /// successful registry check turns that pending handshake into a virtual stream.
+#[tracing::instrument(
+    level = "debug",
+    skip_all,
+    fields(
+        noise_side = "executor",
+        environment_id = %environment_id,
+        executor_registration_id = %executor_registration_id,
+    )
+)]
 pub(crate) async fn run_noise_multiplexed_environment<S, V>(
     stream: WebSocketStream<S>,
     processor: ConnectionProcessor,
@@ -129,7 +139,16 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                         };
                         if validation_result.result.is_err() {
                             // Validator errors may contain authorization details.
-                            warn!("Noise relay harness key validation failed");
+                            warn!(
+                                noise_event = "authorization",
+                                noise_outcome = "error",
+                                noise_reason = "authorization_failed",
+                                "Noise harness authorization failed"
+                            );
+                            debug!(
+                                stream_id = validation_result.stream_id,
+                                "Noise harness authorization failure details"
+                            );
                             send_reset(&physical_outgoing_tx, validation_result.stream_id);
                             if failed_handshake_budget_exhausted(&mut failed_handshakes) {
                                 warn!("closing Noise relay after repeated handshake failures");
@@ -170,6 +189,16 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                         {
                             break;
                         }
+                        info!(
+                            noise_event = "handshake",
+                            noise_outcome = "ok",
+                            "Noise executor handshake completed"
+                        );
+                        debug!(
+                            stream_id = validation_result.stream_id,
+                            active_streams = streams.len() + 1,
+                            "Noise executor stream activated"
+                        );
                         streams.insert(
                             validation_result.stream_id.clone(),
                             spawn_noise_virtual_stream(

@@ -12,6 +12,7 @@ use serde::Serialize;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async_with_config;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
@@ -172,9 +173,16 @@ pub(super) async fn run_remote_environment(
                 response.security_profile
             )));
         }
-        let environment_id = &response.environment_id;
         info!(
-            "codex exec-server Noise environment registered with environment_id {environment_id}"
+            noise_event = "registration",
+            noise_outcome = "ok",
+            security_profile = NOISE_RELAY_SECURITY_PROFILE,
+            "Noise executor registration completed"
+        );
+        debug!(
+            environment_id = response.environment_id,
+            executor_registration_id = response.executor_registration_id,
+            "Noise executor registration details"
         );
 
         match timeout(
@@ -190,6 +198,11 @@ pub(super) async fn run_remote_environment(
             Ok(Ok((websocket, _))) => {
                 backoff = Duration::from_secs(1);
                 let executor_registration_id = response.executor_registration_id;
+                info!(
+                    noise_event = "rendezvous_connection",
+                    noise_outcome = "ok",
+                    "Noise executor connected to rendezvous"
+                );
                 run_noise_multiplexed_environment(
                     websocket,
                     processor.clone(),
@@ -204,8 +217,21 @@ pub(super) async fn run_remote_environment(
                 )
                 .await;
             }
-            Ok(Err(err)) => warn!("failed to connect Noise remote exec-server websocket: {err}"),
-            Err(_) => warn!("timed out connecting Noise remote exec-server websocket"),
+            Ok(Err(error)) => {
+                warn!(
+                    noise_event = "rendezvous_connection",
+                    noise_outcome = "error",
+                    noise_reason = "websocket_error",
+                    "Noise executor failed to connect to rendezvous"
+                );
+                debug!(error = %error, "Noise executor rendezvous connection error");
+            }
+            Err(_) => warn!(
+                noise_event = "rendezvous_connection",
+                noise_outcome = "error",
+                noise_reason = "timeout",
+                "Noise executor rendezvous connection timed out"
+            ),
         }
 
         sleep(backoff).await;
