@@ -425,8 +425,9 @@ def codex_rust_crate(
     for binary_label in extra_binaries:
         sanitized_binaries.append(binary_label)
         binary = Label(binary_label).name
-        cargo_env_runfiles[binary_label] = "CARGO_BIN_EXE_" + binary
-        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
+        cargo_binary = binary.replace("-", "_")
+        cargo_env_runfiles[binary_label] = "CARGO_BIN_EXE_" + cargo_binary
+        cargo_env["CARGO_BIN_EXE_" + cargo_binary] = "$(rlocationpath %s)" % binary_label
 
     integration_test_kwargs = {}
     if integration_test_args:
