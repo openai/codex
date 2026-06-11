@@ -5,6 +5,12 @@ use serde_json::json;
 
 #[test]
 fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
+    let args = RequestPluginInstallSingleArgs {
+        tool_type: DiscoverableToolType::Connector,
+        action_type: DiscoverableToolAction::Install,
+        tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+        suggest_reason: "Plan and reference events from your calendar".to_string(),
+    };
     let connector = DiscoverableTool::Connector(Box::new(AppInfo {
         id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
         name: "Google Calendar".to_string(),
@@ -28,6 +34,7 @@ fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
         "codex-apps",
         "thread-1".to_string(),
         "turn-1".to_string(),
+        &args,
         "Plan and reference events from your calendar",
         &connector,
     );
@@ -67,6 +74,12 @@ fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
 
 #[test]
 fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
+    let args = RequestPluginInstallSingleArgs {
+        tool_type: DiscoverableToolType::Plugin,
+        action_type: DiscoverableToolAction::Install,
+        tool_id: "sample@openai-curated-remote".to_string(),
+        suggest_reason: "Use the sample plugin's skills and MCP server".to_string(),
+    };
     let plugin = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
         id: "sample@openai-curated-remote".to_string(),
         remote_plugin_id: Some("plugins~Plugin_sample".to_string()),
@@ -81,6 +94,7 @@ fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
         "codex-apps",
         "thread-1".to_string(),
         "turn-1".to_string(),
+        &args,
         "Use the sample plugin's skills and MCP server",
         &plugin,
     );
@@ -117,6 +131,181 @@ fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
 }
 
 #[test]
+fn build_request_plugin_install_picker_elicitation_request_uses_flat_entries_shape() {
+    let args = RequestPluginInstallPickerArgs {
+        action_type: DiscoverableToolAction::Install,
+        suggest_reason: "Connect tools for this request".to_string(),
+        title: Some("Connect tools".to_string()),
+        entries: Some(vec![RequestPluginInstallPickerEntry {
+            id: "calendar".to_string(),
+            tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+            tool_name: "Calendar".to_string(),
+            tool_type: DiscoverableToolType::Connector,
+            description: None,
+        }]),
+        categories: None,
+    };
+    let connector = DiscoverableTool::Connector(Box::new(AppInfo {
+        id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+        name: "Google Calendar".to_string(),
+        description: Some("Plan events and schedules.".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some(
+            "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
+                .to_string(),
+        ),
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }));
+    let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
+        category_id: None,
+        entry_id: "calendar",
+        tool: &connector,
+    }];
+
+    let request = build_request_plugin_install_picker_elicitation_request(
+        "codex-apps",
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+        &args,
+        "Connect tools for this request",
+        &resolved_entries,
+    )
+    .expect("picker request");
+
+    assert_eq!(
+        request,
+        McpServerElicitationRequestParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            server_name: "codex-apps".to_string(),
+            request: McpServerElicitationRequest::Form {
+                meta: Some(json!(RequestPluginInstallPickerMeta {
+                    codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+                    suggest_type: DiscoverableToolAction::Install,
+                    suggest_reason: "Connect tools for this request",
+                    title: Some("Connect tools"),
+                    entries: Some(vec![RequestPluginInstallPickerEntryMeta {
+                        id: "calendar",
+                        tool_id: "connector_2128aebfecb84f64a069897515042a44",
+                        tool_name: "Google Calendar",
+                        tool_type: DiscoverableToolType::Connector,
+                        description: Some("Plan events and schedules."),
+                        install_url: Some(
+                            "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
+                        ),
+                        remote_plugin_id: None,
+                        app_connector_ids: None,
+                    }]),
+                    categories: None,
+                })),
+                message: "Connect tools for this request".to_string(),
+                requested_schema: McpElicitationSchema {
+                    schema_uri: None,
+                    type_: McpElicitationObjectType::Object,
+                    properties: BTreeMap::new(),
+                    required: None,
+                },
+            },
+        },
+    );
+}
+
+#[test]
+fn build_request_plugin_install_picker_elicitation_request_injects_category_metadata() {
+    let args = RequestPluginInstallPickerArgs {
+        action_type: DiscoverableToolAction::Install,
+        suggest_reason: "Connect the requested tools".to_string(),
+        title: None,
+        entries: None,
+        categories: Some(vec![RequestPluginInstallPickerCategory {
+            id: "sales".to_string(),
+            title: "Sales tools".to_string(),
+            required: Some(true),
+            min_installed: Some(1),
+            entries: vec![RequestPluginInstallPickerEntry {
+                id: "hubspot".to_string(),
+                tool_id: "hubspot@openai-curated-remote".to_string(),
+                tool_name: "HubSpot".to_string(),
+                tool_type: DiscoverableToolType::Plugin,
+                description: Some("Use HubSpot CRM context.".to_string()),
+            }],
+        }]),
+    };
+    let plugin = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
+        id: "hubspot@openai-curated-remote".to_string(),
+        remote_plugin_id: Some("plugins~Plugin_hubspot".to_string()),
+        name: "HubSpot".to_string(),
+        description: Some("CRM records and sales workflows.".to_string()),
+        has_skills: true,
+        mcp_server_names: vec!["hubspot".to_string()],
+        app_connector_ids: vec!["connector_hubspot".to_string()],
+    }));
+    let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
+        category_id: Some("sales"),
+        entry_id: "hubspot",
+        tool: &plugin,
+    }];
+
+    let request = build_request_plugin_install_picker_elicitation_request(
+        "codex-apps",
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+        &args,
+        "Connect the requested tools",
+        &resolved_entries,
+    )
+    .expect("picker request");
+
+    assert_eq!(
+        request,
+        McpServerElicitationRequestParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            server_name: "codex-apps".to_string(),
+            request: McpServerElicitationRequest::Form {
+                meta: Some(json!(RequestPluginInstallPickerMeta {
+                    codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+                    suggest_type: DiscoverableToolAction::Install,
+                    suggest_reason: "Connect the requested tools",
+                    title: None,
+                    entries: None,
+                    categories: Some(vec![RequestPluginInstallPickerCategoryMeta {
+                        id: "sales",
+                        title: "Sales tools",
+                        required: Some(true),
+                        min_installed: Some(1),
+                        entries: vec![RequestPluginInstallPickerEntryMeta {
+                            id: "hubspot",
+                            tool_id: "hubspot@openai-curated-remote",
+                            tool_name: "HubSpot",
+                            tool_type: DiscoverableToolType::Plugin,
+                            description: Some("Use HubSpot CRM context."),
+                            install_url: None,
+                            remote_plugin_id: Some("plugins~Plugin_hubspot"),
+                            app_connector_ids: Some(&["connector_hubspot".to_string()]),
+                        }],
+                    }]),
+                })),
+                message: "Connect the requested tools".to_string(),
+                requested_schema: McpElicitationSchema {
+                    schema_uri: None,
+                    type_: McpElicitationObjectType::Object,
+                    properties: BTreeMap::new(),
+                    required: None,
+                },
+            },
+        },
+    );
+}
+
+#[test]
 fn build_request_plugin_install_meta_uses_expected_shape() {
     let connector = DiscoverableTool::Connector(Box::new(AppInfo {
         id: "connector_68df038e0ba48191908c8434991bbac2".to_string(),
@@ -135,8 +324,12 @@ fn build_request_plugin_install_meta_uses_expected_shape() {
         is_enabled: true,
         plugin_display_names: Vec::new(),
     }));
-    let meta =
-        build_request_plugin_install_meta("Find and reference emails from your inbox", &connector);
+    let meta = build_request_plugin_install_meta(
+        DiscoverableToolType::Connector,
+        DiscoverableToolAction::Install,
+        "Find and reference emails from your inbox",
+        &connector,
+    );
 
     assert_eq!(
         meta,
@@ -184,7 +377,6 @@ fn verified_connector_install_completed_requires_accessible_connector() {
         &accessible_connectors,
     ));
 }
-
 #[test]
 fn all_requested_connectors_picked_up_requires_every_expected_connector() {
     let accessible_connectors = vec![AppInfo {
