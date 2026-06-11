@@ -273,6 +273,22 @@ async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Resu
     session.services.code_mode_service =
         crate::tools::code_mode::CodeModeService::new(Arc::clone(&provider));
     session.services.code_mode_session_provider = provider;
+    assert_eq!(
+        session
+            .services
+            .code_mode_service
+            .execute(ExecuteRequest {
+                tool_call_id: "setup-call".to_string(),
+                enabled_tools: Vec::new(),
+                source: String::new(),
+                yield_time_ms: None,
+                max_output_tokens: None,
+            })
+            .await
+            .err()
+            .as_deref(),
+        Some("execute is not supported by this test session")
+    );
     attach_test_trace(&mut session, &turn, temp.path())?;
 
     let registry = ToolRegistry::with_handler_for_test(Arc::new(CodeModeWaitHandler));
