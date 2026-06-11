@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::path::Path;
 use std::path::PathBuf;
@@ -264,9 +263,8 @@ impl ExecutorFileSystem for DirectFileSystem {
     ) -> FileSystemResult<PathUri> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
-        let canonicalized =
-            AbsolutePathBuf::from_absolute_path(tokio::fs::canonicalize(path.as_path()).await?)?;
-        PathUri::from_abs_path(&canonicalized)
+        let canonicalized = tokio::fs::canonicalize(path.as_path()).await?;
+        PathUri::from_path(canonicalized)
     }
 
     async fn read_file(
