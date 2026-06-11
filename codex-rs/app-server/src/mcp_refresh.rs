@@ -113,6 +113,7 @@ mod tests {
     use codex_core::thread_store_from_config;
     use codex_exec_server::EnvironmentManager;
     use codex_extension_api::NoopExtensionEventSink;
+    use codex_home::CodexHomeUserInstructionsProvider;
     use codex_login::AuthManager;
     use codex_login::CodexAuth;
     use codex_protocol::protocol::SessionSource;
@@ -202,8 +203,12 @@ mod tests {
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::new(codex_goal_extension::GoalService::new()),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
+                        thread_store: Arc::clone(&thread_store),
                     },
                 ),
+                Arc::new(CodexHomeUserInstructionsProvider::new(
+                    good_config.codex_home.clone(),
+                )),
                 /*analytics_events_client*/ None,
                 Arc::clone(&thread_store),
                 Some(state_db.clone()),

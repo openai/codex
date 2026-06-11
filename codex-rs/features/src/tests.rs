@@ -84,6 +84,16 @@ fn plugin_hooks_is_removed_and_disabled_by_default() {
 }
 
 #[test]
+fn external_migration_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::ExternalMigration.stage(), Stage::Removed);
+    assert_eq!(Feature::ExternalMigration.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("external_migration"),
+        Some(Feature::ExternalMigration)
+    );
+}
+
+#[test]
 fn removed_apps_mcp_path_override_shapes_are_ignored() {
     let features = [
         toml::from_str::<FeaturesToml>("apps_mcp_path_override = true")
@@ -123,23 +133,6 @@ fn guardian_approval_is_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn external_migration_is_experimental_and_disabled_by_default() {
-    let spec = Feature::ExternalMigration.info();
-    let stage = spec.stage;
-
-    assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("External migration"));
-    assert_eq!(
-        stage.experimental_menu_description(),
-        Some(
-            "Show a startup prompt when Codex detects migratable external agent config for this machine or project."
-        )
-    );
-    assert_eq!(stage.experimental_announcement(), None);
-    assert_eq!(Feature::ExternalMigration.default_enabled(), false);
-}
-
-#[test]
 fn request_permissions_is_under_development() {
     assert_eq!(
         Feature::ExecPermissionApprovals.stage(),
@@ -155,16 +148,6 @@ fn request_permissions_tool_is_under_development() {
         Stage::UnderDevelopment
     );
     assert_eq!(Feature::RequestPermissionsTool.default_enabled(), false);
-}
-
-#[test]
-fn remote_compaction_v2_is_under_development() {
-    assert_eq!(Feature::RemoteCompactionV2.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::RemoteCompactionV2.default_enabled(), false);
-    assert_eq!(
-        feature_for_key("remote_compaction_v2"),
-        Some(Feature::RemoteCompactionV2)
-    );
 }
 
 #[test]

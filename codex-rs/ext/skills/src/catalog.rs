@@ -1,5 +1,5 @@
 use codex_core_skills::model::SkillDependencies;
-use codex_exec_server::EnvironmentPathRef;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Source authority that owns a skill package and must be used to read it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -9,8 +9,8 @@ pub enum SkillSourceKind {
     Host,
     /// Skills owned by an execution environment.
     Executor,
-    /// Skills read through an authenticated remote catalog/API.
-    Remote,
+    /// Skills owned by the orchestrator rather than an execution environment.
+    Orchestrator,
     /// Extension-private source kind for future providers that do not fit an
     /// existing transport category.
     Custom(String),
@@ -25,7 +25,7 @@ impl SkillSourceKind {
         match self {
             Self::Host => "host",
             Self::Executor => "executor",
-            Self::Remote => "remote",
+            Self::Orchestrator => "orchestrator",
             Self::Custom(kind) => kind,
         }
     }
@@ -62,7 +62,7 @@ pub struct SkillPackageId(pub String);
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SkillResourceId {
     id: String,
-    environment_path: Option<EnvironmentPathRef>,
+    environment_path: Option<EnvironmentSkillResource>,
 }
 
 impl SkillResourceId {
@@ -73,10 +73,17 @@ impl SkillResourceId {
         }
     }
 
-    pub fn environment(id: impl Into<String>, path: EnvironmentPathRef) -> Self {
+    pub fn environment(
+        id: impl Into<String>,
+        environment_id: impl Into<String>,
+        path: AbsolutePathBuf,
+    ) -> Self {
         Self {
             id: id.into(),
-            environment_path: Some(path),
+            environment_path: Some(EnvironmentSkillResource {
+                environment_id: environment_id.into(),
+                path,
+            }),
         }
     }
 
@@ -84,9 +91,17 @@ impl SkillResourceId {
         &self.id
     }
 
-    pub(crate) fn environment_path(&self) -> Option<&EnvironmentPathRef> {
-        self.environment_path.as_ref()
+    pub(crate) fn environment_path(&self) -> Option<(&str, &AbsolutePathBuf)> {
+        self.environment_path
+            .as_ref()
+            .map(|resource| (resource.environment_id.as_str(), &resource.path))
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct EnvironmentSkillResource {
+    environment_id: String,
+    path: AbsolutePathBuf,
 }
 
 /// Metadata shown in the always-visible skills catalog.

@@ -7,8 +7,8 @@ use codex_file_system::FileSystemResult;
 use codex_file_system::FileSystemSandboxContext;
 use codex_file_system::ReadDirectoryEntry;
 use codex_file_system::RemoveOptions;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
-use std::path::Path;
 use tempfile::tempdir;
 
 struct TestFileSystem;
@@ -17,35 +17,26 @@ struct TestFileSystem;
 impl ExecutorFileSystem for TestFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        path.canonicalize()
-    }
-
-    async fn join(
-        &self,
-        base_path: &AbsolutePathBuf,
-        path: &Path,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        Ok(base_path.join(path))
-    }
-
-    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        Ok(path.parent())
+    ) -> FileSystemResult<PathUri> {
+        let path = path.to_abs_path()?;
+        let canonicalized = path.canonicalize()?;
+        PathUri::from_abs_path(&canonicalized)
     }
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
+        let path = path.to_abs_path()?;
         tokio::fs::read(path.as_path()).await
     }
 
     async fn write_file(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _contents: Vec<u8>,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -54,7 +45,7 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn create_directory(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _create_directory_options: CreateDirectoryOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -63,7 +54,7 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn get_metadata(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         unimplemented!("test filesystem only supports reads")
@@ -71,7 +62,7 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn read_directory(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         unimplemented!("test filesystem only supports reads")
@@ -79,7 +70,7 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn remove(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _remove_options: RemoveOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -88,8 +79,8 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn copy(
         &self,
-        _source_path: &AbsolutePathBuf,
-        _destination_path: &AbsolutePathBuf,
+        _source_path: &PathUri,
+        _destination_path: &PathUri,
         _copy_options: CopyOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
