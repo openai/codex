@@ -20,6 +20,7 @@ const REQUEST_FILE_FLAG: &str = "--request-file";
 pub struct WindowsSandboxWrapperRequest {
     pub codex_home: PathBuf,
     pub command_cwd: AbsolutePathBuf,
+    pub env_map: HashMap<String, String>,
     pub permission_profile: PermissionProfile,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -29,6 +30,7 @@ pub struct WindowsSandboxWrapperRequest {
 pub fn create_windows_sandbox_wrapper_request_for_permission_profile(
     command: Vec<String>,
     command_cwd: AbsolutePathBuf,
+    env_map: HashMap<String, String>,
     permission_profile: PermissionProfile,
     windows_sandbox_level: WindowsSandboxLevel,
     windows_sandbox_private_desktop: bool,
@@ -37,6 +39,7 @@ pub fn create_windows_sandbox_wrapper_request_for_permission_profile(
     WindowsSandboxWrapperRequest {
         codex_home,
         command_cwd,
+        env_map,
         permission_profile,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -99,7 +102,7 @@ async fn run_windows_sandbox_wrapper_request(request: WindowsSandboxWrapperReque
         bail!("missing sandboxed command in windows sandbox wrapper request");
     }
 
-    let env = std::env::vars().collect::<HashMap<_, _>>();
+    let env = request.env_map;
     let workspace_roots = vec![request.command_cwd.clone()];
     let spawned = match request.windows_sandbox_level {
         WindowsSandboxLevel::Elevated => {
@@ -225,6 +228,7 @@ mod tests {
                 "--codex-run-as-fs-helper".to_string(),
             ],
             AbsolutePathBuf::from_absolute_path(Path::new(r"C:\work"))?,
+            HashMap::from([("PATH".to_string(), r"C:\Windows\System32".to_string())]),
             permission_profile.clone(),
             WindowsSandboxLevel::RestrictedToken,
             /*windows_sandbox_private_desktop*/ true,
@@ -239,6 +243,10 @@ mod tests {
                 "helper.exe".to_string(),
                 "--codex-run-as-fs-helper".to_string()
             ]
+        );
+        assert_eq!(
+            request.env_map,
+            HashMap::from([("PATH".to_string(), r"C:\Windows\System32".to_string())])
         );
         assert_eq!(request.permission_profile, permission_profile);
         assert_eq!(

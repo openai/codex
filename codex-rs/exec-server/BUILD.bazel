@@ -15,6 +15,8 @@ codex_rust_crate(
     ],
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
+        "//codex-rs/windows-sandbox-rs:codex-command-runner",
+        "//codex-rs/windows-sandbox-rs:codex-windows-sandbox-setup",
     ],
     test_tags = ["no-sandbox"],
 )

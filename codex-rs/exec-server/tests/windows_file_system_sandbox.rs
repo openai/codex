@@ -87,27 +87,22 @@ fn process_is_elevated() -> bool {
     status.is_ok_and(|status| status.success())
 }
 
-fn stage_windows_sandbox_helpers_next_to_codex_exe(codex_exe: &Path) -> Result<bool> {
+fn stage_windows_sandbox_helpers_next_to_codex_exe(codex_exe: &Path) -> Result<()> {
     let helper_dir = codex_exe
         .parent()
         .context("configured Codex helper path has no parent")?;
     std::fs::create_dir_all(helper_dir)
         .with_context(|| format!("create helper dir {}", helper_dir.display()))?;
     for helper_name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
-        let helper = match codex_utils_cargo_bin::cargo_bin(helper_name) {
-            Ok(helper) => helper,
-            Err(err) => {
-                eprintln!("skipping elevated fs-helper test: {helper_name} unavailable: {err}");
-                return Ok(false);
-            }
-        };
+        let helper = codex_utils_cargo_bin::cargo_bin(helper_name)
+            .with_context(|| format!("locate Windows sandbox helper binary {helper_name}"))?;
         std::fs::copy(
             &helper,
             helper_dir.join(Path::new(helper_name).with_extension("exe")),
         )
         .with_context(|| format!("stage Windows sandbox helper {}", helper.display()))?;
     }
-    Ok(true)
+    Ok(())
 }
 
 fn temp_workspace() -> Result<(TempDir, AbsolutePathBuf)> {
@@ -317,9 +312,7 @@ async fn elevated_fs_helper_allows_writable_path_when_setup_is_available() -> Re
     let helper_dir = TempDir::new()?;
     let configured_helper = helper_dir.path().join("codex.exe");
     std::fs::copy(std::env::current_exe()?, &configured_helper)?;
-    if !stage_windows_sandbox_helpers_next_to_codex_exe(&configured_helper)? {
-        return Ok(());
-    }
+    stage_windows_sandbox_helpers_next_to_codex_exe(&configured_helper)?;
     let sandboxed = sandboxed_file_system_with_codex_exe(configured_helper)?;
 
     let (_workspace_dir, workspace) = temp_workspace()?;

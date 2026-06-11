@@ -29,6 +29,8 @@ use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 
 const FS_HELPER_ENV_ALLOWLIST: &[&str] = &["PATH", "TMPDIR", "TMP", "TEMP"];
+#[cfg(target_os = "windows")]
+const WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST: &[&str] = &["USERNAME", "USERPROFILE"];
 #[cfg(debug_assertions)]
 const FS_HELPER_BAZEL_BWRAP_ENV_ALLOWLIST: &[&str] = &[
     "CARGO_BIN_EXE_bwrap",
@@ -429,10 +431,12 @@ fn wrap_windows_sandbox_command(
             "windows fs sandbox helper failed to resolve CODEX_HOME: {err}"
         ))
     })?;
+    let sandboxed_env = request.env.clone();
     let wrapper_request =
         codex_windows_sandbox::create_windows_sandbox_wrapper_request_for_permission_profile(
             std::mem::take(&mut request.command),
             request.cwd.clone(),
+            sandboxed_env,
             request.permission_profile.clone(),
             request.windows_sandbox_level,
             request.windows_sandbox_private_desktop,
@@ -450,7 +454,36 @@ fn wrap_windows_sandbox_command(
     request.command.append(&mut args);
     request.sandbox = codex_sandboxing::SandboxType::None;
     request.arg0 = None;
+    add_windows_wrapper_setup_env(&mut request.env);
     Ok(request_file)
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_wrapper_setup_env(env: &mut HashMap<String, String>) {
+    add_windows_wrapper_setup_env_from_vars(env, std::env::vars_os());
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_wrapper_setup_env_from_vars(
+    env: &mut HashMap<String, String>,
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) {
+    for (key, value) in vars {
+        let key = key.to_string_lossy().into_owned();
+        if !WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST
+            .iter()
+            .any(|allowed| key.eq_ignore_ascii_case(allowed))
+        {
+            continue;
+        }
+        if env
+            .keys()
+            .any(|existing| existing.eq_ignore_ascii_case(&key))
+        {
+            continue;
+        }
+        env.insert(key, value.to_string_lossy().into_owned());
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -533,6 +566,8 @@ mod tests {
     use super::FileSystemSandboxRunner;
     use super::FsHelperLaunchPaths;
     use super::add_helper_runtime_permissions;
+    #[cfg(target_os = "windows")]
+    use super::add_windows_wrapper_setup_env_from_vars;
     use super::helper_env;
     use super::helper_env_from_vars;
     use super::helper_env_key_is_allowed;
@@ -674,6 +709,31 @@ mod tests {
         assert_eq!(
             env,
             HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())])
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_wrapper_setup_env_preserves_only_setup_identity() {
+        let mut env = HashMap::from([("PATH".to_string(), r"C:\Windows\System32".to_string())]);
+
+        add_windows_wrapper_setup_env_from_vars(
+            &mut env,
+            [
+                ("USERNAME", "alice"),
+                ("USERPROFILE", r"C:\Users\alice"),
+                ("OPENAI_API_KEY", "secret"),
+            ]
+            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+        );
+
+        assert_eq!(
+            env,
+            HashMap::from([
+                ("PATH".to_string(), r"C:\Windows\System32".to_string()),
+                ("USERNAME".to_string(), "alice".to_string()),
+                ("USERPROFILE".to_string(), r"C:\Users\alice".to_string()),
+            ])
         );
     }
 
