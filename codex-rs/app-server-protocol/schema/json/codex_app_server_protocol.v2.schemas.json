@@ -965,6 +965,15 @@
         }
       ]
     },
+    "AuthCredentialsStoreMode": {
+      "enum": [
+        "file",
+        "keyring",
+        "auto",
+        "ephemeral"
+      ],
+      "type": "string"
+    },
     "AuthMode": {
       "description": "Authentication mode for OpenAI-backed providers.",
       "oneOf": [
@@ -4404,6 +4413,12 @@
             "null"
           ]
         },
+        "allowLoginShell": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowManagedHooksOnly": {
           "type": [
             "boolean",
@@ -4416,6 +4431,24 @@
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "allowedChatgptWorkspaces": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "allowedLoginMethods": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
             "null"
           ]
         },
@@ -4455,6 +4488,28 @@
             "null"
           ]
         },
+        "chatgptBaseUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checkForUpdateOnStartup": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cliAuthCredentialsStore": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuthCredentialsStoreMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "computerUse": {
           "anyOf": [
             {
@@ -4487,6 +4542,58 @@
           },
           "type": [
             "object",
+            "null"
+          ]
+        },
+        "feedback": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FeedbackRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logDir": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelCatalogJson": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "otel": {
+          "description": "Lossless config-native OTEL requirements, including exporter headers."
+        },
+        "shellEnvironmentPolicy": {
+          "description": "Lossless config-native shell environment policy requirements."
+        },
+        "sqliteHome": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "windowsSandboxPrivateDesktop": {
+          "type": [
+            "boolean",
             "null"
           ]
         }
@@ -5241,6 +5348,17 @@
         "SESSIONS"
       ],
       "type": "string"
+    },
+    "FeedbackRequirements": {
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "FeedbackUploadParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",

@@ -387,6 +387,38 @@ pub struct ConfigRequirements {
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+    pub allowed_login_methods: Option<BTreeMap<String, bool>>,
+    pub allowed_chatgpt_workspaces: Option<BTreeMap<String, bool>>,
+    pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
+    pub chatgpt_base_url: Option<String>,
+    pub sqlite_home: Option<AbsolutePathBuf>,
+    pub log_dir: Option<AbsolutePathBuf>,
+    pub model_catalog_json: Option<AbsolutePathBuf>,
+    pub check_for_update_on_startup: Option<bool>,
+    /// Lossless config-native OTEL requirements, including exporter headers.
+    pub otel: Option<JsonValue>,
+    pub allow_login_shell: Option<bool>,
+    /// Lossless config-native shell environment policy requirements.
+    pub shell_environment_policy: Option<JsonValue>,
+    pub feedback: Option<FeedbackRequirements>,
+    pub windows_sandbox_private_desktop: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum AuthCredentialsStoreMode {
+    File,
+    Keyring,
+    Auto,
+    Ephemeral,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FeedbackRequirements {
+    pub enabled: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

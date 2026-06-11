@@ -35,6 +35,7 @@ export type { AppsListResponse } from "./AppsListResponse";
 export type { AskForApproval } from "./AskForApproval";
 export type { AttestationGenerateParams } from "./AttestationGenerateParams";
 export type { AttestationGenerateResponse } from "./AttestationGenerateResponse";
+export type { AuthCredentialsStoreMode } from "./AuthCredentialsStoreMode";
 export type { AutoReviewDecisionSource } from "./AutoReviewDecisionSource";
 export type { ByteRange } from "./ByteRange";
 export type { CancelLoginAccountParams } from "./CancelLoginAccountParams";
@@ -108,6 +109,7 @@ export type { ExternalAgentConfigImportParams } from "./ExternalAgentConfigImpor
 export type { ExternalAgentConfigImportResponse } from "./ExternalAgentConfigImportResponse";
 export type { ExternalAgentConfigMigrationItem } from "./ExternalAgentConfigMigrationItem";
 export type { ExternalAgentConfigMigrationItemType } from "./ExternalAgentConfigMigrationItemType";
+export type { FeedbackRequirements } from "./FeedbackRequirements";
 export type { FeedbackUploadParams } from "./FeedbackUploadParams";
 export type { FeedbackUploadResponse } from "./FeedbackUploadResponse";
 export type { FileChangeApprovalDecision } from "./FileChangeApprovalDecision";

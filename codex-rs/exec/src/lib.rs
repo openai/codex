@@ -63,7 +63,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_and_load_options;
+use codex_core::config::load_bootstrap_config_as_toml_with_cli_and_load_options;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config::resolve_profile_v2_config_path;
 use codex_core::find_thread_meta_by_name_str;
@@ -617,7 +617,7 @@ async fn load_config_toml_or_exit(
     strict_config: bool,
     cloud_config_bundle: CloudConfigBundleLoader,
 ) -> codex_config::config_toml::ConfigToml {
-    match load_config_as_toml_with_cli_and_load_options(
+    match load_bootstrap_config_as_toml_with_cli_and_load_options(
         codex_home,
         cwd,
         cli_kv_overrides,

@@ -20,6 +20,10 @@ use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
+use crate::types::AuthCredentialsStoreMode;
+use crate::types::FeedbackConfigToml;
+use crate::types::OtelConfigToml;
+use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::WindowsSandboxModeToml;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,10 +146,23 @@ impl<T> std::ops::DerefMut for ConstrainedWithSource<T> {
 /// normalization.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigRequirements {
+    pub allowed_login_methods: Option<Sourced<BTreeMap<String, bool>>>,
+    pub allowed_chatgpt_workspaces: Option<Sourced<BTreeMap<String, bool>>>,
+    pub cli_auth_credentials_store: Option<Sourced<AuthCredentialsStoreMode>>,
+    pub chatgpt_base_url: Option<Sourced<String>>,
+    pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
+    pub log_dir: Option<Sourced<AbsolutePathBuf>>,
+    pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
+    pub check_for_update_on_startup: Option<Sourced<bool>>,
+    pub otel: Option<Sourced<OtelConfigToml>>,
+    pub allow_login_shell: Option<Sourced<bool>>,
+    pub shell_environment_policy: Option<Sourced<ShellEnvironmentPolicyToml>>,
+    pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
     pub windows_sandbox_mode: ConstrainedWithSource<Option<WindowsSandboxModeToml>>,
+    pub windows_sandbox_private_desktop: Option<Sourced<bool>>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
@@ -167,6 +184,18 @@ pub struct ConfigRequirements {
 impl Default for ConfigRequirements {
     fn default() -> Self {
         Self {
+            allowed_login_methods: None,
+            allowed_chatgpt_workspaces: None,
+            cli_auth_credentials_store: None,
+            chatgpt_base_url: None,
+            sqlite_home: None,
+            log_dir: None,
+            model_catalog_json: None,
+            check_for_update_on_startup: None,
+            otel: None,
+            allow_login_shell: None,
+            shell_environment_policy: None,
+            feedback: None,
             approval_policy: ConstrainedWithSource::new(
                 Constrained::allow_any_from_default(),
                 /*source*/ None,
@@ -183,6 +212,7 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any(/*initial_value*/ None),
                 /*source*/ None,
             ),
+            windows_sandbox_private_desktop: None,
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Cached),
                 /*source*/ None,
@@ -714,11 +744,12 @@ impl ComputerUseRequirementsToml {
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct WindowsRequirementsToml {
     pub allowed_sandbox_implementations: Option<Vec<WindowsSandboxModeToml>>,
+    pub sandbox_private_desktop: Option<bool>,
 }
 
 impl WindowsRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.allowed_sandbox_implementations.is_none()
+        self.allowed_sandbox_implementations.is_none() && self.sandbox_private_desktop.is_none()
     }
 }
 
@@ -819,6 +850,18 @@ pub(crate) fn merge_app_requirements_descending(
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
+    pub allowed_login_methods: Option<BTreeMap<String, bool>>,
+    pub allowed_chatgpt_workspaces: Option<BTreeMap<String, bool>>,
+    pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
+    pub chatgpt_base_url: Option<String>,
+    pub sqlite_home: Option<AbsolutePathBuf>,
+    pub log_dir: Option<AbsolutePathBuf>,
+    pub model_catalog_json: Option<AbsolutePathBuf>,
+    pub check_for_update_on_startup: Option<bool>,
+    pub otel: Option<OtelConfigToml>,
+    pub allow_login_shell: Option<bool>,
+    pub shell_environment_policy: Option<ShellEnvironmentPolicyToml>,
+    pub feedback: Option<FeedbackConfigToml>,
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
@@ -874,6 +917,18 @@ impl<T> std::ops::Deref for Sourced<T> {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsWithSources {
+    pub allowed_login_methods: Option<Sourced<BTreeMap<String, bool>>>,
+    pub allowed_chatgpt_workspaces: Option<Sourced<BTreeMap<String, bool>>>,
+    pub cli_auth_credentials_store: Option<Sourced<AuthCredentialsStoreMode>>,
+    pub chatgpt_base_url: Option<Sourced<String>>,
+    pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
+    pub log_dir: Option<Sourced<AbsolutePathBuf>>,
+    pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
+    pub check_for_update_on_startup: Option<Sourced<bool>>,
+    pub otel: Option<Sourced<OtelConfigToml>>,
+    pub allow_login_shell: Option<Sourced<bool>>,
+    pub shell_environment_policy: Option<Sourced<ShellEnvironmentPolicyToml>>,
+    pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
@@ -915,6 +970,18 @@ impl ConfigRequirementsWithSources {
         // Destructure without `..` so adding fields to `ConfigRequirementsToml`
         // forces this merge logic to be updated.
         let ConfigRequirementsToml {
+            allowed_login_methods: _,
+            allowed_chatgpt_workspaces: _,
+            cli_auth_credentials_store: _,
+            chatgpt_base_url: _,
+            sqlite_home: _,
+            log_dir: _,
+            model_catalog_json: _,
+            check_for_update_on_startup: _,
+            otel: _,
+            allow_login_shell: _,
+            shell_environment_policy: _,
+            feedback: _,
             allowed_approval_policies: _,
             allowed_approvals_reviewers: _,
             allowed_sandbox_modes: _,
@@ -951,6 +1018,18 @@ impl ConfigRequirementsWithSources {
             other,
             source,
             {
+                allowed_login_methods,
+                allowed_chatgpt_workspaces,
+                cli_auth_credentials_store,
+                chatgpt_base_url,
+                sqlite_home,
+                log_dir,
+                model_catalog_json,
+                check_for_update_on_startup,
+                otel,
+                allow_login_shell,
+                shell_environment_policy,
+                feedback,
                 allowed_approval_policies,
                 allowed_approvals_reviewers,
                 allowed_sandbox_modes,
@@ -984,6 +1063,18 @@ impl ConfigRequirementsWithSources {
 
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
+            sqlite_home,
+            log_dir,
+            model_catalog_json,
+            check_for_update_on_startup,
+            otel,
+            allow_login_shell,
+            shell_environment_policy,
+            feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
@@ -1006,6 +1097,18 @@ impl ConfigRequirementsWithSources {
             guardian_policy_config,
         } = self;
         ConfigRequirementsToml {
+            allowed_login_methods: allowed_login_methods.map(|sourced| sourced.value),
+            allowed_chatgpt_workspaces: allowed_chatgpt_workspaces.map(|sourced| sourced.value),
+            cli_auth_credentials_store: cli_auth_credentials_store.map(|sourced| sourced.value),
+            chatgpt_base_url: chatgpt_base_url.map(|sourced| sourced.value),
+            sqlite_home: sqlite_home.map(|sourced| sourced.value),
+            log_dir: log_dir.map(|sourced| sourced.value),
+            model_catalog_json: model_catalog_json.map(|sourced| sourced.value),
+            check_for_update_on_startup: check_for_update_on_startup.map(|sourced| sourced.value),
+            otel: otel.map(|sourced| sourced.value),
+            allow_login_shell: allow_login_shell.map(|sourced| sourced.value),
+            shell_environment_policy: shell_environment_policy.map(|sourced| sourced.value),
+            feedback: feedback.map(|sourced| sourced.value),
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_approvals_reviewers: allowed_approvals_reviewers.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
@@ -1095,7 +1198,37 @@ impl ConfigRequirementsToml {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.allowed_approval_policies.is_none()
+        self.allowed_login_methods.is_none()
+            && self.allowed_chatgpt_workspaces.is_none()
+            && self.cli_auth_credentials_store.is_none()
+            && self.chatgpt_base_url.is_none()
+            && self.sqlite_home.is_none()
+            && self.log_dir.is_none()
+            && self.model_catalog_json.is_none()
+            && self.check_for_update_on_startup.is_none()
+            && self.otel.as_ref().is_none_or(|otel| {
+                otel.log_user_prompt.is_none()
+                    && otel.environment.is_none()
+                    && otel.exporter.is_none()
+                    && otel.trace_exporter.is_none()
+                    && otel.metrics_exporter.is_none()
+                    && otel.span_attributes.is_none()
+                    && otel.tracestate.is_none()
+            })
+            && self.allow_login_shell.is_none()
+            && self.shell_environment_policy.as_ref().is_none_or(|policy| {
+                policy.inherit.is_none()
+                    && policy.ignore_default_excludes.is_none()
+                    && policy.exclude.is_none()
+                    && policy.r#set.is_none()
+                    && policy.include_only.is_none()
+                    && policy.experimental_use_profile.is_none()
+            })
+            && self
+                .feedback
+                .as_ref()
+                .is_none_or(|feedback| feedback.enabled.is_none())
+            && self.allowed_approval_policies.is_none()
             && self.allowed_approvals_reviewers.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.allowed_permission_profiles.is_none()
@@ -1148,6 +1281,18 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         // config loading and requirements API projection. The normalized
         // constraints below only need the compiled PermissionProfile envelope.
         let ConfigRequirementsWithSources {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
+            sqlite_home,
+            log_dir,
+            model_catalog_json,
+            check_for_update_on_startup,
+            otel,
+            allow_login_shell,
+            shell_environment_policy,
+            feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
@@ -1169,6 +1314,37 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             permissions,
             guardian_policy_config,
         } = toml;
+
+        if let Some(Sourced {
+            value: methods,
+            source,
+        }) = &allowed_login_methods
+            && let Some(unknown) = methods
+                .keys()
+                .find(|method| method.as_str() != "api" && method.as_str() != "chatgpt")
+        {
+            return Err(ConstraintError::InvalidValue {
+                field_name: "allowed_login_methods",
+                candidate: unknown.clone(),
+                allowed: "[\"api\", \"chatgpt\"]".to_string(),
+                requirement_source: source.clone(),
+            });
+        }
+        if let Some(Sourced {
+            value: workspaces,
+            source,
+        }) = &allowed_chatgpt_workspaces
+            && let Some(empty) = workspaces
+                .keys()
+                .find(|workspace| workspace.trim().is_empty())
+        {
+            return Err(ConstraintError::InvalidValue {
+                field_name: "allowed_chatgpt_workspaces",
+                candidate: empty.clone(),
+                allowed: "non-empty workspace identifiers".to_string(),
+                requirement_source: source.clone(),
+            });
+        }
 
         let approval_policy = match allowed_approval_policies {
             Some(Sourced {
@@ -1267,42 +1443,60 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 /*source*/ None,
             ),
         };
-        let windows_sandbox_mode = match windows {
+        let (windows_sandbox_mode, windows_sandbox_private_desktop) = match windows {
             Some(Sourced {
                 value:
                     WindowsRequirementsToml {
-                        allowed_sandbox_implementations: Some(implementations),
+                        allowed_sandbox_implementations,
+                        sandbox_private_desktop,
                     },
                 source: requirement_source,
             }) => {
-                if implementations.is_empty() {
-                    return Err(ConstraintError::empty_field(
-                        "windows.allowed_sandbox_implementations",
-                    ));
-                }
-                // Prefer elevated when both Windows sandbox implementations are allowed.
-                let initial_value = if implementations.contains(&WindowsSandboxModeToml::Elevated) {
-                    WindowsSandboxModeToml::Elevated
-                } else {
-                    WindowsSandboxModeToml::Unelevated
-                };
+                let sandbox_private_desktop = sandbox_private_desktop
+                    .map(|value| Sourced::new(value, requirement_source.clone()));
+                let sandbox_mode = match allowed_sandbox_implementations {
+                    Some(implementations) => {
+                        if implementations.is_empty() {
+                            return Err(ConstraintError::empty_field(
+                                "windows.allowed_sandbox_implementations",
+                            ));
+                        }
+                        // Prefer elevated when both Windows sandbox implementations are allowed.
+                        let initial_value =
+                            if implementations.contains(&WindowsSandboxModeToml::Elevated) {
+                                WindowsSandboxModeToml::Elevated
+                            } else {
+                                WindowsSandboxModeToml::Unelevated
+                            };
 
-                let requirement_source_for_error = requirement_source.clone();
-                let constrained =
-                    Constrained::new(Some(initial_value), move |candidate| match candidate {
-                        Some(candidate) if implementations.contains(candidate) => Ok(()),
-                        _ => Err(ConstraintError::InvalidValue {
-                            field_name: "windows.sandbox",
-                            candidate: format!("{candidate:?}"),
-                            allowed: format!("{implementations:?}"),
-                            requirement_source: requirement_source_for_error.clone(),
-                        }),
-                    })?;
-                ConstrainedWithSource::new(constrained, Some(requirement_source))
+                        let requirement_source_for_error = requirement_source.clone();
+                        let constrained = Constrained::new(
+                            Some(initial_value),
+                            move |candidate| match candidate {
+                                Some(candidate) if implementations.contains(candidate) => Ok(()),
+                                _ => Err(ConstraintError::InvalidValue {
+                                    field_name: "windows.sandbox",
+                                    candidate: format!("{candidate:?}"),
+                                    allowed: format!("{implementations:?}"),
+                                    requirement_source: requirement_source_for_error.clone(),
+                                }),
+                            },
+                        )?;
+                        ConstrainedWithSource::new(constrained, Some(requirement_source))
+                    }
+                    None => ConstrainedWithSource::new(
+                        Constrained::allow_any(/*initial_value*/ None),
+                        /*source*/ None,
+                    ),
+                };
+                (sandbox_mode, sandbox_private_desktop)
             }
-            Some(_) | None => ConstrainedWithSource::new(
-                Constrained::allow_any(/*initial_value*/ None),
-                /*source*/ None,
+            None => (
+                ConstrainedWithSource::new(
+                    Constrained::allow_any(/*initial_value*/ None),
+                    /*source*/ None,
+                ),
+                None,
             ),
         };
         let exec_policy = match rules {
@@ -1427,10 +1621,23 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         });
         let guardian_policy_config_source = guardian_policy_config.map(|sourced| sourced.source);
         Ok(ConfigRequirements {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
+            sqlite_home,
+            log_dir,
+            model_catalog_json,
+            check_for_update_on_startup,
+            otel,
+            allow_login_shell,
+            shell_environment_policy,
+            feedback,
             approval_policy,
             approvals_reviewer,
             permission_profile,
             windows_sandbox_mode,
+            windows_sandbox_private_desktop,
             web_search_mode,
             allow_managed_hooks_only,
             allow_appshots,
@@ -1516,6 +1723,18 @@ mod tests {
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
+            sqlite_home,
+            log_dir,
+            model_catalog_json,
+            check_for_update_on_startup,
+            otel,
+            allow_login_shell,
+            shell_environment_policy,
+            feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
@@ -1539,6 +1758,26 @@ mod tests {
             guardian_policy_config,
         } = toml;
         ConfigRequirementsWithSources {
+            allowed_login_methods: allowed_login_methods
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allowed_chatgpt_workspaces: allowed_chatgpt_workspaces
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            cli_auth_credentials_store: cli_auth_credentials_store
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            chatgpt_base_url: chatgpt_base_url
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            sqlite_home: sqlite_home.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            log_dir: log_dir.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            model_catalog_json: model_catalog_json
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            check_for_update_on_startup: check_for_update_on_startup
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            otel: otel.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_login_shell: allow_login_shell
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            shell_environment_policy: shell_environment_policy
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            feedback: feedback.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_approval_policies: allowed_approval_policies
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_approvals_reviewers: allowed_approvals_reviewers
@@ -1708,6 +1947,152 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_managed_config_replacement_requirements() -> Result<()> {
+        let sqlite_home = std::env::temp_dir().join("codex-sqlite");
+        let log_dir = std::env::temp_dir().join("codex-logs");
+        let model_catalog_json = std::env::temp_dir().join("models.json");
+        let requirements: ConfigRequirementsToml = from_str(&format!(
+            r#"
+                allowed_login_methods = {{ chatgpt = true, api = false }}
+                allowed_chatgpt_workspaces = {{ workspace_1 = true, workspace_2 = false }}
+                cli_auth_credentials_store = "keyring"
+                chatgpt_base_url = "https://chatgpt.example.com"
+                sqlite_home = {:?}
+                log_dir = {:?}
+                model_catalog_json = {:?}
+                check_for_update_on_startup = false
+                allow_login_shell = false
+
+                [otel]
+                log_user_prompt = false
+                environment = "prod"
+                span_attributes = {{ team = "codex" }}
+
+                [shell_environment_policy]
+                ignore_default_excludes = false
+                set = {{ MANAGED_ENV = "1" }}
+
+                [feedback]
+                enabled = false
+
+                [windows]
+                sandbox_private_desktop = false
+            "#,
+            sqlite_home.display().to_string(),
+            log_dir.display().to_string(),
+            model_catalog_json.display().to_string(),
+        ))?;
+
+        assert_eq!(
+            requirements.allowed_login_methods,
+            Some(BTreeMap::from([
+                ("api".to_string(), false),
+                ("chatgpt".to_string(), true),
+            ]))
+        );
+        assert_eq!(
+            requirements.allowed_chatgpt_workspaces,
+            Some(BTreeMap::from([
+                ("workspace_1".to_string(), true),
+                ("workspace_2".to_string(), false),
+            ]))
+        );
+        assert_eq!(
+            requirements.cli_auth_credentials_store,
+            Some(AuthCredentialsStoreMode::Keyring)
+        );
+        assert_eq!(
+            requirements.chatgpt_base_url.as_deref(),
+            Some("https://chatgpt.example.com")
+        );
+        assert_eq!(
+            requirements.sqlite_home.as_deref(),
+            Some(sqlite_home.as_path())
+        );
+        assert_eq!(requirements.log_dir.as_deref(), Some(log_dir.as_path()));
+        assert_eq!(
+            requirements.model_catalog_json.as_deref(),
+            Some(model_catalog_json.as_path())
+        );
+        assert_eq!(requirements.check_for_update_on_startup, Some(false));
+        assert_eq!(requirements.allow_login_shell, Some(false));
+        assert_eq!(
+            requirements
+                .otel
+                .as_ref()
+                .and_then(|otel| otel.span_attributes.as_ref()),
+            Some(&BTreeMap::from([("team".to_string(), "codex".to_string())]))
+        );
+        assert_eq!(
+            requirements
+                .shell_environment_policy
+                .as_ref()
+                .and_then(|policy| policy.r#set.as_ref())
+                .and_then(|set| set.get("MANAGED_ENV"))
+                .map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            requirements.feedback,
+            Some(FeedbackConfigToml {
+                enabled: Some(false),
+            })
+        );
+        assert_eq!(
+            requirements.windows,
+            Some(WindowsRequirementsToml {
+                allowed_sandbox_implementations: None,
+                sandbox_private_desktop: Some(false),
+            })
+        );
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_rejects_unknown_login_method() -> Result<()> {
+        let config: ConfigRequirementsToml = from_str(
+            r#"
+                [allowed_login_methods]
+                chatgpt = true
+                sso = true
+            "#,
+        )?;
+
+        assert_eq!(
+            ConfigRequirements::try_from(with_unknown_source(config)),
+            Err(ConstraintError::InvalidValue {
+                field_name: "allowed_login_methods",
+                candidate: "sso".to_string(),
+                allowed: "[\"api\", \"chatgpt\"]".to_string(),
+                requirement_source: RequirementSource::Unknown,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_rejects_blank_chatgpt_workspace_id() -> Result<()> {
+        let config: ConfigRequirementsToml = from_str(
+            r#"
+                [allowed_chatgpt_workspaces]
+                "   " = true
+            "#,
+        )?;
+
+        assert_eq!(
+            ConfigRequirements::try_from(with_unknown_source(config)),
+            Err(ConstraintError::InvalidValue {
+                field_name: "allowed_chatgpt_workspaces",
+                candidate: "   ".to_string(),
+                allowed: "non-empty workspace identifiers".to_string(),
+                requirement_source: RequirementSource::Unknown,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
     fn merge_unset_fields_copies_every_field_and_sets_sources() {
         let mut target = ConfigRequirementsWithSources::default();
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
@@ -1729,6 +2114,27 @@ mod tests {
         let computer_use = ComputerUseRequirementsToml {
             allow_locked_computer_use: Some(false),
         };
+        let allowed_login_methods =
+            BTreeMap::from([("api".to_string(), true), ("chatgpt".to_string(), false)]);
+        let allowed_chatgpt_workspaces = BTreeMap::from([("workspace-1".to_string(), true)]);
+        let sqlite_home = AbsolutePathBuf::try_from(std::env::temp_dir().join("sqlite"))
+            .expect("absolute sqlite home");
+        let log_dir = AbsolutePathBuf::try_from(std::env::temp_dir().join("logs"))
+            .expect("absolute log directory");
+        let model_catalog_json =
+            AbsolutePathBuf::try_from(std::env::temp_dir().join("managed-model-catalog.json"))
+                .expect("absolute model catalog path");
+        let otel = OtelConfigToml {
+            log_user_prompt: Some(false),
+            ..Default::default()
+        };
+        let shell_environment_policy = ShellEnvironmentPolicyToml {
+            ignore_default_excludes: Some(false),
+            ..Default::default()
+        };
+        let feedback = FeedbackConfigToml {
+            enabled: Some(false),
+        };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
         let guardian_policy_config = "Use the company-managed guardian policy.".to_string();
@@ -1736,6 +2142,18 @@ mod tests {
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
         let other = ConfigRequirementsToml {
+            allowed_login_methods: Some(allowed_login_methods.clone()),
+            allowed_chatgpt_workspaces: Some(allowed_chatgpt_workspaces.clone()),
+            cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
+            chatgpt_base_url: Some("https://chatgpt.example.com".to_string()),
+            sqlite_home: Some(sqlite_home.clone()),
+            log_dir: Some(log_dir.clone()),
+            model_catalog_json: Some(model_catalog_json.clone()),
+            check_for_update_on_startup: Some(false),
+            otel: Some(otel.clone()),
+            allow_login_shell: Some(false),
+            shell_environment_policy: Some(shell_environment_policy.clone()),
+            feedback: Some(feedback.clone()),
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
@@ -1764,6 +2182,30 @@ mod tests {
         assert_eq!(
             target,
             ConfigRequirementsWithSources {
+                allowed_login_methods: Some(Sourced::new(allowed_login_methods, source.clone(),)),
+                allowed_chatgpt_workspaces: Some(Sourced::new(
+                    allowed_chatgpt_workspaces,
+                    source.clone(),
+                )),
+                cli_auth_credentials_store: Some(Sourced::new(
+                    AuthCredentialsStoreMode::Keyring,
+                    source.clone(),
+                )),
+                chatgpt_base_url: Some(Sourced::new(
+                    "https://chatgpt.example.com".to_string(),
+                    source.clone(),
+                )),
+                sqlite_home: Some(Sourced::new(sqlite_home, source.clone())),
+                log_dir: Some(Sourced::new(log_dir, source.clone())),
+                model_catalog_json: Some(Sourced::new(model_catalog_json, source.clone(),)),
+                check_for_update_on_startup: Some(Sourced::new(false, source.clone())),
+                otel: Some(Sourced::new(otel, source.clone())),
+                allow_login_shell: Some(Sourced::new(false, source.clone())),
+                shell_environment_policy: Some(Sourced::new(
+                    shell_environment_policy,
+                    source.clone(),
+                )),
+                feedback: Some(Sourced::new(feedback, source.clone())),
                 allowed_approval_policies: Some(Sourced::new(
                     allowed_approval_policies,
                     source.clone()
@@ -1824,6 +2266,18 @@ mod tests {
         assert_eq!(
             empty_target,
             ConfigRequirementsWithSources {
+                allowed_login_methods: None,
+                allowed_chatgpt_workspaces: None,
+                cli_auth_credentials_store: None,
+                chatgpt_base_url: None,
+                sqlite_home: None,
+                log_dir: None,
+                model_catalog_json: None,
+                check_for_update_on_startup: None,
+                otel: None,
+                allow_login_shell: None,
+                shell_environment_policy: None,
+                feedback: None,
                 allowed_approval_policies: Some(Sourced::new(
                     vec![AskForApproval::OnRequest],
                     source_location,
@@ -1877,6 +2331,18 @@ mod tests {
         assert_eq!(
             populated_target,
             ConfigRequirementsWithSources {
+                allowed_login_methods: None,
+                allowed_chatgpt_workspaces: None,
+                cli_auth_credentials_store: None,
+                chatgpt_base_url: None,
+                sqlite_home: None,
+                log_dir: None,
+                model_catalog_json: None,
+                check_for_update_on_startup: None,
+                otel: None,
+                allow_login_shell: None,
+                shell_environment_policy: None,
+                feedback: None,
                 allowed_approval_policies: Some(Sourced::new(
                     vec![AskForApproval::Never],
                     existing_source,

@@ -7,6 +7,7 @@ use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_analytics::AnalyticsEventsClient;
+use codex_app_server_protocol::AuthCredentialsStoreMode as ApiAuthCredentialsStoreMode;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ComputerUseRequirements;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -21,6 +22,7 @@ use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
+use codex_app_server_protocol::FeedbackRequirements;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
@@ -314,6 +316,11 @@ impl ConfigRequestProcessor {
 }
 
 fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
+    let windows_sandbox_private_desktop = requirements
+        .windows
+        .as_ref()
+        .and_then(|windows| windows.sandbox_private_desktop);
+
     ConfigRequirements {
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
@@ -375,6 +382,40 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+        allowed_login_methods: requirements.allowed_login_methods,
+        allowed_chatgpt_workspaces: requirements.allowed_chatgpt_workspaces,
+        cli_auth_credentials_store: requirements
+            .cli_auth_credentials_store
+            .map(map_auth_credentials_store_mode_to_api),
+        chatgpt_base_url: requirements.chatgpt_base_url,
+        sqlite_home: requirements.sqlite_home,
+        log_dir: requirements.log_dir,
+        model_catalog_json: requirements.model_catalog_json,
+        check_for_update_on_startup: requirements.check_for_update_on_startup,
+        otel: requirements.otel.map(|otel| json!(otel)),
+        allow_login_shell: requirements.allow_login_shell,
+        shell_environment_policy: requirements
+            .shell_environment_policy
+            .map(|policy| json!(policy)),
+        feedback: requirements.feedback.map(|feedback| FeedbackRequirements {
+            enabled: feedback.enabled,
+        }),
+        windows_sandbox_private_desktop,
+    }
+}
+
+fn map_auth_credentials_store_mode_to_api(
+    mode: codex_config::types::AuthCredentialsStoreMode,
+) -> ApiAuthCredentialsStoreMode {
+    match mode {
+        codex_config::types::AuthCredentialsStoreMode::File => ApiAuthCredentialsStoreMode::File,
+        codex_config::types::AuthCredentialsStoreMode::Keyring => {
+            ApiAuthCredentialsStoreMode::Keyring
+        }
+        codex_config::types::AuthCredentialsStoreMode::Auto => ApiAuthCredentialsStoreMode::Auto,
+        codex_config::types::AuthCredentialsStoreMode::Ephemeral => {
+            ApiAuthCredentialsStoreMode::Ephemeral
+        }
     }
 }
 
@@ -569,8 +610,15 @@ mod tests {
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
     use codex_config::WindowsRequirementsToml;
+    use codex_config::types::OtelConfigToml;
+    use codex_config::types::OtelExporterKind;
+    use codex_config::types::OtelHttpProtocol as CoreOtelHttpProtocol;
+    use codex_config::types::ShellEnvironmentPolicyToml;
+    use codex_protocol::config_types::ShellEnvironmentPolicyInherit as CoreShellEnvironmentPolicyInherit;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::collections::BTreeMap;
+    use std::collections::HashMap;
 
     #[test]
     fn requirements_api_includes_allow_managed_hooks_only() {
@@ -643,6 +691,7 @@ mod tests {
                     codex_config::types::WindowsSandboxModeToml::Elevated,
                     codex_config::types::WindowsSandboxModeToml::Unelevated,
                 ]),
+                sandbox_private_desktop: Some(false),
             }),
             ..ConfigRequirementsToml::default()
         });
@@ -653,6 +702,74 @@ mod tests {
                 WindowsSandboxSetupMode::Elevated,
                 WindowsSandboxSetupMode::Unelevated,
             ])
+        );
+        assert_eq!(mapped.windows_sandbox_private_desktop, Some(false));
+    }
+
+    #[test]
+    fn requirements_api_preserves_complex_config_values_and_otel_headers() {
+        let headers = HashMap::from([("Authorization".to_string(), "Bearer secret".to_string())]);
+        let shell_set = HashMap::from([("MANAGED".to_string(), "true".to_string())]);
+
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            otel: Some(OtelConfigToml {
+                log_user_prompt: Some(false),
+                environment: Some("production".to_string()),
+                exporter: Some(OtelExporterKind::OtlpHttp {
+                    endpoint: "https://otel.example.com/v1/logs".to_string(),
+                    headers,
+                    protocol: CoreOtelHttpProtocol::Json,
+                    tls: None,
+                }),
+                trace_exporter: None,
+                metrics_exporter: None,
+                span_attributes: Some(BTreeMap::from([("team".to_string(), "codex".to_string())])),
+                tracestate: None,
+            }),
+            shell_environment_policy: Some(ShellEnvironmentPolicyToml {
+                inherit: Some(CoreShellEnvironmentPolicyInherit::Core),
+                ignore_default_excludes: Some(false),
+                exclude: Some(vec!["*SECRET*".to_string()]),
+                r#set: Some(shell_set.clone()),
+                include_only: None,
+                experimental_use_profile: Some(false),
+            }),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(
+            mapped.otel,
+            Some(json!({
+                "log_user_prompt": false,
+                "environment": "production",
+                "exporter": {
+                    "otlp-http": {
+                        "endpoint": "https://otel.example.com/v1/logs",
+                        "headers": {
+                            "Authorization": "Bearer secret"
+                        },
+                        "protocol": "json",
+                        "tls": null
+                    }
+                },
+                "trace_exporter": null,
+                "metrics_exporter": null,
+                "span_attributes": {
+                    "team": "codex"
+                },
+                "tracestate": null
+            }))
+        );
+        assert_eq!(
+            mapped.shell_environment_policy,
+            Some(json!({
+                "inherit": "core",
+                "ignore_default_excludes": false,
+                "exclude": ["*SECRET*"],
+                "set": shell_set,
+                "include_only": null,
+                "experimental_use_profile": false
+            }))
         );
     }
 }

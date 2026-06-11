@@ -744,6 +744,18 @@ mod tests {
         };
 
         let requirements_toml = ConfigRequirementsToml {
+            allowed_login_methods: None,
+            allowed_chatgpt_workspaces: None,
+            cli_auth_credentials_store: None,
+            chatgpt_base_url: None,
+            sqlite_home: None,
+            log_dir: None,
+            model_catalog_json: None,
+            check_for_update_on_startup: None,
+            otel: None,
+            allow_login_shell: None,
+            shell_environment_policy: None,
+            feedback: None,
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest.to_core()]),
             allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
@@ -1103,6 +1115,18 @@ approval_policy = "never"
         };
 
         let requirements_toml = ConfigRequirementsToml {
+            allowed_login_methods: None,
+            allowed_chatgpt_workspaces: None,
+            cli_auth_credentials_store: None,
+            chatgpt_base_url: None,
+            sqlite_home: None,
+            log_dir: None,
+            model_catalog_json: None,
+            check_for_update_on_startup: None,
+            otel: None,
+            allow_login_shell: None,
+            shell_environment_policy: None,
+            feedback: None,
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,

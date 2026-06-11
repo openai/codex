@@ -8343,6 +8343,18 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
     let fixture = create_test_fixture()?;
 
     let requirements_toml = codex_config::ConfigRequirementsToml {
+        allowed_login_methods: None,
+        allowed_chatgpt_workspaces: None,
+        cli_auth_credentials_store: None,
+        chatgpt_base_url: None,
+        sqlite_home: None,
+        log_dir: None,
+        model_catalog_json: None,
+        check_for_update_on_startup: None,
+        otel: None,
+        allow_login_shell: None,
+        shell_environment_policy: None,
+        feedback: None,
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
@@ -9331,6 +9343,256 @@ async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -
     assert_eq!(
         config.permissions.approval_policy.value(),
         AskForApproval::OnRequest
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn exact_requirements_override_only_managed_leaves() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let catalog_path = codex_home.path().join("required-models.json");
+    let mut catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    catalog.models = catalog.models.into_iter().take(1).collect();
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_string(&catalog).expect("serialize catalog"),
+    )?;
+    let required_sqlite_home = codex_home.path().join("required-state");
+    let required_log_dir = codex_home.path().join("required-logs");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+forced_chatgpt_workspace_id = ["A", "C"]
+cli_auth_credentials_store = "file"
+chatgpt_base_url = "https://user.example/backend-api"
+check_for_update_on_startup = true
+allow_login_shell = true
+
+[shell_environment_policy]
+ignore_default_excludes = true
+exclude = ["USER_*"]
+
+[otel]
+environment = "user"
+
+[otel.span_attributes]
+configured = "kept"
+managed = "old"
+
+[feedback]
+enabled = true
+
+[windows]
+sandbox_private_desktop = true
+"#,
+    )?;
+
+    let requirements = format!(
+        r#"
+cli_auth_credentials_store = "keyring"
+chatgpt_base_url = "https://managed.example/backend-api"
+sqlite_home = "{}"
+log_dir = "{}"
+model_catalog_json = "{}"
+check_for_update_on_startup = false
+allow_login_shell = false
+
+[allowed_login_methods]
+chatgpt = true
+api = false
+
+[allowed_chatgpt_workspaces]
+"A" = true
+"B" = true
+
+[shell_environment_policy]
+ignore_default_excludes = false
+experimental_use_profile = true
+
+[otel]
+log_user_prompt = false
+environment = "managed"
+
+[otel.span_attributes]
+managed = "required"
+
+[feedback]
+enabled = false
+
+[windows]
+sandbox_private_desktop = false
+"#,
+        required_sqlite_home.display(),
+        required_log_dir.display(),
+        catalog_path.display(),
+    );
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+        )
+        .build()
+        .await?;
+
+    let expected_shell_environment_policy: ShellEnvironmentPolicy =
+        codex_config::types::ShellEnvironmentPolicyToml {
+            ignore_default_excludes: Some(false),
+            exclude: Some(vec!["USER_*".to_string()]),
+            experimental_use_profile: Some(true),
+            ..Default::default()
+        }
+        .into();
+    assert_eq!(
+        (
+            config.forced_login_method,
+            config.forced_chatgpt_workspace_id.clone(),
+            config.cli_auth_credentials_store_mode,
+            config.chatgpt_base_url.clone(),
+            config.sqlite_home.clone(),
+            config.log_dir.clone(),
+            config.model_catalog.clone(),
+            config.check_for_update_on_startup,
+            config.permissions.allow_login_shell,
+            config.permissions.shell_environment_policy.clone(),
+            config.feedback_enabled,
+            config.permissions.windows_sandbox_private_desktop,
+        ),
+        (
+            Some(ForcedLoginMethod::Chatgpt),
+            Some(vec!["A".to_string()]),
+            AuthCredentialsStoreMode::Keyring,
+            "https://managed.example/backend-api".to_string(),
+            required_sqlite_home,
+            required_log_dir,
+            Some(catalog),
+            false,
+            false,
+            expected_shell_environment_policy,
+            false,
+            false,
+        )
+    );
+    assert_eq!(
+        config.otel.span_attributes,
+        BTreeMap::from([
+            ("configured".to_string(), "kept".to_string()),
+            ("managed".to_string(), "required".to_string()),
+        ])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_required_otel_trace_metadata_fails_closed() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "[otel.span_attributes]\n\"\" = \"missing-key\"\n",
+            ),
+        )
+        .build()
+        .await
+        .expect_err("invalid managed OTEL metadata should fail startup");
+
+    assert_eq!(err.kind(), ErrorKind::InvalidInput);
+    assert!(
+        err.to_string()
+            .contains("invalid required `otel.span_attributes`")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn conflicting_login_method_requirements_fail_closed() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "forced_login_method = \"api\"\n",
+    )?;
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "[allowed_login_methods]\nchatgpt = true\n",
+            ),
+        )
+        .build()
+        .await
+        .expect_err("conflicting login restrictions should fail closed");
+
+    assert_eq!(err.kind(), ErrorKind::InvalidInput);
+    assert!(
+        err.to_string()
+            .contains("conflicts with `allowed_login_methods`")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workspace_requirements_can_disable_all_chatgpt_workspaces() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[allowed_chatgpt_workspaces]
+"A" = false
+"#,
+            ),
+        )
+        .build()
+        .await?;
+
+    assert_eq!(config.forced_chatgpt_workspace_id, Some(Vec::new()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn bootstrap_config_applies_local_auth_requirements() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let requirements_path = codex_home.path().join("requirements.toml");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+cli_auth_credentials_store = "file"
+chatgpt_base_url = "https://user.example/backend-api"
+"#,
+    )?;
+    std::fs::write(
+        &requirements_path,
+        r#"
+cli_auth_credentials_store = "keyring"
+chatgpt_base_url = "https://managed.example/backend-api"
+"#,
+    )?;
+    let mut loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    loader_overrides.system_requirements_path = Some(requirements_path);
+
+    let config = load_bootstrap_config_as_toml_with_cli_and_load_options(
+        codex_home.path(),
+        Some(&codex_home.path().abs()),
+        Vec::new(),
+        ConfigLoadOptions {
+            loader_overrides,
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        (config.cli_auth_credentials_store, config.chatgpt_base_url,),
+        (
+            Some(AuthCredentialsStoreMode::Keyring),
+            Some("https://managed.example/backend-api".to_string()),
+        )
     );
     Ok(())
 }

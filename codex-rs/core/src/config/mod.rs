@@ -110,7 +110,9 @@ use rmcp::model::FormElicitationCapability;
 use rmcp::model::UrlElicitationCapability;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -1661,6 +1663,41 @@ pub async fn load_config_as_toml_with_cli_and_load_options(
     Ok(cfg)
 }
 
+/// Load the raw merged config needed to bootstrap cloud requirements, applying
+/// exact auth requirements from every layer available to this load.
+///
+/// The initial bootstrap call has no cloud loader, so system and MDM
+/// requirements determine how the cloud bundle is fetched. A later call may
+/// include cloud requirements, but those values cannot retroactively change
+/// the loader that fetched them.
+pub async fn load_bootstrap_config_as_toml_with_cli_and_load_options(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    options: impl Into<ConfigLoadOptions>,
+) -> std::io::Result<ConfigToml> {
+    let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        codex_home,
+        cwd.cloned(),
+        &cli_overrides,
+        options,
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    let merged_toml = config_layer_stack.effective_config();
+    let mut cfg = deserialize_config_toml_with_base(merged_toml, codex_home)?;
+    let requirements = config_layer_stack.requirements_toml();
+    if let Some(required) = requirements.cli_auth_credentials_store {
+        cfg.cli_auth_credentials_store = Some(required);
+    }
+    if let Some(required) = requirements.chatgpt_base_url.as_ref() {
+        cfg.chatgpt_base_url = Some(required.clone());
+    }
+    Ok(cfg)
+}
+
 pub fn deserialize_config_toml_with_base(
     root_value: TomlValue,
     config_base_dir: &Path,
@@ -1816,6 +1853,171 @@ where
     }
 
     Ok(false)
+}
+
+fn apply_exact_requirement<T>(
+    field_name: &'static str,
+    configured_value: &mut Option<T>,
+    requirement: Option<Sourced<T>>,
+    startup_warnings: &mut Vec<String>,
+) where
+    T: Clone + PartialEq + std::fmt::Debug,
+{
+    let Some(Sourced { value, source }) = requirement else {
+        return;
+    };
+    if configured_value
+        .as_ref()
+        .is_some_and(|configured| configured != &value)
+    {
+        tracing::warn!(
+            ?source,
+            ?value,
+            "configured value is overridden by an exact requirement for {field_name}"
+        );
+        startup_warnings.push(format!(
+            "Configured value for `{field_name}` is overridden by the required value {value:?} from {source}."
+        ));
+    }
+    *configured_value = Some(value);
+}
+
+fn merge_exact_requirement<T>(
+    field_name: &'static str,
+    configured_value: T,
+    requirement: Option<Sourced<T>>,
+    startup_warnings: &mut Vec<String>,
+) -> std::io::Result<T>
+where
+    T: Clone + PartialEq + std::fmt::Debug + Serialize + DeserializeOwned,
+{
+    let Some(Sourced { value, source }) = requirement else {
+        return Ok(configured_value);
+    };
+    let mut configured_toml = TomlValue::try_from(configured_value).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to serialize configured `{field_name}` value: {err}"),
+        )
+    })?;
+    let required_toml = TomlValue::try_from(value).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to serialize required `{field_name}` value: {err}"),
+        )
+    })?;
+    if toml_values_conflict(&configured_toml, &required_toml) {
+        tracing::warn!(
+            ?source,
+            "configured value contains leaves overridden by exact requirements for {field_name}"
+        );
+        startup_warnings.push(format!(
+            "Configured leaves under `{field_name}` are overridden by requirements from {source}."
+        ));
+    }
+    codex_config::merge_toml_values(&mut configured_toml, &required_toml);
+    configured_toml.try_into().map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to deserialize required `{field_name}` value: {err}"),
+        )
+    })
+}
+
+fn toml_values_conflict(configured: &TomlValue, required: &TomlValue) -> bool {
+    match (configured, required) {
+        (TomlValue::Table(configured), TomlValue::Table(required)) => {
+            required.iter().any(|(key, required)| {
+                configured
+                    .get(key)
+                    .is_some_and(|configured| toml_values_conflict(configured, required))
+            })
+        }
+        _ => configured != required,
+    }
+}
+
+fn validate_otel_requirement(
+    requirement: &codex_config::types::OtelConfigToml,
+) -> std::io::Result<()> {
+    if let Some(span_attributes) = requirement.span_attributes.as_ref() {
+        codex_otel::validate_span_attributes(span_attributes).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid required `otel.span_attributes`: {err}"),
+            )
+        })?;
+    }
+    if let Some(tracestate) = requirement.tracestate.as_ref() {
+        codex_otel::validate_tracestate_entries(tracestate).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid required `otel.tracestate`: {err}"),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn apply_otel_requirement(
+    configured: &mut Option<codex_config::types::OtelConfigToml>,
+    requirement: Sourced<codex_config::types::OtelConfigToml>,
+    startup_warnings: &mut Vec<String>,
+) {
+    let Sourced {
+        value: required,
+        source,
+    } = requirement;
+    let configured = configured.get_or_insert_default();
+    let mut conflict = false;
+
+    macro_rules! replace_leaf {
+        ($field:ident) => {
+            if let Some(required) = required.$field {
+                conflict |= configured
+                    .$field
+                    .as_ref()
+                    .is_some_and(|configured| configured != &required);
+                configured.$field = Some(required);
+            }
+        };
+    }
+
+    replace_leaf!(log_user_prompt);
+    replace_leaf!(environment);
+    replace_leaf!(exporter);
+    replace_leaf!(trace_exporter);
+    replace_leaf!(metrics_exporter);
+
+    if let Some(required) = required.span_attributes {
+        let configured = configured.span_attributes.get_or_insert_default();
+        conflict |= required
+            .iter()
+            .any(|(key, value)| configured.get(key).is_some_and(|current| current != value));
+        configured.extend(required);
+    }
+    if let Some(required) = required.tracestate {
+        let configured = configured.tracestate.get_or_insert_default();
+        for (member, required_fields) in required {
+            let configured_fields = configured.entry(member).or_default();
+            conflict |= required_fields.iter().any(|(key, value)| {
+                configured_fields
+                    .get(key)
+                    .is_some_and(|current| current != value)
+            });
+            configured_fields.extend(required_fields);
+        }
+    }
+
+    if conflict {
+        tracing::warn!(
+            ?source,
+            "configured OTEL leaves are overridden by exact requirements"
+        );
+        startup_warnings.push(format!(
+            "Configured leaves under `otel` are overridden by requirements from {source}."
+        ));
+    }
 }
 
 fn mcp_server_matches_requirement(
@@ -2566,7 +2768,7 @@ impl Config {
 
     pub(crate) async fn load_config_with_layer_stack(
         fs: &dyn ExecutorFileSystem,
-        cfg: ConfigToml,
+        mut cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
@@ -2590,6 +2792,19 @@ impl Config {
             permission_profile: mut constrained_permission_profile,
             windows_sandbox_mode: mut constrained_windows_sandbox_mode,
             web_search_mode: mut constrained_web_search_mode,
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
+            cli_auth_credentials_store: required_cli_auth_credentials_store,
+            chatgpt_base_url: required_chatgpt_base_url,
+            sqlite_home: required_sqlite_home,
+            log_dir: required_log_dir,
+            model_catalog_json: required_model_catalog_json,
+            check_for_update_on_startup: required_check_for_update_on_startup,
+            otel: required_otel,
+            allow_login_shell: required_allow_login_shell,
+            shell_environment_policy: required_shell_environment_policy,
+            feedback: required_feedback,
+            windows_sandbox_private_desktop: required_windows_sandbox_private_desktop,
             allow_managed_hooks_only: _,
             allow_appshots: _,
             computer_use: _,
@@ -2608,6 +2823,77 @@ impl Config {
             .startup_warnings()
             .unwrap_or_default()
             .to_vec();
+        let cli_auth_credentials_store_is_required =
+            required_cli_auth_credentials_store.is_some();
+        apply_exact_requirement(
+            "cli_auth_credentials_store",
+            &mut cfg.cli_auth_credentials_store,
+            required_cli_auth_credentials_store,
+            &mut startup_warnings,
+        );
+        apply_exact_requirement(
+            "chatgpt_base_url",
+            &mut cfg.chatgpt_base_url,
+            required_chatgpt_base_url,
+            &mut startup_warnings,
+        );
+        apply_exact_requirement(
+            "sqlite_home",
+            &mut cfg.sqlite_home,
+            required_sqlite_home,
+            &mut startup_warnings,
+        );
+        apply_exact_requirement(
+            "log_dir",
+            &mut cfg.log_dir,
+            required_log_dir,
+            &mut startup_warnings,
+        );
+        apply_exact_requirement(
+            "model_catalog_json",
+            &mut cfg.model_catalog_json,
+            required_model_catalog_json,
+            &mut startup_warnings,
+        );
+        apply_exact_requirement(
+            "check_for_update_on_startup",
+            &mut cfg.check_for_update_on_startup,
+            required_check_for_update_on_startup,
+            &mut startup_warnings,
+        );
+        apply_exact_requirement(
+            "allow_login_shell",
+            &mut cfg.allow_login_shell,
+            required_allow_login_shell,
+            &mut startup_warnings,
+        );
+        cfg.shell_environment_policy = merge_exact_requirement(
+            "shell_environment_policy",
+            cfg.shell_environment_policy,
+            required_shell_environment_policy,
+            &mut startup_warnings,
+        )?;
+        if let Some(required_otel) = required_otel {
+            validate_otel_requirement(&required_otel.value)?;
+            apply_otel_requirement(&mut cfg.otel, required_otel, &mut startup_warnings);
+        }
+        if let Some(required_feedback) = required_feedback {
+            cfg.feedback = Some(merge_exact_requirement(
+                "feedback",
+                cfg.feedback.take().unwrap_or_default(),
+                Some(required_feedback),
+                &mut startup_warnings,
+            )?);
+        }
+        if let Some(required) = required_windows_sandbox_private_desktop {
+            let windows = cfg.windows.get_or_insert_default();
+            apply_exact_requirement(
+                "windows.sandbox_private_desktop",
+                &mut windows.sandbox_private_desktop,
+                Some(required),
+                &mut startup_warnings,
+            );
+        }
         let user_instructions = AgentsMdManager::load_global_instructions(
             LOCAL_FS.as_ref(),
             Some(&codex_home),
@@ -3202,8 +3488,68 @@ impl Config {
                     .collect::<Vec<_>>()
             })
             .filter(|values| !values.is_empty());
+        let forced_chatgpt_workspace_id = match allowed_chatgpt_workspaces {
+            Some(requirement) => {
+                let allowed = requirement
+                    .value
+                    .into_iter()
+                    .filter_map(|(workspace, allowed)| allowed.then_some(workspace))
+                    .collect::<BTreeSet<_>>();
+                Some(match forced_chatgpt_workspace_id {
+                    Some(configured) => configured
+                        .into_iter()
+                        .filter(|workspace| allowed.contains(workspace))
+                        .collect(),
+                    None => allowed.into_iter().collect(),
+                })
+            }
+            None => forced_chatgpt_workspace_id,
+        };
 
-        let forced_login_method = cfg.forced_login_method;
+        let forced_login_method = match allowed_login_methods {
+            Some(requirement) => {
+                let chatgpt_allowed = requirement
+                    .value
+                    .get("chatgpt")
+                    .copied()
+                    .unwrap_or(false);
+                let api_allowed = requirement
+                    .value
+                    .get("api")
+                    .copied()
+                    .unwrap_or(false);
+                match cfg.forced_login_method {
+                    Some(ForcedLoginMethod::Chatgpt) if chatgpt_allowed => {
+                        Some(ForcedLoginMethod::Chatgpt)
+                    }
+                    Some(ForcedLoginMethod::Api) if api_allowed => Some(ForcedLoginMethod::Api),
+                    Some(configured) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "configured `forced_login_method = \"{configured}\"` conflicts with `allowed_login_methods` from {}",
+                                requirement.source
+                            ),
+                        ));
+                    }
+                    None => match (chatgpt_allowed, api_allowed) {
+                        (true, true) => None,
+                        (true, false) => Some(ForcedLoginMethod::Chatgpt),
+                        (false, true) => Some(ForcedLoginMethod::Api),
+                        (false, false) => {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                format!(
+                                    "`allowed_login_methods` from {} does not allow any login method",
+                                    requirement.source
+                                ),
+                            ));
+                        }
+                    },
+                }
+            }
+            None => cfg.forced_login_method,
+        };
 
         let model = model.or(cfg.model);
         let notices = cfg.notice.unwrap_or_default();
@@ -3464,10 +3810,14 @@ impl Config {
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: resolve_cli_auth_credentials_store_mode(
-                cfg.cli_auth_credentials_store.unwrap_or_default(),
-                env!("CARGO_PKG_VERSION"),
-            ),
+            cli_auth_credentials_store_mode: {
+                let configured = cfg.cli_auth_credentials_store.unwrap_or_default();
+                if cli_auth_credentials_store_is_required {
+                    configured
+                } else {
+                    resolve_cli_auth_credentials_store_mode(configured, env!("CARGO_PKG_VERSION"))
+                }
+            },
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.

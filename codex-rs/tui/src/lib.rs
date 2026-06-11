@@ -7,7 +7,7 @@ use crate::legacy_core::check_execpolicy_for_warnings;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
-use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
+use crate::legacy_core::config::load_bootstrap_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::legacy_core::format_exec_policy_error_with_source;
@@ -1190,7 +1190,12 @@ pub async fn run_main(
         .config_layer_stack
         .effective_config()
         .as_table()
-        .is_some_and(|table| table.contains_key("log_dir"));
+        .is_some_and(|table| table.contains_key("log_dir"))
+        || config
+            .config_layer_stack
+            .requirements_toml()
+            .log_dir
+            .is_some();
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -1997,7 +2002,7 @@ async fn load_config_toml_or_exit(
     strict_config: bool,
     cloud_config_bundle: CloudConfigBundleLoader,
 ) -> codex_config::config_toml::ConfigToml {
-    match load_config_as_toml_with_cli_and_load_options(
+    match load_bootstrap_config_as_toml_with_cli_and_load_options(
         codex_home,
         cwd,
         cli_kv_overrides,

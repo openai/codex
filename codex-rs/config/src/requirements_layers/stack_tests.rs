@@ -292,6 +292,107 @@ approval_mode = "approve"
 }
 
 #[test]
+fn managed_config_replacement_tables_merge_recursively() {
+    let composed = compose_requirements_for_hostname(
+        vec![
+            layer(
+                "req_low",
+                "Low",
+                r#"
+[allowed_login_methods]
+chatgpt = true
+api = true
+
+[allowed_chatgpt_workspaces]
+workspace_a = true
+workspace_b = true
+
+[otel.span_attributes]
+region = "us"
+team = "low"
+
+[shell_environment_policy.set]
+LOW = "1"
+SHARED = "low"
+
+[windows]
+sandbox_private_desktop = true
+"#,
+            ),
+            layer(
+                "req_high",
+                "High",
+                r#"
+[allowed_login_methods]
+api = false
+
+[allowed_chatgpt_workspaces]
+workspace_b = false
+
+[otel.span_attributes]
+team = "high"
+
+[shell_environment_policy.set]
+HIGH = "1"
+SHARED = "high"
+
+[feedback]
+enabled = false
+"#,
+            ),
+        ],
+        /*hostname*/ None,
+    )
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed.clone().into_toml(),
+        expected_requirements(
+            r#"
+[allowed_login_methods]
+chatgpt = true
+api = false
+
+[allowed_chatgpt_workspaces]
+workspace_a = true
+workspace_b = false
+
+[otel.span_attributes]
+region = "us"
+team = "high"
+
+[shell_environment_policy.set]
+LOW = "1"
+HIGH = "1"
+SHARED = "high"
+
+[feedback]
+enabled = false
+
+[windows]
+sandbox_private_desktop = true
+"#,
+        )
+    );
+    assert_eq!(
+        composed.allowed_login_methods.map(|sourced| sourced.source),
+        Some(RequirementSource::Composite {
+            sources: vec![
+                RequirementSource::EnterpriseManaged {
+                    id: "req_high".to_string(),
+                    name: "High".to_string(),
+                },
+                RequirementSource::EnterpriseManaged {
+                    id: "req_low".to_string(),
+                    name: "Low".to_string(),
+                },
+            ],
+        })
+    );
+}
+
+#[test]
 fn merged_table_source_is_composite_in_priority_order() {
     let high_source = RequirementSource::EnterpriseManaged {
         id: "req_high".to_string(),

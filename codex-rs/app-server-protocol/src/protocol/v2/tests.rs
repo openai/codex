@@ -1708,6 +1708,19 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             hooks: None,
             enforce_residency: None,
             network: None,
+            allowed_login_methods: None,
+            allowed_chatgpt_workspaces: None,
+            cli_auth_credentials_store: None,
+            chatgpt_base_url: None,
+            sqlite_home: None,
+            log_dir: None,
+            model_catalog_json: None,
+            check_for_update_on_startup: None,
+            otel: None,
+            allow_login_shell: None,
+            shell_environment_policy: None,
+            feedback: None,
+            windows_sandbox_private_desktop: None,
         });
 
     assert_eq!(reason, Some("askForApproval.granular"));

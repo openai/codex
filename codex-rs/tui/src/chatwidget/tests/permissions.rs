@@ -54,6 +54,7 @@ fn windows_sandbox_requirements_stack(
     let requirements_toml = codex_config::ConfigRequirementsToml {
         windows: Some(codex_config::WindowsRequirementsToml {
             allowed_sandbox_implementations: Some(allowed_sandbox_implementations),
+            sandbox_private_desktop: None,
         }),
         ..Default::default()
     };
