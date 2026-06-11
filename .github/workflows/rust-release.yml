@@ -1103,30 +1103,20 @@ jobs:
 
           echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Download target artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
+          pattern: "{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc}"
+
+      - name: Download supplemental release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: "{*-symbols,argument-comment-lint-*,codex-zsh-*,python-runtime-wheel-*}"
 
       - name: List
         run: ls -R dist/
-
-      - name: Delete entries from dist/ that should not go in the release
-        run: |
-          rm -rf dist/windows-binaries*
-          rm -rf dist/*-apple-darwin*-signed-binaries
-          rm -rf dist/*-apple-darwin*-packaged
-          rm -rf dist/*-apple-darwin*-unsigned-dmg
-          rm -rf dist/*-apple-darwin*-signed-dmg
-          rm -rf dist/*-apple-darwin*-binary-signing-verification
-          rm -rf dist/*-apple-darwin*-dmg-signing-verification
-          rm -rf dist/*-apple-darwin*-unsigned
-          # cargo-timing.html appears under multiple target-specific directories.
-          # If included in files: dist/**, release upload races on duplicate
-          # asset names and can fail with 404s.
-          find dist -type f -name 'cargo-timing.html' -delete
-          find dist -type d -empty -delete
-
-          ls -R dist/
 
       - name: Add Codex package checksum manifest
         run: |
