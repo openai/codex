@@ -3366,6 +3366,7 @@ mod tests {
             RolloutItem::Compacted(CompactedItem {
                 message: String::new(),
                 replacement_history: None,
+                window_id: None,
             }),
         ];
 

@@ -17,6 +17,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -30,24 +31,18 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
-use wiremock::Mock;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path_regex;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
-    const FIRST_REVIEW_TOTAL_TOKENS: i64 = 220_000;
+    const FIRST_REVIEW_TOTAL_TOKENS: i64 = 500_000;
     const AUTO_COMPACT_TOKEN_LIMIT: i64 = 200_000;
+    const COMPACT_RESPONSE_DELAY: Duration = Duration::from_secs(/*secs*/ 5);
 
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
@@ -67,6 +62,7 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
             config.model_auto_compact_token_limit = Some(AUTO_COMPACT_TOKEN_LIMIT);
             config.model_auto_compact_token_limit_scope =
                 AutoCompactTokenLimitScope::BodyAfterPrefix;
+            config.model_context_window = Some(400_000);
             config.model_provider.request_max_retries = Some(u64::MAX);
             config.model_provider.stream_max_retries = Some(u64::default());
             config.model_provider.supports_websockets = false;
@@ -93,11 +89,16 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
     let mut first_guardian_completed =
         ev_completed_with_tokens("resp-guardian-first", FIRST_REVIEW_TOTAL_TOKENS);
     first_guardian_completed["response"]["usage"]["input_tokens"] = 10_000.into();
-    first_guardian_completed["response"]["usage"]["output_tokens"] = 210_000.into();
-    let responses = mount_sse_sequence(
+    first_guardian_completed["response"]["usage"]["output_tokens"] = 490_000.into();
+    let sse_response = |body| {
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(body)
+    };
+    let responses = mount_response_sequence(
         &server,
         vec![
-            sse(vec![
+            sse_response(sse(vec![
                 ev_response_created("resp-parent-first-tool"),
                 ev_function_call(
                     "exec-first",
@@ -105,13 +106,24 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
                     &serde_json::to_string(&first_args)?,
                 ),
                 ev_completed("resp-parent-first-tool"),
-            ]),
-            sse(vec![
+            ])),
+            sse_response(sse(vec![
                 ev_response_created("resp-guardian-first"),
                 ev_assistant_message("msg-guardian-first", r#"{"outcome":"allow"}"#),
                 first_guardian_completed,
-            ]),
-            sse(vec![
+            ])),
+            sse_response(sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "EAGER_GUARDIAN_COMPACTED_CONTEXT",
+                    },
+                }),
+                ev_completed("resp-eager-guardian-compact"),
+            ]))
+            .set_delay(COMPACT_RESPONSE_DELAY),
+            sse_response(sse(vec![
                 ev_response_created("resp-parent-second-tool"),
                 ev_function_call(
                     "exec-second",
@@ -119,46 +131,24 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
                     &serde_json::to_string(&second_args)?,
                 ),
                 ev_completed("resp-parent-second-tool"),
-            ]),
-            sse(vec![
+            ])),
+            sse_response(sse(vec![
                 ev_response_created("resp-guardian-second"),
                 ev_assistant_message("msg-guardian-second", r#"{"outcome":"allow"}"#),
                 ev_completed("resp-guardian-second"),
-            ]),
-            sse(vec![
+            ])),
+            sse_response(sse(vec![
                 ev_response_created("resp-parent-done"),
                 ev_assistant_message("msg-parent-done", "done"),
                 ev_completed("resp-parent-done"),
-            ]),
+            ])),
         ],
     )
     .await;
-    let compact_response_released = Arc::new(AtomicBool::new(false));
-    let compact_request_count = Arc::new(AtomicUsize::new(0));
-    let compact_response_released_for_mock = Arc::clone(&compact_response_released);
-    let compact_request_count_for_mock = Arc::clone(&compact_request_count);
-    Mock::given(method("POST"))
-        .and(path_regex(".*/responses/compact$"))
-        .respond_with(move |_: &wiremock::Request| {
-            compact_request_count_for_mock.fetch_add(1, Ordering::AcqRel);
-            if !compact_response_released_for_mock.load(Ordering::Acquire) {
-                return ResponseTemplate::new(503);
-            }
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "application/json")
-                .set_body_json(json!({
-                    "output": [{
-                        "type": "compaction",
-                        "encrypted_content": "EAGER_GUARDIAN_COMPACTED_CONTEXT",
-                    }],
-                }))
-        })
-        .mount(&server)
-        .await;
-    let compact_request_count_for_release = Arc::clone(&compact_request_count);
+    let responses_for_release = responses.clone();
     let release_first_tool = tokio::spawn(async move {
         tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
-            while compact_request_count_for_release.load(Ordering::Acquire) == 0 {
+            while responses_for_release.requests().len() < 3 {
                 tokio::task::yield_now().await;
             }
         })
@@ -203,23 +193,31 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
             .all(|request| !request.body_contains_text(second_justification)),
         "the second Guardian request must wait for eager compaction"
     );
-    compact_response_released.store(true, Ordering::Release);
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
     release_first_tool.await??;
 
-    let second_guardian = responses
-        .requests()
-        .into_iter()
+    let requests = responses.requests();
+    let second_guardian = requests
+        .iter()
         .find(|request| request.body_contains_text(second_justification))
         .expect("second Guardian request");
     assert!(
         second_guardian.body_contains_text("EAGER_GUARDIAN_COMPACTED_CONTEXT"),
         "the second Guardian request must use the installed compacted history"
     );
-    assert!(compact_request_count.load(Ordering::Acquire) >= 2);
+    let compact_request_count = requests
+        .iter()
+        .filter(|request| {
+            request
+                .header("x-codex-turn-metadata")
+                .and_then(|metadata| serde_json::from_str::<Value>(&metadata).ok())
+                .is_some_and(|metadata| metadata["request_kind"] == "compaction")
+        })
+        .count();
+    assert_eq!(compact_request_count, 1);
 
     Ok(())
 }

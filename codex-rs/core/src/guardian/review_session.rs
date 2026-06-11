@@ -1669,12 +1669,8 @@ mod tests {
             &params.spawn_config,
             params.parent_session.user_instructions().await,
         );
-        let manager = GuardianReviewSessionManager {
-            state: Arc::new(Mutex::new(GuardianReviewSessionState {
-                trunk: Some(Arc::new(review_session)),
-                ephemeral_reviews: Vec::new(),
-            })),
-        };
+        let manager = GuardianReviewSessionManager::default();
+        manager.state.lock().await.trunk = Some(Arc::new(review_session));
         drop(tx_event);
 
         let (outcome, _) = manager.run_review(params).await;

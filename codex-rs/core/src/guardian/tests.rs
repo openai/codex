@@ -2224,13 +2224,16 @@ async fn run_eager_compaction_review(
             retry_reason.map(str::to_string),
             guardian_output_schema(),
             /*external_cancel*/ None,
+            /*max_attempts*/ 1,
         ),
     )
     .await?;
-    let (GuardianReviewOutcome::Completed(_), analytics_result) = outcome else {
-        anyhow::bail!("expected guardian assessment");
-    };
-    Ok(analytics_result)
+    match outcome {
+        (GuardianReviewOutcome::Completed(_), analytics_result) => Ok(analytics_result),
+        (outcome, _) => anyhow::bail!(
+            "expected guardian assessment for retry {retry_reason:?}, got {outcome:?}"
+        ),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2246,16 +2249,19 @@ async fn run_eager_compaction_recovery_case(
     const TIMEOUT_WAIT_TIMEOUT: Duration = Duration::from_millis(/*millis*/ 50);
     const FIRST_REVIEW_TOTAL_TOKENS: i64 = 500_000;
     let (compaction_tx, compaction_rx) = tokio::sync::oneshot::channel();
+    let failed_compaction_sse = |id: &str| {
+        sse(vec![
+            ev_response_created(&format!("resp-eager-compact-{id}")),
+            ev_assistant_message(&format!("msg-eager-compact-{id}"), "partial summary"),
+        ])
+    };
     let compaction_body = match recovery_case {
-        EagerCompactionRecoveryCase::Failure => sse(vec![
-            ev_response_created("resp-eager-compact-failed"),
-            ev_assistant_message("msg-eager-compact-partial", "partial summary"),
-        ]),
+        EagerCompactionRecoveryCase::Failure => failed_compaction_sse("failed"),
         EagerCompactionRecoveryCase::Timeout => {
             sse(vec![ev_response_created("resp-eager-compact-timeout")])
         }
     };
-    let (server, _) = start_streaming_sse_server(vec![
+    let mut responses = vec![
         guardian_review_sse_with_body_tokens(
             "1",
             FIRST_REVIEW_TOTAL_TOKENS - EAGER_COMPACTION_GUARDIAN_PREFILL_TOKENS,
@@ -2264,9 +2270,15 @@ async fn run_eager_compaction_recovery_case(
             gate: Some(compaction_rx),
             body: compaction_body,
         }],
-        guardian_review_sse("2", ev_completed),
-    ])
-    .await;
+    ];
+    if matches!(recovery_case, EagerCompactionRecoveryCase::Failure) {
+        responses.push(vec![StreamingSseChunk {
+            gate: None,
+            body: failed_compaction_sse("retry-failed"),
+        }]);
+    }
+    responses.push(guardian_review_sse("2", ev_completed));
+    let (server, _) = start_streaming_sse_server(responses).await;
     let (mut session, mut turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
     let eager_compaction_wait_timeout = match recovery_case {
         EagerCompactionRecoveryCase::Failure => FAILURE_WAIT_TIMEOUT,
