@@ -3100,11 +3100,9 @@ dependencies = [
 name = "codex-image-generation-extension"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "codex-api",
  "codex-core",
  "codex-extension-api",
- "codex-file-system",
  "codex-login",
  "codex-model-provider",
  "codex-model-provider-info",

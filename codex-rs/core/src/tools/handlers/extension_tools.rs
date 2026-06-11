@@ -125,7 +125,6 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
             ),
         })
         .collect::<Vec<_>>();
-    let environments = (!environments.is_empty()).then_some(environments);
     ExtensionToolCall {
         turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),

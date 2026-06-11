@@ -88,7 +88,7 @@ pub struct ToolCall {
     pub truncation_policy: TruncationPolicy,
     pub conversation_history: ConversationHistory,
     pub turn_item_emitter: Arc<dyn TurnItemEmitter>,
-    pub environments: Option<Vec<ToolEnvironment>>,
+    pub environments: Vec<ToolEnvironment>,
     pub payload: ToolPayload,
 }
 
@@ -102,10 +102,7 @@ impl std::fmt::Debug for ToolCall {
             .field("truncation_policy", &self.truncation_policy)
             .field("conversation_history", &self.conversation_history)
             .field("turn_item_emitter", &"<host turn item emitter>")
-            .field(
-                "environment_count",
-                &self.environments.as_ref().map(Vec::len),
-            )
+            .field("environment_count", &self.environments.len())
             .field("payload", &self.payload)
             .finish()
     }

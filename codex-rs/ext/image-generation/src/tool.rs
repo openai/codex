@@ -104,12 +104,9 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
 impl ImageGenerationTool {
     async fn handle_call(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
-        let request = request_for_call_args(
-            &args,
-            call.conversation_history.items(),
-            call.environments.as_deref(),
-        )
-        .await?;
+        let request =
+            request_for_call_args(&args, call.conversation_history.items(), &call.environments)
+                .await?;
         call.turn_item_emitter
             .emit_started(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
                 id: call.call_id.clone(),
@@ -163,7 +160,7 @@ enum ImageRequest {
 async fn request_for_call_args(
     args: &ImagegenArgs,
     history: &[ResponseItem],
-    environments: Option<&[ToolEnvironment]>,
+    environments: &[ToolEnvironment],
 ) -> Result<ImageRequest, FunctionCallError> {
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
     if paths.len() > MAX_EDIT_IMAGES {
@@ -183,7 +180,7 @@ async fn request_for_call_args(
             }));
         }
         (false, None) => {
-            let Some(environment) = environments.and_then(<[_]>::first) else {
+            let Some(environment) = environments.first() else {
                 return Err(FunctionCallError::RespondToModel(
                     "referenced image paths are unavailable in this session".to_string(),
                 ));
