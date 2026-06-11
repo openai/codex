@@ -41,15 +41,8 @@ pub(crate) fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
     }
 }
 
-pub(crate) fn goal_usage_summary(
-    goal: &ThreadGoal,
-    codex_home: Option<&crate::goal_files::GoalFilePath>,
-) -> String {
-    let objective = match crate::goal_files::objective_file_path(&goal.objective, codex_home) {
-        Some(path) => format!("Objective file: {path}"),
-        None => format!("Objective: {}", goal.objective),
-    };
-    let mut parts = vec![objective];
+pub(crate) fn goal_usage_summary(goal: &ThreadGoal) -> String {
+    let mut parts = vec![format!("Objective: {}", goal.objective)];
     if goal.time_used_seconds > 0 {
         parts.push(format!(
             "Time: {}.",
@@ -108,13 +101,10 @@ mod tests {
     #[test]
     fn goal_usage_summary_formats_time_and_budgeted_tokens() {
         assert_eq!(
-            goal_usage_summary(
-                &test_thread_goal(
-                    /*token_budget*/ Some(50_000),
-                    /*tokens_used*/ 63_876,
-                ),
-                /*codex_home*/ None,
-            ),
+            goal_usage_summary(&test_thread_goal(
+                /*token_budget*/ Some(50_000),
+                /*tokens_used*/ 63_876,
+            )),
             "Objective: Complete the task described in ../gameboy-long-running-prompt5.txt Time: 2m. Tokens: 63.9K/50K."
         );
     }

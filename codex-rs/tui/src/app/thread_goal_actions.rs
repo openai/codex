@@ -48,9 +48,7 @@ impl App {
             return;
         };
 
-        let codex_home = app_server.codex_home_path(&self.config.codex_home);
-        self.chat_widget
-            .show_goal_summary(goal, codex_home.as_ref());
+        self.chat_widget.show_goal_summary(goal);
     }
 
     pub(super) async fn maybe_prompt_resume_paused_goal_after_resume(
@@ -78,12 +76,8 @@ impl App {
             goal.status,
             ThreadGoalStatus::Paused | ThreadGoalStatus::Blocked | ThreadGoalStatus::UsageLimited
         ) {
-            let codex_home = app_server.codex_home_path(&self.config.codex_home);
-            self.chat_widget.show_resume_paused_goal_prompt(
-                thread_id,
-                goal.objective,
-                codex_home.as_ref(),
-            );
+            self.chat_widget
+                .show_resume_paused_goal_prompt(thread_id, goal.objective);
         }
     }
 
@@ -111,30 +105,24 @@ impl App {
             }
         };
 
-        let Some(goal) = response.goal else {
+        let Some(mut goal) = response.goal else {
             self.show_no_thread_goal_to_edit();
             return;
         };
 
         let codex_home = app_server.codex_home_path(&self.config.codex_home);
-        let objective = match goal_files::objective_text_for_edit(
-            app_server,
-            codex_home.as_ref(),
-            &goal.objective,
-        )
-        .await
+        match goal_files::objective_text_for_edit(app_server, codex_home.as_ref(), &goal.objective)
+            .await
         {
-            Ok(objective) => objective,
+            Ok(objective) => goal.objective = objective,
             Err(err) => {
                 self.chat_widget.add_error_message(err.to_string());
-                goal.objective.clone()
             }
-        };
+        }
         if self.current_displayed_thread_id() != Some(thread_id) {
             return;
         }
-        self.chat_widget
-            .show_goal_edit_prompt(thread_id, goal, objective);
+        self.chat_widget.show_goal_edit_prompt(thread_id, goal);
     }
 
     pub(super) async fn set_thread_goal_objective(
@@ -170,7 +158,7 @@ impl App {
             mode
         };
 
-        let materialized = match goal_files::materialize_goal_objective(
+        let (objective, output_dir) = match goal_files::materialize_goal_objective(
             app_server,
             codex_home.as_ref(),
             objective,
@@ -185,10 +173,6 @@ impl App {
                 return;
             }
         };
-        let goal_files::MaterializedGoal {
-            objective,
-            output_dir,
-        } = materialized;
 
         let replacing_goal = matches!(mode, ThreadGoalSetMode::ReplaceExisting);
         if replacing_goal {
@@ -226,7 +210,7 @@ impl App {
                 }
                 self.chat_widget.add_info_message(
                     format!("Goal {}", goal_status_label(response.goal.status)),
-                    Some(goal_usage_summary(&response.goal, codex_home.as_ref())),
+                    Some(goal_usage_summary(&response.goal)),
                 );
                 self.chat_widget.maybe_send_next_queued_input();
             }
@@ -260,11 +244,10 @@ impl App {
             return;
         }
 
-        let codex_home = app_server.codex_home_path(&self.config.codex_home);
         match result {
             Ok(response) => self.chat_widget.add_info_message(
                 format!("Goal {}", goal_status_label(response.goal.status)),
-                Some(goal_usage_summary(&response.goal, codex_home.as_ref())),
+                Some(goal_usage_summary(&response.goal)),
             ),
             Err(err) => self
                 .chat_widget

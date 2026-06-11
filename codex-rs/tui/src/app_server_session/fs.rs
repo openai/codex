@@ -25,24 +25,20 @@ impl AppServerSession {
         &mut self,
         path: &AppServerPath,
     ) -> Result<()> {
-        let _: FsCreateDirectoryResponse = self
-            .request_fs_path(
-                "fs/createDirectory",
-                path,
-                |request_id, path| ClientRequest::FsCreateDirectory {
-                    request_id,
-                    params: FsCreateDirectoryParams {
-                        path,
-                        recursive: Some(true),
-                    },
+        self.request_fs_path::<FsCreateDirectoryResponse>(
+            "fs/createDirectory",
+            path,
+            |request_id, path| ClientRequest::FsCreateDirectory {
+                request_id,
+                params: FsCreateDirectoryParams {
+                    path,
+                    recursive: Some(true),
                 },
-                json!({
-                    "path": path.as_str(),
-                    "recursive": true,
-                }),
-            )
-            .await?;
-        Ok(())
+            },
+            json!({ "path": path.as_str(), "recursive": true }),
+        )
+        .await
+        .map(drop)
     }
 
     pub(crate) async fn fs_write_file_path(
@@ -51,24 +47,20 @@ impl AppServerSession {
         bytes: Vec<u8>,
     ) -> Result<()> {
         let data_base64 = STANDARD.encode(bytes);
-        let _: FsWriteFileResponse = self
-            .request_fs_path(
-                "fs/writeFile",
-                path,
-                |request_id, path| ClientRequest::FsWriteFile {
-                    request_id,
-                    params: FsWriteFileParams {
-                        path,
-                        data_base64: data_base64.clone(),
-                    },
+        self.request_fs_path::<FsWriteFileResponse>(
+            "fs/writeFile",
+            path,
+            |request_id, path| ClientRequest::FsWriteFile {
+                request_id,
+                params: FsWriteFileParams {
+                    path,
+                    data_base64: data_base64.clone(),
                 },
-                json!({
-                    "path": path.as_str(),
-                    "dataBase64": data_base64,
-                }),
-            )
-            .await?;
-        Ok(())
+            },
+            json!({ "path": path.as_str(), "dataBase64": data_base64 }),
+        )
+        .await
+        .map(drop)
     }
 
     pub(crate) async fn fs_read_file_path(&mut self, path: &AppServerPath) -> Result<Vec<u8>> {
@@ -89,34 +81,30 @@ impl AppServerSession {
     }
 
     pub(crate) async fn fs_remove_path(&mut self, path: &AppServerPath) -> Result<()> {
-        let _: FsRemoveResponse = self
-            .request_fs_path(
-                "fs/remove",
-                path,
-                |request_id, path| ClientRequest::FsRemove {
-                    request_id,
-                    params: FsRemoveParams {
-                        path,
-                        recursive: None,
-                        force: None,
-                    },
+        self.request_fs_path::<FsRemoveResponse>(
+            "fs/remove",
+            path,
+            |request_id, path| ClientRequest::FsRemove {
+                request_id,
+                params: FsRemoveParams {
+                    path,
+                    recursive: None,
+                    force: None,
                 },
-                json!({ "path": path.as_str() }),
-            )
-            .await?;
-        Ok(())
+            },
+            json!({ "path": path.as_str() }),
+        )
+        .await
+        .map(drop)
     }
 
-    async fn request_fs_path<T>(
+    async fn request_fs_path<T: DeserializeOwned>(
         &mut self,
         method: &str,
         path: &AppServerPath,
         local_request: impl FnOnce(RequestId, AbsolutePathBuf) -> ClientRequest,
         remote_params: serde_json::Value,
-    ) -> Result<T>
-    where
-        T: DeserializeOwned,
-    {
+    ) -> Result<T> {
         let request_id = self.next_request_id();
         match self.request_handle() {
             AppServerRequestHandle::Remote(handle) => {
@@ -129,11 +117,10 @@ impl AppServerSession {
                     })
                     .await
                     .wrap_err_with(|| format!("{method} failed in TUI"))?;
-                let result = response.map_err(|source| {
+                serde_json::from_value(response.map_err(|source| {
                     color_eyre::eyre::eyre!("{method} failed in TUI: {}", source.message)
-                })?;
-                serde_json::from_value(result)
-                    .wrap_err_with(|| format!("{method} returned invalid data"))
+                })?)
+                .wrap_err_with(|| format!("{method} returned invalid data"))
             }
             AppServerRequestHandle::InProcess(_) => {
                 let path = AbsolutePathBuf::from_absolute_path_checked(path.as_str())

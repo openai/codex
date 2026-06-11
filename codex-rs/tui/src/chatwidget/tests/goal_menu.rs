@@ -5,12 +5,11 @@ async fn goal_menu_active_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
 
-    show_test_goal_summary(
-        &mut chat,
+    chat.show_goal_summary(test_goal(
         thread_id,
         AppThreadGoalStatus::Active,
         /*token_budget*/ Some(80_000),
-    );
+    ));
 
     assert_chatwidget_snapshot!("goal_menu_active", rendered_goal_summary(&mut rx));
 }
@@ -20,12 +19,11 @@ async fn goal_menu_paused_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
 
-    show_test_goal_summary(
-        &mut chat,
+    chat.show_goal_summary(test_goal(
         thread_id,
         AppThreadGoalStatus::Paused,
         /*token_budget*/ None,
-    );
+    ));
 
     assert_chatwidget_snapshot!("goal_menu_paused", rendered_goal_summary(&mut rx));
 }
@@ -35,12 +33,11 @@ async fn goal_menu_blocked_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
 
-    show_test_goal_summary(
-        &mut chat,
+    chat.show_goal_summary(test_goal(
         thread_id,
         AppThreadGoalStatus::Blocked,
         /*token_budget*/ None,
-    );
+    ));
 
     assert_chatwidget_snapshot!("goal_menu_blocked", rendered_goal_summary(&mut rx));
 }
@@ -50,12 +47,11 @@ async fn goal_menu_usage_limited_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
 
-    show_test_goal_summary(
-        &mut chat,
+    chat.show_goal_summary(test_goal(
         thread_id,
         AppThreadGoalStatus::UsageLimited,
         /*token_budget*/ None,
-    );
+    ));
 
     assert_chatwidget_snapshot!("goal_menu_usage_limited", rendered_goal_summary(&mut rx));
 }
@@ -65,36 +61,13 @@ async fn goal_menu_budget_limited_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
 
-    show_test_goal_summary(
-        &mut chat,
+    chat.show_goal_summary(test_goal(
         thread_id,
         AppThreadGoalStatus::BudgetLimited,
         /*token_budget*/ Some(80_000),
-    );
+    ));
 
     assert_chatwidget_snapshot!("goal_menu_budget_limited", rendered_goal_summary(&mut rx));
-}
-
-#[tokio::test]
-async fn goal_menu_managed_file_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
-    let mut goal = test_goal(
-        thread_id,
-        AppThreadGoalStatus::Active,
-        /*token_budget*/ Some(80_000),
-    );
-    let codex_home = codex_app_server_client::AppServerPath::from_app_server("/tmp/codex-home");
-    let path = codex_home
-        .join("attachments")
-        .join("00000000-0000-4000-8000-000000000000")
-        .join("goal-objective.md");
-    goal.objective =
-        crate::goal_files::objective_file_reference(&path).expect("goal objective file reference");
-
-    chat.show_goal_summary(goal, Some(&codex_home));
-
-    assert_chatwidget_snapshot!("goal_menu_managed_file", rendered_goal_summary(&mut rx));
 }
 
 #[tokio::test]
@@ -102,10 +75,9 @@ async fn resume_paused_goal_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
 
-    show_resume_prompt(
-        &mut chat,
+    chat.show_resume_paused_goal_prompt(
         thread_id,
-        "Keep improving the bare goal command until it feels calm and useful.",
+        "Keep improving the bare goal command until it feels calm and useful.".to_string(),
     );
 
     assert_chatwidget_snapshot!(
@@ -126,7 +98,6 @@ async fn goal_edit_prompt_snapshot() {
             AppThreadGoalStatus::Active,
             /*token_budget*/ Some(80_000),
         ),
-        "Keep improving the bare goal command until it feels calm and useful.".to_string(),
     );
 
     assert_chatwidget_snapshot!(
@@ -147,7 +118,6 @@ async fn goal_edit_prompt_submits_preserved_status_and_budget() {
             AppThreadGoalStatus::Paused,
             /*token_budget*/ Some(80_000),
         ),
-        "Keep improving the bare goal command until it feels calm and useful.".to_string(),
     );
     chat.handle_paste(" with clearer wording".to_string());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -191,7 +161,6 @@ async fn goal_edit_prompt_preserves_resumable_stopped_statuses() {
                 stopped_status,
                 /*token_budget*/ Some(80_000),
             ),
-            "Keep improving the bare goal command until it feels calm and useful.".to_string(),
         );
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
@@ -230,7 +199,6 @@ async fn goal_edit_prompt_resets_terminal_status_to_active() {
                 terminal_status,
                 /*token_budget*/ Some(80_000),
             ),
-            "Keep improving the bare goal command until it feels calm and useful.".to_string(),
         );
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
@@ -256,7 +224,7 @@ async fn resume_paused_goal_prompt_default_resumes_goal() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
 
-    show_resume_prompt(&mut chat, thread_id, "Finish the paused goal.");
+    chat.show_resume_paused_goal_prompt(thread_id, "Finish the paused goal.".to_string());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     match rx.try_recv() {
@@ -277,7 +245,7 @@ async fn resume_paused_goal_prompt_can_leave_goal_paused() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
 
-    show_resume_prompt(&mut chat, thread_id, "Finish the paused goal.");
+    chat.show_resume_paused_goal_prompt(thread_id, "Finish the paused goal.".to_string());
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
@@ -301,22 +269,6 @@ fn test_goal(
         created_at: 1_776_272_400,
         updated_at: 1_776_272_460,
     }
-}
-
-fn show_test_goal_summary(
-    chat: &mut ChatWidget,
-    thread_id: ThreadId,
-    status: AppThreadGoalStatus,
-    token_budget: Option<i64>,
-) {
-    chat.show_goal_summary(
-        test_goal(thread_id, status, token_budget),
-        /*codex_home*/ None,
-    );
-}
-
-fn show_resume_prompt(chat: &mut ChatWidget, thread_id: ThreadId, objective: &str) {
-    chat.show_resume_paused_goal_prompt(thread_id, objective.to_string(), /*codex_home*/ None);
 }
 
 fn rendered_goal_summary(

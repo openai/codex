@@ -15,6 +15,7 @@ use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::chatwidget::tests::set_chatgpt_auth;
 use crate::chatwidget::tests::set_fast_mode_test_catalog;
 use crate::file_search::FileSearchManager;
+use crate::goal_files;
 use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
@@ -31,6 +32,7 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
+use codex_app_server_client::AppServerPath;
 use codex_app_server_protocol::AdditionalFileSystemPermissions;
 use codex_app_server_protocol::AdditionalNetworkPermissions;
 use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -4154,17 +4156,14 @@ async fn make_test_app_with_channels() -> (
 #[tokio::test]
 async fn set_thread_goal_objective_materializes_long_objective_before_goal_set() -> Result<()> {
     let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
     let started = app_server
         .start_thread(app.chat_widget.config_ref())
-        .await
-        .expect("thread/start should succeed");
+        .await?;
     let thread_id = started.session.thread_id;
     app.enqueue_primary_thread_session(started.session, started.turns)
-        .await
-        .expect("primary thread should be registered");
+        .await?;
     let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
 
     app.set_thread_goal_objective(
@@ -4181,49 +4180,33 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
         .goal
         .expect("goal should be set");
     let saved_objective = goal.objective.clone();
-    let codex_home = app_server.codex_home_path(&app.chat_widget.config_ref().codex_home);
-    assert!(crate::goal_files::objective_file_path(&goal.objective, codex_home.as_ref()).is_some());
+    let codex_home = app_server
+        .codex_home_path(&app.chat_widget.config_ref().codex_home)
+        .expect("codex home");
+    assert!(goal_files::objective_file_path(&goal.objective, Some(&codex_home)).is_some());
     assert_eq!(
-        crate::goal_files::objective_text_for_edit(
-            &mut app_server,
-            codex_home.as_ref(),
-            &goal.objective
-        )
-        .await
-        .expect("managed goal file should be readable"),
+        goal_files::objective_text_for_edit(&mut app_server, Some(&codex_home), &goal.objective)
+            .await
+            .expect("managed goal file should be readable"),
         objective
     );
-    assert_goal_reference_remains_literal(
-        codex_home.as_ref(),
-        codex_app_server_client::AppServerPath::from_app_server(
-            "/tmp/attachments/00000000-0000-4000-8000-000000000000/goal-objective.md",
-        ),
-    );
-    let escaped_path = codex_home
-        .as_ref()
-        .expect("codex home")
-        .join("..")
-        .join("other")
-        .join("attachments")
-        .join("00000000-0000-4000-8000-000000000000")
-        .join("goal-objective.md");
-    assert_goal_reference_remains_literal(codex_home.as_ref(), escaped_path);
-    let nested_path = codex_home
-        .as_ref()
-        .expect("codex home")
-        .join("other")
-        .join("attachments")
-        .join("00000000-0000-4000-8000-000000000000")
-        .join("goal-objective.md");
-    assert_goal_reference_remains_literal(codex_home.as_ref(), nested_path);
-    assert_goal_reference_remains_literal(
-        Some(&codex_app_server_client::AppServerPath::from_app_server(
-            "/tmp/codex\\home",
-        )),
-        codex_app_server_client::AppServerPath::from_app_server(
-            "/tmp/codex/home/attachments/00000000-0000-4000-8000-000000000000/goal-objective.md",
-        ),
-    );
+    let is_managed = |home: &AppServerPath, path: &str| {
+        let reference = goal_files::objective_file_reference(&AppServerPath::from_app_server(path))
+            .expect("goal objective reference");
+        goal_files::objective_file_path(&reference, Some(home)).is_some()
+    };
+    let suffix = "attachments/00000000-0000-4000-8000-000000000000/goal-objective.md";
+    for path in [
+        format!("/tmp/{suffix}"),
+        format!("{codex_home}/../other/{suffix}"),
+        format!("{codex_home}/other/{suffix}"),
+    ] {
+        assert!(!is_managed(&codex_home, &path));
+    }
+    assert!(!is_managed(
+        &AppServerPath::from_app_server("/tmp/codex\\home"),
+        &format!("/tmp/codex/home/{suffix}")
+    ));
     let attachments_dir = app.chat_widget.config_ref().codex_home.join("attachments");
     let attachment_count = std::fs::read_dir(&attachments_dir)?.count();
 
@@ -4250,15 +4233,6 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
     );
     app_server.shutdown().await?;
     Ok(())
-}
-
-fn assert_goal_reference_remains_literal(
-    codex_home: Option<&codex_app_server_client::AppServerPath>,
-    path: codex_app_server_client::AppServerPath,
-) {
-    let reference =
-        crate::goal_files::objective_file_reference(&path).expect("goal objective reference");
-    assert!(crate::goal_files::objective_file_path(&reference, codex_home).is_none());
 }
 
 fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {

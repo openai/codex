@@ -1,7 +1,4 @@
-//! App-server-host path strings.
-//!
-//! Remote app-server fs APIs deserialize and resolve paths on the server host,
-//! so callers must not parse remote paths using their local platform rules.
+//! Paths resolved using the app-server host's platform rules.
 
 use std::fmt;
 
@@ -39,10 +36,11 @@ impl AppServerPath {
         } else {
             '/'
         };
-        let mut raw = self.0.trim_end_matches(['/', '\\']).to_string();
-        raw.push(separator);
-        raw.push_str(segment.as_ref());
-        Self(raw)
+        Self(format!(
+            "{}{separator}{}",
+            self.0.trim_end_matches(['/', '\\']),
+            segment.as_ref()
+        ))
     }
 }
 
