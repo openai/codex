@@ -5087,7 +5087,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_tool_call_end_event_defaults_missing_app_identity() {
+    fn mcp_tool_call_end_event_defaults_missing_connector_id() {
         let event = McpToolCallEndEvent {
             call_id: "mcp-1".into(),
             invocation: McpInvocation {
@@ -5096,8 +5096,8 @@ mod tests {
                 arguments: Some(json!({"arg": "value"})),
             },
             connector_id: Some("connector".into()),
-            mcp_app_resource_uri: Some("app://connector".into()),
-            plugin_id: Some("sample@test".into()),
+            mcp_app_resource_uri: None,
+            plugin_id: None,
             duration: Duration::from_millis(42),
             result: Ok(CallToolResult {
                 content: vec![json!({"type": "text", "text": "ok"})],

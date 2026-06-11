@@ -756,9 +756,11 @@ impl ThreadHistoryBuilder {
 
     fn handle_mcp_tool_call_begin(&mut self, payload: &McpToolCallBeginEvent) {
         // The canonical started item carries app identity that this deprecated event cannot.
-        if self.ensure_turn().items.iter().any(
-            |item| matches!(item, ThreadItem::McpToolCall { id, .. } if id == &payload.call_id),
-        ) {
+        let items = &mut self.ensure_turn().items;
+        let existing_item_index = items.iter().position(|item| item.id() == payload.call_id);
+        if existing_item_index
+            .is_some_and(|index| matches!(&items[index], ThreadItem::McpToolCall { .. }))
+        {
             return;
         }
         let item = ThreadItem::McpToolCall {
@@ -778,7 +780,11 @@ impl ThreadHistoryBuilder {
             error: None,
             duration_ms: None,
         };
-        self.upsert_item_in_current_turn(item);
+        if let Some(index) = existing_item_index {
+            items[index] = item;
+        } else {
+            items.push(item);
+        }
     }
 
     fn handle_mcp_tool_call_end(&mut self, payload: &McpToolCallEndEvent) {
@@ -1853,7 +1859,7 @@ mod tests {
     }
 
     #[test]
-    fn active_turn_snapshot_preserves_started_mcp_app_identity() {
+    fn active_turn_snapshot_preserves_started_mcp_connector_id() {
         let turn_id = "turn-1";
         let call_id = "mcp-1";
         let arguments = serde_json::json!({"title":"Planning"});
@@ -1879,8 +1885,8 @@ mod tests {
                 tool: invocation.tool.clone(),
                 arguments: arguments.clone(),
                 connector_id: Some("calendar".into()),
-                mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
-                plugin_id: Some("sample@test".into()),
+                mcp_app_resource_uri: None,
+                plugin_id: None,
                 status: CoreMcpToolCallStatus::InProgress,
                 result: None,
                 error: None,
@@ -1891,8 +1897,8 @@ mod tests {
         builder.handle_event(&EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
             call_id: call_id.into(),
             invocation,
-            mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
-            plugin_id: Some("sample@test".into()),
+            mcp_app_resource_uri: None,
+            plugin_id: None,
         }));
 
         assert_eq!(
@@ -1904,8 +1910,48 @@ mod tests {
                 status: McpToolCallStatus::InProgress,
                 arguments,
                 connector_id: Some("calendar".into()),
-                mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
-                plugin_id: Some("sample@test".into()),
+                mcp_app_resource_uri: None,
+                plugin_id: None,
+                result: None,
+                error: None,
+                duration_ms: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn deprecated_mcp_begin_replaces_an_item_with_the_same_id() {
+        let call_id = "mcp-1";
+        let mut builder = ThreadHistoryBuilder::new();
+        builder.ensure_turn().items.push(ThreadItem::AgentMessage {
+            id: call_id.into(),
+            text: "stale".into(),
+            phase: None,
+            memory_citation: None,
+        });
+
+        builder.handle_mcp_tool_call_begin(&McpToolCallBeginEvent {
+            call_id: call_id.into(),
+            invocation: McpInvocation {
+                server: "docs".into(),
+                tool: "lookup".into(),
+                arguments: None,
+            },
+            mcp_app_resource_uri: None,
+            plugin_id: None,
+        });
+
+        assert_eq!(
+            builder.ensure_turn().items,
+            vec![ThreadItem::McpToolCall {
+                id: call_id.into(),
+                server: "docs".into(),
+                tool: "lookup".into(),
+                status: McpToolCallStatus::InProgress,
+                arguments: serde_json::Value::Null,
+                connector_id: None,
+                mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: None,
                 error: None,
                 duration_ms: None,

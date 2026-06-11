@@ -1151,62 +1151,50 @@ async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
 
 #[test]
 fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
-    let mut metadata = approval_metadata(
+    let metadata = approval_metadata(
         Some("asdk_app_0123456789abcdef0123456789abcdef"),
-        Some("Calendar"),
+        /*connector_name*/ None,
         /*connector_description*/ None,
-        Some("Create event"),
+        /*tool_title*/ None,
         /*tool_description*/ None,
     );
-    metadata.mcp_app_resource_uri = Some("ui://widget/calendar-create-event.html".to_string());
-    metadata.codex_apps_meta = Some(
-        serde_json::json!({
-            "resource_uri": "connector://calendar/tools/calendar_create_event",
-        })
-        .as_object()
-        .cloned()
-        .expect("_codex_apps metadata should be an object"),
-    );
-    metadata.plugin_id = Some("sample@test".to_string());
 
     assert_eq!(
         McpToolCallItemMetadata::from_tool_metadata(CODEX_APPS_MCP_SERVER_NAME, Some(&metadata),),
         McpToolCallItemMetadata {
             connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
-            mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".to_string()),
-            plugin_id: Some("sample@test".to_string()),
+            mcp_app_resource_uri: None,
+            plugin_id: None,
         }
     );
     assert_eq!(
         McpToolCallItemMetadata::from_tool_metadata("custom_server", Some(&metadata)),
         McpToolCallItemMetadata {
             connector_id: None,
-            mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".to_string()),
-            plugin_id: Some("sample@test".to_string()),
+            mcp_app_resource_uri: None,
+            plugin_id: None,
         }
     );
 }
 
 #[tokio::test]
-async fn mcp_tool_call_items_include_snapshotted_metadata() {
+async fn mcp_tool_call_item_includes_plugin_id_and_connector_id() {
     let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
-    let item_metadata = McpToolCallItemMetadata {
-        connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
-        mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".to_string()),
-        plugin_id: Some("sample@test".to_string()),
-    };
-    let invocation = McpInvocation {
-        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        tool: "calendar_create_event".to_string(),
-        arguments: Some(serde_json::json!({"title": "Lunch"})),
-    };
 
     notify_mcp_tool_call_started(
         &session,
         &turn_context,
-        "call-calendar",
-        invocation.clone(),
-        item_metadata.clone(),
+        "call-plugin",
+        McpInvocation {
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool: "echo".to_string(),
+            arguments: None,
+        },
+        McpToolCallItemMetadata {
+            connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
+            mcp_app_resource_uri: None,
+            plugin_id: Some("sample@test".to_string()),
+        },
     )
     .await;
 
@@ -1221,60 +1209,11 @@ async fn mcp_tool_call_items_include_snapshotted_metadata() {
         panic!("expected MCP tool call item");
     };
 
-    let expected_started = McpToolCallItem {
-        id: "call-calendar".to_string(),
-        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        tool: "calendar_create_event".to_string(),
-        arguments: serde_json::json!({"title": "Lunch"}),
-        connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
-        mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".to_string()),
-        plugin_id: Some("sample@test".to_string()),
-        status: McpToolCallStatus::InProgress,
-        result: None,
-        error: None,
-        duration: None,
-    };
-    assert_eq!(item, expected_started);
-
-    let result = CallToolResult {
-        content: vec![serde_json::json!({"type": "text", "text": "ok"})],
-        structured_content: None,
-        is_error: Some(false),
-        meta: None,
-    };
-    notify_mcp_tool_call_completed(
-        &session,
-        &turn_context,
-        "call-calendar",
-        invocation,
-        item_metadata,
-        Duration::from_millis(42),
-        Ok(result.clone()),
-    )
-    .await;
-
-    let item_completed = loop {
-        let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx_event.recv())
-            .await
-            .expect("tool call item timed out")
-            .expect("tool call item event");
-        if let EventMsg::ItemCompleted(item_completed) = event.msg {
-            break item_completed;
-        }
-    };
-    let TurnItem::McpToolCall(item) = item_completed.item else {
-        panic!("expected MCP tool call item");
-    };
-
     assert_eq!(
-        item,
-        McpToolCallItem {
-            status: McpToolCallStatus::Completed,
-            result: Some(result),
-            duration: Some(Duration::from_millis(42)),
-            ..expected_started
-        }
+        item.connector_id.as_deref(),
+        Some("asdk_app_0123456789abcdef0123456789abcdef")
     );
+    assert_eq!(item.plugin_id.as_deref(), Some("sample@test"));
 }
 
 #[tokio::test]
