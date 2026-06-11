@@ -885,6 +885,7 @@ fn sample_effective_permissions_approval_response(
         permissions,
         scope,
         strict_auto_review: false,
+        approvals_reviewer: None,
     }
 }
 

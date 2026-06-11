@@ -1,3 +1,4 @@
+use super::shared::ApprovalsReviewer;
 use super::shared::v2_enum_from_core;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
@@ -693,4 +694,8 @@ pub struct PermissionsRequestApprovalResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub strict_auto_review: Option<bool>,
+    /// Override who reviews later approval prompts for the rest of the current turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
 }

@@ -2151,6 +2151,7 @@ impl Session {
                     permissions: RequestPermissionProfile::default(),
                     scope: PermissionGrantScope::Turn,
                     strict_auto_review: false,
+                    approvals_reviewer: None,
                 });
             }
             AskForApproval::Granular(granular_config)
@@ -2160,6 +2161,7 @@ impl Session {
                     permissions: RequestPermissionProfile::default(),
                     scope: PermissionGrantScope::Turn,
                     strict_auto_review: false,
+                    approvals_reviewer: None,
                 });
             }
             AskForApproval::OnFailure
@@ -2204,12 +2206,14 @@ impl Session {
                         permissions: requested_permissions.clone(),
                         scope: PermissionGrantScope::Turn,
                         strict_auto_review: false,
+                        approvals_reviewer: None,
                     }
                 }
                 ReviewDecision::ApprovedForSession => RequestPermissionsResponse {
                     permissions: requested_permissions.clone(),
                     scope: PermissionGrantScope::Session,
                     strict_auto_review: false,
+                    approvals_reviewer: None,
                 },
                 ReviewDecision::NetworkPolicyAmendment {
                     network_policy_amendment,
@@ -2218,11 +2222,13 @@ impl Session {
                         permissions: requested_permissions.clone(),
                         scope: PermissionGrantScope::Turn,
                         strict_auto_review: false,
+                        approvals_reviewer: None,
                     },
                     NetworkPolicyRuleAction::Deny => RequestPermissionsResponse {
                         permissions: RequestPermissionProfile::default(),
                         scope: PermissionGrantScope::Turn,
                         strict_auto_review: false,
+                        approvals_reviewer: None,
                     },
                 },
                 ReviewDecision::Abort | ReviewDecision::Denied | ReviewDecision::TimedOut => {
@@ -2230,6 +2236,7 @@ impl Session {
                         permissions: RequestPermissionProfile::default(),
                         scope: PermissionGrantScope::Turn,
                         strict_auto_review: false,
+                        approvals_reviewer: None,
                     }
                 }
             };
@@ -2314,6 +2321,7 @@ impl Session {
                 permissions: RequestPermissionProfile::default(),
                 scope: PermissionGrantScope::Turn,
                 strict_auto_review: false,
+                approvals_reviewer: None,
             });
         };
         let mut environment = turn_environment.selection();
@@ -2448,6 +2456,7 @@ impl Session {
                 permissions: RequestPermissionProfile::default(),
                 scope: PermissionGrantScope::Turn,
                 strict_auto_review: false,
+                approvals_reviewer: None,
             };
         }
 
@@ -2464,6 +2473,7 @@ impl Session {
             .into(),
             scope: response.scope,
             strict_auto_review: response.strict_auto_review,
+            approvals_reviewer: response.approvals_reviewer,
         }
     }
 

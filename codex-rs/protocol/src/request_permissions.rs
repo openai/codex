@@ -1,3 +1,4 @@
+use crate::config_types::ApprovalsReviewer;
 use crate::models::AdditionalPermissionProfile;
 use crate::models::FileSystemPermissions;
 use crate::models::NetworkPermissions;
@@ -69,6 +70,19 @@ pub struct RequestPermissionsResponse {
     /// Review every subsequent command in this turn before normal sandboxed execution.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub strict_auto_review: bool,
+    /// Override who reviews later approval prompts for the rest of the current turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+}
+
+impl RequestPermissionsResponse {
+    pub fn approvals_reviewer_override(&self) -> Option<ApprovalsReviewer> {
+        self.approvals_reviewer.or_else(|| {
+            self.strict_auto_review
+                .then_some(ApprovalsReviewer::AutoReview)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

@@ -210,6 +210,7 @@ impl PendingAppServerRequests {
                             ),
                             scope: response.scope.into(),
                             strict_auto_review: response.strict_auto_review.then_some(true),
+                            approvals_reviewer: None,
                         })
                         .map_err(|err| {
                             format!("failed to serialize permissions approval response: {err}")

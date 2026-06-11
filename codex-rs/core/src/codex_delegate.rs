@@ -823,6 +823,7 @@ where
                 permissions: Default::default(),
                 scope: PermissionGrantScope::Turn,
                 strict_auto_review: false,
+                approvals_reviewer: None,
             };
             parent_session
                 .notify_request_permissions_response(call_id, empty.clone())
@@ -833,6 +834,7 @@ where
             permissions: Default::default(),
             scope: PermissionGrantScope::Turn,
             strict_auto_review: false,
+            approvals_reviewer: None,
         }),
     }
 }

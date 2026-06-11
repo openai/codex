@@ -89,6 +89,7 @@ use codex_core::ThreadManager;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer as CoreApprovalsReviewer;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -1849,6 +1850,7 @@ fn request_permissions_response_from_client_result(
                 permissions: Default::default(),
                 scope: CorePermissionGrantScope::Turn,
                 strict_auto_review: false,
+                approvals_reviewer: None,
             });
         }
         Err(err) => {
@@ -1857,6 +1859,7 @@ fn request_permissions_response_from_client_result(
                 permissions: Default::default(),
                 scope: CorePermissionGrantScope::Turn,
                 strict_auto_review: false,
+                approvals_reviewer: None,
             });
         }
     };
@@ -1868,22 +1871,14 @@ fn request_permissions_response_from_client_result(
                 permissions: V2GrantedPermissionProfile::default(),
                 scope: codex_app_server_protocol::PermissionGrantScope::Turn,
                 strict_auto_review: None,
+                approvals_reviewer: None,
             }
         });
     let strict_auto_review = response.strict_auto_review.unwrap_or(false);
-    if strict_auto_review
-        && matches!(
-            response.scope,
-            codex_app_server_protocol::PermissionGrantScope::Session
-        )
-    {
-        error!("strict auto review is only supported for turn-scoped permission grants");
-        return Some(CoreRequestPermissionsResponse {
-            permissions: Default::default(),
-            scope: CorePermissionGrantScope::Turn,
-            strict_auto_review: false,
-        });
-    }
+    let approvals_reviewer = response
+        .approvals_reviewer
+        .map(codex_app_server_protocol::ApprovalsReviewer::to_core)
+        .or_else(|| strict_auto_review.then_some(CoreApprovalsReviewer::AutoReview));
     let granted_permissions: CoreAdditionalPermissionProfile = response.permissions.into();
     let permissions = if granted_permissions.is_empty() {
         CoreRequestPermissionProfile::default()
@@ -1894,6 +1889,7 @@ fn request_permissions_response_from_client_result(
         permissions,
         scope: response.scope.to_core(),
         strict_auto_review,
+        approvals_reviewer,
     })
 }
 
@@ -3001,6 +2997,7 @@ mod tests {
                     permissions: expected_permissions,
                     scope: CorePermissionGrantScope::Turn,
                     strict_auto_review: false,
+                    approvals_reviewer: None,
                 }
             );
         }
@@ -3024,14 +3021,20 @@ mod tests {
                 permissions: CoreRequestPermissionProfile::default(),
                 scope: CorePermissionGrantScope::Session,
                 strict_auto_review: false,
+                approvals_reviewer: None,
             }
         );
     }
 
     #[test]
-    fn request_permissions_response_rejects_session_scoped_strict_auto_review() {
+    fn request_permissions_response_preserves_session_scope_with_auto_review_override() {
         let response = request_permissions_response_from_client_result(
-            CoreRequestPermissionProfile::default(),
+            CoreRequestPermissionProfile {
+                network: Some(codex_protocol::models::NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                ..Default::default()
+            },
             Ok(Ok(serde_json::json!({
                 "scope": "session",
                 "strictAutoReview": true,
@@ -3048,9 +3051,15 @@ mod tests {
         assert_eq!(
             response,
             CoreRequestPermissionsResponse {
-                permissions: CoreRequestPermissionProfile::default(),
-                scope: CorePermissionGrantScope::Turn,
-                strict_auto_review: false,
+                permissions: CoreRequestPermissionProfile {
+                    network: Some(codex_protocol::models::NetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    ..CoreRequestPermissionProfile::default()
+                },
+                scope: CorePermissionGrantScope::Session,
+                strict_auto_review: true,
+                approvals_reviewer: Some(CoreApprovalsReviewer::AutoReview),
             }
         );
     }
@@ -3078,6 +3087,29 @@ mod tests {
 
         assert_eq!(response.scope, CorePermissionGrantScope::Turn);
         assert!(response.strict_auto_review);
+        assert_eq!(
+            response.approvals_reviewer,
+            Some(CoreApprovalsReviewer::AutoReview)
+        );
+    }
+
+    #[test]
+    fn request_permissions_response_preserves_explicit_approvals_reviewer() {
+        let response = request_permissions_response_from_client_result(
+            CoreRequestPermissionProfile::default(),
+            Ok(Ok(serde_json::json!({
+                "approvalsReviewer": "user",
+                "strictAutoReview": true,
+                "permissions": {},
+            }))),
+            std::env::current_dir().expect("current dir").as_path(),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(
+            response.approvals_reviewer,
+            Some(CoreApprovalsReviewer::User)
+        );
     }
 
     #[test]

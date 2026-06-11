@@ -431,6 +431,7 @@ impl ApprovalOverlay {
                 permissions: granted_permissions,
                 scope,
                 strict_auto_review,
+                approvals_reviewer: None,
             },
         );
     }
