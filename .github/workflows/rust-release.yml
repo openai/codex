@@ -1204,6 +1204,7 @@ jobs:
           ./scripts/stage_npm_packages.py \
             --release-version "$RELEASE_VERSION" \
             --workflow-url "$workflow_url" \
+            --artifacts-dir "${GITHUB_WORKSPACE}/dist" \
             --package codex \
             --package codex-responses-api-proxy \
             --package codex-sdk
