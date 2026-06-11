@@ -8199,6 +8199,14 @@
       "created_at": "2026-06-11T13:52:20Z",
       "repoId": 965415649,
       "pullRequestNo": 27605
+    },
+    {
+      "name": "kotakem-openai",
+      "id": 236717381,
+      "comment_id": 4682389826,
+      "created_at": "2026-06-11T15:49:30Z",
+      "repoId": 965415649,
+      "pullRequestNo": 27619
     }
   ]
 }
