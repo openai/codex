@@ -230,7 +230,7 @@ async fn recent_image_fallback_requires_requested_count() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn referenced_image_uses_environment_file_system_and_sandbox() {
     let path = absolute_path("/virtual/image.png");
     let sandbox = FileSystemSandboxContext::from_permission_profile(PermissionProfile::read_only());
@@ -285,7 +285,10 @@ async fn referenced_image_read_failure_returns_tool_error() {
 
     assert_eq!(
         error.to_string(),
-        "unable to read referenced image at `/virtual/denied.png`: denied"
+        format!(
+            "unable to read referenced image at `{}`: denied",
+            path.display()
+        )
     );
     assert_eq!(file_system.reads(), vec![(path, sandbox)]);
 }

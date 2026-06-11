@@ -32,4 +32,4 @@ serde_json = { workspace = true }
 async-trait = { workspace = true }
 codex-file-system = { workspace = true }
 pretty_assertions = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
