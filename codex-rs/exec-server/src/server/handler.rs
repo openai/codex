@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::ExecServerRuntimePaths;
+use crate::LocalFileSystemConfig;
 use crate::client::http_client::PendingReqwestHttpBodyStream;
 use crate::client::http_client::ReqwestHttpRequestRunner;
 use crate::protocol::EnvironmentInfo;
@@ -69,10 +70,25 @@ pub(crate) struct ExecServerHandler {
 }
 
 impl ExecServerHandler {
+    #[cfg(test)]
     pub(crate) fn new(
         session_registry: Arc<SessionRegistry>,
         notifications: RpcNotificationSender,
         runtime_paths: ExecServerRuntimePaths,
+    ) -> Self {
+        Self::new_with_config(
+            session_registry,
+            notifications,
+            runtime_paths,
+            LocalFileSystemConfig::default(),
+        )
+    }
+
+    pub(crate) fn new_with_config(
+        session_registry: Arc<SessionRegistry>,
+        notifications: RpcNotificationSender,
+        runtime_paths: ExecServerRuntimePaths,
+        config: LocalFileSystemConfig,
     ) -> Self {
         Self {
             session_registry,
@@ -81,7 +97,7 @@ impl ExecServerHandler {
             active_body_stream_ids: Mutex::new(HashSet::new()),
             background_task_shutdown: CancellationToken::new(),
             background_tasks: TaskTracker::new(),
-            file_system: FileSystemHandler::new(runtime_paths),
+            file_system: FileSystemHandler::new(runtime_paths, config),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
         }

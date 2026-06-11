@@ -24,6 +24,13 @@ The CLI entrypoint supports:
 - `ws://IP:PORT` (default)
 - `--remote URL --environment-id ID [--name NAME]`
 
+Standalone server defaults can be set in `$CODEX_HOME/exec-server.toml`.
+CLI flags win over matching file values; when the file is absent, startup keeps
+the current `ws://127.0.0.1:0` local default. The file owns exec-server-local
+transport, remote reconnect, session retention, process retention, and
+filesystem read-limit settings; orchestrator environment selection remains in
+`environments.toml`.
+
 Remote mode registers the local exec-server with the environment registry,
 then reconnects to the service-provided rendezvous websocket as the environment.
 It uses the standard Codex ChatGPT sign-in state; run `codex login` first when
@@ -383,8 +390,9 @@ The crate exports:
 - `RemoteExecServerConnectArgs`
 - protocol request/response structs for process and filesystem RPCs
 - `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
+- `ExecServerConfig` for `$CODEX_HOME/exec-server.toml`
 - `ExecServerRuntimePaths`
-- `run_main()` for embedding the websocket server
+- `run_main()` and `run_main_with_config()` for embedding the websocket server
 - `RemoteEnvironmentConfig` and `run_remote_environment()` for embedding remote
   registration mode
 

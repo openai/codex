@@ -10,7 +10,9 @@ use tracing::warn;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use crate::ExecServerError;
+use crate::ExecServerRuntimeConfig;
 use crate::ExecServerRuntimePaths;
+use crate::config::validate_reconnect_backoff;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 
@@ -93,6 +95,9 @@ pub struct RemoteEnvironmentConfig {
     pub base_url: String,
     pub environment_id: String,
     pub name: String,
+    runtime: ExecServerRuntimeConfig,
+    reconnect_initial_backoff: Duration,
+    reconnect_max_backoff: Duration,
     auth_provider: SharedAuthProvider,
 }
 
@@ -102,6 +107,9 @@ impl std::fmt::Debug for RemoteEnvironmentConfig {
             .field("base_url", &self.base_url)
             .field("environment_id", &self.environment_id)
             .field("name", &self.name)
+            .field("runtime", &self.runtime)
+            .field("reconnect_initial_backoff", &self.reconnect_initial_backoff)
+            .field("reconnect_max_backoff", &self.reconnect_max_backoff)
             .field("auth_provider", &"<redacted>")
             .finish()
     }
@@ -118,8 +126,31 @@ impl RemoteEnvironmentConfig {
             base_url,
             environment_id,
             name: "codex-exec-server".to_string(),
+            runtime: ExecServerRuntimeConfig::default(),
+            reconnect_initial_backoff: Duration::from_secs(1),
+            reconnect_max_backoff: Duration::from_secs(30),
             auth_provider,
         })
+    }
+
+    pub fn with_reconnect_backoff(
+        mut self,
+        reconnect_initial_backoff: Duration,
+        reconnect_max_backoff: Duration,
+    ) -> Result<Self, ExecServerError> {
+        validate_reconnect_backoff(reconnect_initial_backoff, reconnect_max_backoff)?;
+        self.reconnect_initial_backoff = reconnect_initial_backoff;
+        self.reconnect_max_backoff = reconnect_max_backoff;
+        Ok(self)
+    }
+
+    pub fn with_runtime(
+        mut self,
+        runtime: ExecServerRuntimeConfig,
+    ) -> Result<Self, ExecServerError> {
+        runtime.validate()?;
+        self.runtime = runtime;
+        Ok(self)
     }
 }
 
@@ -130,10 +161,11 @@ pub async fn run_remote_environment(
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), ExecServerError> {
     ensure_rustls_crypto_provider();
+    config.runtime.validate()?;
     let client =
         EnvironmentRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
-    let processor = ConnectionProcessor::new(runtime_paths);
-    let mut backoff = Duration::from_secs(1);
+    let processor = ConnectionProcessor::new_with_config(runtime_paths, config.runtime.clone());
+    let mut backoff = config.reconnect_initial_backoff;
 
     loop {
         let response = client.register_environment(&config.environment_id).await?;
@@ -144,7 +176,7 @@ pub async fn run_remote_environment(
 
         match connect_async(response.url.as_str()).await {
             Ok((websocket, _)) => {
-                backoff = Duration::from_secs(1);
+                backoff = config.reconnect_initial_backoff;
                 run_multiplexed_environment(websocket, processor.clone()).await;
             }
             Err(err) => {
@@ -153,8 +185,12 @@ pub async fn run_remote_environment(
         }
 
         sleep(backoff).await;
-        backoff = (backoff * 2).min(Duration::from_secs(30));
+        backoff = next_reconnect_backoff(backoff, config.reconnect_max_backoff);
     }
+}
+
+fn next_reconnect_backoff(backoff: Duration, reconnect_max_backoff: Duration) -> Duration {
+    backoff.saturating_mul(2).min(reconnect_max_backoff)
 }
 
 fn normalize_environment_id(environment_id: String) -> Result<String, ExecServerError> {
@@ -362,5 +398,13 @@ mod tests {
 
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("workspace-123"));
+    }
+
+    #[test]
+    fn next_reconnect_backoff_saturates_before_capping() {
+        assert_eq!(
+            next_reconnect_backoff(Duration::MAX, Duration::MAX),
+            Duration::MAX
+        );
     }
 }

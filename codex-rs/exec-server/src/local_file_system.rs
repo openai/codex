@@ -15,17 +15,24 @@ use crate::ExecutorFileSystem;
 use crate::FileMetadata;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
+use crate::LocalFileSystemConfig;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 use crate::sandboxed_file_system::SandboxedFileSystem;
-
-const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
     LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem::unsandboxed()) });
 
 #[derive(Clone, Default)]
-pub(crate) struct DirectFileSystem;
+pub(crate) struct DirectFileSystem {
+    config: LocalFileSystemConfig,
+}
+
+impl DirectFileSystem {
+    pub(crate) fn new(config: LocalFileSystemConfig) -> Self {
+        Self { config }
+    }
+}
 
 #[derive(Clone, Default)]
 pub(crate) struct UnsandboxedFileSystem {
@@ -47,9 +54,18 @@ impl LocalFileSystem {
     }
 
     pub fn with_runtime_paths(runtime_paths: ExecServerRuntimePaths) -> Self {
+        Self::with_runtime_paths_and_config(runtime_paths, LocalFileSystemConfig::default())
+    }
+
+    pub(crate) fn with_runtime_paths_and_config(
+        runtime_paths: ExecServerRuntimePaths,
+        config: LocalFileSystemConfig,
+    ) -> Self {
         Self {
-            unsandboxed: UnsandboxedFileSystem::default(),
-            sandboxed: Some(SandboxedFileSystem::new(runtime_paths)),
+            unsandboxed: UnsandboxedFileSystem {
+                file_system: DirectFileSystem::new(config.clone()),
+            },
+            sandboxed: Some(SandboxedFileSystem::new(runtime_paths, config)),
         }
     }
 
@@ -308,10 +324,11 @@ impl ExecutorFileSystem for DirectFileSystem {
     ) -> FileSystemResult<Vec<u8>> {
         reject_sandbox_context(sandbox)?;
         let metadata = tokio::fs::metadata(path.as_path()).await?;
-        if metadata.len() > MAX_READ_FILE_BYTES {
+        let max_read_file_bytes = self.config.max_read_file_bytes;
+        if metadata.len() > max_read_file_bytes {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("file is too large to read: limit is {MAX_READ_FILE_BYTES} bytes"),
+                format!("file is too large to read: limit is {max_read_file_bytes} bytes"),
             ));
         }
         tokio::fs::read(path.as_path()).await

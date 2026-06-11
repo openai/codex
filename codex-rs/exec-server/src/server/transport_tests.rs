@@ -17,6 +17,7 @@ use super::DEFAULT_LISTEN_URL;
 use super::ExecServerListenTransport;
 use super::parse_listen_url;
 use super::run_stdio_connection_with_io;
+use crate::ExecServerRuntimeConfig;
 use crate::ExecServerRuntimePaths;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
@@ -61,6 +62,7 @@ async fn stdio_listen_transport_serves_initialize() {
         server_reader,
         server_writer,
         test_runtime_paths(),
+        ExecServerRuntimeConfig::default(),
     ));
     let mut client_lines = BufReader::new(client_reader).lines();
 

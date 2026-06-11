@@ -13,8 +13,10 @@ use crate::ExecutorFileSystem;
 use crate::FileMetadata;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
+use crate::LocalFileSystemConfig;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
+use crate::fs_helper::FsHelperInvocation;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
 use crate::fs_sandbox::FileSystemSandboxRunner;
@@ -30,12 +32,14 @@ use crate::protocol::FsWriteFileParams;
 #[derive(Clone)]
 pub struct SandboxedFileSystem {
     sandbox_runner: FileSystemSandboxRunner,
+    config: LocalFileSystemConfig,
 }
 
 impl SandboxedFileSystem {
-    pub fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
+    pub fn new(runtime_paths: ExecServerRuntimePaths, config: LocalFileSystemConfig) -> Self {
         Self {
             sandbox_runner: FileSystemSandboxRunner::new(runtime_paths),
+            config,
         }
     }
 
@@ -45,7 +49,13 @@ impl SandboxedFileSystem {
         request: FsHelperRequest,
     ) -> FileSystemResult<FsHelperPayload> {
         self.sandbox_runner
-            .run(sandbox, request)
+            .run(
+                sandbox,
+                FsHelperInvocation {
+                    request,
+                    config: self.config.clone(),
+                },
+            )
             .await
             .map_err(map_sandbox_error)
     }

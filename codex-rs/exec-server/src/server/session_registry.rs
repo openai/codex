@@ -7,22 +7,22 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::LocalProcessConfig;
+use crate::SessionRegistryConfig;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::invalid_request;
 use crate::server::process_handler::ProcessHandler;
 
-#[cfg(test)]
-const DETACHED_SESSION_TTL: Duration = Duration::from_millis(200);
-#[cfg(not(test))]
-const DETACHED_SESSION_TTL: Duration = Duration::from_secs(10);
-
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<String, Arc<SessionEntry>>>,
+    session_config: SessionRegistryConfig,
+    process_config: LocalProcessConfig,
 }
 
 struct SessionEntry {
     session_id: String,
     process: ProcessHandler,
+    detached_session_ttl: Duration,
     attachment: StdMutex<AttachmentState>,
 }
 
@@ -49,9 +49,22 @@ pub(crate) struct SessionHandle {
 }
 
 impl SessionRegistry {
+    #[cfg(test)]
     pub(crate) fn new() -> Arc<Self> {
+        Self::new_with_config(
+            SessionRegistryConfig::default(),
+            LocalProcessConfig::default(),
+        )
+    }
+
+    pub(crate) fn new_with_config(
+        session_config: SessionRegistryConfig,
+        process_config: LocalProcessConfig,
+    ) -> Arc<Self> {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
+            session_config,
+            process_config,
         })
     }
 
@@ -94,7 +107,8 @@ impl SessionRegistry {
                 let session_id = Uuid::new_v4().to_string();
                 let entry = Arc::new(SessionEntry::new(
                     session_id.clone(),
-                    ProcessHandler::new(notifications),
+                    ProcessHandler::new(notifications, self.process_config.clone()),
+                    self.session_config.detached_session_ttl,
                     connection_id,
                 ));
                 sessions.insert(session_id, Arc::clone(&entry));
@@ -117,7 +131,15 @@ impl SessionRegistry {
     }
 
     async fn expire_if_detached(&self, session_id: String, connection_id: ConnectionId) {
-        tokio::time::sleep(DETACHED_SESSION_TTL).await;
+        let Some(detached_expires_at) = ({
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(&session_id)
+                .and_then(|entry| entry.detached_expires_at_for(connection_id))
+        }) else {
+            return;
+        };
+        tokio::time::sleep_until(detached_expires_at).await;
 
         let removed = {
             let mut sessions = self.sessions.lock().await;
@@ -140,15 +162,23 @@ impl Default for SessionRegistry {
     fn default() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            session_config: SessionRegistryConfig::default(),
+            process_config: LocalProcessConfig::default(),
         }
     }
 }
 
 impl SessionEntry {
-    fn new(session_id: String, process: ProcessHandler, connection_id: ConnectionId) -> Self {
+    fn new(
+        session_id: String,
+        process: ProcessHandler,
+        detached_session_ttl: Duration,
+        connection_id: ConnectionId,
+    ) -> Self {
         Self {
             session_id,
             process,
+            detached_session_ttl,
             attachment: StdMutex::new(AttachmentState {
                 current_connection_id: Some(connection_id),
                 detached_connection_id: None,
@@ -175,10 +205,15 @@ impl SessionEntry {
         if attachment.current_connection_id != Some(connection_id) {
             return false;
         }
+        let Some(detached_expires_at) =
+            tokio::time::Instant::now().checked_add(self.detached_session_ttl)
+        else {
+            return false;
+        };
 
         attachment.current_connection_id = None;
         attachment.detached_connection_id = Some(connection_id);
-        attachment.detached_expires_at = Some(tokio::time::Instant::now() + DETACHED_SESSION_TTL);
+        attachment.detached_expires_at = Some(detached_expires_at);
         true
     }
 
@@ -220,6 +255,18 @@ impl SessionEntry {
             && attachment
                 .detached_expires_at
                 .is_some_and(|deadline| now >= deadline)
+    }
+
+    fn detached_expires_at_for(&self, connection_id: ConnectionId) -> Option<tokio::time::Instant> {
+        let attachment = self
+            .attachment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if attachment.detached_connection_id == Some(connection_id) {
+            attachment.detached_expires_at
+        } else {
+            None
+        }
     }
 }
 

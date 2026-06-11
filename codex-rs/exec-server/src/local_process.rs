@@ -22,6 +22,7 @@ use crate::ExecProcess;
 use crate::ExecProcessEvent;
 use crate::ExecProcessEventReceiver;
 use crate::ExecServerError;
+use crate::LocalProcessConfig;
 use crate::ProcessId;
 use crate::StartedExecProcess;
 use crate::process::ExecProcessEventLog;
@@ -50,13 +51,8 @@ use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 
-const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
-#[cfg(test)]
-const EXITED_PROCESS_RETENTION: Duration = Duration::from_millis(25);
-#[cfg(not(test))]
-const EXITED_PROCESS_RETENTION: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 struct RetainedOutputChunk {
@@ -88,6 +84,7 @@ enum ProcessEntry {
 struct Inner {
     notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
+    config: LocalProcessConfig,
 }
 
 #[derive(Clone)]
@@ -107,16 +104,20 @@ impl Default for LocalProcess {
         let (outgoing_tx, mut outgoing_rx) =
             mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
         tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        Self::new(RpcNotificationSender::new(outgoing_tx))
+        Self::new(
+            RpcNotificationSender::new(outgoing_tx),
+            LocalProcessConfig::default(),
+        )
     }
 }
 
 impl LocalProcess {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+    pub(crate) fn new(notifications: RpcNotificationSender, config: LocalProcessConfig) -> Self {
         Self {
             inner: Arc::new(Inner {
                 notifications: std::sync::RwLock::new(Some(notifications)),
                 processes: Mutex::new(HashMap::new()),
+                config,
             }),
         }
     }
@@ -211,7 +212,7 @@ impl LocalProcess {
         let (wake_tx, _wake_rx) = watch::channel(0);
         let events = ExecProcessEventLog::new(
             PROCESS_EVENT_CHANNEL_CAPACITY,
-            RETAINED_OUTPUT_BYTES_PER_PROCESS,
+            self.inner.config.retained_output_bytes_per_process,
         );
         {
             let mut process_map = self.inner.processes.lock().await;
@@ -609,7 +610,7 @@ async fn stream_output(
                 stream,
                 chunk: chunk.clone(),
             });
-            while process.retained_bytes > RETAINED_OUTPUT_BYTES_PER_PROCESS {
+            while process.retained_bytes > inner.config.retained_output_bytes_per_process {
                 let Some(evicted) = process.output.pop_front() else {
                     break;
                 };
@@ -724,7 +725,7 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
     let cleanup_process_id = process_id.clone();
     let cleanup_inner = Arc::clone(&inner);
     tokio::spawn(async move {
-        tokio::time::sleep(EXITED_PROCESS_RETENTION).await;
+        tokio::time::sleep(cleanup_inner.config.exited_process_retention).await;
         let mut processes = cleanup_inner.processes.lock().await;
         match processes.entry(cleanup_process_id) {
             Entry::Occupied(entry) => {
@@ -828,7 +829,10 @@ mod tests {
             }
         );
 
-        tokio::time::sleep(EXITED_PROCESS_RETENTION + Duration::from_millis(10)).await;
+        tokio::time::sleep(
+            backend.inner.config.exited_process_retention + Duration::from_millis(10),
+        )
+        .await;
         process
             .stdout_tx
             .send(b"late output after retention\n".to_vec())
@@ -919,7 +923,7 @@ mod tests {
         let (wake_tx, _wake_rx) = watch::channel(0);
         let events = ExecProcessEventLog::new(
             PROCESS_EVENT_CHANNEL_CAPACITY,
-            RETAINED_OUTPUT_BYTES_PER_PROCESS,
+            backend.inner.config.retained_output_bytes_per_process,
         );
 
         let mut processes = backend.inner.processes.lock().await;

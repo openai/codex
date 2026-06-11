@@ -8,6 +8,7 @@ use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
+use crate::LocalFileSystemConfig;
 use crate::RemoveOptions;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_WRITE_FILE_METHOD;
@@ -42,9 +43,12 @@ pub(crate) struct FileSystemHandler {
 }
 
 impl FileSystemHandler {
-    pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
+    pub(crate) fn new(
+        runtime_paths: ExecServerRuntimePaths,
+        config: LocalFileSystemConfig,
+    ) -> Self {
         Self {
-            file_system: LocalFileSystem::with_runtime_paths(runtime_paths),
+            file_system: LocalFileSystem::with_runtime_paths_and_config(runtime_paths, config),
         }
     }
 
@@ -233,7 +237,7 @@ mod tests {
             /*codex_linux_sandbox_exe*/ None,
         )
         .expect("runtime paths");
-        let handler = FileSystemHandler::new(runtime_paths);
+        let handler = FileSystemHandler::new(runtime_paths, LocalFileSystemConfig::default());
         let sandbox_cwd =
             AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute tempdir");
 

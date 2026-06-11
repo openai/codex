@@ -41,6 +41,7 @@ use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 use supports_color::Stream;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -564,11 +565,13 @@ struct ExecServerCommand {
     strict_config: bool,
 
     /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`.
+    /// Falls back to `$CODEX_HOME/exec-server.toml` when omitted.
     #[arg(long = "listen", value_name = "URL", conflicts_with = "remote")]
     listen: Option<String>,
 
     /// Register this exec-server as a remote environment using the given base URL.
-    #[arg(long = "remote", value_name = "URL", requires = "environment_id")]
+    /// Falls back to `$CODEX_HOME/exec-server.toml` when omitted.
+    #[arg(long = "remote", value_name = "URL")]
     remote: Option<String>,
 
     /// Environment id to attach to when registering remotely.
@@ -580,7 +583,7 @@ struct ExecServerCommand {
     name: Option<String>,
 
     /// Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration.
-    #[arg(long = "use-agent-identity-auth", requires = "remote")]
+    #[arg(long = "use-agent-identity-auth")]
     use_agent_identity_auth: bool,
 }
 
@@ -1670,20 +1673,57 @@ async fn run_exec_server_command(
         codex_self_exe,
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
-    if let Some(base_url) = cmd.remote {
-        let environment_id = cmd
-            .environment_id
-            .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
-        let config = load_exec_server_config(root_config_overrides, strict_config).await?;
-        let auth_provider =
-            load_exec_server_remote_auth_provider(&config, &base_url, cmd.use_agent_identity_auth)
-                .await?;
-        let mut remote_config = codex_exec_server::RemoteEnvironmentConfig::new(
-            base_url,
+    let codex_home = find_codex_home()?;
+    let exec_server_config = codex_exec_server::ExecServerConfig::from_codex_home(&codex_home)?;
+    let codex_exec_server::ExecServerConfig {
+        listen: configured_listen,
+        remote: configured_remote,
+        runtime,
+    } = exec_server_config;
+    let ExecServerCommand {
+        strict_config: _strict_config,
+        listen: cli_listen,
+        remote: cli_remote,
+        environment_id,
+        name,
+        use_agent_identity_auth,
+    } = cmd;
+    let cli_selects_local = cli_listen.is_some();
+    let cli_selects_remote = cli_remote.is_some();
+    let configured_selects_remote = configured_remote.is_some();
+    let remote = if cli_selects_local {
+        None
+    } else if cli_selects_remote || configured_selects_remote {
+        Some(resolve_remote_exec_server_config(
+            cli_remote,
             environment_id,
+            name,
+            use_agent_identity_auth,
+            configured_remote,
+        )?)
+    } else {
+        None
+    };
+    validate_exec_server_remote_only_flags(remote.as_ref(), use_agent_identity_auth)?;
+    if let Some(remote) = remote {
+        let config = load_exec_server_config(root_config_overrides, strict_config).await?;
+        let auth_provider = load_exec_server_remote_auth_provider(
+            &config,
+            &remote.url,
+            remote.use_agent_identity_auth,
+        )
+        .await?;
+        let mut remote_config = codex_exec_server::RemoteEnvironmentConfig::new(
+            remote.url,
+            remote.environment_id,
             auth_provider,
-        )?;
-        if let Some(name) = cmd.name {
+        )?
+        .with_reconnect_backoff(
+            remote.reconnect_initial_backoff,
+            remote.reconnect_max_backoff,
+        )?
+        .with_runtime(runtime)?;
+        if let Some(name) = remote.name {
             remote_config.name = name;
         }
         codex_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
@@ -1695,14 +1735,78 @@ async fn run_exec_server_command(
             let _validated_config =
                 load_exec_server_config(root_config_overrides, strict_config).await?;
         }
-        let listen_url = cmd
-            .listen
+        let listen = cli_listen.or(configured_listen);
+        let listen_url = listen
             .as_deref()
             .unwrap_or(codex_exec_server::DEFAULT_LISTEN_URL);
-        codex_exec_server::run_main(listen_url, runtime_paths)
+        codex_exec_server::run_main_with_config(listen_url, runtime_paths, runtime)
             .await
             .map_err(anyhow::Error::from_boxed)
     }
+}
+
+fn validate_exec_server_remote_only_flags(
+    remote: Option<&ResolvedRemoteExecServerConfig>,
+    use_agent_identity_auth_requested: bool,
+) -> anyhow::Result<()> {
+    if remote.is_none() && use_agent_identity_auth_requested {
+        anyhow::bail!("--use-agent-identity-auth requires remote exec-server mode");
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ResolvedRemoteExecServerConfig {
+    url: String,
+    environment_id: String,
+    name: Option<String>,
+    use_agent_identity_auth: bool,
+    reconnect_initial_backoff: Duration,
+    reconnect_max_backoff: Duration,
+}
+
+fn resolve_remote_exec_server_config(
+    url: Option<String>,
+    environment_id: Option<String>,
+    name: Option<String>,
+    use_agent_identity_auth: bool,
+    configured_remote: Option<codex_exec_server::RemoteExecServerConfig>,
+) -> anyhow::Result<ResolvedRemoteExecServerConfig> {
+    let configured_url = configured_remote
+        .as_ref()
+        .and_then(|remote| remote.url.clone());
+    let configured_environment_id = configured_remote
+        .as_ref()
+        .and_then(|remote| remote.environment_id.clone());
+    let configured_name = configured_remote
+        .as_ref()
+        .and_then(|remote| remote.name.clone());
+    let configured_use_agent_identity_auth = configured_remote
+        .as_ref()
+        .is_some_and(|remote| remote.use_agent_identity_auth);
+    let reconnect_initial_backoff = configured_remote
+        .as_ref()
+        .map_or(Duration::from_secs(1), |remote| {
+            remote.reconnect_initial_backoff
+        });
+    let reconnect_max_backoff = configured_remote
+        .as_ref()
+        .map_or(Duration::from_secs(30), |remote| {
+            remote.reconnect_max_backoff
+        });
+    Ok(ResolvedRemoteExecServerConfig {
+        url: url
+            .or(configured_url)
+            .ok_or_else(|| anyhow::anyhow!("remote exec-server URL is required"))?,
+        environment_id: environment_id
+            .or(configured_environment_id)
+            .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?,
+        name: name.or(configured_name),
+        use_agent_identity_auth: use_agent_identity_auth || configured_use_agent_identity_auth,
+        reconnect_initial_backoff,
+        reconnect_max_backoff,
+    })
 }
 
 async fn load_exec_server_remote_auth_provider(
@@ -2465,6 +2569,154 @@ mod tests {
         let auth = CodexAuth::from_api_key("sk-test");
 
         assert!(is_supported_exec_server_remote_auth(&auth));
+    }
+
+    #[test]
+    fn exec_server_cli_remote_values_override_file_values() {
+        let config = resolve_remote_exec_server_config(
+            Some("https://cli.example".to_string()),
+            Some("cli-env".to_string()),
+            Some("cli-name".to_string()),
+            true,
+            Some(codex_exec_server::RemoteExecServerConfig {
+                url: Some("https://file.example".to_string()),
+                environment_id: Some("file-env".to_string()),
+                name: Some("file-name".to_string()),
+                use_agent_identity_auth: false,
+                reconnect_initial_backoff: Duration::from_secs(2),
+                reconnect_max_backoff: Duration::from_secs(8),
+            }),
+        )
+        .expect("remote config");
+
+        assert_eq!(
+            config,
+            ResolvedRemoteExecServerConfig {
+                url: "https://cli.example".to_string(),
+                environment_id: "cli-env".to_string(),
+                name: Some("cli-name".to_string()),
+                use_agent_identity_auth: true,
+                reconnect_initial_backoff: Duration::from_secs(2),
+                reconnect_max_backoff: Duration::from_secs(8),
+            }
+        );
+    }
+
+    #[test]
+    fn exec_server_file_remote_values_fill_missing_cli_values() {
+        let config = resolve_remote_exec_server_config(
+            None,
+            None,
+            None,
+            false,
+            Some(codex_exec_server::RemoteExecServerConfig {
+                url: Some("https://file.example".to_string()),
+                environment_id: Some("file-env".to_string()),
+                name: Some("file-name".to_string()),
+                use_agent_identity_auth: true,
+                reconnect_initial_backoff: Duration::from_secs(2),
+                reconnect_max_backoff: Duration::from_secs(8),
+            }),
+        )
+        .expect("remote config");
+
+        assert_eq!(
+            config,
+            ResolvedRemoteExecServerConfig {
+                url: "https://file.example".to_string(),
+                environment_id: "file-env".to_string(),
+                name: Some("file-name".to_string()),
+                use_agent_identity_auth: true,
+                reconnect_initial_backoff: Duration::from_secs(2),
+                reconnect_max_backoff: Duration::from_secs(8),
+            }
+        );
+    }
+
+    #[test]
+    fn exec_server_cli_remote_url_fills_partial_file_remote() {
+        let config = resolve_remote_exec_server_config(
+            Some("https://cli.example".to_string()),
+            None,
+            None,
+            false,
+            Some(codex_exec_server::RemoteExecServerConfig {
+                url: None,
+                environment_id: Some("file-env".to_string()),
+                name: None,
+                use_agent_identity_auth: false,
+                reconnect_initial_backoff: Duration::from_secs(1),
+                reconnect_max_backoff: Duration::from_secs(30),
+            }),
+        )
+        .expect("remote config");
+
+        assert_eq!(
+            config,
+            ResolvedRemoteExecServerConfig {
+                url: "https://cli.example".to_string(),
+                environment_id: "file-env".to_string(),
+                name: None,
+                use_agent_identity_auth: false,
+                reconnect_initial_backoff: Duration::from_secs(1),
+                reconnect_max_backoff: Duration::from_secs(30),
+            }
+        );
+    }
+
+    #[test]
+    fn exec_server_cli_environment_id_fills_partial_file_remote() {
+        let config = resolve_remote_exec_server_config(
+            None,
+            Some("cli-env".to_string()),
+            None,
+            false,
+            Some(codex_exec_server::RemoteExecServerConfig {
+                url: Some("https://file.example".to_string()),
+                environment_id: None,
+                name: None,
+                use_agent_identity_auth: false,
+                reconnect_initial_backoff: Duration::from_secs(1),
+                reconnect_max_backoff: Duration::from_secs(30),
+            }),
+        )
+        .expect("remote config");
+
+        assert_eq!(
+            config,
+            ResolvedRemoteExecServerConfig {
+                url: "https://file.example".to_string(),
+                environment_id: "cli-env".to_string(),
+                name: None,
+                use_agent_identity_auth: false,
+                reconnect_initial_backoff: Duration::from_secs(1),
+                reconnect_max_backoff: Duration::from_secs(30),
+            }
+        );
+    }
+
+    #[test]
+    fn exec_server_agent_identity_auth_requires_remote_mode() {
+        let err = validate_exec_server_remote_only_flags(None, true).expect_err("missing remote");
+
+        assert_eq!(
+            err.to_string(),
+            "--use-agent-identity-auth requires remote exec-server mode"
+        );
+    }
+
+    #[test]
+    fn exec_server_agent_identity_auth_accepts_file_remote_mode() {
+        let remote = ResolvedRemoteExecServerConfig {
+            url: "https://file.example".to_string(),
+            environment_id: "file-env".to_string(),
+            name: Some("file-name".to_string()),
+            use_agent_identity_auth: true,
+            reconnect_initial_backoff: Duration::from_secs(2),
+            reconnect_max_backoff: Duration::from_secs(8),
+        };
+
+        validate_exec_server_remote_only_flags(Some(&remote), true).expect("file remote");
     }
 
     #[test]

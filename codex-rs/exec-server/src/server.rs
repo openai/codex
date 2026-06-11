@@ -11,11 +11,26 @@ pub(crate) use processor::ConnectionProcessor;
 pub use transport::DEFAULT_LISTEN_URL;
 pub use transport::ExecServerListenUrlParseError;
 
+use crate::ExecServerRuntimeConfig;
 use crate::ExecServerRuntimePaths;
 
 pub async fn run_main(
     listen_url: &str,
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    transport::run_transport(listen_url, runtime_paths).await
+    run_main_with_config(
+        listen_url,
+        runtime_paths,
+        ExecServerRuntimeConfig::default(),
+    )
+    .await
+}
+
+pub async fn run_main_with_config(
+    listen_url: &str,
+    runtime_paths: ExecServerRuntimePaths,
+    config: ExecServerRuntimeConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    config.validate()?;
+    transport::run_transport(listen_url, runtime_paths, config).await
 }

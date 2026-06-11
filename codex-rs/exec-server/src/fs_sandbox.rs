@@ -21,8 +21,8 @@ use tokio::process::Command;
 use crate::ExecServerRuntimePaths;
 use crate::FileSystemSandboxContext;
 use crate::fs_helper::CODEX_FS_HELPER_ARG1;
+use crate::fs_helper::FsHelperInvocation;
 use crate::fs_helper::FsHelperPayload;
-use crate::fs_helper::FsHelperRequest;
 use crate::fs_helper::FsHelperResponse;
 use crate::local_file_system::current_sandbox_cwd;
 use crate::rpc::internal_error;
@@ -56,7 +56,7 @@ impl FileSystemSandboxRunner {
     pub(crate) async fn run(
         &self,
         sandbox: &FileSystemSandboxContext,
-        request: FsHelperRequest,
+        invocation: FsHelperInvocation,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
         let cwd = sandbox_cwd(sandbox)?;
         let mut file_system_policy = sandbox.permissions.file_system_sandbox_policy();
@@ -74,7 +74,7 @@ impl FileSystemSandboxRunner {
             network_policy,
         );
         let command = self.sandbox_exec_request(&permission_profile, &cwd, sandbox)?;
-        let request_json = serde_json::to_vec(&request).map_err(json_error)?;
+        let request_json = serde_json::to_vec(&invocation).map_err(json_error)?;
         run_command(command, request_json).await
     }
 

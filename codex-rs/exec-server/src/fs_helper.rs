@@ -42,6 +42,12 @@ use crate::rpc::not_found;
 pub const CODEX_FS_HELPER_ARG1: &str = "--codex-run-as-fs-helper";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FsHelperInvocation {
+    pub(crate) request: FsHelperRequest,
+    pub(crate) config: crate::LocalFileSystemConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "params")]
 pub(crate) enum FsHelperRequest {
     #[serde(rename = "fs/readFile")]
@@ -184,10 +190,10 @@ fn unexpected_response(expected: &str, actual: &str) -> JSONRPCErrorError {
 }
 
 pub(crate) async fn run_direct_request(
-    request: FsHelperRequest,
+    invocation: FsHelperInvocation,
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
-    let file_system = DirectFileSystem;
-    match request {
+    let file_system = DirectFileSystem::new(invocation.config);
+    match invocation.request {
         FsHelperRequest::ReadFile(params) => {
             let data = file_system
                 .read_file(&params.path, /*sandbox*/ None)
