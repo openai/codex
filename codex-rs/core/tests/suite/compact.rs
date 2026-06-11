@@ -279,9 +279,9 @@ fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo 
     model_info
 }
 
-fn model_info_with_comp_hash(slug: &str, comp_hash: &str) -> ModelInfo {
+fn model_info_with_optional_comp_hash(slug: &str, comp_hash: Option<&str>) -> ModelInfo {
     let mut model_info = model_info_with_context_window(slug, /*context_window*/ 273_000);
-    model_info.comp_hash = Some(comp_hash.to_string());
+    model_info.comp_hash = comp_hash.map(str::to_string);
     model_info
 }
 
@@ -2110,8 +2110,8 @@ async fn pre_sampling_compact_runs_when_comp_hash_changes() {
         &server,
         ModelsResponse {
             models: vec![
-                model_info_with_comp_hash(previous_model, "hash-a"),
-                model_info_with_comp_hash(next_model, "hash-b"),
+                model_info_with_optional_comp_hash(previous_model, Some("hash-a")),
+                model_info_with_optional_comp_hash(next_model, Some("hash-b")),
             ],
         },
     )
@@ -2183,6 +2183,113 @@ async fn pre_sampling_compact_runs_when_comp_hash_changes() {
         previous_model,
         next_model,
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_sampling_compact_skips_when_either_comp_hash_is_missing() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let model_without_hash = "gpt-5.4";
+    let model_with_hash = "gpt-5.3-codex";
+    let next_model_without_hash = "gpt-5.2";
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                model_info_with_optional_comp_hash(model_without_hash, None),
+                model_info_with_optional_comp_hash(model_with_hash, Some("hash-a")),
+                model_info_with_optional_comp_hash(next_model_without_hash, None),
+            ],
+        },
+    )
+    .await;
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before hash"),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "hash introduced"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 100),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "hash removed"),
+                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(model_without_hash)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "before hash",
+            test.cwd.path().to_path_buf(),
+            model_without_hash.to_string(),
+        ))
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "hash introduced",
+            test.cwd.path().to_path_buf(),
+            model_with_hash.to_string(),
+        ))
+        .await
+        .expect("submit second user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "hash removed",
+            test.cwd.path().to_path_buf(),
+            next_model_without_hash.to_string(),
+        ))
+        .await
+        .expect("submit third user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json()["model"].as_str().map(str::to_string))
+            .collect::<Vec<_>>(),
+        vec![
+            Some(model_without_hash.to_string()),
+            Some(model_with_hash.to_string()),
+            Some(next_model_without_hash.to_string()),
+        ]
+    );
+    assert!(requests.iter().all(|request| {
+        !body_contains_text(&request.body_json().to_string(), SUMMARIZATION_PROMPT)
+    }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2412,8 +2519,8 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
         &server,
         ModelsResponse {
             models: vec![
-                model_info_with_comp_hash(previous_model, "hash-a"),
-                model_info_with_comp_hash(next_model, "hash-b"),
+                model_info_with_optional_comp_hash(previous_model, Some("hash-a")),
+                model_info_with_optional_comp_hash(next_model, Some("hash-b")),
             ],
         },
     )

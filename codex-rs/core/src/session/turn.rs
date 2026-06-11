@@ -172,7 +172,7 @@ pub(crate) async fn run_turn(
         .await;
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
         model: turn_context.model_info.slug.clone(),
-        comp_hash: turn_context.model_info.comp_hash.clone(),
+        comp_hash: turn_context.comp_hash.clone(),
         realtime_active: Some(turn_context.realtime_active),
     }))
     .await;
@@ -791,7 +791,11 @@ async fn maybe_run_previous_model_inline_compact(
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(());
     };
-    let comp_hash_changed = previous_turn_settings.comp_hash != turn_context.model_info.comp_hash;
+    let comp_hash_changed = previous_turn_settings
+        .comp_hash
+        .as_deref()
+        .zip(turn_context.comp_hash.as_deref())
+        .is_some_and(|(previous, current)| previous != current);
     let previous_model_turn_context = Arc::new(
         turn_context
             .with_model(previous_turn_settings.model, &sess.services.models_manager)

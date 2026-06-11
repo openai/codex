@@ -7967,6 +7967,18 @@ fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSy
 }
 
 #[tokio::test]
+async fn turn_context_item_uses_turn_context_comp_hash_snapshot() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    turn_context.comp_hash = Some("turn-context-hash".to_string());
+    turn_context.model_info.comp_hash = Some("model-info-hash".to_string());
+
+    assert_eq!(
+        turn_context.to_turn_context_item().comp_hash.as_deref(),
+        Some("turn-context-hash")
+    );
+}
+
+#[tokio::test]
 async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() {
     let (_session, turn_context) = make_session_and_context().await;
 
