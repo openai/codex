@@ -29,8 +29,11 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::RolloutRecorder;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
 use codex_rollout::append_rollout_item_to_path;
@@ -83,9 +86,24 @@ async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
 
 #[tokio::test]
 async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
+    const ROOT_USAGE_HINT: &str = "disabled forks must not receive root multi-agent guidance";
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[features]
+enable_fanout = true
+
+[features.multi_agent_v2]
+enabled = true
+root_agent_usage_hint_text = "{ROOT_USAGE_HINT}"
+"#,
+    ));
+    std::fs::write(config_path, config_toml)?;
 
     let preview = "Saved user message";
     let conversation_id = create_fake_rollout(
@@ -173,6 +191,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
     assert_eq!(thread.status, ThreadStatus::Idle);
+    let fork_thread_id = thread.id.clone();
     let thread_path = thread.path.clone().expect("thread path");
     assert!(thread_path.as_path().is_absolute());
     assert_ne!(thread_path.as_path(), original_path);
@@ -180,6 +199,31 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     assert_eq!(thread.source, SessionSource::VsCode);
     assert_eq!(thread.thread_source, Some(ThreadSource::User));
     assert_eq!(thread.name, None);
+    assert_eq!(
+        read_session_meta_line(&thread_path)
+            .await?
+            .meta
+            .multi_agent_version,
+        Some(MultiAgentVersion::Disabled),
+        "fork should persist the disabled runtime"
+    );
+    let forked_history = RolloutRecorder::get_rollout_history(&thread_path).await?;
+    let forked_items = forked_history.get_rollout_items();
+    let interrupted_index = forked_items
+        .iter()
+        .position(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnAborted(_))))
+        .expect("fork should persist an interrupted-turn boundary");
+    let interrupted_marker = interrupted_index
+        .checked_sub(1)
+        .and_then(|index| forked_items.get(index))
+        .expect("interrupted-turn event should follow its model-visible marker");
+    assert!(
+        matches!(
+            interrupted_marker,
+            RolloutItem::ResponseItem(ResponseItem::Message { role, .. }) if role == "developer"
+        ),
+        "disabled target should preserve the V2 source's developer interruption marker"
+    );
 
     assert_eq!(
         thread.turns.len(),
@@ -251,6 +295,71 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     let mut expected_started_thread = thread;
     expected_started_thread.turns.clear();
     assert_eq!(started.thread, expected_started_thread);
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: fork_thread_id,
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "which tools are available?".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server should record the responses request");
+    let response_request = requests
+        .iter()
+        .find(|request| request.method == "POST" && request.url.path().ends_with("/responses"))
+        .expect("turn should issue a responses request");
+    let body: Value = serde_json::from_slice(&response_request.body)?;
+    assert!(!body.to_string().contains(ROOT_USAGE_HINT));
+    let tool_names = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .expect("responses request should include tools")
+        .iter()
+        .filter_map(|tool| {
+            tool.get("name")
+                .or_else(|| tool.get("type"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    assert!(tool_names.contains(&"update_plan".to_string()));
+    assert_eq!(
+        tool_names
+            .into_iter()
+            .filter(|tool| {
+                matches!(
+                    tool.as_str(),
+                    "spawn_agent"
+                        | "send_message"
+                        | "followup_task"
+                        | "wait_agent"
+                        | "interrupt_agent"
+                        | "list_agents"
+                        | "spawn_agents_on_csv"
+                )
+            })
+            .collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
 
     Ok(())
 }

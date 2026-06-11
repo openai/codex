@@ -199,7 +199,7 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
                 history: source_items.clone(),
                 rollout_path: None,
             }),
-            /*multi_agent_version*/ None,
+            codex_core::MultiAgentRuntimeOverride::Inherit,
             /*thread_source*/ None,
             /*parent_trace*/ None,
         )

@@ -143,9 +143,6 @@ pub struct ThreadStartParams {
     /// Optional client-supplied analytics source classification for this thread.
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,
-    /// When true, disable multi-agent collaboration tools for this thread.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub disable_multi_agent_tools: bool,
     /// Optional sticky environments for this thread.
     ///
     /// Omitted selects the default environment when environment access is

@@ -17,10 +17,6 @@ struct ThreadListFilters {
     use_state_db_only: bool,
 }
 
-fn multi_agent_version_override(disable_multi_agent_tools: bool) -> Option<MultiAgentVersion> {
-    disable_multi_agent_tools.then_some(MultiAgentVersion::Disabled)
-}
-
 fn collect_resume_override_mismatches(
     request: &ThreadResumeParams,
     config_snapshot: &ThreadConfigSnapshot,
@@ -846,7 +842,6 @@ impl ThreadRequestProcessor {
             ephemeral,
             session_start_source,
             thread_source,
-            disable_multi_agent_tools,
             environments,
         } = params;
         if sandbox.is_some() && permissions.is_some() {
@@ -899,7 +894,6 @@ impl ThreadRequestProcessor {
                 selected_capability_roots.unwrap_or_default(),
                 session_start_source,
                 thread_source.map(Into::into),
-                disable_multi_agent_tools,
                 environment_selections,
                 service_name,
                 experimental_raw_events,
@@ -973,7 +967,6 @@ impl ThreadRequestProcessor {
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
-        disable_multi_agent_tools: bool,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
         experimental_raw_events: bool,
@@ -1095,7 +1088,6 @@ impl ThreadRequestProcessor {
                 },
                 session_source: None,
                 thread_source,
-                multi_agent_version: multi_agent_version_override(disable_multi_agent_tools),
                 dynamic_tools: core_dynamic_tools,
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
@@ -3275,7 +3267,11 @@ impl ThreadRequestProcessor {
                     history: history_items.clone(),
                     rollout_path: source_thread.rollout_path.clone(),
                 }),
-                multi_agent_version_override(disable_multi_agent_tools),
+                if disable_multi_agent_tools {
+                    MultiAgentRuntimeOverride::Disabled
+                } else {
+                    MultiAgentRuntimeOverride::Inherit
+                },
                 thread_source.map(Into::into),
                 self.request_trace_context(&request_id).await,
             )

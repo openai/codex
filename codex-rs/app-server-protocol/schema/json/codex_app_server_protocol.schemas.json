@@ -18184,10 +18184,6 @@
               "null"
             ]
           },
-          "disableMultiAgentTools": {
-            "description": "When true, disable multi-agent collaboration tools for this thread.",
-            "type": "boolean"
-          },
           "ephemeral": {
             "type": [
               "boolean",

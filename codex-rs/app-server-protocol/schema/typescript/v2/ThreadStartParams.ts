@@ -16,7 +16,4 @@ export type ThreadStartParams = {model?: string | null, modelProvider?: string |
 approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, sessionStartSource?: ThreadStartSource | null, /**
  * Optional client-supplied analytics source classification for this thread.
  */
-threadSource?: ThreadSource | null, /**
- * When true, disable multi-agent collaboration tools for this thread.
- */
-disableMultiAgentTools?: boolean};
+threadSource?: ThreadSource | null};

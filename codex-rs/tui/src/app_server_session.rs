@@ -127,6 +127,7 @@ use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -135,6 +136,8 @@ use uuid::Uuid;
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
+const DISABLED_FORK_UNSUPPORTED_MESSAGE: &str =
+    "connected app server did not confirm that multi-agent tools were disabled for the fork";
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
@@ -176,6 +179,8 @@ pub(crate) struct AppServerSession {
     thread_settings_update_supported: bool,
     default_model: Option<String>,
     available_models: Vec<ModelPreset>,
+    rejected_fork_thread_ids: HashSet<ThreadId>,
+    disabled_forks_unsupported: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -225,6 +230,8 @@ impl AppServerSession {
             thread_settings_update_supported: true,
             default_model: None,
             available_models: Vec::new(),
+            rejected_fork_thread_ids: HashSet::new(),
+            disabled_forks_unsupported: false,
         }
     }
 
@@ -453,6 +460,10 @@ impl AppServerSession {
         thread_id: ThreadId,
         multi_agent_tools: MultiAgentToolsOverride,
     ) -> Result<AppServerStartedThread> {
+        if multi_agent_tools == MultiAgentToolsOverride::Disabled && self.disabled_forks_unsupported
+        {
+            return Err(color_eyre::eyre::eyre!(DISABLED_FORK_UNSUPPORTED_MESSAGE));
+        }
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadForkResponse = self
@@ -474,12 +485,12 @@ impl AppServerSession {
         if multi_agent_tools == MultiAgentToolsOverride::Disabled
             && !response.multi_agent_tools_disabled
         {
+            self.disabled_forks_unsupported = true;
             if let Ok(thread_id) = ThreadId::from_string(&response.thread.id) {
+                self.quarantine_rejected_fork(thread_id);
                 let _ = self.thread_unsubscribe(thread_id).await;
             }
-            return Err(color_eyre::eyre::eyre!(
-                "connected app server did not confirm that multi-agent tools were disabled for the fork"
-            ));
+            return Err(color_eyre::eyre::eyre!(DISABLED_FORK_UNSUPPORTED_MESSAGE));
         }
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
@@ -488,6 +499,14 @@ impl AppServerSession {
             started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
         started.session.fork_parent_title = fork_parent_title;
         Ok(started)
+    }
+
+    pub(crate) fn quarantine_rejected_fork(&mut self, thread_id: ThreadId) {
+        self.rejected_fork_thread_ids.insert(thread_id);
+    }
+
+    pub(crate) fn is_rejected_fork_thread(&self, thread_id: ThreadId) -> bool {
+        self.rejected_fork_thread_ids.contains(&thread_id)
     }
 
     pub(crate) fn thread_params_mode(&self) -> ThreadParamsMode {

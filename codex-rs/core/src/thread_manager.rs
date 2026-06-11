@@ -154,6 +154,16 @@ impl From<usize> for ForkSnapshot {
     }
 }
 
+/// Controls whether a fork inherits its multi-agent runtime or disables it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MultiAgentRuntimeOverride {
+    /// Resolve the runtime from copied history and configuration.
+    #[default]
+    Inherit,
+    /// Force the fork to run without multi-agent collaboration.
+    Disabled,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ThreadShutdownReport {
     pub completed: Vec<ThreadId>,
@@ -179,7 +189,6 @@ pub struct StartThreadOptions {
     pub initial_history: InitialHistory,
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
-    pub multi_agent_version: Option<MultiAgentVersion>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
@@ -578,7 +587,6 @@ impl ThreadManager {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
-            multi_agent_version: None,
             dynamic_tools,
             metrics_service_name: None,
             parent_trace: None,
@@ -616,7 +624,7 @@ impl ThreadManager {
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
-            options.multi_agent_version,
+            /*multi_agent_version*/ None,
             options.dynamic_tools,
             options.metrics_service_name,
             /*inherited_shell_snapshot*/ None,
@@ -863,7 +871,7 @@ impl ThreadManager {
             snapshot,
             config,
             history,
-            /*multi_agent_version*/ None,
+            MultiAgentRuntimeOverride::Inherit,
             thread_source,
             parent_trace,
         )
@@ -894,7 +902,7 @@ impl ThreadManager {
         snapshot: S,
         config: Config,
         history: InitialHistory,
-        multi_agent_version: Option<MultiAgentVersion>,
+        multi_agent_runtime: MultiAgentRuntimeOverride,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread>
@@ -905,7 +913,7 @@ impl ThreadManager {
             snapshot.into(),
             config,
             history,
-            multi_agent_version,
+            multi_agent_runtime,
             thread_source,
             parent_trace,
         )
@@ -917,7 +925,7 @@ impl ThreadManager {
         snapshot: ForkSnapshot,
         config: Config,
         history: InitialHistory,
-        multi_agent_version: Option<MultiAgentVersion>,
+        multi_agent_runtime: MultiAgentRuntimeOverride,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
@@ -928,22 +936,24 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let multi_agent_version = match multi_agent_version {
-            Some(multi_agent_version) => multi_agent_version,
-            None => {
-                self.state
-                    .effective_multi_agent_version_for_spawn(
-                        &history,
-                        /*session_source*/ None,
-                        /*parent_thread_id*/ None,
-                        forked_from_thread_id,
-                        &config,
-                    )
-                    .await
-            }
+        let source_multi_agent_version = self
+            .state
+            .effective_multi_agent_version_for_spawn(
+                &history,
+                /*session_source*/ None,
+                /*parent_thread_id*/ None,
+                forked_from_thread_id,
+                &config,
+            )
+            .await;
+        let multi_agent_version = match multi_agent_runtime {
+            MultiAgentRuntimeOverride::Disabled => MultiAgentVersion::Disabled,
+            MultiAgentRuntimeOverride::Inherit => source_multi_agent_version,
         };
-        let interrupted_marker =
-            InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
+        let interrupted_marker = InterruptedTurnHistoryMarker::from_config_and_version(
+            &config,
+            source_multi_agent_version,
+        );
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),

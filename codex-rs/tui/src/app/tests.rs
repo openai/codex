@@ -2990,6 +2990,82 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     Ok(())
 }
 
+#[tokio::test]
+async fn rejected_fork_notifications_never_enter_thread_routing() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let primary_thread_id = ThreadId::new();
+    let rejected_thread_id = ThreadId::new();
+    let accepted_thread_id = ThreadId::new();
+    let primary_cwd = test_path_buf("/tmp/main").abs();
+    app.primary_thread_id = Some(primary_thread_id);
+    app.active_thread_id = Some(primary_thread_id);
+    app.primary_session_configured = Some(test_thread_session(
+        primary_thread_id,
+        primary_cwd.to_path_buf(),
+    ));
+    app_server.quarantine_rejected_fork(rejected_thread_id);
+
+    let rejected_thread = Thread {
+        id: rejected_thread_id.to_string(),
+        session_id: rejected_thread_id.to_string(),
+        forked_from_id: Some(primary_thread_id.to_string()),
+        parent_thread_id: None,
+        preview: "rejected fork".to_string(),
+        ephemeral: true,
+        model_provider: "openai".to_string(),
+        created_at: 1,
+        updated_at: 2,
+        status: codex_app_server_protocol::ThreadStatus::Idle,
+        path: None,
+        cwd: test_path_buf("/tmp/rejected").abs(),
+        cli_version: "0.0.0".to_string(),
+        source: codex_app_server_protocol::SessionSource::Unknown,
+        thread_source: None,
+        agent_nickname: None,
+        agent_role: None,
+        git_info: None,
+        name: Some("rejected fork".to_string()),
+        turns: Vec::new(),
+    };
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::ThreadStarted(ThreadStartedNotification {
+                thread: rejected_thread.clone(),
+            }),
+        ),
+    )
+    .await;
+
+    assert!(!app.thread_event_channels.contains_key(&rejected_thread_id));
+    assert!(app.agent_navigation.get(&rejected_thread_id).is_none());
+
+    let accepted_thread = Thread {
+        id: accepted_thread_id.to_string(),
+        session_id: accepted_thread_id.to_string(),
+        preview: "accepted thread".to_string(),
+        name: Some("accepted thread".to_string()),
+        ..rejected_thread
+    };
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::ThreadStarted(ThreadStartedNotification {
+                thread: accepted_thread,
+            }),
+        ),
+    )
+    .await;
+
+    assert!(app.thread_event_channels.contains_key(&accepted_thread_id));
+    assert!(app.agent_navigation.get(&accepted_thread_id).is_some());
+
+    Ok(())
+}
+
 /// `thread/read` is metadata/replay hydration and does not return a fresh
 /// server-authored `PermissionProfile`, so it must not reuse the cached primary
 /// session profile after swapping in the read thread's cwd.
