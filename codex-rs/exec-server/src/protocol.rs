@@ -66,6 +66,24 @@ pub struct InitializeResponse {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InitializeWireParams {
+    #[serde(flatten)]
+    pub params: InitializeParams,
+    #[serde(default)]
+    pub filesystem_path_uris: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InitializeWireResponse {
+    #[serde(flatten)]
+    pub response: InitializeResponse,
+    #[serde(default)]
+    pub filesystem_path_uris: bool,
+}
+
 /// Information about an execution/filesystem environment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

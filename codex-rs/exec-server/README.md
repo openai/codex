@@ -339,8 +339,9 @@ Params:
 ## Filesystem RPCs
 
 Filesystem methods use canonical `file:` URIs and return JSON-RPC errors for
-invalid or unavailable paths. For compatibility, requests also accept native
-absolute path strings and normalize them to `file:` URIs:
+invalid or unavailable paths. Peers negotiate URI support during `initialize`;
+connections to older peers retain native absolute path strings on the wire.
+Requests accept either form and normalize it to a `file:` URI:
 
 - `fs/readFile`
 - `fs/writeFile`

@@ -3,6 +3,7 @@ use std::io;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_utils_path_uri::PathUri;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
@@ -129,10 +130,9 @@ impl FileSystemHandler {
         params: FsJoinParams,
     ) -> Result<FsJoinResponse, JSONRPCErrorError> {
         // TODO(anp): remove and migrate callers to PathUri.
-        let path = params
-            .base_path
-            .join(&params.path.to_string_lossy())
-            .map_err(|err| invalid_request(err.to_string()))?;
+        let base_path = params.base_path.to_abs_path().map_err(map_fs_error)?;
+        let path = base_path.join(params.path);
+        let path = PathUri::from_abs_path(&path).map_err(map_fs_error)?;
         Ok(FsJoinResponse { path })
     }
 
@@ -141,7 +141,14 @@ impl FileSystemHandler {
         params: FsParentParams,
     ) -> Result<FsParentResponse, JSONRPCErrorError> {
         // TODO(anp): remove and migrate callers to PathUri.
-        let path = params.path.parent();
+        let path = params
+            .path
+            .to_abs_path()
+            .map_err(map_fs_error)?
+            .parent()
+            .map(|path| PathUri::from_abs_path(&path))
+            .transpose()
+            .map_err(map_fs_error)?;
         Ok(FsParentResponse { path })
     }
 
@@ -292,7 +299,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn protocol_join_and_parent_use_path_uri_operations() {
+    async fn protocol_join_and_parent_preserve_native_path_operations() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let runtime_paths = ExecServerRuntimePaths::new(
             std::env::current_exe().expect("current exe"),
@@ -300,7 +307,9 @@ mod tests {
         )
         .expect("runtime paths");
         let handler = FileSystemHandler::new(runtime_paths);
-        let base_path = PathUri::from_path(temp_dir.path()).expect("path URI");
+        let native_base =
+            AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute tempdir");
+        let base_path = PathUri::from_abs_path(&native_base).expect("path URI");
 
         let joined = handler
             .join(FsJoinParams {
@@ -311,7 +320,7 @@ mod tests {
             .expect("join path");
         assert_eq!(
             joined.path,
-            base_path.join("nested/file.txt").expect("joined path URI")
+            PathUri::from_abs_path(&native_base.join("nested/file.txt")).expect("joined path URI")
         );
 
         let parent = handler
@@ -320,6 +329,36 @@ mod tests {
             })
             .await
             .expect("parent path");
-        assert_eq!(parent.path, joined.path.parent());
+        assert_eq!(
+            parent.path,
+            native_base
+                .join("nested/file.txt")
+                .parent()
+                .map(|path| PathUri::from_abs_path(&path).expect("parent path URI"))
+        );
+
+        let absolute_path = native_base.join("absolute.txt");
+        let joined = handler
+            .join(FsJoinParams {
+                base_path,
+                path: absolute_path.as_path().to_path_buf(),
+            })
+            .await
+            .expect("join absolute path");
+        assert_eq!(
+            joined.path,
+            PathUri::from_abs_path(&absolute_path).expect("absolute path URI")
+        );
+
+        let native_root = native_base
+            .ancestors()
+            .last()
+            .expect("absolute path should have a root");
+        let root = PathUri::from_abs_path(&native_root).expect("root path URI");
+        let parent = handler
+            .parent(FsParentParams { path: root })
+            .await
+            .expect("root parent");
+        assert_eq!(parent, FsParentResponse { path: None });
     }
 }
