@@ -543,6 +543,9 @@ impl Daemon {
             } else {
                 None
             };
+            if mode == RemoteControlMode::Disabled && info.is_some() {
+                remote_control_client::disable_remote_control(&self.socket_path).await?;
+            }
             return Ok(self.remote_control_output(
                 already_remote_control_status(mode),
                 backend.map(|_| BackendKind::Pid),

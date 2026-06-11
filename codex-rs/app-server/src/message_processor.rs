@@ -948,9 +948,12 @@ impl MessageProcessor {
                 )
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::RemoteControlDisable { .. } => self
+            ClientRequest::RemoteControlDisable { params, .. } => self
                 .remote_control_processor
-                .disable(app_server_client_name.as_deref())
+                .disable(
+                    params.is_some_and(|params| params.ephemeral),
+                    app_server_client_name.as_deref(),
+                )
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlStatusRead { .. } => self

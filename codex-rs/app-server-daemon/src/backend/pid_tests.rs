@@ -174,6 +174,25 @@ fn app_server_remote_control_uses_runtime_flag() {
     );
 }
 
+#[test]
+fn app_server_disabled_remote_control_uses_runtime_flag() {
+    let backend = PidBackend::new(
+        "codex".into(),
+        "app-server.pid".into(),
+        /*remote_control_enabled*/ false,
+    );
+
+    assert_eq!(
+        backend.command_args(),
+        vec![
+            "app-server",
+            "--remote-control=false",
+            "--listen",
+            "unix://"
+        ]
+    );
+}
+
 #[tokio::test]
 async fn read_stderr_log_tail_returns_recent_complete_lines() {
     let temp_dir = TempDir::new().expect("temp dir");

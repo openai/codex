@@ -47,14 +47,19 @@ impl RemoteControlRequestProcessor {
 
     pub(crate) async fn disable(
         &self,
+        ephemeral: bool,
         app_server_client_name: Option<&str>,
     ) -> Result<RemoteControlDisableResponse, JSONRPCErrorError> {
         let handle = self.handle()?;
-        handle
-            .disable(app_server_client_name)
-            .await
-            .map(RemoteControlDisableResponse::from)
-            .map_err(map_update_error)
+        let status = if ephemeral {
+            handle.disable_ephemeral().await
+        } else {
+            handle
+                .disable(app_server_client_name)
+                .await
+                .map_err(map_update_error)?
+        };
+        Ok(RemoteControlDisableResponse::from(status))
     }
 
     pub(crate) fn status_read(&self) -> Result<RemoteControlStatusReadResponse, JSONRPCErrorError> {

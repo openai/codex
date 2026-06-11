@@ -517,9 +517,15 @@ struct AppServerCommand {
     #[arg(long = "stdio", conflicts_with = "listen")]
     stdio: bool,
 
-    /// Enable remote control for this app-server process.
-    #[arg(long = "remote-control", hide = true)]
-    remote_control: bool,
+    /// Enable or disable remote control for this app-server process without changing persistence.
+    #[arg(
+        long = "remote-control",
+        hide = true,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true"
+    )]
+    remote_control: Option<bool>,
 
     /// Controls whether analytics are enabled by default.
     ///
@@ -1084,7 +1090,15 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     };
                     let auth = auth.try_into_settings()?;
                     let runtime_options = codex_app_server::AppServerRuntimeOptions {
-                        remote_control_enabled: remote_control,
+                        remote_control_startup_mode: match remote_control {
+                            Some(true) => {
+                                codex_app_server::RemoteControlStartupMode::EnabledEphemeral
+                            }
+                            Some(false) => {
+                                codex_app_server::RemoteControlStartupMode::DisabledEphemeral
+                            }
+                            None => codex_app_server::RemoteControlStartupMode::ResolvePersisted,
+                        },
                         ..Default::default()
                     };
                     codex_app_server::run_main_with_transport_options(
@@ -3291,11 +3305,21 @@ mod tests {
     fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
-        assert!(!app_server.remote_control);
+        assert_eq!(app_server.remote_control, None);
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
         );
+    }
+
+    #[test]
+    fn app_server_remote_control_startup_flag_supports_explicit_false() {
+        let enabled = app_server_from_args(["codex", "app-server", "--remote-control"].as_ref());
+        assert_eq!(enabled.remote_control, Some(true));
+
+        let disabled =
+            app_server_from_args(["codex", "app-server", "--remote-control=false"].as_ref());
+        assert_eq!(disabled.remote_control, Some(false));
     }
 
     #[test]

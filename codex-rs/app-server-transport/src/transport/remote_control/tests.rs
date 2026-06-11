@@ -202,6 +202,63 @@ async fn plain_start_resolves_persisted_remote_control_preference() {
     }
 }
 
+#[tokio::test]
+async fn explicit_disabled_start_ignores_persisted_enable() {
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let remote_control_target = normalize_remote_control_url(TEST_REMOTE_CONTROL_URL)
+        .expect("remote control target should normalize");
+    let enrollment = RemoteControlEnrollmentRecord {
+        websocket_url: remote_control_target.websocket_url,
+        account_id: "account_id".to_string(),
+        app_server_client_name: None,
+        server_id: "server-id".to_string(),
+        environment_id: "environment-id".to_string(),
+        server_name: "server-name".to_string(),
+        remote_control_enabled: Some(true),
+    };
+    state_db
+        .upsert_remote_control_enrollment(&enrollment)
+        .await
+        .expect("enrollment should persist");
+    let (transport_event_tx, _transport_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url: TEST_REMOTE_CONTROL_URL.to_string(),
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(state_db.clone()),
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        RemoteControlStartupMode::DisabledEphemeral,
+    )
+    .await
+    .expect("remote control should start disabled");
+
+    assert_eq!(
+        *remote_handle.desired_state_tx.borrow(),
+        RemoteControlDesiredState::Disabled
+    );
+    assert_eq!(
+        state_db
+            .get_remote_control_enrollment(
+                &enrollment.websocket_url,
+                &enrollment.account_id,
+                /*app_server_client_name*/ None,
+            )
+            .await
+            .expect("enrollment should load"),
+        Some(enrollment)
+    );
+
+    shutdown_token.cancel();
+    remote_task.await.expect("remote control task should join");
+}
+
 fn remote_control_url_for_listener(listener: &TcpListener) -> String {
     let addr = listener
         .local_addr()
@@ -376,7 +433,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");
@@ -669,7 +726,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");
@@ -770,7 +827,7 @@ async fn remote_control_transport_refreshes_server_token_after_websocket_unautho
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");
@@ -850,7 +907,7 @@ async fn remote_control_start_allows_remote_control_invalid_url_when_disabled() 
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ false,
+        RemoteControlStartupMode::ResolvePersisted,
     )
     .await
     .expect("disabled remote control should not validate the URL at startup");
@@ -889,7 +946,7 @@ async fn remote_control_start_allows_missing_auth_when_enabled() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start before ChatGPT auth is available");
@@ -924,7 +981,7 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start disabled without sqlite state db");
@@ -983,7 +1040,7 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");
@@ -1102,7 +1159,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");
@@ -1284,7 +1341,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");
@@ -1532,7 +1589,7 @@ async fn remote_control_http_mode_refreshes_persisted_enrollment_before_connecti
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");
@@ -1640,7 +1697,7 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
         transport_event_tx,
         shutdown_token.clone(),
         Some(app_server_client_name_rx),
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");
@@ -1721,7 +1778,7 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start before account id is available");
@@ -1818,7 +1875,7 @@ async fn remote_control_http_mode_reenrolls_when_refresh_reports_stale_enrollmen
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");
@@ -1938,7 +1995,7 @@ async fn remote_control_http_mode_reenrolls_after_explicit_missing_server_404() 
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");
@@ -2072,7 +2129,7 @@ async fn remote_control_http_mode_preserves_enrollment_after_generic_websocket_4
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartupMode::EnabledEphemeral,
     )
     .await
     .expect("remote control should start");

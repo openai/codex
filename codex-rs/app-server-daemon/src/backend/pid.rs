@@ -402,7 +402,12 @@ impl PidBackend {
             } => vec!["app-server", "--remote-control", "--listen", "unix://"],
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
-            } => vec!["app-server", "--listen", "unix://"],
+            } => vec![
+                "app-server",
+                "--remote-control=false",
+                "--listen",
+                "unix://",
+            ],
             PidCommandKind::UpdateLoop => vec!["app-server", "daemon", "pid-update-loop"],
         }
     }

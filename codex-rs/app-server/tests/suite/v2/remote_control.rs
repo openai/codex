@@ -189,6 +189,13 @@ async fn rpc_updates_durable_preference_but_ephemeral_does_not() -> Result<()> {
         Some(true)
     );
 
+    let request_id = mcp.send_remote_control_ephemeral_disable_request().await?;
+    wait_for_response(&mut mcp, request_id).await?;
+    assert_eq!(
+        remote_control_preference(&state_db, &websocket_url).await?,
+        Some(true)
+    );
+
     let request_id = mcp.send_remote_control_disable_request().await?;
     wait_for_response(&mut mcp, request_id).await?;
     assert_eq!(

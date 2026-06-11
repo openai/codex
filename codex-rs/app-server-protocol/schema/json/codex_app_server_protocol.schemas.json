@@ -13991,6 +13991,14 @@
         ],
         "type": "string"
       },
+      "RemoteControlDisableParams": {
+        "properties": {
+          "ephemeral": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "RemoteControlEnableParams": {
         "properties": {
           "ephemeral": {

@@ -650,6 +650,15 @@ impl TestAppServer {
             .await
     }
 
+    /// Send a runtime-only `remoteControl/disable` JSON-RPC request.
+    pub async fn send_remote_control_ephemeral_disable_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request(
+            "remoteControl/disable",
+            Some(serde_json::json!({ "ephemeral": true })),
+        )
+        .await
+    }
+
     /// Send a `remoteControl/status/read` JSON-RPC request.
     pub async fn send_remote_control_status_read_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("remoteControl/status/read", /*params*/ None)

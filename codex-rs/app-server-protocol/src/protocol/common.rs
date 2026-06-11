@@ -848,7 +848,7 @@ client_request_definitions! {
     },
     #[experimental("remoteControl/disable")]
     RemoteControlDisable => "remoteControl/disable" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[serde(skip_serializing_if = "Option::is_none")] v2::NullableRemoteControlDisableParams,
         serialization: global("remote-control"),
         response: v2::RemoteControlDisableResponse,
     },

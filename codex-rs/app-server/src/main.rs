@@ -53,9 +53,15 @@ struct AppServerArgs {
     #[arg(long = "disable-plugin-startup-tasks-for-tests", hide = true)]
     disable_plugin_startup_tasks_for_tests: bool,
 
-    /// Enable remote control for this app-server process.
-    #[arg(long = "remote-control", hide = true)]
-    remote_control: bool,
+    /// Enable or disable remote control for this app-server process without changing persistence.
+    #[arg(
+        long = "remote-control",
+        hide = true,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true"
+    )]
+    remote_control: Option<bool>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -84,7 +90,11 @@ fn main() -> anyhow::Result<()> {
         if disable_plugin_startup_tasks_for_tests {
             runtime_options.plugin_startup_tasks = PluginStartupTasks::Skip;
         }
-        runtime_options.remote_control_enabled = remote_control;
+        runtime_options.remote_control_startup_mode = match remote_control {
+            Some(true) => codex_app_server::RemoteControlStartupMode::EnabledEphemeral,
+            Some(false) => codex_app_server::RemoteControlStartupMode::DisabledEphemeral,
+            None => codex_app_server::RemoteControlStartupMode::ResolvePersisted,
+        };
 
         run_main_with_transport_options(
             arg0_paths,

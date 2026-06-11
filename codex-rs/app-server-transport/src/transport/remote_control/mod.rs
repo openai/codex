@@ -66,6 +66,13 @@ pub struct RemoteControlStartConfig {
     pub installation_id: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteControlStartupMode {
+    ResolvePersisted,
+    DisabledEphemeral,
+    EnabledEphemeral,
+}
+
 pub(super) struct QueuedServerEnvelope {
     pub(super) event: ServerEvent,
     pub(super) client_id: ClientId,
@@ -241,6 +248,20 @@ impl RemoteControlHandle {
             /*remote_control_enabled*/ false,
         )
         .await?;
+        Ok(self.transition_disabled())
+    }
+
+    pub async fn disable_ephemeral(&self) -> RemoteControlStatusChangedNotification {
+        let _transition = self
+            .desired_state_rpc_lock
+            .acquire()
+            .await
+            .unwrap_or_else(|_| unreachable!());
+        let _persistence = acquire_persistence_lock(&self.desired_state_persistence_lock).await;
+        self.transition_disabled()
+    }
+
+    fn transition_disabled(&self) -> RemoteControlStatusChangedNotification {
         let desired_state_changed = self.desired_state_tx.send_if_modified(|state| {
             let changed = *state != RemoteControlDesiredState::Disabled;
             *state = RemoteControlDesiredState::Disabled;
@@ -255,7 +276,7 @@ impl RemoteControlHandle {
             server_name = %status.server_name,
             "remote control disable requested"
         );
-        Ok(self.publish_status(RemoteControlConnectionStatus::Disabled))
+        self.publish_status(RemoteControlConnectionStatus::Disabled)
     }
 
     async fn persist_preference(
@@ -872,18 +893,20 @@ pub async fn start_remote_control(
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
     app_server_client_name_rx: Option<oneshot::Receiver<String>>,
-    initial_enabled: bool,
+    startup_mode: RemoteControlStartupMode,
 ) -> io::Result<(JoinHandle<()>, RemoteControlHandle)> {
     let state_db_available = state_db.is_some();
-    let requested_initial_enabled = initial_enabled;
+    let requested_initial_enabled = startup_mode == RemoteControlStartupMode::EnabledEphemeral;
     let desired_state = if !state_db_available {
         RemoteControlDesiredState::Disabled
-    } else if initial_enabled {
-        RemoteControlDesiredState::Enabled {
-            persistence_preference: None,
-        }
     } else {
-        RemoteControlDesiredState::Unknown
+        match startup_mode {
+            RemoteControlStartupMode::ResolvePersisted => RemoteControlDesiredState::Unknown,
+            RemoteControlStartupMode::DisabledEphemeral => RemoteControlDesiredState::Disabled,
+            RemoteControlStartupMode::EnabledEphemeral => RemoteControlDesiredState::Enabled {
+                persistence_preference: None,
+            },
+        }
     };
     let initial_enabled = desired_state.is_enabled();
     if requested_initial_enabled && !state_db_available {

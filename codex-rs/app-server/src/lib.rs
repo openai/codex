@@ -106,6 +106,7 @@ mod transport;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;
+pub use crate::transport::RemoteControlStartupMode;
 pub use crate::transport::app_server_control_socket_path;
 pub use crate::transport::auth::AppServerWebsocketAuthArgs;
 pub use crate::transport::auth::AppServerWebsocketAuthSettings;
@@ -404,7 +405,7 @@ pub enum PluginStartupTasks {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
-    pub remote_control_enabled: bool,
+    pub remote_control_startup_mode: RemoteControlStartupMode,
     pub install_shutdown_signal_handler: bool,
 }
 
@@ -412,7 +413,7 @@ impl Default for AppServerRuntimeOptions {
     fn default() -> Self {
         Self {
             plugin_startup_tasks: PluginStartupTasks::Start,
-            remote_control_enabled: false,
+            remote_control_startup_mode: RemoteControlStartupMode::ResolvePersisted,
             install_shutdown_signal_handler: true,
         }
     }
@@ -704,7 +705,9 @@ pub async fn run_main_with_transport_options(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    let remote_control_requested = runtime_options.remote_control_enabled;
+    let remote_control_startup_mode = runtime_options.remote_control_startup_mode;
+    let remote_control_requested =
+        remote_control_startup_mode == RemoteControlStartupMode::EnabledEphemeral;
     let remote_control_enabled = remote_control_requested && state_db.is_some();
     if remote_control_requested && state_db.is_none() {
         error!("remote control disabled because sqlite state db is unavailable");
@@ -730,7 +733,7 @@ pub async fn run_main_with_transport_options(
         transport_event_tx.clone(),
         transport_shutdown_token.clone(),
         app_server_client_name_rx,
-        remote_control_enabled,
+        remote_control_startup_mode,
     )
     .await?;
     transport_accept_handles.push(remote_control_accept_handle);
