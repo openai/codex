@@ -66,7 +66,6 @@ use rmcp::model::RequestId;
 use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
 use serde_json::Value as JsonValue;
-use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -114,7 +113,6 @@ pub struct McpConnectionManager {
     prefix_mcp_tool_names: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
-    codex_apps_tools_refresh_lock: Mutex<()>,
 }
 
 impl McpConnectionManager {
@@ -258,7 +256,6 @@ impl McpConnectionManager {
             prefix_mcp_tool_names,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: startup_cancellation_token.clone(),
-            codex_apps_tools_refresh_lock: Mutex::new(()),
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
@@ -349,7 +346,6 @@ impl McpConnectionManager {
                 /*reviewer*/ None,
             ),
             startup_cancellation_token: CancellationToken::new(),
-            codex_apps_tools_refresh_lock: Mutex::new(()),
         }
     }
 
@@ -496,31 +492,12 @@ impl McpConnectionManager {
         normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
     }
 
-    /// Returns current metadata for a tool that is about to be invoked.
-    ///
-    /// Unlike [`Self::list_all_tools`], this waits for the selected server to finish starting so
-    /// invocation metadata cannot come from an older startup snapshot. The initialized client's
-    /// in-memory tool snapshot also receives hard-refresh updates after auth or install.
-    pub async fn tool_info_for_invocation(
-        &self,
-        server_name: &str,
-        tool_name: &str,
-    ) -> Option<ToolInfo> {
-        let managed_client = self.clients.get(server_name)?.client().await.ok()?;
-        managed_client
-            .listed_tools()
-            .await
-            .into_iter()
-            .find(|tool| tool.tool.name == tool_name)
-    }
-
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
     /// On success, the refreshed tools replace the cache contents and the
     /// latest filtered tools are returned directly to the caller. On
     /// failure, the existing cache remains unchanged.
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
-        let _refresh_guard = self.codex_apps_tools_refresh_lock.lock().await;
         let managed_client = self
             .clients
             .get(CODEX_APPS_MCP_SERVER_NAME)
@@ -558,12 +535,12 @@ impl McpConnectionManager {
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-        let tools = filter_tools(tools, &managed_client.tool_filter);
-        *managed_client.tools.write().await = tools.clone();
-        let tools = tools.into_iter().map(|mut tool| {
-            tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-            self.with_server_metadata(tool)
-        });
+        let tools = filter_tools(tools, &managed_client.tool_filter)
+            .into_iter()
+            .map(|mut tool| {
+                tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+                self.with_server_metadata(tool)
+            });
         Ok(normalize_tools_for_model_with_prefix(
             tools,
             self.prefix_mcp_tool_names,

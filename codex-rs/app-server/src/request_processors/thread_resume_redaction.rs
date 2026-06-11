@@ -124,7 +124,7 @@ mod tests {
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
                 connector_id: Some("calendar".to_string()),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
-                link_id: Some("link_calendar".to_string()),
+                link_id: Some("link_calendar".to_string(),),
                 plugin_id: Some("sample@test".to_string()),
                 result: Some(Box::new(redacted_mcp_tool_call_result())),
                 error: None,

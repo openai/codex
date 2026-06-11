@@ -17,6 +17,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::codex_apps::CachedCodexAppsToolsLoad;
 use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::load_cached_codex_apps_tools;
 use crate::codex_apps::load_startup_cached_codex_apps_server_info;
@@ -64,7 +65,6 @@ use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonObject;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -91,7 +91,7 @@ const UNTRUSTED_CONNECTOR_META_KEYS: &[&str] = &[
 pub(crate) struct ManagedClient {
     pub(crate) client: Arc<RmcpClient>,
     pub(crate) server_info: McpServerInfo,
-    pub(crate) tools: Arc<RwLock<Vec<ToolInfo>>>,
+    pub(crate) tools: Vec<ToolInfo>,
     pub(crate) tool_filter: ToolFilter,
     pub(crate) tool_timeout: Option<Duration>,
     pub(crate) server_instructions: Option<String>,
@@ -100,8 +100,29 @@ pub(crate) struct ManagedClient {
 }
 
 impl ManagedClient {
-    pub(crate) async fn listed_tools(&self) -> Vec<ToolInfo> {
-        self.tools.read().await.clone()
+    fn listed_tools(&self) -> Vec<ToolInfo> {
+        let total_start = Instant::now();
+        if let Some(cache_context) = self.codex_apps_tools_cache_context.as_ref()
+            && let CachedCodexAppsToolsLoad::Hit(tools) =
+                load_cached_codex_apps_tools(cache_context)
+        {
+            emit_duration(
+                MCP_TOOLS_LIST_DURATION_METRIC,
+                total_start.elapsed(),
+                &[("cache", "hit")],
+            );
+            return filter_tools(tools, &self.tool_filter);
+        }
+
+        if self.codex_apps_tools_cache_context.is_some() {
+            emit_duration(
+                MCP_TOOLS_LIST_DURATION_METRIC,
+                total_start.elapsed(),
+                &[("cache", "miss")],
+            );
+        }
+
+        self.tools.clone()
     }
 }
 
@@ -299,7 +320,7 @@ impl AsyncManagedClient {
             Some(startup_tools)
         } else {
             match self.client().await {
-                Ok(client) => Some(client.listed_tools().await),
+                Ok(client) => Some(client.listed_tools()),
                 Err(_) => self.cached_tool_info_snapshot.clone(),
             }
         };
@@ -517,7 +538,7 @@ async fn start_server_task(
     let managed = ManagedClient {
         client: Arc::clone(&client),
         server_info,
-        tools: Arc::new(RwLock::new(tools)),
+        tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
         server_instructions: initialize_result.instructions,

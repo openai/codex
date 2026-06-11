@@ -77,7 +77,6 @@ fn approval_metadata(
 ) -> McpToolApprovalMetadata {
     McpToolApprovalMetadata {
         annotations: None,
-        trusted_codex_apps_identity: false,
         connector_id: connector_id.map(str::to_string),
         link_id: None,
         connector_name: connector_name.map(str::to_string),
@@ -1153,37 +1152,40 @@ async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
 
 #[test]
 fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
-    let connector_id = "asdk_app_0123456789abcdef0123456789abcdef";
-    let link_id = "link_fedcba9876543210fedcba9876543210";
-    let resource_uri = "ui://widget/calendar-create-event.html";
     let mut metadata = approval_metadata(
-        Some(connector_id),
-        /*connector_name*/ None,
+        Some("asdk_app_0123456789abcdef0123456789abcdef"),
+        Some("Calendar"),
         /*connector_description*/ None,
-        /*tool_title*/ None,
+        Some("Create event"),
         /*tool_description*/ None,
     );
-    metadata.link_id = Some(link_id.to_string());
-    metadata.mcp_app_resource_uri = Some(resource_uri.to_string());
+    metadata.link_id = Some("link_fedcba9876543210fedcba9876543210".to_string());
+    metadata.mcp_app_resource_uri = Some("ui://widget/calendar-create-event.html".to_string());
+    metadata.codex_apps_meta = Some(
+        serde_json::json!({
+            "resource_uri": "connector://calendar/tools/calendar_create_event",
+        })
+        .as_object()
+        .cloned()
+        .expect("_codex_apps metadata should be an object"),
+    );
     metadata.plugin_id = Some("sample@test".to_string());
-    metadata.trusted_codex_apps_identity = true;
 
     assert_eq!(
-        McpToolCallItemMetadata::from_tool_metadata(Some(&metadata)),
+        McpToolCallItemMetadata::from_tool_metadata(CODEX_APPS_MCP_SERVER_NAME, Some(&metadata),),
         McpToolCallItemMetadata {
-            connector_id: Some(connector_id.to_string()),
-            link_id: Some(link_id.to_string()),
-            mcp_app_resource_uri: Some(resource_uri.to_string()),
+            connector_id: Some("asdk_app_0123456789abcdef0123456789abcdef".to_string()),
+            link_id: Some("link_fedcba9876543210fedcba9876543210".to_string()),
+            mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".to_string()),
             plugin_id: Some("sample@test".to_string()),
         }
     );
-    metadata.trusted_codex_apps_identity = false;
     assert_eq!(
-        McpToolCallItemMetadata::from_tool_metadata(Some(&metadata)),
+        McpToolCallItemMetadata::from_tool_metadata("custom_server", Some(&metadata)),
         McpToolCallItemMetadata {
             connector_id: None,
             link_id: None,
-            mcp_app_resource_uri: Some(resource_uri.to_string()),
+            mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".to_string()),
             plugin_id: Some("sample@test".to_string()),
         }
     );
@@ -1290,7 +1292,6 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
         .expect("turn metadata");
     let metadata = McpToolApprovalMetadata {
         annotations: None,
-        trusted_codex_apps_identity: false,
         connector_id: Some("calendar".to_string()),
         link_id: None,
         connector_name: Some("Calendar".to_string()),
@@ -1760,7 +1761,6 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
     };
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
-        trusted_codex_apps_identity: false,
         connector_id: None,
         link_id: None,
         connector_name: None,
@@ -2427,7 +2427,6 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
             /*destructive*/ None,
             /*open_world*/ None,
         )),
-        trusted_codex_apps_identity: false,
         connector_id: None,
         link_id: None,
         connector_name: None,
@@ -2503,7 +2502,6 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
             /*destructive*/ None,
             /*open_world*/ None,
         )),
-        trusted_codex_apps_identity: false,
         connector_id: None,
         link_id: None,
         connector_name: None,
@@ -2562,7 +2560,6 @@ async fn permission_request_hook_allows_mcp_tool_call() {
             Some(true),
             /*open_world*/ None,
         )),
-        trusted_codex_apps_identity: false,
         connector_id: None,
         link_id: None,
         connector_name: None,
@@ -2700,7 +2697,6 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
             Some(true),
             /*open_world*/ None,
         )),
-        trusted_codex_apps_identity: false,
         connector_id: None,
         link_id: None,
         connector_name: None,
@@ -2789,7 +2785,6 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     };
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
-        trusted_codex_apps_identity: false,
         connector_id: None,
         link_id: None,
         connector_name: None,
@@ -2845,7 +2840,6 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
             /*destructive*/ None,
             /*open_world*/ None,
         )),
-        trusted_codex_apps_identity: false,
         connector_id: None,
         link_id: None,
         connector_name: None,
@@ -2902,7 +2896,6 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
     };
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
-        trusted_codex_apps_identity: false,
         connector_id: Some("calendar".to_string()),
         link_id: None,
         connector_name: Some("Calendar".to_string()),
@@ -2957,7 +2950,6 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
     };
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
-        trusted_codex_apps_identity: false,
         connector_id: Some("calendar".to_string()),
         link_id: None,
         connector_name: Some("Calendar".to_string()),

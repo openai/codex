@@ -557,7 +557,7 @@ impl McpToolCallItem {
         })
     }
 
-    pub fn as_legacy_end_event(&self, turn_id: String) -> Option<EventMsg> {
+    pub fn as_legacy_end_event(&self) -> Option<EventMsg> {
         let result = match (&self.result, &self.error) {
             (Some(result), _) => Ok(result.clone()),
             (None, Some(error)) => Err(error.message.clone()),
@@ -566,7 +566,6 @@ impl McpToolCallItem {
 
         Some(EventMsg::McpToolCallEnd(McpToolCallEndEvent {
             call_id: self.id.clone(),
-            turn_id,
             invocation: McpInvocation {
                 server: self.server.clone(),
                 tool: self.tool.clone(),
@@ -619,10 +618,7 @@ impl TurnItem {
                 .as_legacy_end_event(String::new())
                 .into_iter()
                 .collect(),
-            TurnItem::McpToolCall(item) => item
-                .as_legacy_end_event(String::new())
-                .into_iter()
-                .collect(),
+            TurnItem::McpToolCall(item) => item.as_legacy_end_event().into_iter().collect(),
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
         }
