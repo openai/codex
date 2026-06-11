@@ -51,6 +51,8 @@ mod compact_resume_fork;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;
+#[cfg(not(target_os = "windows"))]
+mod extension_sandbox;
 mod fork_thread;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;

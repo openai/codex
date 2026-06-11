@@ -5,18 +5,21 @@ use codex_protocol::items::TurnItem;
 use codex_tools::ConversationHistory;
 use codex_tools::ExtensionTurnItem;
 use codex_tools::ToolCall as ExtensionToolCall;
+use codex_tools::ToolEnvironment;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use codex_tools::TurnItemEmissionFuture;
 use codex_tools::TurnItemEmitter;
 
+use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_turn_item;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 
@@ -109,6 +112,26 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
     let conversation_history =
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
+    let mut environments = Vec::with_capacity(invocation.turn.environments.turn_environments.len());
+    for environment in &invocation.turn.environments.turn_environments {
+        let additional_permissions = apply_granted_turn_permissions(
+            invocation.session.as_ref(),
+            &environment.environment_id,
+            environment.cwd.as_path(),
+            SandboxPermissions::UseDefault,
+            /*additional_permissions*/ None,
+        )
+        .await
+        .additional_permissions;
+        environments.push(ToolEnvironment {
+            environment_id: environment.environment_id.clone(),
+            cwd: environment.cwd.clone(),
+            file_system: environment.environment.get_filesystem(),
+            file_system_sandbox_context: invocation
+                .turn
+                .file_system_sandbox_context(additional_permissions, &environment.cwd),
+        });
+    }
     ExtensionToolCall {
         turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
@@ -120,6 +143,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
             session: Arc::downgrade(&invocation.session),
             turn: Arc::downgrade(&invocation.turn),
         }),
+        environments,
         payload: invocation.payload.clone(),
     }
 }

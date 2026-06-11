@@ -34,6 +34,7 @@ const TINY_PNG_BYTES: &[u8] = &[
     0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0, 1,
     122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
+const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
 
 #[derive(Clone, Copy)]
 enum ImagegenTestMode {
@@ -170,11 +171,7 @@ async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()>
     })
     .await?;
     assert_eq!(edit_request["prompt"], "add a red hat");
-    assert!(
-        edit_request["images"][0]["image_url"]
-            .as_str()
-            .is_some_and(|image_url| image_url.starts_with("data:image/png;base64,"))
-    );
+    assert_eq!(edit_request["images"][0]["image_url"], TINY_PNG_DATA_URL);
 
     Ok(())
 }
