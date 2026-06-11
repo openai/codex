@@ -85,19 +85,9 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
         ChatGptAuthFixture::new("access-chatgpt"),
         AuthCredentialsStoreMode::File,
     )?;
-    let code_mode_host = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?;
-    let code_mode_host = code_mode_host
-        .to_str()
-        .context("code-mode host path is not valid UTF-8")?;
 
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
-            ("OPENAI_API_KEY", None),
-            ("CODEX_CODE_MODE_HOST_PATH", Some(code_mode_host)),
-        ],
-    )
-    .await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_image_generation_turn(&mut mcp).await?;
 
@@ -303,9 +293,19 @@ generatedImage(result);
         ChatGptAuthFixture::new("access-chatgpt"),
         AuthCredentialsStoreMode::File,
     )?;
+    let code_mode_host = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?;
+    let code_mode_host = code_mode_host
+        .to_str()
+        .context("code-mode host path is not valid UTF-8")?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            ("CODEX_CODE_MODE_HOST_PATH", Some(code_mode_host)),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_image_generation_turn(&mut mcp).await?;
     timeout(
