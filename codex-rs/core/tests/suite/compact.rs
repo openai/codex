@@ -2639,6 +2639,135 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_sampling_compact_skips_missing_comp_hash_after_resume() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let previous_model = "gpt-5.3-codex";
+    let next_model = "gpt-5.2";
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                model_info_with_optional_comp_hash(previous_model, None),
+                model_info_with_optional_comp_hash(next_model, Some("hash-b")),
+            ],
+        },
+    )
+    .await;
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before resume"),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "after resume"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut initial_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        });
+    let initial = initial_builder
+        .build(&server)
+        .await
+        .expect("build initial test codex");
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    initial
+        .codex
+        .submit(disabled_permission_user_turn(
+            "before resume",
+            initial.cwd.path().to_path_buf(),
+            previous_model.to_string(),
+        ))
+        .await
+        .expect("submit pre-resume turn");
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    initial
+        .codex
+        .submit(Op::Shutdown)
+        .await
+        .expect("shutdown initial session");
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let rollout = fs::read_to_string(&rollout_path).expect("read rollout");
+    let persisted_turn_context = rollout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|line| line["type"] == "turn_context")
+        .expect("persisted turn context");
+    assert!(persisted_turn_context["payload"].get("comp_hash").is_none());
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut resumed_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        });
+    let resumed = resumed_builder
+        .resume(&server, home, rollout_path)
+        .await
+        .expect("resume codex");
+
+    resumed
+        .codex
+        .submit(disabled_permission_user_turn(
+            "after resume",
+            resumed.cwd.path().to_path_buf(),
+            next_model.to_string(),
+        ))
+        .await
+        .expect("submit resumed user turn");
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json()["model"].as_str().map(str::to_string))
+            .collect::<Vec<_>>(),
+        vec![
+            Some(previous_model.to_string()),
+            Some(next_model.to_string()),
+        ]
+    );
+    assert!(requests.iter().all(|request| {
+        !body_contains_text(&request.body_json().to_string(), SUMMARIZATION_PROMPT)
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_persists_rollout_entries() {
     skip_if_no_network!();
 
