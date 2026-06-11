@@ -395,12 +395,10 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> std::result::Result<(), String> {
-        let interrupt_result =
-            if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
-                app_server.turn_interrupt(thread_id, turn_id).await
-            } else {
-                app_server.startup_interrupt(thread_id).await
-            };
+        let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await else {
+            return Ok(());
+        };
+        let interrupt_result = app_server.turn_interrupt(thread_id, turn_id).await;
         interrupt_result.map_err(|err| {
             format!("Failed to close side conversation {thread_id}; it is still open: {err}")
         })

@@ -871,7 +871,8 @@
           "type": "string"
         },
         "sessionId": {
-          "description": "Session id shared by threads that belong to the same session tree.",
+          "default": "",
+          "description": "Session id shared by threads that belong to the same session tree.\n\nOlder app-server implementations omitted this field. Treat the missing value as an empty session id so newer clients can still attach; callers that need a stable identifier can fall back to `id`.",
           "type": "string"
         },
         "source": {
@@ -922,7 +923,6 @@
         "id",
         "modelProvider",
         "preview",
-        "sessionId",
         "source",
         "status",
         "turns",

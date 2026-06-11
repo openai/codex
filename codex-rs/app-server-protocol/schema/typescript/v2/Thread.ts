@@ -11,6 +11,10 @@ import type { Turn } from "./Turn";
 export type Thread = { id: string,
 /**
  * Session id shared by threads that belong to the same session tree.
+ *
+ * Older app-server implementations omitted this field. Treat the missing
+ * value as an empty session id so newer clients can still attach; callers
+ * that need a stable identifier can fall back to `id`.
  */
 sessionId: string,
 /**

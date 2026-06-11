@@ -133,6 +133,9 @@ impl AgentStatusThreadPreview {
 }
 
 fn activity_summary(item: &ThreadItem) -> Option<String> {
+    if !crate::thread_item_visibility::is_user_visible_thread_item(item) {
+        return None;
+    }
     let summary = match item {
         ThreadItem::AgentMessage { text, .. } | ThreadItem::Plan { text, .. } => text,
         ThreadItem::Reasoning { summary, .. } => summary.last()?,

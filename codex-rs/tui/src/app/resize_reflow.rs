@@ -232,6 +232,12 @@ impl App {
         }
     }
 
+    pub(super) fn discard_superseded_initial_history_replay_lines(&mut self) {
+        if let Some(buffer) = &mut self.initial_history_replay_buffer {
+            buffer.retained_lines.clear();
+        }
+    }
+
     fn schedule_resize_reflow(&mut self, target_width: Option<u16>) -> bool {
         debug_assert!(self.terminal_resize_reflow_enabled());
         self.transcript_reflow.schedule_debounced(target_width)
@@ -447,6 +453,10 @@ impl App {
         // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
         tui.clear_pending_history_lines();
         self.clear_terminal_for_resize_replay(tui)?;
+        // This source-backed rebuild already includes every finalized transcript cell. Retained
+        // startup replay lines were rendered before stream consolidation and can otherwise be
+        // appended afterward, hiding the final assistant message behind a stale user-message tail.
+        self.discard_superseded_initial_history_replay_lines();
 
         self.deferred_history_lines.clear();
         if !reflowed_lines.is_empty() {

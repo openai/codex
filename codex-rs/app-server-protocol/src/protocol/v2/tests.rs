@@ -160,6 +160,34 @@ fn thread_resume_params_accept_turns_page_bootstrap() {
 }
 
 #[test]
+fn thread_accepts_legacy_payload_without_session_id() {
+    let thread = serde_json::from_value::<Thread>(json!({
+        "id": "thr_legacy",
+        "forkedFromId": null,
+        "parentThreadId": null,
+        "preview": "legacy thread",
+        "ephemeral": false,
+        "modelProvider": "custom",
+        "createdAt": 1,
+        "updatedAt": 2,
+        "status": { "type": "idle" },
+        "path": null,
+        "cwd": "/tmp",
+        "cliVersion": "legacy",
+        "source": "appServer",
+        "threadSource": null,
+        "agentNickname": null,
+        "agentRole": null,
+        "gitInfo": null,
+        "name": null,
+        "turns": []
+    }))
+    .expect("legacy thread should deserialize");
+
+    assert_eq!(thread.session_id, "");
+}
+
+#[test]
 fn thread_resume_response_round_trips_initial_turns_page() {
     let response = ThreadResumeResponse {
         thread: Thread {

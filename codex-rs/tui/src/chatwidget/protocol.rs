@@ -304,6 +304,9 @@ impl ChatWidget {
         notification: ItemStartedNotification,
         from_replay: bool,
     ) {
+        if self.update_status_for_thread_item(&notification.item) {
+            return;
+        }
         match notification.item {
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_started(item),
             ThreadItem::FileChange { id: _, changes, .. } => {

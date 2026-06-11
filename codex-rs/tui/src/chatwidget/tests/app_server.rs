@@ -61,6 +61,79 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
 }
 
 #[tokio::test]
+async fn internal_clock_wait_command_is_not_rendered() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    let _ = drain_insert_history(&mut rx);
+    let cwd = chat.config.cwd.clone();
+    let command_item = |status| AppServerThreadItem::CommandExecution {
+        id: "clock-wait-1".to_string(),
+        command: "[cot] {\"seconds\":7200}".to_string(),
+        cwd: cwd.clone(),
+        process_id: None,
+        source: ExecCommandSource::Agent,
+        status,
+        command_actions: Vec::new(),
+        aggregated_output: Some(
+            "Channel: analysis\nRecipient: clock.wait\nStream channel: agent".to_string(),
+        ),
+        exit_code: Some(0),
+        duration_ms: None,
+    };
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: command_item(AppServerCommandExecutionStatus::InProgress),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: command_item(AppServerCommandExecutionStatus::Completed),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .expect("status indicator")
+            .header(),
+        "Sleeping"
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: AppServerThreadItem::AgentMessage {
+                id: "agent-1".to_string(),
+                text: "Awake again".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .expect("status indicator")
+            .header(),
+        "Working"
+    );
+}
+
+#[tokio::test]
 async fn invalid_url_elicitation_is_declined() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let visible_thread_id = ThreadId::new();

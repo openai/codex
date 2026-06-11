@@ -121,6 +121,9 @@ pub(crate) fn thread_to_transcript_cells(
 }
 
 fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
+    if !crate::thread_item_visibility::is_user_visible_thread_item(item) {
+        return None;
+    }
     let lines = match item {
         ThreadItem::HookPrompt { fragments, .. } => fragments
             .iter()

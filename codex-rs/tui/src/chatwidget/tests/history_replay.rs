@@ -1089,6 +1089,47 @@ async fn replayed_in_progress_turn_marks_task_running() {
 }
 
 #[tokio::test]
+async fn replayed_in_progress_turn_waiting_on_clock_is_sleeping() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.clone();
+
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "turn-1".to_string(),
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
+            items: vec![AppServerThreadItem::CommandExecution {
+                id: "clock-wait-1".to_string(),
+                command: "[cot] {\"seconds\":300}".to_string(),
+                cwd,
+                process_id: None,
+                source: ExecCommandSource::Agent,
+                status: AppServerCommandExecutionStatus::Completed,
+                command_actions: Vec::new(),
+                aggregated_output: Some(
+                    "Channel: analysis\nRecipient: clock.wait\nStream channel: agent".to_string(),
+                ),
+                exit_code: Some(0),
+                duration_ms: None,
+            }],
+            status: AppServerTurnStatus::InProgress,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }],
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.bottom_pane.is_task_running());
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Sleeping");
+}
+
+#[tokio::test]
 async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_status_header("Idle".to_string());

@@ -529,10 +529,9 @@ impl App {
                     }
                     unreachable!("interrupt retry loop should return");
                 } else {
-                    app_server
-                        .startup_interrupt(thread_id)
-                        .await
-                        .wrap_err("turn/interrupt failed in TUI")?;
+                    // The turn/start response is recorded below before this command can run. If
+                    // no active turn is known, there is nothing safe to interrupt: older remote
+                    // app servers require a real turn id and must not receive a sentinel value.
                 }
                 Ok(true)
             }
@@ -626,7 +625,7 @@ impl App {
                             .as_ref()
                             .map(|profile| &profile.permission_profile),
                     );
-                    app_server
+                    let response = app_server
                         .turn_start(
                             thread_id,
                             items.to_vec(),
@@ -644,6 +643,10 @@ impl App {
                             final_output_json_schema.clone(),
                         )
                         .await?;
+                    if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                        let mut store = channel.store.lock().await;
+                        store.active_turn_id = Some(response.turn.id);
+                    }
                 }
                 Ok(true)
             }

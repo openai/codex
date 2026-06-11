@@ -69,6 +69,9 @@ impl ChatWidget {
         turn_id: String,
         render_source: ThreadItemRenderSource,
     ) {
+        if self.update_status_for_thread_item(&item) {
+            return;
+        }
         let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
         match item {
@@ -197,5 +200,26 @@ impl ChatWidget {
         if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) && turn_id.is_empty() {
             self.request_redraw();
         }
+    }
+
+    /// Applies status-only semantics for internal app-server items. Returns true when the item is
+    /// internal and should not be rendered. A clock wait leaves the app-server turn open so future
+    /// wakeups continue streaming, but the status should describe that dormant state rather than
+    /// looking like an indefinitely busy turn.
+    pub(super) fn update_status_for_thread_item(&mut self, item: &ThreadItem) -> bool {
+        if crate::thread_item_visibility::is_internal_clock_wait_thread_item(item) {
+            if self.bottom_pane.is_task_running() {
+                self.set_status_header(String::from("Sleeping"));
+                self.request_redraw();
+            }
+            return true;
+        }
+
+        if self.bottom_pane.is_task_running()
+            && self.status_state.current_status.header == "Sleeping"
+        {
+            self.set_status_header(String::from("Working"));
+        }
+        false
     }
 }

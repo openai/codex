@@ -3720,6 +3720,9 @@ async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Resu
         app.active_thread_id = Some(side_thread_id);
         app.side_threads
             .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+        let channel = ThreadEventChannel::new(/*capacity*/ 1);
+        channel.store.lock().await.active_turn_id = Some("missing-turn".to_string());
+        app.thread_event_channels.insert(side_thread_id, channel);
         app.agent_navigation.upsert(
             side_thread_id,
             Some("Side".to_string()),
@@ -4319,6 +4322,30 @@ async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
             "line 4".to_string(),
         ]
     );
+}
+
+#[tokio::test]
+async fn transcript_reflow_discards_superseded_initial_replay_rows() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(3);
+
+    app.begin_initial_history_replay_buffer();
+    App::buffer_initial_history_replay_display_lines(
+        app.initial_history_replay_buffer
+            .as_mut()
+            .expect("initial replay buffer active"),
+        vec![Line::from("stale user-message tail").into()],
+        /*max_rows*/ 3,
+    );
+
+    app.discard_superseded_initial_history_replay_lines();
+
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("later replay events should still be buffered");
+    assert!(buffer.retained_lines.is_empty());
 }
 
 #[tokio::test]
@@ -5508,6 +5535,55 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
         .expect("interrupt submission should not fail");
 
         assert_eq!(handled, true);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn turn_start_response_records_active_turn_before_notifications() {
+    Box::pin(async {
+        let mut app = make_test_app().await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("thread/start should succeed");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
+        let config = app.chat_widget.config_ref();
+        let op = AppCommand::user_turn(
+            vec![UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            config.cwd.to_path_buf(),
+            AskForApproval::from(config.permissions.approval_policy.value()),
+            /*active_permission_profile*/ None,
+            config
+                .model
+                .clone()
+                .unwrap_or_else(|| "gpt-5.4".to_string()),
+            /*effort*/ None,
+            /*summary*/ None,
+            /*service_tier*/ None,
+            /*final_output_json_schema*/ None,
+            /*collaboration_mode*/ None,
+            /*personality*/ None,
+        );
+
+        let handled = app
+            .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+            .await
+            .expect("turn submission should not fail");
+
+        assert!(handled);
+        assert!(app.active_turn_id_for_thread(thread_id).await.is_some());
     })
     .await;
 }

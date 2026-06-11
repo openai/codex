@@ -193,6 +193,7 @@ mod terminal_title;
 mod terminal_visualization_instructions;
 mod text_formatting;
 mod theme_picker;
+mod thread_item_visibility;
 mod thread_transcript;
 mod token_usage;
 mod tooltips;
@@ -1022,15 +1023,22 @@ pub async fn run_main(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
-        codex_home.to_path_buf(),
-        /*enable_codex_api_key_env*/ false,
-        bootstrap_config_toml
-            .cli_auth_credentials_store
-            .unwrap_or_default(),
-        chatgpt_base_url,
-    )
-    .await;
+    let cloud_config_bundle = if app_server_target.uses_remote_workspace() {
+        // Remote app servers own authentication and managed policy. Loading a
+        // local cloud bundle here can fail before the TUI connects, and would
+        // incorrectly project local workspace policy onto the remote thread.
+        CloudConfigBundleLoader::default()
+    } else {
+        cloud_config_bundle_loader_for_storage(
+            codex_home.to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            bootstrap_config_toml
+                .cli_auth_credentials_store
+                .unwrap_or_default(),
+            chatgpt_base_url,
+        )
+        .await
+    };
 
     let cwd_override = if app_server_target.uses_remote_workspace() {
         None
