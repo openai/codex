@@ -11,6 +11,7 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:llvm_rusty_v8_custom_libcxx.patch",
+        "//patches:llvm_windows_arm64_powl.patch",
         "//patches:llvm_windows_symlink_extract.patch",
     ],
 )
