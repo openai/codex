@@ -727,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn install_persists_remote_plugin_identity() {
+    fn install_persists_remote_plugin_install_metadata() {
         let codex_home = tempdir().expect("tempdir");
         let bundle = valid_remote_plugin_bundle();
 
@@ -746,6 +746,20 @@ mod tests {
         assert_eq!(
             store.remote_plugin_id(&result.plugin_id).unwrap(),
             Some(REMOTE_PLUGIN_ID.to_string())
+        );
+        let metadata_path = store
+            .plugin_base_root(&result.plugin_id)
+            .join(".codex-remote-plugin-install.json");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(metadata_path.as_path())
+                    .expect("read remote plugin install metadata")
+            )
+            .expect("parse remote plugin install metadata"),
+            serde_json::json!({
+                "schema_version": 1,
+                "remote_plugin_id": REMOTE_PLUGIN_ID,
+            })
         );
     }
 

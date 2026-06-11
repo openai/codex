@@ -1,6 +1,7 @@
 use super::*;
 use codex_plugin::PluginId;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::tempdir;
 
 fn write_plugin_with_version(
@@ -152,7 +153,7 @@ fn install_with_version_uses_requested_cache_version() {
 }
 
 #[test]
-fn remote_plugin_identity_follows_installed_cache_lifecycle() {
+fn remote_plugin_install_metadata_follows_installed_cache_lifecycle() {
     let tmp = tempdir().unwrap();
     write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
     let plugin_id = PluginId::new(
@@ -171,6 +172,21 @@ fn remote_plugin_identity_follows_installed_cache_lifecycle() {
     store
         .write_remote_plugin_id(&plugin_id, "plugins~Plugin_sample")
         .expect("write remote identity");
+    let metadata_path = store.remote_plugin_install_metadata_path(&plugin_id);
+    assert_eq!(
+        metadata_path.as_path().file_name(),
+        Some(std::ffi::OsStr::new(".codex-remote-plugin-install.json"))
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(metadata_path.as_path()).expect("read install metadata")
+        )
+        .expect("parse install metadata"),
+        json!({
+            "schema_version": 1,
+            "remote_plugin_id": "plugins~Plugin_sample",
+        })
+    );
     assert_eq!(
         store.remote_plugin_id(&plugin_id).unwrap(),
         Some("plugins~Plugin_sample".to_string())
@@ -182,17 +198,63 @@ fn remote_plugin_identity_follows_installed_cache_lifecycle() {
         store.remote_plugin_id(&plugin_id).unwrap(),
         Some("plugins~Plugin_updated".to_string())
     );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(metadata_path.as_path()).expect("read updated install metadata")
+        )
+        .expect("parse updated install metadata"),
+        json!({
+            "schema_version": 1,
+            "remote_plugin_id": "plugins~Plugin_updated",
+        })
+    );
 
     store
         .install(source, plugin_id.clone())
         .expect("replace with local install");
     assert_eq!(store.remote_plugin_id(&plugin_id).unwrap(), None);
+    assert!(!metadata_path.as_path().exists());
 
     store
         .write_remote_plugin_id(&plugin_id, "plugins~Plugin_sample")
         .expect("restore remote identity");
     store.uninstall(&plugin_id).expect("uninstall plugin");
     assert_eq!(store.remote_plugin_id(&plugin_id).unwrap(), None);
+    assert!(!metadata_path.as_path().exists());
+}
+
+#[test]
+fn remote_plugin_install_metadata_rejects_unsupported_schema_version() {
+    let tmp = tempdir().unwrap();
+    write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
+    let plugin_id = PluginId::new(
+        "sample-plugin".to_string(),
+        "openai-curated-remote".to_string(),
+    )
+    .unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    store
+        .install(
+            AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap(),
+            plugin_id.clone(),
+        )
+        .expect("install plugin");
+    fs::write(
+        store
+            .remote_plugin_install_metadata_path(&plugin_id)
+            .as_path(),
+        r#"{"schema_version":2,"remote_plugin_id":"plugins~Plugin_sample"}"#,
+    )
+    .expect("write unsupported install metadata");
+
+    let err = store
+        .remote_plugin_id(&plugin_id)
+        .expect_err("unsupported schema version should fail");
+
+    assert_eq!(
+        err.to_string(),
+        "unsupported remote plugin install metadata schema version: 2"
+    );
 }
 
 #[test]
