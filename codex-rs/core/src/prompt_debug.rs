@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
+use codex_extension_api::UserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -26,6 +27,7 @@ pub async fn build_prompt_input(
     mut config: Config,
     input: Vec<UserInput>,
     state_db: Option<StateDbHandle>,
+    user_instructions_provider: Arc<dyn UserInstructionsProvider>,
 ) -> CodexResult<Vec<ResponseItem>> {
     config.ephemeral = true;
 
@@ -52,6 +54,7 @@ pub async fn build_prompt_input(
             .map_err(|err| CodexErr::Fatal(err.to_string()))?,
         ),
         empty_extension_registry(),
+        user_instructions_provider,
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),

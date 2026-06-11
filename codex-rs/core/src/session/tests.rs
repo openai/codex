@@ -3286,7 +3286,7 @@ async fn set_rate_limits_retains_previous_credits() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -3393,7 +3393,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -3925,7 +3925,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4777,7 +4777,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4885,7 +4885,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5117,7 +5117,7 @@ async fn make_session_with_config_and_rx(
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5219,7 +5219,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -6963,7 +6963,7 @@ where
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config

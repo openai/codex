@@ -41,6 +41,7 @@ use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use supports_color::Stream;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -75,6 +76,7 @@ use codex_core::config::resolve_profile_v2_config_path;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
+use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::read_codex_access_token_from_env;
@@ -1941,7 +1943,16 @@ async fn run_debug_prompt_input_command(
         });
     }
 
-    let prompt_input = codex_core::build_prompt_input(config, input, /*state_db*/ None).await?;
+    let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
+        config.codex_home.clone(),
+    ));
+    let prompt_input = codex_core::build_prompt_input(
+        config,
+        input,
+        /*state_db*/ None,
+        user_instructions_provider,
+    )
+    .await?;
     println!("{}", serde_json::to_string_pretty(&prompt_input)?);
 
     Ok(())

@@ -142,3 +142,35 @@ async fn exec_json_surfaces_project_instruction_loading_warnings() -> anyhow::Re
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_surfaces_global_instruction_loading_warnings() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let global_agents_path = test.home_path().join("AGENTS.md");
+    let global_agents_source_suffix = format!(
+        "{}{}AGENTS.md",
+        test.home_path()
+            .file_name()
+            .expect("temporary Codex home should have a file name")
+            .to_string_lossy(),
+        std::path::MAIN_SEPARATOR,
+    );
+    std::fs::write(&global_agents_path, b"global\xFFinstructions")?;
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp1"),
+        responses::ev_assistant_message("m1", "fixture hello"),
+        responses::ev_completed("resp1"),
+    ]);
+    responses::mount_sse_once(&server, body).await;
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("tell me something")
+        .assert()
+        .success()
+        .stderr(contains("invalid UTF-8").and(contains(global_agents_source_suffix)));
+
+    Ok(())
+}

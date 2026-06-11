@@ -19,7 +19,6 @@ pub(super) async fn test_config() -> Config {
     config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
     config.config_layer_stack = ConfigLayerStack::default();
     config.startup_warnings.clear();
-    config.user_instructions = None;
     config
 }
 

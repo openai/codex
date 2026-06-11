@@ -552,7 +552,7 @@ impl Session {
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration
-                .user_instructions
+                .loaded_agents_md
                 .as_ref()
                 .map(LoadedAgentsMd::text),
             collaboration_mode: session_configuration.collaboration_mode.clone(),

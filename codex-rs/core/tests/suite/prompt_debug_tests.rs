@@ -1,19 +1,24 @@
+use std::sync::Arc;
+
 use anyhow::Result;
-use codex_core::LoadedAgentsMd;
 use codex_core::build_prompt_input;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
+const TEST_INSTRUCTIONS: &str = "Global test instructions";
+
 #[tokio::test]
 async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
-    let mut config = ConfigBuilder::default()
+    std::fs::write(codex_home.path().join("AGENTS.md"), TEST_INSTRUCTIONS)?;
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(cwd.path().to_path_buf()),
@@ -22,8 +27,8 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         })
         .build()
         .await?;
-    config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-        "Project-specific test instructions",
+    let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
+        config.codex_home.clone(),
     ));
 
     let input = build_prompt_input(
@@ -33,6 +38,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
             text_elements: Vec::new(),
         }],
         /*state_db*/ None,
+        user_instructions_provider,
     )
     .await?;
 
@@ -55,7 +61,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
             else {
                 return false;
             };
-            text.contains("Project-specific test instructions")
+            text.contains(TEST_INSTRUCTIONS)
         })
     }));
 

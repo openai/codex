@@ -126,7 +126,6 @@ pub type NewConversation = NewThread;
 #[deprecated(note = "use CodexThread")]
 pub type CodexConversation = CodexThread;
 pub(crate) mod agents_md;
-pub use agents_md::AgentsMdManager;
 pub use agents_md::DEFAULT_AGENTS_MD_FILENAME;
 pub use agents_md::LOCAL_AGENTS_MD_FILENAME;
 pub use agents_md::LoadedAgentsMd;
