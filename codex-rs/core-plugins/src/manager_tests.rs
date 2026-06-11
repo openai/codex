@@ -61,6 +61,13 @@ fn plugins_manager_tracks_auth_mode() {
     assert_eq!(manager.auth_mode(), Some(AuthMode::ChatgptAuthTokens));
     assert!(manager.set_auth_mode(/*auth_mode*/ None));
     assert_eq!(manager.auth_mode(), None);
+
+    let manager_with_auth = PluginsManager::new_with_restriction_product(
+        tmp.path().join("auth"),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
+    assert_eq!(manager_with_auth.auth_mode(), Some(AuthMode::Chatgpt));
 }
 
 fn write_plugin_with_version(
@@ -3041,6 +3048,7 @@ plugins = true
     let manager = PluginsManager::new_with_restriction_product(
         tmp.path().to_path_buf(),
         Some(Product::Chatgpt),
+        /*auth_mode*/ None,
     );
 
     let featured_plugin_ids = manager
@@ -3077,6 +3085,7 @@ plugins = true
     let manager = PluginsManager::new_with_restriction_product(
         tmp.path().to_path_buf(),
         /*restriction_product*/ None,
+        /*auth_mode*/ None,
     );
 
     let featured_plugin_ids = manager
