@@ -53,11 +53,7 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
         return;
     }
 
-    let installed = sess
-        .services
-        .mcp_manager
-        .runtime_servers(config.as_ref())
-        .await;
+    let installed = sess.runtime_mcp_servers(config.as_ref()).await;
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
         return;
@@ -98,7 +94,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     }
 
     let codex_home = config.codex_home.clone();
-    let installed = sess.services.mcp_manager.runtime_servers(config).await;
+    let installed = sess.runtime_mcp_servers(config).await;
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
         return;
@@ -201,11 +197,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         warn!("failed to refresh MCP dependencies for mentioned skills: {err}");
         return;
     }
-    let refresh_servers = sess
-        .services
-        .mcp_manager
-        .runtime_servers(&refresh_config)
-        .await;
+    let refresh_servers = sess.runtime_mcp_servers(&refresh_config).await;
     sess.refresh_mcp_servers_now(
         turn_context,
         refresh_servers,

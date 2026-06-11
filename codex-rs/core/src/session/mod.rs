@@ -324,6 +324,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core_plugins::PluginsManager;
 use codex_git_utils::get_git_repo_root;
+use codex_mcp::McpConfig;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::effective_mcp_servers_from_configured;
 use codex_mcp::host_owned_codex_apps_enabled;
