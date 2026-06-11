@@ -30,6 +30,7 @@ use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
+use codex_plugin::AppDeclaration;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::test_support::PathBufExt;
@@ -94,10 +95,27 @@ fn write_auth_projection_plugin(codex_home: &Path, name: &str, include_app: bool
         ),
     );
     if include_app {
-        write_file(
-            &plugin_root.join(".app.json"),
-            &format!(r#"{{"apps":{{"{name}":{{"id":"connector_{name}"}}}}}}"#),
-        );
+        write_auth_projection_app(codex_home, name, name);
+    }
+}
+
+fn write_auth_projection_app(codex_home: &Path, plugin_name: &str, app_name: &str) {
+    let plugin_root = codex_home
+        .join("plugins/cache")
+        .join("test")
+        .join(plugin_name)
+        .join("local");
+    write_file(
+        &plugin_root.join(".app.json"),
+        &format!(r#"{{"apps":{{"{app_name}":{{"id":"connector_{plugin_name}"}}}}}}"#),
+    );
+}
+
+fn app_declaration(name: &str, connector_id: &str) -> AppDeclaration {
+    AppDeclaration {
+        name: name.to_string(),
+        connector_id: AppConnectorId(connector_id.to_string()),
+        category: None,
     }
 }
 
@@ -155,7 +173,7 @@ async fn plugin_auth_projection_hides_apps_without_chatgpt_auth() {
 }
 
 #[tokio::test]
-async fn plugin_auth_projection_hides_dual_surface_mcp_with_chatgpt_apps_route() {
+async fn plugin_auth_projection_hides_matching_mcp_with_chatgpt_apps_route() {
     let codex_home = TempDir::new().unwrap();
     write_auth_projection_plugin(codex_home.path(), "sample", /*include_app*/ true);
     write_auth_projection_plugin(codex_home.path(), "docs", /*include_app*/ false);
@@ -216,6 +234,124 @@ async fn plugin_auth_projection_hides_dual_surface_mcp_with_agent_identity_apps_
     assert_eq!(
         sorted_effective_mcp_server_names(&outcome),
         vec!["docs".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn plugin_auth_projection_keeps_non_conflicting_mcp_with_chatgpt_apps_route() {
+    let codex_home = TempDir::new().unwrap();
+    write_auth_projection_plugin(codex_home.path(), "sample", /*include_app*/ false);
+    write_auth_projection_app(codex_home.path(), "sample", "sample_app");
+    write_auth_projection_plugin(codex_home.path(), "docs", /*include_app*/ false);
+    let config = auth_projection_config(codex_home.path()).await;
+    let manager = PluginsManager::new_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
+
+    let outcome = manager.plugins_for_config(&config).await;
+
+    assert_eq!(
+        outcome.effective_apps(),
+        vec![AppConnectorId("connector_sample".to_string())]
+    );
+    assert_eq!(
+        sorted_effective_mcp_server_names(&outcome),
+        vec!["docs".to_string(), "sample".to_string()]
+    );
+    let sample = outcome
+        .capability_summaries()
+        .iter()
+        .find(|plugin| plugin.config_name == "sample@test")
+        .expect("sample plugin summary should exist");
+    assert_eq!(sample.mcp_server_names, vec!["sample".to_string()]);
+    assert_eq!(
+        sample.app_connector_ids,
+        vec![AppConnectorId("connector_sample".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn plugin_auth_projection_preserves_duplicate_connector_declaration_names() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test")
+        .join("sample")
+        .join("local");
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "foo": {
+      "type": "stdio",
+      "command": "foo-mcp"
+    },
+    "foo2": {
+      "type": "stdio",
+      "command": "foo2-mcp"
+    },
+    "other": {
+      "type": "stdio",
+      "command": "other-mcp"
+    }
+  }
+}"#,
+    );
+    write_file(
+        &plugin_root.join(".app.json"),
+        r#"{
+  "apps": {
+    "foo": {
+      "id": "connector_shared"
+    },
+    "foo2": {
+      "id": "connector_shared"
+    }
+  }
+}"#,
+    );
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    );
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
+
+    let outcome = manager.plugins_for_config(&config).await;
+
+    assert_eq!(
+        outcome.effective_apps(),
+        vec![AppConnectorId("connector_shared".to_string())]
+    );
+    assert_eq!(
+        sorted_effective_mcp_server_names(&outcome),
+        vec!["other".to_string()]
+    );
+    let sample = outcome
+        .capability_summaries()
+        .iter()
+        .find(|plugin| plugin.config_name == "sample@test")
+        .expect("sample plugin summary should exist");
+    assert_eq!(sample.mcp_server_names, vec!["other".to_string()]);
+    assert_eq!(
+        sample.app_connector_ids,
+        vec![AppConnectorId("connector_shared".to_string())]
     );
 }
 
@@ -427,7 +563,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
         codex_home.path(),
-        /*auth_mode*/ None,
+        Some(AuthMode::Chatgpt),
     )
     .await;
 
@@ -471,7 +607,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                     tools: HashMap::new(),
                 },
             )]),
-            apps: Vec::new(),
+            apps: vec![app_declaration("example", "connector_example")],
             hook_sources: Vec::new(),
             hook_load_warnings: Vec::new(),
             error: None,
@@ -485,7 +621,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
             description: Some("Plugin that includes the sample MCP server and Skills".to_string(),),
             has_skills: true,
             mcp_server_names: vec!["sample".to_string()],
-            app_connector_ids: Vec::new(),
+            app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
         }]
     );
     assert_eq!(
@@ -493,7 +629,10 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
         vec![plugin_root.join("skills").abs()]
     );
     assert_eq!(outcome.effective_mcp_servers().len(), 1);
-    assert!(outcome.effective_apps().is_empty());
+    assert_eq!(
+        outcome.effective_apps(),
+        vec![AppConnectorId("connector_example".to_string())]
+    );
 }
 
 #[tokio::test]
@@ -1036,7 +1175,7 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
         &plugin_root.join(".app.json"),
         r#"{
   "apps": {
-    "default": {
+    "default-app": {
       "id": "connector_default"
     }
   }
@@ -1046,7 +1185,7 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
         &plugin_root.join("config/custom.app.json"),
         r#"{
   "apps": {
-    "custom": {
+    "custom-app": {
       "id": "connector_custom"
     }
   }
@@ -1056,7 +1195,7 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
         codex_home.path(),
-        /*auth_mode*/ None,
+        Some(AuthMode::Chatgpt),
     )
     .await;
 
@@ -1095,7 +1234,10 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
             },
         )])
     );
-    assert!(outcome.plugins()[0].apps.is_empty());
+    assert_eq!(
+        outcome.plugins()[0].apps,
+        vec![app_declaration("custom-app", "connector_custom")]
+    );
 }
 
 #[tokio::test]
@@ -1149,7 +1291,7 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
         &plugin_root.join(".app.json"),
         r#"{
   "apps": {
-    "default": {
+    "default-app": {
       "id": "connector_default"
     }
   }
@@ -1159,7 +1301,7 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
         &plugin_root.join("config/custom.app.json"),
         r#"{
   "apps": {
-    "custom": {
+    "custom-app": {
       "id": "connector_custom"
     }
   }
@@ -1169,7 +1311,7 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
         codex_home.path(),
-        /*auth_mode*/ None,
+        Some(AuthMode::Chatgpt),
     )
     .await;
 
@@ -1205,7 +1347,10 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
             },
         )])
     );
-    assert!(outcome.plugins()[0].apps.is_empty());
+    assert_eq!(
+        outcome.plugins()[0].apps,
+        vec![app_declaration("default-app", "connector_default")]
+    );
 }
 
 #[tokio::test]
@@ -1426,6 +1571,7 @@ async fn effective_apps_preserves_app_config_order() {
 fn capability_index_filters_inactive_and_zero_capability_plugins() {
     let codex_home = TempDir::new().unwrap();
     let connector = |id: &str| AppConnectorId(id.to_string());
+    let app = |name: &str, connector_id: &str| app_declaration(name, connector_id);
     let http_server = |url: &str| McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
             url: url.to_string(),
@@ -1477,23 +1623,26 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         },
         LoadedPlugin {
             mcp_servers: HashMap::from([("alpha".to_string(), http_server("https://alpha"))]),
-            apps: vec![connector("connector_example")],
+            apps: vec![app("example", "connector_example")],
             ..plugin("alpha@test", "alpha-plugin", "alpha-plugin")
         },
         LoadedPlugin {
             mcp_servers: HashMap::from([("beta".to_string(), http_server("https://beta"))]),
-            apps: vec![connector("connector_example"), connector("connector_gmail")],
+            apps: vec![
+                app("example", "connector_example"),
+                app("gmail", "connector_gmail"),
+            ],
             ..plugin("beta@test", "beta-plugin", "beta-plugin")
         },
         plugin("empty@test", "empty-plugin", "empty-plugin"),
         LoadedPlugin {
             enabled: false,
             skill_roots: vec![codex_home.path().join("disabled-plugin/skills").abs()],
-            apps: vec![connector("connector_hidden")],
+            apps: vec![app("hidden", "connector_hidden")],
             ..plugin("disabled@test", "disabled-plugin", "disabled-plugin")
         },
         LoadedPlugin {
-            apps: vec![connector("connector_broken")],
+            apps: vec![app("broken", "connector_broken")],
             error: Some("failed to load".to_string()),
             ..plugin("broken@test", "broken-plugin", "broken-plugin")
         },
@@ -2461,7 +2610,18 @@ async fn read_plugin_for_config_installed_git_source_reads_from_cache_without_cl
     );
     write_file(
         &cached_plugin_root.join(".app.json"),
-        r#"{"apps":{"calendar":{"id":"connector_calendar"}}}"#,
+        r#"{
+  "apps": {
+    "calendar": {
+      "id": "connector_calendar",
+      "category": "First Category"
+    },
+    "calendar_duplicate": {
+      "id": "connector_calendar",
+      "category": "Second Category"
+    }
+  }
+}"#,
     );
     write_file(
         &cached_plugin_root.join(".mcp.json"),
@@ -2545,6 +2705,13 @@ enabled = false
     assert_eq!(
         outcome.plugin.apps,
         vec![AppConnectorId("connector_calendar".to_string())]
+    );
+    assert_eq!(
+        outcome.plugin.app_category_by_id,
+        HashMap::from([(
+            "connector_calendar".to_string(),
+            "First Category".to_string()
+        )])
     );
     assert_eq!(
         outcome.plugin.hooks,

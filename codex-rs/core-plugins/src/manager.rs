@@ -5,7 +5,7 @@ use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
 use crate::loader::installed_plugin_telemetry_metadata;
-use crate::loader::load_plugin_app_metadata;
+use crate::loader::load_plugin_apps;
 use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_hooks_from_layer_stack;
 use crate::loader::load_plugin_mcp_servers;
@@ -63,6 +63,7 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
+use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
@@ -214,7 +215,14 @@ fn project_plugin_load_outcome_for_auth(
     for plugin in &mut plugins {
         if apps_route_available {
             if plugin.is_active() && !plugin.apps.is_empty() {
-                plugin.mcp_servers.clear();
+                let app_declaration_names = plugin
+                    .apps
+                    .iter()
+                    .map(|app| app.name.as_str())
+                    .collect::<HashSet<_>>();
+                plugin
+                    .mcp_servers
+                    .retain(|name, _| !app_declaration_names.contains(name.as_str()));
             }
         } else {
             plugin.apps.clear();
@@ -1311,12 +1319,17 @@ impl PluginsManager {
                 event_name: hook.event_name,
             })
             .collect();
-        let app_metadata = load_plugin_app_metadata(source_path.as_path()).await;
-        let apps = app_metadata.iter().map(|app| app.id.clone()).collect();
-        let app_category_by_id = app_metadata
-            .into_iter()
-            .filter_map(|app| app.category.map(|category| (app.id.0, category)))
-            .collect();
+        let app_declarations = load_plugin_apps(source_path.as_path()).await;
+        let apps = app_connector_ids_from_declarations(&app_declarations);
+        let mut seen_app_connector_ids = HashSet::new();
+        let mut app_category_by_id = HashMap::new();
+        for app in &app_declarations {
+            if seen_app_connector_ids.insert(app.connector_id.0.as_str())
+                && let Some(category) = &app.category
+            {
+                app_category_by_id.insert(app.connector_id.0.clone(), category.clone());
+            }
+        }
         let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path())
             .await
             .into_keys()
