@@ -21,10 +21,14 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db::StateDbHandle;
+use codex_thread_store::ThreadStore;
 
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadStateManager;
+
+// TODO(jif): Enable once /ps/mcp serves complete hosted skill packages.
+const ORCHESTRATOR_SKILLS_ENABLED: bool = false;
 
 pub(crate) struct ThreadExtensionDependencies {
     pub(crate) event_sink: Arc<dyn ExtensionEventSink>,
@@ -34,6 +38,8 @@ pub(crate) struct ThreadExtensionDependencies {
     pub(crate) thread_manager: Weak<ThreadManager>,
     pub(crate) goal_service: Arc<GoalService>,
     pub(crate) executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider>,
+    /// Process-scoped persistence backend for extensions that need stored thread history.
+    pub(crate) thread_store: Arc<dyn ThreadStore>,
 }
 
 pub(crate) fn thread_extensions<S>(
@@ -51,6 +57,7 @@ where
         thread_manager,
         goal_service,
         executor_skill_provider,
+        thread_store: _thread_store,
     } = dependencies;
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
     if let Some(state_db) = state_db {
@@ -69,10 +76,20 @@ where
     codex_mcp_extension::install(&mut builder);
     codex_web_search_extension::install(&mut builder, auth_manager.clone());
     codex_image_generation_extension::install(&mut builder, auth_manager);
+    let mut skill_providers = codex_skills_extension::SkillProviders::new()
+        .with_executor_provider(executor_skill_provider);
+    if ORCHESTRATOR_SKILLS_ENABLED {
+        skill_providers = skill_providers.with_orchestrator_provider(Arc::new(
+            codex_skills_extension::OrchestratorSkillProvider::new(),
+        ));
+    }
     codex_skills_extension::install_with_providers(
         &mut builder,
-        codex_skills_extension::SkillProviders::new()
-            .with_executor_provider(executor_skill_provider),
+        skill_providers,
+        |config: &Config| codex_skills_extension::SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            bundled_skills_enabled: config.bundled_skills_enabled(),
+        },
     );
     Arc::new(builder.build())
 }

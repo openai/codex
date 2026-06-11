@@ -430,6 +430,11 @@ impl EventProcessorWithJsonOutput {
                 }));
                 CodexStatus::Running
             }
+            ServerNotification::Warning(notification) => {
+                let warning = self.collect_warning(notification.message);
+                events.extend(warning.events);
+                warning.status
+            }
             ServerNotification::Error(notification) => {
                 let message = match notification.error.additional_details {
                     Some(details) if !details.is_empty() => {

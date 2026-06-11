@@ -51,6 +51,7 @@ pub struct ProviderAccountState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderAccountError {
     MissingChatgptAccountDetails,
+    UnsupportedBedrockApiKeyAuth,
 }
 
 impl fmt::Display for ProviderAccountError {
@@ -60,6 +61,12 @@ impl fmt::Display for ProviderAccountError {
                 write!(
                     f,
                     "email and plan type are required for chatgpt authentication"
+                )
+            }
+            Self::UnsupportedBedrockApiKeyAuth => {
+                write!(
+                    f,
+                    "Bedrock API key auth is only supported by the Amazon Bedrock model provider"
                 )
             }
         }
@@ -232,6 +239,9 @@ impl ModelProvider for ConfiguredModelProvider {
                 })
                 .map(|auth| match &auth {
                     CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
+                    CodexAuth::BedrockApiKey(_) => {
+                        Err(ProviderAccountError::UnsupportedBedrockApiKeyAuth)
+                    }
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
                     | CodexAuth::AgentIdentity(_)
@@ -287,6 +297,7 @@ impl ModelProvider for ConfiguredModelProvider {
 mod tests {
     use std::num::NonZeroU64;
 
+    use codex_login::auth::BedrockApiKeyAuth;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_model_provider_info::WireApi;
     use codex_models_manager::manager::RefreshStrategy;
@@ -372,6 +383,13 @@ mod tests {
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
+    }
+
+    fn bedrock_api_key_auth() -> CodexAuth {
+        CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+            api_key: "bedrock-api-key-test".to_string(),
+            region: "us-east-1".to_string(),
+        })
     }
 
     #[test]
@@ -488,6 +506,19 @@ mod tests {
         assert_eq!(
             provider.account_state(),
             Err(ProviderAccountError::MissingChatgptAccountDetails)
+        );
+    }
+
+    #[test]
+    fn openai_provider_rejects_bedrock_api_key_account_state() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            Some(AuthManager::from_auth_for_testing(bedrock_api_key_auth())),
+        );
+
+        assert_eq!(
+            provider.account_state(),
+            Err(ProviderAccountError::UnsupportedBedrockApiKeyAuth)
         );
     }
 

@@ -36,8 +36,6 @@ use crate::config_update::format_config_error;
 use crate::config_update::write_trusted_project;
 use crate::key_hint::KeyBindingListExt;
 use crate::legacy_core::config::Config;
-#[cfg(target_os = "windows")]
-use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInOption;
 use crate::onboarding::auth::SignInState;
@@ -143,7 +141,7 @@ impl OnboardingScreen {
         }
         #[cfg(target_os = "windows")]
         let show_windows_create_sandbox_hint =
-            WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+            crate::windows_sandbox::level_from_config(&config) == WindowsSandboxLevel::Disabled;
         #[cfg(not(target_os = "windows"))]
         let show_windows_create_sandbox_hint = false;
         let highlighted = TrustDirectorySelection::Trust;

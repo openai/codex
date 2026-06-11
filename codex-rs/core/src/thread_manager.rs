@@ -23,6 +23,8 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::LoadedUserInstructions;
+use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -209,6 +211,7 @@ pub(crate) struct ThreadManagerState {
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
     extensions: Arc<ExtensionRegistry<Config>>,
+    user_instructions_provider: Arc<dyn UserInstructionsProvider>,
     thread_store: Arc<dyn ThreadStore>,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     session_source: SessionSource,
@@ -259,6 +262,7 @@ impl ThreadManager {
         session_source: SessionSource,
         environment_manager: Arc<EnvironmentManager>,
         extensions: Arc<ExtensionRegistry<Config>>,
+        user_instructions_provider: Arc<dyn UserInstructionsProvider>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         state_db: Option<StateDbHandle>,
@@ -272,6 +276,7 @@ impl ThreadManager {
             codex_home.to_path_buf(),
             restriction_product,
         ));
+        plugins_manager.set_auth_mode(auth_manager.get_api_auth_mode());
         let mcp_manager = Arc::new(McpManager::new_with_extensions(
             Arc::clone(&plugins_manager),
             Arc::clone(&extensions),
@@ -291,6 +296,7 @@ impl ThreadManager {
                 plugins_manager,
                 mcp_manager,
                 extensions,
+                user_instructions_provider,
                 thread_store,
                 attestation_provider,
                 auth_manager,
@@ -365,6 +371,7 @@ impl ThreadManager {
             codex_home.clone(),
             restriction_product,
         ));
+        plugins_manager.set_auth_mode(auth_manager.get_api_auth_mode());
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
             skills_codex_home,
@@ -392,6 +399,9 @@ impl ThreadManager {
                 plugins_manager,
                 mcp_manager,
                 extensions: empty_extension_registry(),
+                user_instructions_provider: Arc::new(
+                    crate::test_support::EmptyUserInstructionsProvider,
+                ),
                 thread_store,
                 attestation_provider: None,
                 auth_manager,
@@ -515,14 +525,12 @@ impl ThreadManager {
         &self,
         thread_id: ThreadId,
     ) -> CodexResult<Vec<ThreadId>> {
-        let thread = self.state.get_thread(thread_id).await?;
-
         let mut subtree_thread_ids = Vec::new();
         let mut seen_thread_ids = HashSet::new();
         subtree_thread_ids.push(thread_id);
         seen_thread_ids.insert(thread_id);
 
-        if let Some(state_db_ctx) = thread.state_db() {
+        if let Some(state_db_ctx) = self.state.state_db() {
             for status in [
                 DirectionalThreadSpawnEdgeStatus::Open,
                 DirectionalThreadSpawnEdgeStatus::Closed,
@@ -541,11 +549,8 @@ impl ThreadManager {
             }
         }
 
-        for descendant_id in thread
-            .codex
-            .session
-            .services
-            .agent_control
+        for descendant_id in self
+            .agent_control()
             .list_live_agent_subtree_thread_ids(thread_id)
             .await?
         {
@@ -1094,6 +1099,56 @@ impl ThreadManagerState {
         resolve_multi_agent_version(initial_history, inherited_multi_agent_version)
     }
 
+    /// Resolves the provider snapshot for a newly spawned runtime.
+    ///
+    /// Loads a fresh provider snapshot for:
+    /// - fresh root threads;
+    /// - cold resumes;
+    /// - root forks.
+    ///
+    /// Uses an existing snapshot for:
+    /// - subagents, which inherit from their parent without invoking the
+    ///   provider;
+    /// - running resumes and compaction paths, which retain the live session.
+    ///
+    /// Provider warnings only apply to fresh loads. If a parent runtime is no
+    /// longer available, its child starts without provider instructions rather
+    /// than loading independently.
+    async fn user_instructions_for_spawn(
+        &self,
+        session_source: &SessionSource,
+        parent_thread_id: Option<ThreadId>,
+        forked_from_thread_id: Option<ThreadId>,
+    ) -> LoadedUserInstructions {
+        let is_root_agent = !session_source.is_non_root_agent();
+        if is_root_agent {
+            return self
+                .user_instructions_provider
+                .load_user_instructions()
+                .await;
+        }
+
+        let inherited_thread_id = match session_source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) => Some(*parent_thread_id),
+            _ => parent_thread_id.or(forked_from_thread_id),
+        };
+        let instructions = match inherited_thread_id {
+            // The spawn path retains only thread IDs, so look up the live
+            // runtime again here to inherit its user instructions.
+            Some(thread_id) => match self.get_thread(thread_id).await {
+                Ok(thread) => thread.codex.session.user_instructions().await,
+                Err(_) => None,
+            },
+            None => None,
+        };
+        LoadedUserInstructions {
+            instructions,
+            warnings: Vec::new(),
+        }
+    }
+
     /// Spawn a new thread with no history using a provided config.
     pub(crate) async fn spawn_new_thread(
         &self,
@@ -1311,6 +1366,9 @@ impl ThreadManagerState {
         }
         let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
+        let user_instructions = self
+            .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
+            .await;
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
@@ -1327,6 +1385,7 @@ impl ThreadManagerState {
             codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
             config,
+            user_instructions,
             installation_id: self.installation_id.clone(),
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),

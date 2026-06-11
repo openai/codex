@@ -48,6 +48,9 @@ pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Plugin-owned servers and their provenance continue to be resolved by the
 /// plugin manager until that ownership moves into an extension explicitly.
 pub trait McpServerContributor<C: Sync>: Send + Sync {
+    /// Stable identity used for registration provenance and conflict diagnostics.
+    fn id(&self) -> &'static str;
+
     fn contribute<'a>(&'a self, config: &'a C) -> ExtensionFuture<'a, Vec<McpServerContribution>>;
 }
 
