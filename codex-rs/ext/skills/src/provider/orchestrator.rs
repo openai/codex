@@ -31,6 +31,7 @@ const MAX_QUALIFIED_SKILL_NAME_CHARS: usize = 128;
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 1_024;
 const MAX_SKILL_PACKAGE_URI_CHARS: usize = 1_024;
 const MAX_SKILL_RESOURCE_URI_CHARS: usize = 2_048;
+const MAX_SKILL_RESOURCE_CONTENT_BYTES: usize = 1024 * 1024;
 
 /// Discovers and reads skills owned by the orchestrator.
 ///
@@ -200,6 +201,12 @@ impl SkillProvider for OrchestratorSkillProvider {
                     request.resource.as_str()
                 )));
             };
+            if contents.len() > MAX_SKILL_RESOURCE_CONTENT_BYTES {
+                return Err(SkillProviderError::new(format!(
+                    "orchestrator skill resource {} exceeds the {MAX_SKILL_RESOURCE_CONTENT_BYTES}-byte read limit",
+                    request.resource.as_str()
+                )));
+            }
 
             Ok(SkillReadResult {
                 resource: request.resource,

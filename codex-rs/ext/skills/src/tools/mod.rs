@@ -9,6 +9,7 @@ use codex_extension_api::ToolName;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceClient;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -29,9 +30,7 @@ mod read;
 mod schema;
 
 const SKILLS_NAMESPACE: &str = "skills";
-const MAX_AUTHORITY_ID_BYTES: usize = 256;
 const MAX_HANDLE_BYTES: usize = 2_048;
-const MAX_TOOL_OUTPUT_BYTES: usize = 8_000;
 
 pub(crate) fn skill_tools(
     providers: SkillProviders,
@@ -56,64 +55,53 @@ struct SkillToolContext {
 }
 
 impl SkillToolContext {
-    async fn catalog(&self, turn_id: &str) -> SkillCatalog {
-        match self
-            .providers
-            .list_orchestrator_for_turn(SkillListQuery {
-                turn_id: turn_id.to_string(),
-                executor_roots: Vec::new(),
-                host: None,
-                include_host_skills: false,
-                include_bundled_skills: false,
-                include_orchestrator_skills: true,
-                mcp_resources: self.mcp_resources.clone(),
-            })
-            .await
-        {
-            Ok(catalog) => catalog,
-            Err(err) => SkillCatalog {
-                warnings: vec![err.message],
-                ..Default::default()
+    async fn catalog(&self, turn_id: &str, authority: SkillToolAuthority) -> SkillCatalog {
+        match authority {
+            SkillToolAuthority::Orchestrator => match self
+                .providers
+                .list_orchestrator_for_turn(SkillListQuery {
+                    turn_id: turn_id.to_string(),
+                    executor_roots: Vec::new(),
+                    host: None,
+                    include_host_skills: false,
+                    include_bundled_skills: false,
+                    include_orchestrator_skills: true,
+                    mcp_resources: self.mcp_resources.clone(),
+                })
+                .await
+            {
+                Ok(catalog) => catalog,
+                Err(err) => SkillCatalog {
+                    warnings: vec![err.message],
+                    ..Default::default()
+                },
             },
         }
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct SkillAuthorityHandle {
-    kind: SkillAuthorityKind,
-    id: String,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum SkillAuthorityKind {
-    Remote,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum SkillToolAuthority {
+    Orchestrator,
 }
 
-impl SkillAuthorityHandle {
+impl SkillToolAuthority {
     fn from_authority(authority: &SkillAuthority) -> Option<Self> {
-        if authority.kind != SkillSourceKind::Orchestrator {
+        if authority
+            != &SkillAuthority::new(SkillSourceKind::Orchestrator, CODEX_APPS_MCP_SERVER_NAME)
+        {
             return None;
         }
-        Some(Self {
-            kind: SkillAuthorityKind::Remote,
-            id: authority.id.clone(),
-        })
+        Some(Self::Orchestrator)
     }
 
-    fn into_authority(self) -> Result<SkillAuthority, FunctionCallError> {
-        let Self {
-            kind: SkillAuthorityKind::Remote,
-            id,
-        } = self;
-        validate_handle("authority.id", &id, MAX_AUTHORITY_ID_BYTES)?;
-        Ok(SkillAuthority::new(SkillSourceKind::Orchestrator, id))
-    }
-
-    fn is_bounded(&self) -> bool {
-        is_bounded_handle(&self.id, MAX_AUTHORITY_ID_BYTES)
+    fn into_authority(self) -> SkillAuthority {
+        match self {
+            Self::Orchestrator => {
+                SkillAuthority::new(SkillSourceKind::Orchestrator, CODEX_APPS_MCP_SERVER_NAME)
+            }
+        }
     }
 }
 

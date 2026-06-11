@@ -146,7 +146,12 @@ async fn codex_apps_resources_support_orchestrator_skills_without_an_environment
                     SKILLS_LIST_CALL_ID,
                     "skills",
                     "list",
-                    "{}",
+                    &json!({
+                        "authority": {
+                            "kind": "orchestrator",
+                        },
+                    })
+                    .to_string(),
                 ),
                 responses::ev_completed("resp-skills-list"),
             ]),
@@ -158,8 +163,7 @@ async fn codex_apps_resources_support_orchestrator_skills_without_an_environment
                     "read",
                     &json!({
                         "authority": {
-                            "kind": "remote",
-                            "id": "codex_apps",
+                            "kind": "orchestrator",
                         },
                         "package": SKILL_RESOURCE_URI,
                         "resource": SKILL_REFERENCE_URI,
@@ -235,17 +239,14 @@ async fn codex_apps_resources_support_orchestrator_skills_without_an_environment
         json!({
             "skills": [{
                 "authority": {
-                    "kind": "remote",
-                    "id": "codex_apps",
+                    "kind": "orchestrator",
                 },
                 "package": SKILL_RESOURCE_URI,
                 "name": SKILL_NAME,
                 "description": SKILL_DESCRIPTION,
                 "main_resource": SKILL_MAIN_PROMPT_URI,
             }],
-            "next_cursor": null,
             "warnings": ["Orchestrator skill discovery stopped after 2 resource pages: failed to list orchestrator skill resources: resources/list failed for `codex_apps`: Mcp error: -32603: simulated later-page failure"],
-            "truncated": false,
         })
     );
 
@@ -257,8 +258,6 @@ async fn codex_apps_resources_support_orchestrator_skills_without_an_environment
         json!({
             "resource": SKILL_REFERENCE_URI,
             "contents": SKILL_REFERENCE_CONTENTS,
-            "next_cursor": null,
-            "truncated": false,
         })
     );
     apps_server_handle.abort();
