@@ -87,9 +87,11 @@ fn process_is_elevated() -> bool {
     status.is_ok_and(|status| status.success())
 }
 
-fn stage_windows_sandbox_helpers(codex_home: &Path) -> Result<bool> {
-    let helper_dir = codex_home.join(".sandbox-bin");
-    std::fs::create_dir_all(&helper_dir)
+fn stage_windows_sandbox_helpers_next_to_codex_exe(codex_exe: &Path) -> Result<bool> {
+    let helper_dir = codex_exe
+        .parent()
+        .context("configured Codex helper path has no parent")?;
+    std::fs::create_dir_all(helper_dir)
         .with_context(|| format!("create helper dir {}", helper_dir.display()))?;
     for helper_name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
         let helper = match codex_utils_cargo_bin::cargo_bin(helper_name) {
@@ -312,10 +314,13 @@ async fn elevated_fs_helper_allows_writable_path_when_setup_is_available() -> Re
         return Ok(());
     }
 
-    let sandboxed = sandboxed_file_system()?;
-    if !stage_windows_sandbox_helpers(sandboxed._codex_home.path())? {
+    let helper_dir = TempDir::new()?;
+    let configured_helper = helper_dir.path().join("codex.exe");
+    std::fs::copy(std::env::current_exe()?, &configured_helper)?;
+    if !stage_windows_sandbox_helpers_next_to_codex_exe(&configured_helper)? {
         return Ok(());
     }
+    let sandboxed = sandboxed_file_system_with_codex_exe(configured_helper)?;
 
     let (_workspace_dir, workspace) = temp_workspace()?;
     let file_path = workspace.join("allowed-elevated.txt");
