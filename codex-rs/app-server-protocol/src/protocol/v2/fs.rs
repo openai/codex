@@ -57,6 +57,24 @@ pub struct FsCreateDirectoryParams {
 #[ts(export_to = "v2/")]
 pub struct FsCreateDirectoryResponse {}
 
+/// Resolve an absolute path to its canonical filesystem path.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsCanonicalizeParams {
+    /// Absolute path to canonicalize. The path must exist.
+    pub path: AbsolutePathBuf,
+}
+
+/// Canonical path returned by `fs/canonicalize`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsCanonicalizeResponse {
+    /// Canonical absolute path with symbolic links resolved.
+    pub path: AbsolutePathBuf,
+}
+
 /// Request metadata for an absolute path.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

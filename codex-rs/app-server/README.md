@@ -184,6 +184,7 @@ Example with notification opt-out:
 - `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
 - `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
 - `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
+- `fs/canonicalize` — resolve an existing absolute path to its canonical absolute path, including symbolic links.
 - `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `isSymlink`, `createdAtMs`, and `modifiedAtMs`.
 - `fs/readDirectory` — list direct child entries for an absolute directory path; each entry contains `fileName`, `isDirectory`, and `isFile`, and `fileName` is just the child name, not a path.
 - `fs/remove` — remove an absolute file or directory tree; `recursive` and `force` default to `true`.
@@ -1189,20 +1190,26 @@ All filesystem paths in this section must be absolute.
     "dataBase64": "aGVsbG8="
 } }
 { "id": 41, "result": {} }
-{ "method": "fs/getMetadata", "id": 42, "params": {
-    "path": "/tmp/example/nested/note.txt"
+{ "method": "fs/canonicalize", "id": 42, "params": {
+    "path": "/tmp/example/nested/../nested/note.txt"
 } }
 { "id": 42, "result": {
+    "path": "/tmp/example/nested/note.txt"
+} }
+{ "method": "fs/getMetadata", "id": 43, "params": {
+    "path": "/tmp/example/nested/note.txt"
+} }
+{ "id": 43, "result": {
     "isDirectory": false,
     "isFile": true,
     "isSymlink": false,
     "createdAtMs": 1730910000000,
     "modifiedAtMs": 1730910000000
 } }
-{ "method": "fs/readFile", "id": 43, "params": {
+{ "method": "fs/readFile", "id": 44, "params": {
     "path": "/tmp/example/nested/note.txt"
 } }
-{ "id": 43, "result": {
+{ "id": 44, "result": {
     "dataBase64": "aGVsbG8="
 } }
 ```

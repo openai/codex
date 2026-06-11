@@ -800,6 +800,23 @@
       ],
       "type": "object"
     },
+    "FsCanonicalizeParams": {
+      "description": "Resolve an absolute path to its canonical filesystem path.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute path to canonicalize. The path must exist."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "FsCopyParams": {
       "description": "Copy a file or directory tree on the host filesystem.",
       "properties": {
@@ -5364,6 +5381,30 @@
         "params"
       ],
       "title": "Fs/createDirectoryRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "fs/canonicalize"
+          ],
+          "title": "Fs/canonicalizeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FsCanonicalizeParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Fs/canonicalizeRequest",
       "type": "object"
     },
     {

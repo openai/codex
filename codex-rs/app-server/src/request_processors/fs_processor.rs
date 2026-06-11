@@ -4,6 +4,8 @@ use crate::fs_watch::FsWatchManager;
 use crate::outgoing_message::ConnectionId;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use codex_app_server_protocol::FsCanonicalizeParams;
+use codex_app_server_protocol::FsCanonicalizeResponse;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCopyResponse;
 use codex_app_server_protocol::FsCreateDirectoryParams;
@@ -105,6 +107,18 @@ impl FsRequestProcessor {
             .await
             .map_err(map_fs_error)?;
         Ok(FsCreateDirectoryResponse {})
+    }
+
+    pub(crate) async fn canonicalize(
+        &self,
+        params: FsCanonicalizeParams,
+    ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+        let path = self
+            .file_system()?
+            .canonicalize(&params.path, /*sandbox*/ None)
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsCanonicalizeResponse { path })
     }
 
     pub(crate) async fn get_metadata(

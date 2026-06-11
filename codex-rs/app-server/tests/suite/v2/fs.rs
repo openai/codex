@@ -4,6 +4,8 @@ use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use codex_app_server_protocol::FsCanonicalizeParams;
+use codex_app_server_protocol::FsCanonicalizeResponse;
 use codex_app_server_protocol::FsChangedNotification;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsGetMetadataResponse;
@@ -121,6 +123,64 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_canonicalize_resolves_an_existing_path() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let directory = codex_home.path().join("parent");
+    let child = directory.join("child");
+    std::fs::create_dir_all(&child)?;
+    let path = child.join("..");
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let request_id = mcp
+        .send_fs_canonicalize_request(FsCanonicalizeParams {
+            path: absolute_path(path),
+        })
+        .await?;
+    let response: FsCanonicalizeResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+
+    assert_eq!(
+        response.path,
+        absolute_path(std::fs::canonicalize(directory)?)
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_canonicalize_resolves_a_symlink() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let target = codex_home.path().join("target");
+    let alias = codex_home.path().join("alias");
+    std::fs::create_dir(&target)?;
+    symlink(&target, &alias)?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let request_id = mcp
+        .send_fs_canonicalize_request(FsCanonicalizeParams {
+            path: absolute_path(alias),
+        })
+        .await?;
+    let response: FsCanonicalizeResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+
+    assert_eq!(response.path.as_path(), std::fs::canonicalize(target)?);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_methods_return_error_when_local_environment_is_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let absolute_file = codex_home.path().join("absolute.txt");
@@ -138,6 +198,18 @@ async fn fs_methods_return_error_when_local_environment_is_disabled() -> Result<
         })
         .await?;
     expect_error_message(&mut mcp, read_id, "local filesystem is not configured").await?;
+
+    let canonicalize_id = mcp
+        .send_fs_canonicalize_request(FsCanonicalizeParams {
+            path: absolute_path(codex_home.path().to_path_buf()),
+        })
+        .await?;
+    expect_error_message(
+        &mut mcp,
+        canonicalize_id,
+        "local filesystem is not configured",
+    )
+    .await?;
 
     Ok(())
 }
@@ -439,6 +511,16 @@ async fn fs_methods_reject_relative_paths() -> Result<()> {
     expect_error_message(
         &mut mcp,
         create_directory_id,
+        "Invalid request: AbsolutePathBuf deserialized without a base path",
+    )
+    .await?;
+
+    let canonicalize_id = mcp
+        .send_raw_request("fs/canonicalize", Some(json!({ "path": "relative-dir" })))
+        .await?;
+    expect_error_message(
+        &mut mcp,
+        canonicalize_id,
         "Invalid request: AbsolutePathBuf deserialized without a base path",
     )
     .await?;

@@ -739,6 +739,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::FsCreateDirectoryResponse,
     },
+    FsCanonicalize => "fs/canonicalize" {
+        params: v2::FsCanonicalizeParams,
+        serialization: None,
+        response: v2::FsCanonicalizeResponse,
+    },
     FsGetMetadata => "fs/getMetadata" {
         params: v2::FsGetMetadataParams,
         serialization: None,
@@ -2841,6 +2846,27 @@ mod tests {
                 "params": {
                     "environmentId": "remote-a",
                     "execServerUrl": "ws://127.0.0.1:8765"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_fs_canonicalize() -> Result<()> {
+        let request = ClientRequest::FsCanonicalize {
+            request_id: RequestId::Integer(10),
+            params: v2::FsCanonicalizeParams {
+                path: absolute_path("tmp/example"),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "fs/canonicalize",
+                "id": 10,
+                "params": {
+                    "path": absolute_path_string("tmp/example")
                 }
             }),
             serde_json::to_value(&request)?,

@@ -997,6 +997,11 @@ impl MessageProcessor {
                 .create_directory(params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::FsCanonicalize { params, .. } => self
+                .fs_processor
+                .canonicalize(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::FsGetMetadata { params, .. } => self
                 .fs_processor
                 .get_metadata(params)

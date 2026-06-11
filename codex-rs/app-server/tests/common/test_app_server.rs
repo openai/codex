@@ -25,6 +25,7 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::FeedbackUploadParams;
+use codex_app_server_protocol::FsCanonicalizeParams;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCreateDirectoryParams;
 use codex_app_server_protocol::FsGetMetadataParams;
@@ -1148,6 +1149,14 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("fs/createDirectory", params).await
+    }
+
+    pub async fn send_fs_canonicalize_request(
+        &mut self,
+        params: FsCanonicalizeParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("fs/canonicalize", params).await
     }
 
     pub async fn send_fs_get_metadata_request(
