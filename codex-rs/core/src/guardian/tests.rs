@@ -827,6 +827,10 @@ fn format_guardian_action_pretty_truncates_large_string_fields() -> serde_json::
     assert!(rendered.text.contains("\"tool\": \"apply_patch\""));
     assert!(rendered.text.contains("<truncated omitted_approx_tokens="));
     assert!(rendered.text.len() < patch.len());
+    assert!(
+        rendered.text.len() < 80_000,
+        "guardian action text should stay below the 10k-token context review cap"
+    );
     assert!(rendered.truncated);
     Ok(())
 }
