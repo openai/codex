@@ -27,7 +27,6 @@ use crate::noise_relay::noise_relay_websocket_config;
 use crate::server::ConnectionProcessor;
 
 const ENVIRONMENT_REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_EXECUTOR_REGISTRATION_ID_LEN: usize = 256;
 const MAX_REMOTE_ENVIRONMENT_ID_LEN: usize = 256;
 const NOISE_RELAY_SECURITY_PROFILE: &str = "noise_hybrid_ik_v1";
 const REMOTE_RENDEZVOUS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -173,7 +172,6 @@ pub(super) async fn run_remote_environment(
                 response.security_profile
             )));
         }
-        validate_executor_registration_id(&response.executor_registration_id)?;
         let environment_id = &response.environment_id;
         info!(
             "codex exec-server Noise environment registered with environment_id {environment_id}"
@@ -235,20 +233,6 @@ fn validate_environment_id(environment_id: &str) -> Result<(), ExecServerError> 
     {
         return Err(ExecServerError::EnvironmentRegistryConfig(
             "environment id must contain only ASCII letters, numbers, '-' or '_'".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_executor_registration_id(
-    executor_registration_id: &str,
-) -> Result<(), ExecServerError> {
-    if executor_registration_id.is_empty()
-        || executor_registration_id.trim() != executor_registration_id
-        || executor_registration_id.len() > MAX_EXECUTOR_REGISTRATION_ID_LEN
-    {
-        return Err(ExecServerError::Protocol(
-            "environment registry returned an invalid executor registration id".to_string(),
         ));
     }
     Ok(())

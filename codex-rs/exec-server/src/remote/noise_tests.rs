@@ -151,17 +151,3 @@ fn noise_environment_id_validation_rejects_invalid_values() {
         ExecServerError::EnvironmentRegistryConfig(message) if message.contains("ASCII letters")
     ));
 }
-
-#[test]
-fn executor_registration_id_validation_rejects_ambiguous_values() {
-    for invalid in ["", " registration-1", "registration-1 "] {
-        assert!(validate_executor_registration_id(invalid).is_err());
-    }
-    assert!(
-        validate_executor_registration_id(&"x".repeat(MAX_EXECUTOR_REGISTRATION_ID_LEN)).is_ok()
-    );
-    assert!(
-        validate_executor_registration_id(&"x".repeat(MAX_EXECUTOR_REGISTRATION_ID_LEN + 1))
-            .is_err()
-    );
-}
