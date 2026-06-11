@@ -42,7 +42,12 @@ pub(crate) fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
 }
 
 pub(crate) fn goal_usage_summary(goal: &ThreadGoal) -> String {
-    let mut parts = vec![format!("Objective: {}", goal.objective)];
+    let objective = if let Some(path) = crate::goal_files::objective_file_path(&goal.objective) {
+        format!("Objective file: {path}")
+    } else {
+        format!("Objective: {}", goal.objective)
+    };
+    let mut parts = vec![objective];
     if goal.time_used_seconds > 0 {
         parts.push(format!(
             "Time: {}.",

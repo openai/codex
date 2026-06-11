@@ -75,8 +75,6 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::UserInput as AppServerUserInput;
 use codex_app_server_protocol::WarningNotification;
-use codex_models_manager::test_support::construct_model_info_offline_for_tests;
-use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -90,6 +88,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -309,7 +308,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     let thread_id = ThreadId::new();
     let initial_prompt = "follow-up after replay".to_string();
     let config = app.config.clone();
-    let model = get_model_offline_for_tests(config.model.as_deref());
+    let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
         config,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -4026,7 +4025,7 @@ async fn make_test_app() -> App {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
-    let model = get_model_offline_for_tests(config.model.as_deref());
+    let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     App {
@@ -4090,7 +4089,7 @@ async fn make_test_app_with_channels() -> (
     let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
-    let model = get_model_offline_for_tests(config.model.as_deref());
+    let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     (
@@ -4148,6 +4147,50 @@ async fn make_test_app_with_channels() -> (
         rx,
         op_rx,
     )
+}
+
+#[tokio::test]
+async fn set_thread_goal_draft_materializes_long_objective_before_goal_set() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("thread/start should succeed");
+    let thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await
+        .expect("primary thread should be registered");
+    let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
+
+    app.set_thread_goal_draft(
+        &mut app_server,
+        thread_id,
+        crate::goal_files::GoalDraft {
+            objective: objective.clone(),
+        },
+        crate::app_event::ThreadGoalSetMode::ConfirmIfExists,
+    )
+    .await;
+
+    let goal = app_server
+        .thread_goal_get(thread_id)
+        .await?
+        .goal
+        .expect("goal should be set");
+    let path = crate::goal_files::objective_file_path(&goal.objective)
+        .expect("goal objective should be a managed file reference");
+    assert!(path.as_str().contains("attachments"));
+    assert_eq!(
+        crate::goal_files::objective_text_for_edit(&mut app_server, &goal.objective)
+            .await
+            .expect("managed goal file should be readable"),
+        objective
+    );
+    app_server.shutdown().await?;
+    Ok(())
 }
 
 fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
@@ -4609,8 +4652,7 @@ fn lines_to_single_string(lines: &[Line<'_>]) -> String {
 }
 
 fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info =
-        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
+    let model_info = crate::legacy_core::test_support::construct_model_info_offline(model, config);
     SessionTelemetry::new(
         ThreadId::new(),
         model,

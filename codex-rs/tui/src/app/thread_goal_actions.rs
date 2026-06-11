@@ -9,6 +9,7 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_display::goal_status_label;
 use crate::goal_display::goal_usage_summary;
+use crate::goal_files;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_protocol::ThreadId;
@@ -108,7 +109,48 @@ impl App {
             return;
         };
 
-        self.chat_widget.show_goal_edit_prompt(thread_id, goal);
+        let objective = match goal_files::objective_text_for_edit(app_server, &goal.objective).await
+        {
+            Ok(objective) => objective,
+            Err(err) => {
+                self.chat_widget.add_error_message(err.to_string());
+                goal.objective.clone()
+            }
+        };
+        if self.current_displayed_thread_id() != Some(thread_id) {
+            return;
+        }
+        self.chat_widget
+            .show_goal_edit_prompt(thread_id, goal, objective);
+    }
+
+    pub(super) async fn set_thread_goal_draft(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+        draft: goal_files::GoalDraft,
+        mode: ThreadGoalSetMode,
+    ) {
+        let codex_home = app_server.codex_home_path(&self.config.codex_home);
+        let result =
+            goal_files::materialize_goal_draft(app_server, codex_home.as_ref(), draft).await;
+        let objective = match result {
+            Ok(objective) => objective,
+            Err(err) => {
+                if self.current_displayed_thread_id() == Some(thread_id) {
+                    self.chat_widget.add_error_message(err.to_string());
+                    self.chat_widget.maybe_send_next_queued_input();
+                }
+                return;
+            }
+        };
+
+        if self
+            .set_thread_goal_objective(app_server, thread_id, objective, mode)
+            .await
+        {
+            self.chat_widget.maybe_send_next_queued_input();
+        }
     }
 
     pub(super) async fn set_thread_goal_objective(
@@ -117,18 +159,18 @@ impl App {
         thread_id: ThreadId,
         objective: String,
         mode: ThreadGoalSetMode,
-    ) {
+    ) -> bool {
         let mode = if matches!(mode, ThreadGoalSetMode::ConfirmIfExists) {
             let result = app_server.thread_goal_get(thread_id).await;
             if self.current_displayed_thread_id() != Some(thread_id) {
-                return;
+                return false;
             }
 
             match result {
                 Ok(response) => match response.goal.as_ref() {
                     Some(goal) if should_confirm_before_replacing_goal(goal) => {
                         self.show_replace_thread_goal_confirmation(thread_id, objective);
-                        return;
+                        return false;
                     }
                     Some(_) => ThreadGoalSetMode::ReplaceExisting,
                     None => mode,
@@ -136,7 +178,7 @@ impl App {
                 Err(err) => {
                     self.chat_widget
                         .add_error_message(thread_goal_error_message("read", &err));
-                    return;
+                    return true;
                 }
             }
         } else {
@@ -149,11 +191,11 @@ impl App {
 
             if let Err(err) = result {
                 if self.current_displayed_thread_id() != Some(thread_id) {
-                    return;
+                    return false;
                 }
                 self.chat_widget
                     .add_error_message(thread_goal_error_message("replace", &err));
-                return;
+                return true;
             }
         }
 
@@ -171,7 +213,7 @@ impl App {
             .thread_goal_set(thread_id, Some(objective), Some(status), token_budget)
             .await;
         if self.current_displayed_thread_id() != Some(thread_id) {
-            return;
+            return false;
         }
 
         match result {
@@ -185,6 +227,7 @@ impl App {
                     .add_error_message(thread_goal_error_message(action, &err));
             }
         }
+        true
     }
 
     pub(super) async fn set_thread_goal_status(
@@ -246,10 +289,17 @@ impl App {
 
     fn show_replace_thread_goal_confirmation(&mut self, thread_id: ThreadId, objective: String) {
         let replace_objective = objective.clone();
+        let subtitle = if let Some(path) = goal_files::objective_file_path(&objective) {
+            format!("New objective file: {path}")
+        } else {
+            format!("New objective: {objective}")
+        };
         let replace_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::SetThreadGoalObjective {
+            tx.send(AppEvent::SetThreadGoalDraft {
                 thread_id,
-                objective: replace_objective.clone(),
+                draft: goal_files::GoalDraft {
+                    objective: replace_objective.clone(),
+                },
                 mode: ThreadGoalSetMode::ReplaceExisting,
             });
         })];
@@ -270,7 +320,7 @@ impl App {
         ];
         self.chat_widget.show_selection_view(SelectionViewParams {
             title: Some("Replace goal?".to_string()),
-            subtitle: Some(format!("New objective: {objective}")),
+            subtitle: Some(subtitle),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()

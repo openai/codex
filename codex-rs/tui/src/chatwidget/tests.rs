@@ -218,6 +218,22 @@ macro_rules! assert_chatwidget_snapshot {
     }};
 }
 
+fn next_goal_draft(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    expected_thread_id: ThreadId,
+) -> crate::goal_files::GoalDraft {
+    loop {
+        let event = rx.try_recv().expect("expected goal draft event");
+        if let AppEvent::SetThreadGoalDraft {
+            thread_id, draft, ..
+        } = event
+        {
+            assert_eq!(thread_id, expected_thread_id);
+            return draft;
+        }
+    }
+}
+
 mod app_server;
 mod approval_requests;
 mod composer_submission;

@@ -1,5 +1,4 @@
 use super::*;
-
 #[tokio::test]
 async fn goal_menu_active_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -71,6 +70,36 @@ async fn goal_menu_budget_limited_snapshot() {
 }
 
 #[tokio::test]
+async fn goal_menu_managed_file_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    let mut goal = test_goal(
+        thread_id,
+        AppThreadGoalStatus::Active,
+        /*token_budget*/ Some(80_000),
+    );
+    let path = chat
+        .config
+        .codex_home
+        .join("attachments")
+        .join("00000000-0000-4000-8000-000000000000")
+        .join("goal-objective.md");
+    let goal_path =
+        codex_app_server_client::AppServerPath::from_absolute_str(&path.display().to_string())
+            .expect("absolute goal path");
+    goal.objective = crate::goal_files::objective_file_reference(&goal_path)
+        .expect("goal objective file reference");
+
+    chat.show_goal_summary(goal);
+
+    let rendered = rendered_goal_summary(&mut rx).replace(
+        &path.display().to_string(),
+        "$CODEX_HOME/attachments/<uuid>/goal-objective.md",
+    );
+    assert_chatwidget_snapshot!("goal_menu_managed_file", rendered);
+}
+
+#[tokio::test]
 async fn resume_paused_goal_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
@@ -98,6 +127,7 @@ async fn goal_edit_prompt_snapshot() {
             AppThreadGoalStatus::Active,
             /*token_budget*/ Some(80_000),
         ),
+        "Keep improving the bare goal command until it feels calm and useful.".to_string(),
     );
 
     assert_chatwidget_snapshot!(
@@ -118,14 +148,15 @@ async fn goal_edit_prompt_submits_preserved_status_and_budget() {
             AppThreadGoalStatus::Paused,
             /*token_budget*/ Some(80_000),
         ),
+        "Keep improving the bare goal command until it feels calm and useful.".to_string(),
     );
     chat.handle_paste(" with clearer wording".to_string());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     match rx.try_recv() {
-        Ok(AppEvent::SetThreadGoalObjective {
+        Ok(AppEvent::SetThreadGoalDraft {
             thread_id: event_thread_id,
-            objective,
+            draft,
             mode:
                 crate::app_event::ThreadGoalSetMode::UpdateExisting {
                     status,
@@ -134,13 +165,13 @@ async fn goal_edit_prompt_submits_preserved_status_and_budget() {
         }) => {
             assert_eq!(event_thread_id, thread_id);
             assert_eq!(
-                objective,
+                draft.objective,
                 "Keep improving the bare goal command until it feels calm and useful. with clearer wording"
             );
             assert_eq!(status, AppThreadGoalStatus::Paused);
             assert_eq!(token_budget, Some(80_000));
         }
-        other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+        other => panic!("expected SetThreadGoalDraft event, got {other:?}"),
     }
     assert!(chat.no_modal_or_popup_active());
 }
@@ -161,11 +192,12 @@ async fn goal_edit_prompt_preserves_resumable_stopped_statuses() {
                 stopped_status,
                 /*token_budget*/ Some(80_000),
             ),
+            "Keep improving the bare goal command until it feels calm and useful.".to_string(),
         );
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         match rx.try_recv() {
-            Ok(AppEvent::SetThreadGoalObjective {
+            Ok(AppEvent::SetThreadGoalDraft {
                 mode:
                     crate::app_event::ThreadGoalSetMode::UpdateExisting {
                         status,
@@ -176,7 +208,7 @@ async fn goal_edit_prompt_preserves_resumable_stopped_statuses() {
                 assert_eq!(status, stopped_status);
                 assert_eq!(token_budget, Some(80_000));
             }
-            other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+            other => panic!("expected SetThreadGoalDraft event, got {other:?}"),
         }
     }
 }
@@ -199,11 +231,12 @@ async fn goal_edit_prompt_resets_terminal_status_to_active() {
                 terminal_status,
                 /*token_budget*/ Some(80_000),
             ),
+            "Keep improving the bare goal command until it feels calm and useful.".to_string(),
         );
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         match rx.try_recv() {
-            Ok(AppEvent::SetThreadGoalObjective {
+            Ok(AppEvent::SetThreadGoalDraft {
                 mode:
                     crate::app_event::ThreadGoalSetMode::UpdateExisting {
                         status,
@@ -214,7 +247,7 @@ async fn goal_edit_prompt_resets_terminal_status_to_active() {
                 assert_eq!(status, AppThreadGoalStatus::Active);
                 assert_eq!(token_budget, Some(80_000));
             }
-            other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+            other => panic!("expected SetThreadGoalDraft event, got {other:?}"),
         }
     }
 }

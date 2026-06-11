@@ -59,6 +59,8 @@ use crate::bottom_pane::TerminalTitleSetupView;
 use crate::diff_model::FileChange;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::legacy_core::config::Config;
+use crate::legacy_core::config::Constrained;
+use crate::legacy_core::config::ConstraintResult;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 #[cfg(any(target_os = "windows", test))]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -124,8 +126,6 @@ use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::ConfigLayerStackOrdering;
-use codex_config::Constrained;
-use codex_config::ConstraintResult;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
@@ -345,7 +345,6 @@ use self::goal_status::GoalStatusState;
 #[cfg(test)]
 use self::goal_status::goal_status_indicator_from_app_goal;
 mod goal_menu;
-mod goal_validation;
 mod ide_context;
 use self::ide_context::IdeContextState;
 mod input_queue;

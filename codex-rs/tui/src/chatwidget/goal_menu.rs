@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::goal_display::format_goal_elapsed_seconds;
+use crate::goal_files;
 use crate::status::format_tokens_compact;
 
 impl ChatWidget {
@@ -9,19 +10,24 @@ impl ChatWidget {
         self.add_plain_history_lines(goal_summary_lines(&goal));
     }
 
-    pub(crate) fn show_goal_edit_prompt(&mut self, thread_id: ThreadId, goal: AppThreadGoal) {
+    pub(crate) fn show_goal_edit_prompt(
+        &mut self,
+        thread_id: ThreadId,
+        goal: AppThreadGoal,
+        objective: String,
+    ) {
         let tx = self.app_event_tx.clone();
         let status = edited_goal_status(goal.status);
         let token_budget = goal.token_budget;
         let view = CustomPromptView::new(
             "Edit goal".to_string(),
             "Type a goal objective and press Enter".to_string(),
-            goal.objective,
+            objective,
             /*context_label*/ None,
             Box::new(move |objective: String| {
-                tx.send(AppEvent::SetThreadGoalObjective {
+                tx.send(AppEvent::SetThreadGoalDraft {
                     thread_id,
-                    objective,
+                    draft: goal_files::GoalDraft { objective },
                     mode: crate::app_event::ThreadGoalSetMode::UpdateExisting {
                         status,
                         token_budget,
@@ -37,6 +43,11 @@ impl ChatWidget {
         thread_id: ThreadId,
         objective: String,
     ) {
+        let subtitle = if let Some(path) = goal_files::objective_file_path(&objective) {
+            format!("Goal file: {path}")
+        } else {
+            format!("Goal: {objective}")
+        };
         let resume_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::SetThreadGoalStatus {
                 thread_id,
@@ -45,7 +56,7 @@ impl ChatWidget {
         })];
         self.show_selection_view(SelectionViewParams {
             title: Some("Resume paused goal?".to_string()),
-            subtitle: Some(format!("Goal: {objective}")),
+            subtitle: Some(subtitle),
             footer_hint: Some(standard_popup_hint_line()),
             initial_selected_idx: Some(0),
             items: vec![
@@ -85,7 +96,7 @@ fn goal_summary_lines(goal: &AppThreadGoal) -> Vec<Line<'static>> {
             "Status: ".dim(),
             goal_status_label(goal.status).to_string().into(),
         ]),
-        Line::from(vec!["Objective: ".dim(), goal.objective.clone().into()]),
+        goal_objective_line(&goal.objective),
         Line::from(vec![
             "Time used: ".dim(),
             format_goal_elapsed_seconds(goal.time_used_seconds).into(),
@@ -113,6 +124,14 @@ fn goal_summary_lines(goal: &AppThreadGoal) -> Vec<Line<'static>> {
     lines.push(Line::default());
     lines.push(Line::from(command_hint.dim()));
     lines
+}
+
+fn goal_objective_line(objective: &str) -> Line<'static> {
+    if let Some(path) = goal_files::objective_file_path(objective) {
+        Line::from(vec!["Objective file: ".dim(), path.to_string().into()])
+    } else {
+        Line::from(vec!["Objective: ".dim(), objective.to_string().into()])
+    }
 }
 
 fn goal_status_label(status: AppThreadGoalStatus) -> &'static str {

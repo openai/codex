@@ -5,7 +5,6 @@
 //! dispatch step and records the staged entry once the command has been handled, so
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
-use super::goal_validation::GoalObjectiveValidationSource;
 use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
@@ -14,6 +13,7 @@ use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
+use crate::goal_files::GoalDraft;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -543,9 +543,18 @@ impl ChatWidget {
             return;
         }
 
-        if cmd == SlashCommand::Goal
-            && !self.goal_objective_with_pending_pastes_is_allowed(&args, &text_elements)
-        {
+        if cmd == SlashCommand::Goal {
+            self.dispatch_prepared_command_with_args(
+                cmd,
+                PreparedSlashCommandArgs {
+                    args,
+                    text_elements,
+                    local_images: Vec::new(),
+                    remote_image_urls: Vec::new(),
+                    mention_bindings: Vec::new(),
+                    source: SlashCommandDispatchSource::Live,
+                },
+            );
             return;
         }
 
@@ -580,6 +589,12 @@ impl ChatWidget {
         }
     }
 
+    fn clear_live_goal_submission(&mut self) {
+        self.bottom_pane
+            .set_composer_text(String::new(), Vec::new(), Vec::new());
+        self.bottom_pane.drain_pending_submission_state();
+    }
+
     fn prepared_inline_user_message(
         &mut self,
         args: String,
@@ -609,7 +624,7 @@ impl ChatWidget {
         &mut self,
         cmd: SlashCommand,
         prepared: PreparedSlashCommandArgs,
-    ) {
+    ) -> QueueDrain {
         let PreparedSlashCommandArgs {
             args,
             text_elements,
@@ -654,19 +669,19 @@ impl ChatWidget {
             },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
-                    return;
+                    return self.queued_command_drain_result(cmd);
                 }
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 let Some(name) = normalize_thread_name(&args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
-                    return;
+                    return self.queued_command_drain_result(cmd);
                 };
                 self.app_event_tx.set_thread_name(name);
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
                 if !self.apply_plan_slash_command() {
-                    return;
+                    return self.queued_command_drain_result(cmd);
                 }
                 let user_message = self.prepared_inline_user_message(
                     args,
@@ -687,7 +702,10 @@ impl ChatWidget {
             }
             SlashCommand::Goal if !trimmed.is_empty() => {
                 if !self.config.features.enabled(Feature::Goals) {
-                    return;
+                    if source == SlashCommandDispatchSource::Live {
+                        self.clear_live_goal_submission();
+                    }
+                    return self.queued_command_drain_result(cmd);
                 }
                 enum GoalControlCommand {
                     Clear,
@@ -700,9 +718,9 @@ impl ChatWidget {
                             thread_id: self.thread_id,
                         });
                         if source == SlashCommandDispatchSource::Live {
-                            self.bottom_pane.drain_pending_submission_state();
+                            self.clear_live_goal_submission();
                         }
-                        return;
+                        return self.queued_command_drain_result(cmd);
                     }
                     "pause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Paused)),
                     "resume" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
@@ -716,7 +734,10 @@ impl ChatWidget {
                                 "The session must start before you can change a goal.".to_string(),
                             ),
                         );
-                        return;
+                        if source == SlashCommandDispatchSource::Live {
+                            self.clear_live_goal_submission();
+                        }
+                        return self.queued_command_drain_result(cmd);
                     };
                     match command {
                         GoalControlCommand::Clear => {
@@ -730,58 +751,51 @@ impl ChatWidget {
                     }
                     self.append_message_history_entry(format!("/goal {trimmed}"));
                     if source == SlashCommandDispatchSource::Live {
-                        self.bottom_pane.drain_pending_submission_state();
+                        self.clear_live_goal_submission();
                     }
-                    return;
+                    return self.queued_command_drain_result(cmd);
                 }
-                let objective = args.trim();
-                if objective.is_empty() {
-                    self.add_error_message("Goal objective must not be empty.".to_string());
-                    self.add_info_message(
-                        GOAL_USAGE.to_string(),
-                        Some(GOAL_USAGE_HINT.to_string()),
-                    );
-                    if source == SlashCommandDispatchSource::Live {
-                        self.bottom_pane.drain_pending_submission_state();
-                    }
-                    return;
-                }
-                let validation_source = match source {
-                    SlashCommandDispatchSource::Live => GoalObjectiveValidationSource::Live,
-                    SlashCommandDispatchSource::Queued => GoalObjectiveValidationSource::Queued,
-                };
-                if !self.goal_objective_is_allowed(objective, validation_source) {
-                    return;
-                }
+                let draft = GoalDraft { objective: args };
                 let Some(thread_id) = self.thread_id else {
                     if source == SlashCommandDispatchSource::Live {
+                        const GOAL_PREFIX: &str = "/goal ";
+                        let text_elements = text_elements
+                            .into_iter()
+                            .map(|element| {
+                                element.map_range(|range| ByteRange {
+                                    start: range.start + GOAL_PREFIX.len(),
+                                    end: range.end + GOAL_PREFIX.len(),
+                                })
+                            })
+                            .collect();
                         self.queue_user_message_with_options(
                             UserMessage {
-                                text: format!("/goal {args}"),
+                                text: format!("{GOAL_PREFIX}{}", draft.objective),
                                 local_images: Vec::new(),
                                 remote_image_urls: Vec::new(),
-                                text_elements: Vec::new(),
+                                text_elements,
                                 mention_bindings: Vec::new(),
                             },
                             QueuedInputAction::ParseSlash,
                         );
-                        self.bottom_pane.drain_pending_submission_state();
+                        self.clear_live_goal_submission();
                     } else {
                         self.add_info_message(
                             GOAL_USAGE.to_string(),
                             Some("The session must start before you can set a goal.".to_string()),
                         );
                     }
-                    return;
+                    return self.queued_command_drain_result(cmd);
                 };
-                self.app_event_tx.send(AppEvent::SetThreadGoalObjective {
+                let history_objective = draft.objective.clone();
+                self.app_event_tx.send(AppEvent::SetThreadGoalDraft {
                     thread_id,
-                    objective: objective.to_string(),
+                    draft,
                     mode: ThreadGoalSetMode::ConfirmIfExists,
                 });
-                self.append_message_history_entry(format!("/goal {trimmed}"));
+                self.append_message_history_entry(format!("/goal {history_objective}"));
                 if source == SlashCommandDispatchSource::Live {
-                    self.bottom_pane.drain_pending_submission_state();
+                    self.clear_live_goal_submission();
                 }
             }
             SlashCommand::Side | SlashCommand::Btw if !trimmed.is_empty() => {
@@ -790,7 +804,7 @@ impl ChatWidget {
                     self.add_error_message(format!(
                         "'/{command}' is unavailable before the session starts."
                     ));
-                    return;
+                    return self.queued_command_drain_result(cmd);
                 };
                 let user_message = self.prepared_inline_user_message(
                     args,
@@ -831,6 +845,7 @@ impl ChatWidget {
         if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
             self.bottom_pane.drain_pending_submission_state();
         }
+        self.queued_command_drain_result(cmd)
     }
 
     pub(super) fn submit_queued_slash_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
@@ -918,11 +933,6 @@ impl ChatWidget {
             rest_offset + leading_trimmed,
             &text_elements,
         );
-        if cmd == SlashCommand::Goal
-            && !self.goal_objective_is_allowed(trimmed_rest, GoalObjectiveValidationSource::Queued)
-        {
-            return QueueDrain::Continue;
-        }
         self.dispatch_prepared_command_with_args(
             cmd,
             PreparedSlashCommandArgs {
@@ -933,8 +943,7 @@ impl ChatWidget {
                 mention_bindings,
                 source: SlashCommandDispatchSource::Queued,
             },
-        );
-        self.queued_command_drain_result(cmd)
+        )
     }
 
     fn builtin_command_flags(&self) -> BuiltinCommandFlags {

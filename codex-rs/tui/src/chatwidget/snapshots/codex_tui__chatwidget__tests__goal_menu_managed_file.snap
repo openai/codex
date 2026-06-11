@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/goal_menu.rs
+assertion_line: 99
+expression: rendered
+---
+Goal
+Status: active
+Objective file: $CODEX_HOME/attachments/<uuid>/goal-objective.md
+Time used: 1m
+Tokens used: 12.5K
+Token budget: 80K
+
+Commands: /goal edit, /goal pause, /goal clear

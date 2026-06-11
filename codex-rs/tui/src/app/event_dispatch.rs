@@ -725,12 +725,12 @@ impl App {
             AppEvent::OpenThreadGoalEditor { thread_id } => {
                 self.open_thread_goal_editor(app_server, thread_id).await;
             }
-            AppEvent::SetThreadGoalObjective {
+            AppEvent::SetThreadGoalDraft {
                 thread_id,
-                objective,
+                draft,
                 mode,
             } => {
-                self.set_thread_goal_objective(app_server, thread_id, objective, mode)
+                self.set_thread_goal_draft(app_server, thread_id, draft, mode)
                     .await;
             }
             AppEvent::SetThreadGoalStatus { thread_id, status } => {
