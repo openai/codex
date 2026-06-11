@@ -438,6 +438,14 @@ fn large_rewrite_returns_promptly_and_preserves_exact_content() {
             .expect("run git init")
             .success()
     );
+    assert!(
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(dir.path())
+            .status()
+            .expect("disable line ending conversion")
+            .success()
+    );
     let old_content = (0..48_000)
         .map(|line| format!("old line {line:05}\n"))
         .collect::<String>();
