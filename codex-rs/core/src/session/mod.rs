@@ -207,6 +207,7 @@ mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+mod token_budget;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
 use self::config_lock::export_config_lock_if_configured;
@@ -2712,14 +2713,12 @@ impl Session {
         &self,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
-        mut compacted_item: CompactedItem,
+        compacted_item: CompactedItem,
     ) {
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
         }
-
-        compacted_item.window_id = Some(self.advance_auto_compact_window_id().await);
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
             .await;
@@ -2805,6 +2804,7 @@ impl Session {
             collaboration_mode,
             base_instructions,
             session_source,
+            auto_compact_window_id,
         ) = {
             let state = self.state.lock().await;
             (
@@ -2813,6 +2813,7 @@ impl Session {
                 state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
                 state.session_configuration.session_source.clone(),
+                state.auto_compact_window_id(),
             )
         };
         if let Some(model_switch_message) =
@@ -2962,6 +2963,18 @@ impl Session {
                 .render(),
             );
         }
+        // This is full-context metadata. Steady-state context diffs should not re-emit it.
+        if turn_context.features.enabled(Feature::TokenBudget)
+            && let Some(model_context_window) = turn_context.model_context_window()
+        {
+            developer_sections.push(
+                crate::context::TokenBudgetContext::new(
+                    auto_compact_window_id,
+                    model_context_window,
+                )
+                .render(),
+            );
+        }
         if turn_context.config.include_environment_context {
             let shell = self.user_shell();
             let subagents = self
@@ -3040,7 +3053,7 @@ impl Session {
         format!("{thread_id}:{window_id}")
     }
 
-    async fn advance_auto_compact_window_id(&self) -> u64 {
+    pub(crate) async fn advance_auto_compact_window_id(&self) -> u64 {
         let mut state = self.state.lock().await;
         state.advance_auto_compact_window_id()
     }

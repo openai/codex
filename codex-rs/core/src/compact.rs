@@ -294,6 +294,7 @@ async fn run_compact_task_inner_impl(
     let user_messages = collect_user_messages(history_items);
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
+    let window_id = sess.advance_auto_compact_window_id().await;
 
     if matches!(
         initial_context_injection,
@@ -310,7 +311,7 @@ async fn run_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
-        window_id: None,
+        window_id: Some(window_id),
     };
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
