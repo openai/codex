@@ -76,7 +76,7 @@ impl RemoteControlHandle {
                 &remote_control_target.websocket_url,
                 &auth.account_id,
                 app_server_client_name,
-                true,
+                /*remote_control_enabled*/ true,
             )
             .await
             .map_err(io::Error::other)?;

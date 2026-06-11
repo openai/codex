@@ -225,8 +225,11 @@ impl RemoteControlHandle {
             .await
             .unwrap_or_else(|_| unreachable!());
         let _persistence = acquire_persistence_lock(&self.desired_state_persistence_lock).await;
-        self.persist_preference(app_server_client_name, false)
-            .await?;
+        self.persist_preference(
+            app_server_client_name,
+            /*remote_control_enabled*/ false,
+        )
+        .await?;
         let desired_state_changed = self.desired_state_tx.send_if_modified(|state| {
             let changed = *state != RemoteControlDesiredState::Disabled;
             *state = RemoteControlDesiredState::Disabled;

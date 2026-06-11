@@ -178,7 +178,9 @@ async fn plain_start_resolves_persisted_remote_control_preference() {
         RemoteControlChannels {
             transport_event_tx,
             status_publisher: RemoteControlStatusPublisher::new(status_tx),
-            current_enrollment: Arc::new(RemoteControlEnrollmentState::new(None)),
+            current_enrollment: Arc::new(RemoteControlEnrollmentState::new(
+                /*enrollment*/ None,
+            )),
             pairing_persistence_key: watch::channel(None).0,
             desired_state_persistence_lock: Arc::new(Semaphore::new(1)),
         },
