@@ -75,6 +75,54 @@ async fn exchanges_azure_subject_token_and_caches_access_token() -> anyhow::Resu
 }
 
 #[tokio::test]
+async fn concurrent_resolves_share_one_successful_exchange() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(exchange_response("shared.access.token"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = test_client(&server).await?;
+
+    let (first, second, third) = tokio::join!(client.resolve(), client.resolve(), client.resolve());
+
+    assert_eq!(first?, second?);
+    assert_eq!(client.resolve().await?, third?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_resolves_share_one_rejected_exchange() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({"error": "invalid_grant"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = test_client(&server).await?;
+
+    let (first, second, third) = tokio::join!(client.resolve(), client.resolve(), client.resolve());
+    let expected =
+        "workload identity token exchange was rejected with HTTP 401 Unauthorized: invalid_grant";
+
+    assert_eq!(
+        first.expect_err("first exchange should fail").to_string(),
+        expected
+    );
+    assert_eq!(
+        second.expect_err("second exchange should fail").to_string(),
+        expected
+    );
+    assert_eq!(
+        third.expect_err("third exchange should fail").to_string(),
+        expected
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn forced_refresh_performs_a_new_exchange() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

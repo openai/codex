@@ -1689,18 +1689,31 @@ impl AuthManager {
     /// For managed ChatGPT auth that needs a proactive refresh, first performs
     /// a guarded reload and then refreshes only if the on-disk auth is unchanged.
     pub async fn auth(&self) -> Option<CodexAuth> {
+        match self.auth_result().await {
+            Ok(auth) => auth,
+            Err(error) => {
+                tracing::error!("Failed to resolve external auth: {error}");
+                None
+            }
+        }
+    }
+
+    /// Resolves current auth while preserving errors from explicitly configured external auth.
+    pub async fn auth_result(&self) -> std::io::Result<Option<CodexAuth>> {
         if self.has_external_auth() {
             return self.resolve_external_auth().await;
         }
 
-        let auth = self.auth_cached()?;
+        let Some(auth) = self.auth_cached() else {
+            return Ok(None);
+        };
         if Self::should_refresh_proactively(&auth)
             && let Err(err) = self.refresh_token().await
         {
             tracing::error!("Failed to refresh token: {}", err);
-            return Some(auth);
+            return Ok(Some(auth));
         }
-        self.auth_cached()
+        Ok(self.auth_cached())
     }
 
     /// Force a reload of the auth information from auth.json. Returns
@@ -1945,28 +1958,22 @@ impl AuthManager {
         self.external_auth_mode() == Some(AuthMode::ApiKey)
     }
 
-    async fn resolve_external_auth(&self) -> Option<CodexAuth> {
-        let external_auth = self.external_auth()?;
+    async fn resolve_external_auth(&self) -> std::io::Result<Option<CodexAuth>> {
+        let Some(external_auth) = self.external_auth() else {
+            return Ok(None);
+        };
 
         match external_auth.resolve().await {
             Ok(Some(tokens)) if external_auth.auth_mode() == AuthMode::ApiKey => {
-                Some(CodexAuth::from_api_key(&tokens.access_token))
+                Ok(Some(CodexAuth::from_api_key(&tokens.access_token)))
             }
-            Ok(Some(tokens)) => match self.external_chatgpt_auth(&tokens).await {
-                Ok(auth) => {
-                    self.set_cached_auth(Some(auth.clone()));
-                    Some(auth)
-                }
-                Err(error) => {
-                    tracing::error!("Failed to resolve external ChatGPT auth: {error}");
-                    None
-                }
-            },
-            Ok(None) => self.auth_cached(),
-            Err(err) => {
-                tracing::error!("Failed to resolve external auth: {err}");
-                None
+            Ok(Some(tokens)) => {
+                let auth = self.external_chatgpt_auth(&tokens).await?;
+                self.set_cached_auth(Some(auth.clone()));
+                Ok(Some(auth))
             }
+            Ok(None) => Ok(self.auth_cached()),
+            Err(error) => Err(error),
         }
     }
 

@@ -11,12 +11,14 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
+use tokio::sync::Semaphore;
 
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const JWT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 const MAX_REFRESH_LEAD: Duration = Duration::from_secs(5 * 60);
 const TOKEN_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
+const FAILED_EXCHANGE_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct WorkloadIdentityAccessToken {
@@ -62,6 +64,10 @@ pub enum WorkloadIdentityError {
     InvalidLifetime,
     #[error("workload identity token exchange returned an unexpected token type")]
     UnexpectedTokenType,
+    #[error("workload identity token exchange is unavailable")]
+    ExchangeUnavailable,
+    #[error("{0}")]
+    RecentFailure(String),
 }
 
 enum SubjectTokenSource {
@@ -103,6 +109,17 @@ struct CachedAccessToken {
     refresh_at: Instant,
 }
 
+struct CachedExchangeFailure {
+    message: String,
+    retry_at: Instant,
+}
+
+#[derive(Default)]
+struct CacheState {
+    token: Option<CachedAccessToken>,
+    failure: Option<CachedExchangeFailure>,
+}
+
 pub struct WorkloadIdentityClient {
     identity_provider_id: String,
     identity_provider_mapping_id: String,
@@ -110,7 +127,8 @@ pub struct WorkloadIdentityClient {
     client_id: String,
     source: SubjectTokenSource,
     http: reqwest::Client,
-    cache: Mutex<Option<CachedAccessToken>>,
+    cache: Mutex<CacheState>,
+    exchange_lock: Semaphore,
 }
 
 impl WorkloadIdentityClient {
@@ -126,27 +144,69 @@ impl WorkloadIdentityClient {
             client_id: client_id.into(),
             source: SubjectTokenSource::from_config(config.credential_source),
             http,
-            cache: Mutex::new(None),
+            cache: Mutex::new(CacheState::default()),
+            exchange_lock: Semaphore::new(/*permits*/ 1),
         }
     }
 
     pub async fn resolve(&self) -> Result<WorkloadIdentityAccessToken, WorkloadIdentityError> {
-        {
-            let cache = self
-                .cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(cached) = cache.as_ref()
-                && Instant::now() < cached.refresh_at
-            {
-                return Ok(cached.token.clone());
-            }
+        if let Some(cached) = self.cached_result() {
+            return cached;
         }
-        self.exchange_and_cache().await
+        let _permit = self
+            .exchange_lock
+            .acquire()
+            .await
+            .map_err(|_| WorkloadIdentityError::ExchangeUnavailable)?;
+        if let Some(cached) = self.cached_result() {
+            return cached;
+        }
+        self.exchange_and_record().await
     }
 
     pub async fn refresh(&self) -> Result<WorkloadIdentityAccessToken, WorkloadIdentityError> {
-        self.exchange_and_cache().await
+        let _permit = self
+            .exchange_lock
+            .acquire()
+            .await
+            .map_err(|_| WorkloadIdentityError::ExchangeUnavailable)?;
+        self.exchange_and_record().await
+    }
+
+    fn cached_result(&self) -> Option<Result<WorkloadIdentityAccessToken, WorkloadIdentityError>> {
+        let cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = Instant::now();
+        if let Some(failure) = cache.failure.as_ref()
+            && now < failure.retry_at
+        {
+            return Some(Err(WorkloadIdentityError::RecentFailure(
+                failure.message.clone(),
+            )));
+        }
+        cache
+            .token
+            .as_ref()
+            .filter(|cached| now < cached.refresh_at)
+            .map(|cached| Ok(cached.token.clone()))
+    }
+
+    async fn exchange_and_record(
+        &self,
+    ) -> Result<WorkloadIdentityAccessToken, WorkloadIdentityError> {
+        let result = self.exchange_and_cache().await;
+        if let Err(error) = &result {
+            self.cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failure = Some(CachedExchangeFailure {
+                message: error.to_string(),
+                retry_at: Instant::now() + FAILED_EXCHANGE_RETRY_DELAY,
+            });
+        }
+        result
     }
 
     async fn exchange_and_cache(
@@ -209,10 +269,13 @@ impl WorkloadIdentityClient {
         *self
             .cache
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(CachedAccessToken {
-            token: token.clone(),
-            refresh_at,
-        });
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = CacheState {
+            failure: None,
+            token: Some(CachedAccessToken {
+                token: token.clone(),
+                refresh_at,
+            }),
+        };
         Ok(token)
     }
 }

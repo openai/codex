@@ -604,7 +604,7 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
         let auth_and_mcp_fut = async move {
-            let auth = auth_manager_clone.auth().await;
+            let auth = auth_manager_clone.auth_result().await?;
             let mcp_config = mcp_manager_for_mcp
                 .runtime_config_for_thread(&config_for_mcp, mcp_thread_init_for_startup)
                 .await;
@@ -617,7 +617,12 @@ impl Session {
                 auth.as_ref(),
             )
             .await;
-            (auth, mcp_servers, auth_statuses, tool_plugin_provenance)
+            Ok::<_, std::io::Error>((
+                auth,
+                mcp_servers,
+                auth_statuses,
+                tool_plugin_provenance,
+            ))
         }
         .instrument(info_span!(
             "session_init.auth_mcp",
@@ -628,8 +633,9 @@ impl Session {
         let (
             thread_persistence_result,
             state_db_ctx,
-            (auth, mcp_servers, auth_statuses, tool_plugin_provenance),
+            auth_and_mcp_result,
         ) = tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
+        let (auth, mcp_servers, auth_statuses, tool_plugin_provenance) = auth_and_mcp_result?;
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {

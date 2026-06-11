@@ -16,7 +16,7 @@ reqwest = { workspace = true, features = ["json"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "sync"] }
 url = { workspace = true }
 
 [dev-dependencies]

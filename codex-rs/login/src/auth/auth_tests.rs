@@ -555,6 +555,26 @@ struct TestExternalChatgptAuth {
     refresh_count: AtomicUsize,
 }
 
+struct FailingExternalChatgptAuth;
+
+#[async_trait]
+impl ExternalAuth for FailingExternalChatgptAuth {
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::Chatgpt
+    }
+
+    async fn resolve(&self) -> std::io::Result<Option<ExternalAuthTokens>> {
+        Err(std::io::Error::other("external token exchange failed"))
+    }
+
+    async fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> std::io::Result<ExternalAuthTokens> {
+        Err(std::io::Error::other("external token exchange failed"))
+    }
+}
+
 #[async_trait]
 impl ExternalAuth for TestExternalChatgptAuth {
     fn auth_mode(&self) -> AuthMode {
@@ -627,6 +647,26 @@ async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file(
         refreshed_token
     );
     assert!(!get_auth_file(codex_home.path()).exists());
+}
+
+#[tokio::test]
+async fn auth_result_preserves_external_auth_resolution_errors() {
+    let manager = AuthManager::shared(
+        PathBuf::from("non-existent"),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    manager.set_external_auth(Arc::new(FailingExternalChatgptAuth));
+
+    let error = manager
+        .auth_result()
+        .await
+        .expect_err("external auth failure should be preserved");
+
+    assert_eq!(error.to_string(), "external token exchange failed");
+    assert_eq!(manager.auth().await, None);
 }
 
 #[tokio::test]
