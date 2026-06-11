@@ -29,6 +29,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use core_test_support::responses;
@@ -150,7 +151,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     write_mock_responses_config_toml(
         codex_home.path(),
         &server.uri(),
-        &BTreeMap::default(),
+        &BTreeMap::from([(Feature::RemoteCompactionV2, false)]),
         REMOTE_AUTO_COMPACT_LIMIT,
         Some(true),
         "mock_provider",
