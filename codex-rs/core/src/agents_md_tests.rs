@@ -796,9 +796,13 @@ async fn multiple_environments_can_exceed_single_environment_project_doc_limit()
         ("secondary", secondary.abs()),
     ]);
 
-    let loaded = load_project_instructions(&mut config.config, None, &environments)
-        .await
-        .expect("instructions expected");
+    let loaded = load_project_instructions(
+        &mut config.config,
+        /*user_instructions*/ None,
+        &environments,
+    )
+    .await
+    .expect("instructions expected");
     let project_bytes = loaded
         .entries
         .iter()
@@ -826,9 +830,13 @@ async fn secondary_environment_invalid_utf8_warns_without_suppressing_other_docs
         ("secondary", secondary.abs()),
     ]);
 
-    let loaded = load_project_instructions(&mut config.config, None, &environments)
-        .await
-        .expect("instructions expected");
+    let loaded = load_project_instructions(
+        &mut config.config,
+        /*user_instructions*/ None,
+        &environments,
+    )
+    .await
+    .expect("instructions expected");
 
     assert!(loaded.text().contains("primary doc"));
     assert!(loaded.text().contains("secondary\u{FFFD}doc"));
@@ -852,9 +860,13 @@ async fn child_agents_guidance_is_appended_once_after_environment_groups() {
         ("secondary", secondary.abs()),
     ]);
 
-    let loaded = load_project_instructions(&mut config.config, None, &environments)
-        .await
-        .expect("instructions expected");
+    let loaded = load_project_instructions(
+        &mut config.config,
+        /*user_instructions*/ None,
+        &environments,
+    )
+    .await
+    .expect("instructions expected");
     let text = loaded.text();
 
     assert_eq!(text.matches(HIERARCHICAL_AGENTS_MESSAGE).count(), 1);
