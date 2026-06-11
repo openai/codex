@@ -409,6 +409,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
         permissions: expected_permissions.clone(),
         scope: PermissionGrantScope::Turn,
         strict_auto_review: false,
+        approvals_reviewer: None,
     };
     let command = format!(
         "printf 'remote-request-permissions-ok' > {relative_target_path} && cat {relative_target_path}"

@@ -2172,7 +2172,13 @@ impl Session {
 
         let requested_permissions = args.permissions;
 
-        if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
+        let approvals_reviewer = self
+            .approvals_reviewer_for_turn(turn_context.config.approvals_reviewer)
+            .await;
+        if crate::guardian::routes_approval_to_guardian_with_reviewer(
+            turn_context.as_ref(),
+            approvals_reviewer,
+        ) {
             let originating_turn_state = {
                 let active = self.active_turn.lock().await;
                 active.as_ref().map(|active| Arc::clone(&active.turn_state))
@@ -2451,15 +2457,6 @@ impl Session {
         response: RequestPermissionsResponse,
         cwd: &Path,
     ) -> RequestPermissionsResponse {
-        if response.strict_auto_review && matches!(response.scope, PermissionGrantScope::Session) {
-            return RequestPermissionsResponse {
-                permissions: RequestPermissionProfile::default(),
-                scope: PermissionGrantScope::Turn,
-                strict_auto_review: false,
-                approvals_reviewer: None,
-            };
-        }
-
         if response.permissions.is_empty() {
             return response;
         }
@@ -2483,27 +2480,37 @@ impl Session {
         environment_id: &str,
         originating_turn_state: Option<&Arc<Mutex<crate::state::TurnState>>>,
     ) {
-        if response.permissions.is_empty() {
-            return;
-        }
+        let approvals_reviewer = response.approvals_reviewer_override();
         match response.scope {
             PermissionGrantScope::Turn => {
                 if let Some(turn_state) = originating_turn_state {
                     let mut ts = turn_state.lock().await;
-                    let permissions: AdditionalPermissionProfile =
-                        response.permissions.clone().into();
-                    ts.record_granted_permissions(environment_id, permissions);
-                    if response.strict_auto_review {
-                        ts.enable_strict_auto_review();
+                    if !response.permissions.is_empty() {
+                        let permissions: AdditionalPermissionProfile =
+                            response.permissions.clone().into();
+                        ts.record_granted_permissions(environment_id, permissions);
+                    }
+                    if let Some(approvals_reviewer) = approvals_reviewer {
+                        ts.set_approvals_reviewer_override(approvals_reviewer);
                     }
                 }
             }
             PermissionGrantScope::Session => {
-                let mut state = self.state.lock().await;
-                state.record_granted_permissions(
-                    environment_id,
-                    response.permissions.clone().into(),
-                );
+                if !response.permissions.is_empty() {
+                    let mut state = self.state.lock().await;
+                    state.record_granted_permissions(
+                        environment_id,
+                        response.permissions.clone().into(),
+                    );
+                }
+                if let (Some(turn_state), Some(approvals_reviewer)) =
+                    (originating_turn_state, approvals_reviewer)
+                {
+                    turn_state
+                        .lock()
+                        .await
+                        .set_approvals_reviewer_override(approvals_reviewer);
+                }
             }
         }
     }
@@ -2533,6 +2540,22 @@ impl Session {
         };
         let ts = active.turn_state.lock().await;
         ts.strict_auto_review_enabled()
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn reads must stay consistent with the matching turn state"
+    )]
+    pub(crate) async fn approvals_reviewer_for_turn(
+        &self,
+        fallback: ApprovalsReviewer,
+    ) -> ApprovalsReviewer {
+        let active = self.active_turn.lock().await;
+        let Some(active) = active.as_ref() else {
+            return fallback;
+        };
+        let ts = active.turn_state.lock().await;
+        ts.approvals_reviewer_override().unwrap_or(fallback)
     }
 
     pub(crate) async fn granted_session_permissions(
