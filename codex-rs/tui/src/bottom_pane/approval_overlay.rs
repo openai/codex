@@ -52,6 +52,7 @@ use codex_app_server_protocol::NetworkPolicyRuleAction;
 use codex_app_server_protocol::RequestId;
 use codex_features::Features;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -396,24 +397,35 @@ impl ApprovalOverlay {
         };
         let granted_permissions = match decision {
             PermissionsDecision::GrantForTurn
-            | PermissionsDecision::GrantForTurnWithStrictAutoReview
-            | PermissionsDecision::GrantForSession => permissions.clone(),
+            | PermissionsDecision::GrantForTurnWithAutoReview
+            | PermissionsDecision::GrantForSession
+            | PermissionsDecision::GrantForSessionWithAutoReview => permissions.clone(),
             PermissionsDecision::Deny => Default::default(),
         };
-        let scope = if matches!(decision, PermissionsDecision::GrantForSession) {
+        let scope = if matches!(
+            decision,
+            PermissionsDecision::GrantForSession
+                | PermissionsDecision::GrantForSessionWithAutoReview
+        ) {
             PermissionGrantScope::Session
         } else {
             PermissionGrantScope::Turn
         };
-        let strict_auto_review = matches!(
+        let approvals_reviewer = matches!(
             decision,
-            PermissionsDecision::GrantForTurnWithStrictAutoReview
-        );
+            PermissionsDecision::GrantForTurnWithAutoReview
+                | PermissionsDecision::GrantForSessionWithAutoReview
+        )
+        .then_some(ApprovalsReviewer::AutoReview);
         if request.thread_label().is_none() {
             let message = if granted_permissions.is_empty() {
                 "You did not grant additional permissions"
-            } else if strict_auto_review {
-                "You granted additional permissions with strict auto review"
+            } else if approvals_reviewer == Some(ApprovalsReviewer::AutoReview)
+                && matches!(scope, PermissionGrantScope::Session)
+            {
+                "You granted additional permissions for this session with auto review for this turn"
+            } else if approvals_reviewer == Some(ApprovalsReviewer::AutoReview) {
+                "You granted additional permissions with auto review for this turn"
             } else if matches!(scope, PermissionGrantScope::Session) {
                 "You granted additional permissions for this session"
             } else {
@@ -430,8 +442,8 @@ impl ApprovalOverlay {
             codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: granted_permissions,
                 scope,
-                strict_auto_review,
-                approvals_reviewer: None,
+                strict_auto_review: false,
+                approvals_reviewer,
             },
         );
     }
@@ -811,8 +823,9 @@ enum ApprovalDecision {
 #[derive(Clone, Copy)]
 enum PermissionsDecision {
     GrantForTurn,
-    GrantForTurnWithStrictAutoReview,
+    GrantForTurnWithAutoReview,
     GrantForSession,
+    GrantForSessionWithAutoReview,
     Deny,
 }
 
@@ -1062,9 +1075,9 @@ fn permissions_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
             shortcuts: keymap.approve.clone(),
         },
         ApprovalOption {
-            label: "Yes, grant for this turn with strict auto review".to_string(),
+            label: "Yes, grant and use auto review for this turn".to_string(),
             decision: ApprovalDecision::Permissions(
-                PermissionsDecision::GrantForTurnWithStrictAutoReview,
+                PermissionsDecision::GrantForTurnWithAutoReview,
             ),
             shortcuts: vec![key_hint::plain(KeyCode::Char('r'))],
         },
@@ -1072,6 +1085,13 @@ fn permissions_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
             label: "Yes, grant these permissions for this session".to_string(),
             decision: ApprovalDecision::Permissions(PermissionsDecision::GrantForSession),
             shortcuts: keymap.approve_for_session.clone(),
+        },
+        ApprovalOption {
+            label: "Yes, grant for this session and use auto review this turn".to_string(),
+            decision: ApprovalDecision::Permissions(
+                PermissionsDecision::GrantForSessionWithAutoReview,
+            ),
+            shortcuts: Vec::new(),
         },
         ApprovalOption {
             label: "No, continue without permissions".to_string(),
@@ -1806,8 +1826,9 @@ mod tests {
             labels,
             vec![
                 "Yes, grant these permissions for this turn".to_string(),
-                "Yes, grant for this turn with strict auto review".to_string(),
+                "Yes, grant and use auto review for this turn".to_string(),
                 "Yes, grant these permissions for this session".to_string(),
+                "Yes, grant for this session and use auto review this turn".to_string(),
                 "No, continue without permissions".to_string(),
             ]
         );
@@ -1885,6 +1906,7 @@ mod tests {
             } = ev
             {
                 assert_eq!(response.scope, PermissionGrantScope::Session);
+                assert_eq!(response.approvals_reviewer, None);
                 saw_op = true;
                 break;
             }
@@ -1922,6 +1944,7 @@ mod tests {
                 assert!(response.permissions.is_empty());
                 assert_eq!(response.scope, PermissionGrantScope::Turn);
                 assert!(!response.strict_auto_review);
+                assert_eq!(response.approvals_reviewer, None);
                 saw_op = true;
                 break;
             }
@@ -1933,7 +1956,7 @@ mod tests {
     }
 
     #[test]
-    fn permissions_strict_auto_review_shortcut_submits_turn_scope_with_strict_review() {
+    fn permissions_auto_review_shortcut_submits_turn_scope_with_reviewer_override() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let mut view = make_overlay(make_permissions_request(), tx, Features::with_defaults());
@@ -1948,14 +1971,52 @@ mod tests {
             } = ev
             {
                 assert_eq!(response.scope, PermissionGrantScope::Turn);
-                assert!(response.strict_auto_review);
+                assert!(!response.strict_auto_review);
+                assert_eq!(
+                    response.approvals_reviewer,
+                    Some(ApprovalsReviewer::AutoReview)
+                );
                 saw_op = true;
                 break;
             }
         }
         assert!(
             saw_op,
-            "expected permission approval decision to emit a strict auto review response"
+            "expected permission approval decision to emit an auto-review response"
+        );
+    }
+
+    #[test]
+    fn permissions_session_auto_review_option_combines_session_scope_with_reviewer_override() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = make_overlay(make_permissions_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let mut saw_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::RequestPermissionsResponse { response, .. },
+                ..
+            } = ev
+            {
+                assert_eq!(response.scope, PermissionGrantScope::Session);
+                assert!(!response.strict_auto_review);
+                assert_eq!(
+                    response.approvals_reviewer,
+                    Some(ApprovalsReviewer::AutoReview)
+                );
+                saw_op = true;
+                break;
+            }
+        }
+        assert!(
+            saw_op,
+            "expected session permission approval to emit an auto-review response"
         );
     }
 
