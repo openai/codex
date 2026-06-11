@@ -942,7 +942,10 @@ impl MessageProcessor {
             }
             ClientRequest::RemoteControlEnable { params, .. } => self
                 .remote_control_processor
-                .enable(params.ephemeral, app_server_client_name.as_deref())
+                .enable(
+                    params.is_some_and(|params| params.ephemeral),
+                    app_server_client_name.as_deref(),
+                )
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlDisable { .. } => self

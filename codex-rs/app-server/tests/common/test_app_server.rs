@@ -631,7 +631,7 @@ impl TestAppServer {
 
     /// Send a `remoteControl/enable` JSON-RPC request.
     pub async fn send_remote_control_enable_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("remoteControl/enable", Some(serde_json::json!({})))
+        self.send_request("remoteControl/enable", /*params*/ None)
             .await
     }
 
