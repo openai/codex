@@ -6,54 +6,46 @@
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AppServerPath {
-    raw: String,
-}
+pub struct AppServerPath(String);
 
 impl AppServerPath {
     pub fn from_app_server(path: impl Into<String>) -> Self {
-        Self { raw: path.into() }
+        Self(path.into())
     }
 
     pub fn from_absolute_str(raw: &str) -> Option<Self> {
-        if is_absolute_app_server_path(raw) {
-            Some(Self {
-                raw: raw.to_string(),
-            })
-        } else {
-            None
-        }
+        is_absolute_app_server_path(raw).then(|| Self(raw.to_string()))
     }
 
     pub fn as_str(&self) -> &str {
-        &self.raw
+        &self.0
     }
 
     pub fn components(&self) -> Vec<&str> {
-        self.raw
+        self.0
             .split(['/', '\\'])
             .filter(|part| !part.is_empty())
             .collect()
     }
 
     pub fn join(&self, segment: impl AsRef<str>) -> Self {
-        let separator = if is_windows_absolute_path(&self.raw) {
+        let separator = if is_windows_absolute_path(&self.0) {
             '\\'
         } else {
             '/'
         };
-        let mut raw = self.raw.trim_end_matches(['/', '\\']).to_string();
+        let mut raw = self.0.trim_end_matches(['/', '\\']).to_string();
         if !raw.ends_with(separator) {
             raw.push(separator);
         }
         raw.push_str(segment.as_ref());
-        Self { raw }
+        Self(raw)
     }
 }
 
 impl fmt::Display for AppServerPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.raw.fmt(f)
+        self.0.fmt(f)
     }
 }
 

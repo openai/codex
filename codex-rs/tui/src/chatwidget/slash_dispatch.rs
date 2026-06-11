@@ -542,21 +542,6 @@ impl ChatWidget {
             return;
         }
 
-        if cmd == SlashCommand::Goal {
-            self.dispatch_prepared_command_with_args(
-                cmd,
-                PreparedSlashCommandArgs {
-                    args,
-                    text_elements,
-                    local_images: Vec::new(),
-                    remote_image_urls: Vec::new(),
-                    mention_bindings: Vec::new(),
-                    source: SlashCommandDispatchSource::Live,
-                },
-            );
-            return;
-        }
-
         let Some((prepared_args, prepared_elements)) =
             self.prepare_live_inline_args(args, text_elements)
         else {

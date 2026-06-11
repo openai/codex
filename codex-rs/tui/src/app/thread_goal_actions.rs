@@ -47,7 +47,9 @@ impl App {
             return;
         };
 
-        self.chat_widget.show_goal_summary(goal);
+        let codex_home = app_server.codex_home_path(&self.config.codex_home);
+        self.chat_widget
+            .show_goal_summary(goal, codex_home.as_ref());
     }
 
     pub(super) async fn maybe_prompt_resume_paused_goal_after_resume(
@@ -75,8 +77,12 @@ impl App {
             goal.status,
             ThreadGoalStatus::Paused | ThreadGoalStatus::Blocked | ThreadGoalStatus::UsageLimited
         ) {
-            self.chat_widget
-                .show_resume_paused_goal_prompt(thread_id, goal.objective);
+            let codex_home = app_server.codex_home_path(&self.config.codex_home);
+            self.chat_widget.show_resume_paused_goal_prompt(
+                thread_id,
+                goal.objective,
+                codex_home.as_ref(),
+            );
         }
     }
 
@@ -109,7 +115,13 @@ impl App {
             return;
         };
 
-        let objective = match goal_files::objective_text_for_edit(app_server, &goal.objective).await
+        let codex_home = app_server.codex_home_path(&self.config.codex_home);
+        let objective = match goal_files::objective_text_for_edit(
+            app_server,
+            codex_home.as_ref(),
+            &goal.objective,
+        )
+        .await
         {
             Ok(objective) => objective,
             Err(err) => {
@@ -158,7 +170,11 @@ impl App {
             match result {
                 Ok(response) => match response.goal.as_ref() {
                     Some(goal) if should_confirm_before_replacing_goal(goal) => {
-                        self.show_replace_thread_goal_confirmation(thread_id, objective);
+                        self.show_replace_thread_goal_confirmation(
+                            thread_id,
+                            objective,
+                            codex_home.as_ref(),
+                        );
                         return false;
                     }
                     Some(_) => ThreadGoalSetMode::ReplaceExisting,
@@ -208,7 +224,7 @@ impl App {
         match result {
             Ok(response) => self.chat_widget.add_info_message(
                 format!("Goal {}", goal_status_label(response.goal.status)),
-                Some(goal_usage_summary(&response.goal)),
+                Some(goal_usage_summary(&response.goal, codex_home.as_ref())),
             ),
             Err(err) => {
                 let action = if replacing_goal { "replace" } else { "set" };
@@ -237,10 +253,11 @@ impl App {
             return;
         }
 
+        let codex_home = app_server.codex_home_path(&self.config.codex_home);
         match result {
             Ok(response) => self.chat_widget.add_info_message(
                 format!("Goal {}", goal_status_label(response.goal.status)),
-                Some(goal_usage_summary(&response.goal)),
+                Some(goal_usage_summary(&response.goal, codex_home.as_ref())),
             ),
             Err(err) => self
                 .chat_widget
@@ -276,9 +293,14 @@ impl App {
         }
     }
 
-    fn show_replace_thread_goal_confirmation(&mut self, thread_id: ThreadId, objective: String) {
+    fn show_replace_thread_goal_confirmation(
+        &mut self,
+        thread_id: ThreadId,
+        objective: String,
+        codex_home: Option<&goal_files::GoalFilePath>,
+    ) {
         let replace_objective = objective.clone();
-        let subtitle = if let Some(path) = goal_files::objective_file_path(&objective) {
+        let subtitle = if let Some(path) = goal_files::objective_file_path(&objective, codex_home) {
             format!("New objective file: {path}")
         } else {
             format!("New objective: {objective}")

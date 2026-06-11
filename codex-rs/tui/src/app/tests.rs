@@ -4180,14 +4180,42 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
         .await?
         .goal
         .expect("goal should be set");
-    let path = crate::goal_files::objective_file_path(&goal.objective)
+    let codex_home = app_server.codex_home_path(&app.chat_widget.config_ref().codex_home);
+    let path = crate::goal_files::objective_file_path(&goal.objective, codex_home.as_ref())
         .expect("goal objective should be a managed file reference");
     assert!(path.as_str().contains("attachments"));
     assert_eq!(
-        crate::goal_files::objective_text_for_edit(&mut app_server, &goal.objective)
-            .await
-            .expect("managed goal file should be readable"),
+        crate::goal_files::objective_text_for_edit(
+            &mut app_server,
+            codex_home.as_ref(),
+            &goal.objective
+        )
+        .await
+        .expect("managed goal file should be readable"),
         objective
+    );
+    let outside_path = codex_app_server_client::AppServerPath::from_absolute_str(
+        &tempdir()?
+            .path()
+            .join("attachments")
+            .join("00000000-0000-4000-8000-000000000000")
+            .join("goal-objective.md")
+            .display()
+            .to_string(),
+    )
+    .expect("absolute outside goal path");
+    let reference = crate::goal_files::objective_file_reference(&outside_path)
+        .expect("goal objective reference");
+    assert!(crate::goal_files::objective_file_path(&reference, codex_home.as_ref()).is_none());
+    assert_eq!(
+        crate::goal_files::objective_text_for_edit(
+            &mut app_server,
+            codex_home.as_ref(),
+            &reference
+        )
+        .await
+        .expect("outside goal file reference should not be read"),
+        reference
     );
     app_server.shutdown().await?;
     Ok(())

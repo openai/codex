@@ -17,6 +17,10 @@ fn complete_turn_with_message(chat: &mut ChatWidget, turn_id: &str, message: Opt
 fn submit_composer_text(chat: &mut ChatWidget, text: &str) {
     chat.bottom_pane
         .set_composer_text(text.to_string(), Vec::new(), Vec::new());
+    submit_current_composer(chat);
+}
+
+fn submit_current_composer(chat: &mut ChatWidget) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -83,6 +87,27 @@ async fn goal_slash_command_emits_oversized_objective() {
     let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
 
     submit_composer_text(&mut chat, &format!("/goal {objective}"));
+
+    assert_eq!(next_goal_objective(&mut rx, thread_id), objective);
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn goal_slash_command_expands_large_pasted_objective() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
+    chat.bottom_pane
+        .set_composer_text("/goal ".to_string(), Vec::new(), Vec::new());
+    chat.handle_paste(objective.clone());
+
+    assert!(
+        chat.bottom_pane.composer_text().contains("[Pasted Content"),
+        "expected large paste placeholder in composer"
+    );
+    submit_current_composer(&mut chat);
 
     assert_eq!(next_goal_objective(&mut rx, thread_id), objective);
     assert_no_submit_op(&mut op_rx);

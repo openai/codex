@@ -3,6 +3,8 @@
 //! This module owns the typed JSON-RPC calls needed by the TUI and keeps
 //! request/response plumbing out of `App` and `ChatWidget`.
 
+mod fs;
+
 use crate::bottom_pane::FeedbackAudience;
 use crate::legacy_core::config::Config;
 use crate::permission_compat::legacy_compatible_permission_profile;
@@ -12,8 +14,6 @@ use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerPath;
@@ -30,17 +30,10 @@ use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
-use codex_app_server_protocol::FsCreateDirectoryParams;
-use codex_app_server_protocol::FsCreateDirectoryResponse;
-use codex_app_server_protocol::FsReadFileParams;
-use codex_app_server_protocol::FsReadFileResponse;
-use codex_app_server_protocol::FsWriteFileParams;
-use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
@@ -136,8 +129,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
-use serde::de::DeserializeOwned;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -941,129 +932,6 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/goal/clear failed in TUI")
-    }
-
-    pub(crate) async fn fs_create_directory_path(
-        &mut self,
-        path: &AppServerPath,
-        recursive: bool,
-    ) -> Result<()> {
-        let path_str = path.as_str();
-        let _: FsCreateDirectoryResponse = self
-            .request_fs_path(
-                "fs/createDirectory",
-                path,
-                |request_id, path| ClientRequest::FsCreateDirectory {
-                    request_id,
-                    params: FsCreateDirectoryParams {
-                        path,
-                        recursive: Some(recursive),
-                    },
-                },
-                json!({
-                    "path": path_str,
-                    "recursive": recursive,
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub(crate) async fn fs_write_file_path(
-        &mut self,
-        path: &AppServerPath,
-        bytes: Vec<u8>,
-    ) -> Result<()> {
-        let data_base64 = STANDARD.encode(bytes);
-        let path_str = path.as_str();
-        let _: FsWriteFileResponse = self
-            .request_fs_path(
-                "fs/writeFile",
-                path,
-                |request_id, path| ClientRequest::FsWriteFile {
-                    request_id,
-                    params: FsWriteFileParams {
-                        path,
-                        data_base64: data_base64.clone(),
-                    },
-                },
-                json!({
-                    "path": path_str,
-                    "dataBase64": data_base64,
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub(crate) async fn fs_read_file_path(&mut self, path: &AppServerPath) -> Result<Vec<u8>> {
-        let response: FsReadFileResponse = self
-            .request_fs_path(
-                "fs/readFile",
-                path,
-                |request_id, path| ClientRequest::FsReadFile {
-                    request_id,
-                    params: FsReadFileParams { path },
-                },
-                json!({ "path": path.as_str() }),
-            )
-            .await?;
-        STANDARD
-            .decode(response.data_base64)
-            .wrap_err("fs/readFile returned invalid base64 data")
-    }
-
-    async fn request_fs_path<T>(
-        &mut self,
-        method: &str,
-        path: &AppServerPath,
-        local_request: impl FnOnce(RequestId, AbsolutePathBuf) -> ClientRequest,
-        remote_params: serde_json::Value,
-    ) -> Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        let request_id = self.next_request_id();
-        if self.uses_remote_workspace() {
-            return self
-                .request_remote_json_rpc_typed(request_id, method, remote_params)
-                .await;
-        }
-        let path = AbsolutePathBuf::from_absolute_path_checked(path.as_str())
-            .wrap_err_with(|| format!("invalid local app-server fs path {path}"))?;
-        self.client
-            .request_typed(local_request(request_id, path))
-            .await
-            .wrap_err_with(|| format!("{method} failed in TUI"))
-    }
-
-    async fn request_remote_json_rpc_typed<T>(
-        &self,
-        request_id: RequestId,
-        method: &str,
-        params: serde_json::Value,
-    ) -> Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        let AppServerRequestHandle::Remote(handle) = self.request_handle() else {
-            color_eyre::eyre::bail!(
-                "raw JSON-RPC requests are only supported by the remote app-server client"
-            );
-        };
-        let response = handle
-            .request_json_rpc(JSONRPCRequest {
-                id: request_id,
-                method: method.to_string(),
-                params: Some(params),
-                trace: None,
-            })
-            .await
-            .wrap_err_with(|| format!("{method} failed in TUI"))?;
-        let result = response.map_err(|source| {
-            color_eyre::eyre::eyre!("{method} failed in TUI: {}", source.message)
-        })?;
-        serde_json::from_value(result).wrap_err_with(|| format!("{method} returned invalid data"))
     }
 
     pub(crate) async fn logout_account(&mut self) -> Result<()> {

@@ -6,8 +6,12 @@ use crate::goal_files;
 use crate::status::format_tokens_compact;
 
 impl ChatWidget {
-    pub(crate) fn show_goal_summary(&mut self, goal: AppThreadGoal) {
-        self.add_plain_history_lines(goal_summary_lines(&goal));
+    pub(crate) fn show_goal_summary(
+        &mut self,
+        goal: AppThreadGoal,
+        codex_home: Option<&goal_files::GoalFilePath>,
+    ) {
+        self.add_plain_history_lines(goal_summary_lines(&goal, codex_home));
     }
 
     pub(crate) fn show_goal_edit_prompt(
@@ -42,8 +46,9 @@ impl ChatWidget {
         &mut self,
         thread_id: ThreadId,
         objective: String,
+        codex_home: Option<&goal_files::GoalFilePath>,
     ) {
-        let subtitle = if let Some(path) = goal_files::objective_file_path(&objective) {
+        let subtitle = if let Some(path) = goal_files::objective_file_path(&objective, codex_home) {
             format!("Goal file: {path}")
         } else {
             format!("Goal: {objective}")
@@ -89,14 +94,17 @@ impl ChatWidget {
     }
 }
 
-fn goal_summary_lines(goal: &AppThreadGoal) -> Vec<Line<'static>> {
+fn goal_summary_lines(
+    goal: &AppThreadGoal,
+    codex_home: Option<&goal_files::GoalFilePath>,
+) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from("Goal".bold()),
         Line::from(vec![
             "Status: ".dim(),
             goal_status_label(goal.status).to_string().into(),
         ]),
-        goal_objective_line(&goal.objective),
+        goal_objective_line(&goal.objective, codex_home),
         Line::from(vec![
             "Time used: ".dim(),
             format_goal_elapsed_seconds(goal.time_used_seconds).into(),
@@ -126,8 +134,11 @@ fn goal_summary_lines(goal: &AppThreadGoal) -> Vec<Line<'static>> {
     lines
 }
 
-fn goal_objective_line(objective: &str) -> Line<'static> {
-    if let Some(path) = goal_files::objective_file_path(objective) {
+fn goal_objective_line(
+    objective: &str,
+    codex_home: Option<&goal_files::GoalFilePath>,
+) -> Line<'static> {
+    if let Some(path) = goal_files::objective_file_path(objective, codex_home) {
         Line::from(vec!["Objective file: ".dim(), path.to_string().into()])
     } else {
         Line::from(vec!["Objective: ".dim(), objective.to_string().into()])
