@@ -18,9 +18,11 @@ codex-core = { workspace = true }
 codex-core-skills = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-mcp = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
 
 [dev-dependencies]
 async-trait = { workspace = true }

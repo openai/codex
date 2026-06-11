@@ -9,8 +9,8 @@ pub enum SkillSourceKind {
     Host,
     /// Skills owned by an execution environment.
     Executor,
-    /// Skills read through an authenticated remote catalog/API.
-    Remote,
+    /// Skills owned by the orchestrator rather than an execution environment.
+    Orchestrator,
     /// Extension-private source kind for future providers that do not fit an
     /// existing transport category.
     Custom(String),
@@ -25,7 +25,7 @@ impl SkillSourceKind {
         match self {
             Self::Host => "host",
             Self::Executor => "executor",
-            Self::Remote => "remote",
+            Self::Orchestrator => "orchestrator",
             Self::Custom(kind) => kind,
         }
     }

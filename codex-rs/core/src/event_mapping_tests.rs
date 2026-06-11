@@ -15,8 +15,18 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
+
+#[test]
+fn recognizes_skills_instructions_as_contextual_developer_content() {
+    assert!(is_contextual_dev_message_content(&[
+        ContentItem::InputText {
+            text: format!("{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills"),
+        },
+    ]));
+}
 
 #[test]
 fn recognizes_token_budget_as_contextual_developer_content() {

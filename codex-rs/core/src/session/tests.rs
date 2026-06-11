@@ -4940,13 +4940,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let services = SessionServices {
-        mcp_connection_manager: arc_swap::ArcSwap::from_pointee(
+        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
                 config.prefix_mcp_tool_names(),
             ),
-        ),
+        )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -7018,13 +7018,13 @@ where
     );
 
     let services = SessionServices {
-        mcp_connection_manager: arc_swap::ArcSwap::from_pointee(
+        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
                 config.prefix_mcp_tool_names(),
             ),
-        ),
+        )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
