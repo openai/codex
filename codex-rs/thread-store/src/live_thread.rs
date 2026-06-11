@@ -12,12 +12,14 @@ use crate::AppendThreadItemsParams;
 use crate::CreateThreadParams;
 use crate::LoadThreadHistoryParams;
 use crate::LocalThreadStore;
+use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
 use crate::ThreadStore;
+use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 use crate::thread_metadata_sync::ThreadMetadataSync;
@@ -106,15 +108,41 @@ impl LiveThread {
         let should_load_history = params.history.is_none();
         let include_archived = params.include_archived;
         if should_load_history {
-            match thread_store
-                .load_history(LoadThreadHistoryParams {
-                    thread_id,
-                    include_archived,
-                })
-                .await
-            {
-                Ok(history) => params.history = Some(history.items),
-                Err(err) => return Err(err),
+            if let Some(rollout_path) = params.rollout_path.clone() {
+                let thread = thread_store
+                    .read_thread_by_rollout_path(ReadThreadByRolloutPathParams {
+                        rollout_path,
+                        include_archived,
+                        include_history: true,
+                    })
+                    .await?;
+                if thread.thread_id != thread_id {
+                    return Err(ThreadStoreError::InvalidRequest {
+                        message: format!(
+                            "rollout path belongs to thread {}, not {thread_id}",
+                            thread.thread_id
+                        ),
+                    });
+                }
+                params.history = Some(
+                    thread
+                        .history
+                        .ok_or_else(|| ThreadStoreError::Internal {
+                            message: format!("failed to load history for thread {thread_id}"),
+                        })?
+                        .items,
+                );
+            } else {
+                match thread_store
+                    .load_history(LoadThreadHistoryParams {
+                        thread_id,
+                        include_archived,
+                    })
+                    .await
+                {
+                    Ok(history) => params.history = Some(history.items),
+                    Err(err) => return Err(err),
+                }
             }
         }
         thread_store.resume_thread(params.clone()).await?;
