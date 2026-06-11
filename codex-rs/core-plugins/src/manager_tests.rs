@@ -17,6 +17,7 @@ use crate::test_support::load_plugins_config as load_plugins_config_input;
 use crate::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::test_support::write_file;
 use crate::test_support::write_openai_curated_marketplace;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::AppToolApproval;
 use codex_config::CONFIG_TOML_FILE;
@@ -46,6 +47,21 @@ use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
+
+#[test]
+fn plugins_manager_tracks_auth_mode() {
+    let tmp = TempDir::new().unwrap();
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+
+    assert_eq!(manager.auth_mode(), None);
+    assert!(manager.set_auth_mode(Some(AuthMode::ApiKey)));
+    assert_eq!(manager.auth_mode(), Some(AuthMode::ApiKey));
+    assert!(!manager.set_auth_mode(Some(AuthMode::ApiKey)));
+    assert!(manager.set_auth_mode(Some(AuthMode::ChatgptAuthTokens)));
+    assert_eq!(manager.auth_mode(), Some(AuthMode::ChatgptAuthTokens));
+    assert!(manager.set_auth_mode(/*auth_mode*/ None));
+    assert_eq!(manager.auth_mode(), None);
+}
 
 fn write_plugin_with_version(
     root: &Path,
