@@ -705,7 +705,7 @@ fn unstable_warning_event_only_mentions_enabled_under_development_features() {
     )
     .expect("warning event");
 
-    let EventMsg::Warning(WarningEvent { message }) = warning.msg else {
+    let EventMsg::ThreadStartupWarning(WarningEvent { message }) = warning.msg else {
         panic!("expected warning event");
     };
     assert!(message.contains("child_agents_md"));

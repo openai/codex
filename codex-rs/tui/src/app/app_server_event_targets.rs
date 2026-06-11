@@ -235,6 +235,7 @@ mod tests {
         let notification = ServerNotification::Warning(WarningNotification {
             thread_id: None,
             message: "warning".to_string(),
+            source: codex_app_server_protocol::WarningSource::Runtime,
         });
 
         let target = server_notification_thread_target(&notification);
@@ -248,6 +249,7 @@ mod tests {
         let notification = ServerNotification::Warning(WarningNotification {
             thread_id: Some(thread_id.to_string()),
             message: "warning".to_string(),
+            source: codex_app_server_protocol::WarningSource::Runtime,
         });
 
         let target = server_notification_thread_target(&notification);

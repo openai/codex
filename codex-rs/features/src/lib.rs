@@ -1282,7 +1282,7 @@ pub fn unstable_features_warning_event(
     );
     Some(Event {
         id: String::new(),
-        msg: EventMsg::Warning(WarningEvent { message }),
+        msg: EventMsg::ThreadStartupWarning(WarningEvent { message }),
     })
 }
 

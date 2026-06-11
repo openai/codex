@@ -21,6 +21,8 @@ use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
+use codex_app_server_protocol::WarningNotification;
+use codex_app_server_protocol::WarningSource;
 use codex_config::loader::project_trust_key;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
@@ -395,6 +397,103 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
     )?)];
 
     assert_eq!(instruction_sources, expected_instruction_sources);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_warning_identifies_thread_startup_source() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let workspace = TempDir::new()?;
+    let project_agents_path = workspace.path().join("AGENTS.md");
+    std::fs::write(&project_agents_path, b"project\xFFinstructions")?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(response)?;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("warning"),
+    )
+    .await??;
+    let warning: WarningNotification =
+        serde_json::from_value(notification.params.expect("thread startup warning params"))?;
+
+    assert_eq!(
+        warning,
+        WarningNotification {
+            thread_id: Some(thread.id),
+            message: format!(
+                "Project AGENTS.md instructions from `{}` contain invalid UTF-8: invalid utf-8 sequence of 1 bytes from index 7. Invalid byte sequences were replaced.",
+                project_agents_path.display()
+            ),
+            source: WarningSource::ThreadStartup,
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_warning_identifies_config_source() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let global_agents_path = codex_home.path().join("AGENTS.md");
+    std::fs::write(&global_agents_path, b"global\xFFinstructions")?;
+    let global_agents_path = global_agents_path.canonicalize()?;
+    let workspace = TempDir::new()?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(response)?;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("warning"),
+    )
+    .await??;
+    let warning: WarningNotification =
+        serde_json::from_value(notification.params.expect("configuration warning params"))?;
+
+    assert_eq!(
+        warning,
+        WarningNotification {
+            thread_id: Some(thread.id),
+            message: format!(
+                "Global AGENTS.md instructions from `{}` contain invalid UTF-8: invalid utf-8 sequence of 1 bytes from index 6. Invalid byte sequences were replaced.",
+                global_agents_path.display()
+            ),
+            source: WarningSource::Config,
+        }
+    );
 
     Ok(())
 }

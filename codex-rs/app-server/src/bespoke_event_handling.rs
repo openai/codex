@@ -81,6 +81,7 @@ use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WarningNotification;
+use codex_app_server_protocol::WarningSource;
 use codex_app_server_protocol::build_item_from_guardian_event;
 use codex_app_server_protocol::guardian_auto_approval_review_notification;
 use codex_app_server_protocol::item_event_to_server_notification;
@@ -226,6 +227,27 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = WarningNotification {
                 thread_id: Some(conversation_id.to_string()),
                 message: warning_event.message,
+                source: WarningSource::Runtime,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::Warning(notification))
+                .await;
+        }
+        EventMsg::ConfigWarning(warning_event) => {
+            let notification = WarningNotification {
+                thread_id: Some(conversation_id.to_string()),
+                message: warning_event.message,
+                source: WarningSource::Config,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::Warning(notification))
+                .await;
+        }
+        EventMsg::ThreadStartupWarning(warning_event) => {
+            let notification = WarningNotification {
+                thread_id: Some(conversation_id.to_string()),
+                message: warning_event.message,
+                source: WarningSource::ThreadStartup,
             };
             outgoing
                 .send_server_notification(ServerNotification::Warning(notification))

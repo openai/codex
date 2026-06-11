@@ -1167,6 +1167,12 @@ pub enum EventMsg {
     /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
+    /// Warning loaded with configuration before constructing the thread.
+    ConfigWarning(WarningEvent),
+
+    /// Warning discovered while constructing a thread, before its first turn.
+    ThreadStartupWarning(WarningEvent),
+
     /// Warning issued by the guardian automatic approval reviewer.
     GuardianWarning(WarningEvent),
 

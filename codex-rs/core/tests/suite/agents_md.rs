@@ -474,7 +474,7 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
     let mut builder = test_codex().with_home(home);
     let test = builder.build(&server).await?;
     let warning = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::Warning(warning)
+        EventMsg::ConfigWarning(warning)
             if warning
                 .message
                 .contains(source.as_path().display().to_string().as_str()) =>
@@ -496,6 +496,38 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
     let expected_fragment =
         expected_instruction_fragment(&test.config.cwd, "global\u{FFFD}instructions");
     assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_loading_warning_is_attributed_to_thread_startup() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_workspace_setup(|cwd, fs| async move {
+        fs.write_file(
+            &cwd.join(GLOBAL_AGENTS_FILENAME),
+            b"project\xFFinstructions".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+        Ok::<(), anyhow::Error>(())
+    });
+    let test = builder.build_with_remote_env(&server).await?;
+    let source = test.config.cwd.join(GLOBAL_AGENTS_FILENAME);
+
+    let warning = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ThreadStartupWarning(warning)
+            if warning
+                .message
+                .contains(source.as_path().display().to_string().as_str()) =>
+        {
+            Some(warning.message.clone())
+        }
+        _ => None,
+    })
+    .await;
+
+    assert!(warning.contains("invalid UTF-8"), "{warning}");
 
     Ok(())
 }

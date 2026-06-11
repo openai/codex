@@ -711,7 +711,7 @@ impl Session {
             for message in &config.startup_warnings {
                 post_session_configured_events.push(Event {
                     id: "".to_owned(),
-                    msg: EventMsg::Warning(WarningEvent {
+                    msg: EventMsg::ConfigWarning(WarningEvent {
                         message: message.clone(),
                     }),
                 });
@@ -732,7 +732,7 @@ impl Session {
             if config.permissions.approval_policy.value() == AskForApproval::OnFailure {
                 post_session_configured_events.push(Event {
                     id: "".to_owned(),
-                    msg: EventMsg::Warning(WarningEvent {
+                    msg: EventMsg::ThreadStartupWarning(WarningEvent {
                         message: "`on-failure` approval policy is deprecated and will be removed in a future release. Use `on-request` for interactive approvals or `never` for non-interactive runs.".to_string(),
                     }),
                 });
@@ -922,7 +922,7 @@ impl Session {
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::Warning(WarningEvent {
+                    msg: EventMsg::ThreadStartupWarning(WarningEvent {
                         message: warning.clone(),
                     }),
                 });

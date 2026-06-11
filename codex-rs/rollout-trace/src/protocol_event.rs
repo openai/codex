@@ -225,6 +225,8 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         }),
         EventMsg::Error(_)
         | EventMsg::Warning(_)
+        | EventMsg::ConfigWarning(_)
+        | EventMsg::ThreadStartupWarning(_)
         | EventMsg::GuardianWarning(_)
         | EventMsg::RealtimeConversationStarted(_)
         | EventMsg::RealtimeConversationRealtime(_)
@@ -298,6 +300,8 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         EventMsg::ThreadRolledBack(_) => Some("thread_rolled_back"),
         EventMsg::Error(_) => Some("error"),
         EventMsg::Warning(_) => Some("warning"),
+        EventMsg::ConfigWarning(_) => Some("config_warning"),
+        EventMsg::ThreadStartupWarning(_) => Some("thread_startup_warning"),
         EventMsg::ShutdownComplete => Some("shutdown_complete"),
         EventMsg::GuardianWarning(_)
         | EventMsg::RealtimeConversationStarted(_)

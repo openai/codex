@@ -466,6 +466,7 @@ pub(super) fn handle_warning(chat: &mut ChatWidget, message: impl Into<String>) 
         ServerNotification::Warning(WarningNotification {
             thread_id: Some(thread_id(chat)),
             message: message.into(),
+            source: codex_app_server_protocol::WarningSource::Runtime,
         }),
         /*replay_kind*/ None,
     );

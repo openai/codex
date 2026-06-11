@@ -111,6 +111,8 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::DynamicToolCallRequest(_)
         | EventMsg::DynamicToolCallResponse(_)
         | EventMsg::Warning(_)
+        | EventMsg::ConfigWarning(_)
+        | EventMsg::ThreadStartupWarning(_)
         | EventMsg::GuardianWarning(_)
         | EventMsg::RealtimeConversationStarted(_)
         | EventMsg::RealtimeConversationSdp(_)

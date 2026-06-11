@@ -2343,6 +2343,7 @@ async fn replay_snapshot_with_pending_request_suppresses_replay_notices() {
                     WarningNotification {
                         thread_id: Some(thread_id.to_string()),
                         message: stale_warning.to_string(),
+                        source: codex_app_server_protocol::WarningSource::Runtime,
                     },
                 )),
                 ThreadBufferedEvent::Request(exec_approval_request(

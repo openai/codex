@@ -23,6 +23,22 @@ pub struct WarningNotification {
     pub thread_id: Option<String>,
     /// Concise warning message for the user.
     pub message: String,
+    /// Lifecycle source that produced the warning.
+    #[serde(default)]
+    pub source: WarningSource,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WarningSource {
+    /// Warning without a more specific startup origin.
+    #[default]
+    Runtime,
+    /// Warning loaded with configuration before constructing the thread.
+    Config,
+    /// Warning discovered while constructing a thread before its first turn.
+    ThreadStartup,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

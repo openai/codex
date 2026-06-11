@@ -469,6 +469,7 @@ export type { TurnSteerResponse } from "./TurnSteerResponse";
 export type { TurnsPage } from "./TurnsPage";
 export type { UserInput } from "./UserInput";
 export type { WarningNotification } from "./WarningNotification";
+export type { WarningSource } from "./WarningSource";
 export type { WebSearchAction } from "./WebSearchAction";
 export type { WindowsSandboxReadiness } from "./WindowsSandboxReadiness";
 export type { WindowsSandboxReadinessResponse } from "./WindowsSandboxReadinessResponse";
