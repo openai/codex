@@ -9,6 +9,7 @@ use codex_aws_auth::AwsRequestToSign;
 use codex_client::Request;
 use codex_client::RequestBody;
 use codex_client::RequestCompression;
+use codex_login::auth::BedrockApiKeyAuth;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
@@ -24,13 +25,22 @@ const AWS_REGION_ENV_VAR: &str = "AWS_REGION";
 const AWS_DEFAULT_REGION_ENV_VAR: &str = "AWS_DEFAULT_REGION";
 
 pub(super) enum BedrockAuthMethod {
+    ManagedBearerToken { token: String, region: String },
     EnvBearerToken { token: String, region: String },
     AwsSdkAuth { context: AwsAuthContext },
 }
 
 pub(super) async fn resolve_auth_method(
+    managed_auth: Option<&BedrockApiKeyAuth>,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<BedrockAuthMethod> {
+    if let Some(managed_auth) = managed_auth {
+        return Ok(BedrockAuthMethod::ManagedBearerToken {
+            token: managed_auth.api_key.clone(),
+            region: managed_auth.region.clone(),
+        });
+    }
+
     if let Some(token) = non_empty_env_var_from(AWS_BEARER_TOKEN_BEDROCK_ENV_VAR, std::env::var) {
         let region = bearer_token_region(aws, std::env::var)?;
         return Ok(BedrockAuthMethod::EnvBearerToken { token, region });
@@ -44,10 +54,12 @@ pub(super) async fn resolve_auth_method(
 }
 
 pub(super) async fn resolve_provider_auth(
+    managed_auth: Option<&BedrockApiKeyAuth>,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<SharedAuthProvider> {
-    match resolve_auth_method(aws).await? {
-        BedrockAuthMethod::EnvBearerToken { token, .. } => Ok(Arc::new(BearerAuthProvider {
+    match resolve_auth_method(managed_auth, aws).await? {
+        BedrockAuthMethod::ManagedBearerToken { token, .. }
+        | BedrockAuthMethod::EnvBearerToken { token, .. } => Ok(Arc::new(BearerAuthProvider {
             token: Some(token),
             account_id: None,
             is_fedramp_account: false,
