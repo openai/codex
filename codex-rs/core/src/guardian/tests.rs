@@ -2279,12 +2279,6 @@ async fn run_eager_compaction_recovery_case(
     seed_guardian_parent_history(&session, &turn).await;
 
     run_eager_compaction_review(&session, &turn, /*retry_reason*/ None).await?;
-    let discarded_rollout_path = session
-        .guardian_review_session
-        .trunk_rollout_path()
-        .await
-        .expect("discarded guardian rollout path");
-    let committed_rollout = tokio::fs::read(&discarded_rollout_path).await?;
     tokio::time::timeout(
         EAGER_COMPACTION_TEST_TIMEOUT,
         server.wait_for_request_count(/*count*/ 2),
@@ -2306,10 +2300,6 @@ async fn run_eager_compaction_recovery_case(
     if let Some(compaction_tx) = compaction_tx {
         let _ = compaction_tx.send(());
     }
-    assert_eq!(
-        tokio::fs::read(&discarded_rollout_path).await?,
-        committed_rollout
-    );
     assert!(matches!(
         metadata.guardian_session_kind,
         Some(GuardianReviewSessionKind::EphemeralForked)

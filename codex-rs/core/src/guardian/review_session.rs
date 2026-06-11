@@ -529,7 +529,7 @@ impl GuardianReviewSessionManager {
             && matches!(outcome, GuardianReviewSessionOutcome::Completed(_))
             && trunk.refresh_last_committed_fork_snapshot().await.is_some()
         {
-            trunk.schedule_eager_compaction(params).await;
+            trunk.schedule_eager_compaction().await;
         }
 
         if keep_review_session {
