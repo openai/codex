@@ -167,6 +167,7 @@ async fn login_with_access_token_writes_only_personal_access_token() {
             last_refresh: None,
             agent_identity: None,
             personal_access_token: Some("at-login-test".to_string()),
+            bedrock_api_key: None,
         }
     );
     assert_eq!(auth.resolved_mode(), AuthMode::PersonalAccessToken);
@@ -327,6 +328,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
             last_refresh: Some(last_refresh),
             agent_identity: None,
             personal_access_token: None,
+            bedrock_api_key: None,
         },
         auth_dot_json
     );
@@ -370,6 +372,7 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        bedrock_api_key: None,
     };
     super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
     let auth_file = get_auth_file(dir.path());
@@ -1120,6 +1123,7 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
             last_refresh: None,
             agent_identity: Some(agent_identity),
             personal_access_token: None,
+            bedrock_api_key: None,
         },
         AuthCredentialsStoreMode::File,
     )

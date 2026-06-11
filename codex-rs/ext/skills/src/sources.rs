@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillProviderError;
+use crate::catalog::SkillProviderResult;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSearchResult;
 use crate::catalog::SkillSourceKind;
@@ -39,15 +40,15 @@ impl SkillProviderSource {
         Self::new(SkillSourceKind::Executor, label, provider)
     }
 
-    pub fn remote(label: impl Into<String>, provider: Arc<dyn SkillProvider>) -> Self {
-        Self::new(SkillSourceKind::Remote, label, provider)
+    pub fn orchestrator(label: impl Into<String>, provider: Arc<dyn SkillProvider>) -> Self {
+        Self::new(SkillSourceKind::Orchestrator, label, provider)
     }
 
     fn should_list(&self, query: &SkillListQuery) -> bool {
         match &self.kind {
             SkillSourceKind::Host => query.include_host_skills,
             SkillSourceKind::Executor => !query.executor_roots.is_empty(),
-            SkillSourceKind::Remote => query.include_remote_skills,
+            SkillSourceKind::Orchestrator => query.include_orchestrator_skills,
             SkillSourceKind::Custom(_) => true,
         }
     }
@@ -94,20 +95,54 @@ impl SkillProviders {
         self
     }
 
-    pub fn with_remote_provider(mut self, provider: Arc<dyn SkillProvider>) -> Self {
+    pub fn with_orchestrator_provider(mut self, provider: Arc<dyn SkillProvider>) -> Self {
         self.sources
-            .push(SkillProviderSource::remote("remote", provider));
+            .push(SkillProviderSource::orchestrator("orchestrator", provider));
         self
     }
 
+    pub(crate) fn has_orchestrator_provider(&self) -> bool {
+        self.sources
+            .iter()
+            .any(|source| source.kind == SkillSourceKind::Orchestrator)
+    }
+
     pub(crate) async fn list_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
+        self.list_matching(&query, |source| source.should_list(&query))
+            .await
+    }
+
+    pub(crate) async fn list_orchestrator_for_turn(
+        &self,
+        query: SkillListQuery,
+    ) -> SkillProviderResult<SkillCatalog> {
         let mut catalog = SkillCatalog::default();
 
         for source in self
             .sources
             .iter()
-            .filter(|source| source.should_list(&query))
+            .filter(|source| source.kind == SkillSourceKind::Orchestrator)
         {
+            let source_catalog = source.provider.list(query.clone()).await.map_err(|err| {
+                SkillProviderError::new(format!(
+                    "{} skills unavailable: {}",
+                    source.label, err.message
+                ))
+            })?;
+            catalog.extend(source_catalog);
+        }
+
+        Ok(catalog)
+    }
+
+    async fn list_matching(
+        &self,
+        query: &SkillListQuery,
+        should_list: impl Fn(&SkillProviderSource) -> bool,
+    ) -> SkillCatalog {
+        let mut catalog = SkillCatalog::default();
+
+        for source in self.sources.iter().filter(|source| should_list(source)) {
             extend_catalog(
                 &mut catalog,
                 source.provider.list(query.clone()).await,
