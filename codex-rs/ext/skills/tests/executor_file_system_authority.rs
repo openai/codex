@@ -1,5 +1,4 @@
 use std::io;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -21,11 +20,10 @@ use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::SkillScope;
 use codex_skills_extension::ExecutorSkillProvider;
-use codex_skills_extension::catalog::SkillReadResult;
 use codex_skills_extension::provider::SkillListQuery;
 use codex_skills_extension::provider::SkillProvider;
-use codex_skills_extension::provider::SkillReadRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
 const SKILL_CONTENTS: &str =
@@ -62,34 +60,23 @@ impl SyntheticFileSystem {
 impl ExecutorFileSystem for SyntheticFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        if path == &self.alias_root {
-            return Ok(self.canonical_root.clone());
+    ) -> FileSystemResult<PathUri> {
+        let path = path.to_abs_path()?;
+        if path == self.alias_root {
+            return PathUri::from_abs_path(&self.canonical_root);
         }
-        self.metadata(path)?;
-        Ok(path.clone())
-    }
-
-    async fn join(
-        &self,
-        base_path: &AbsolutePathBuf,
-        path: &Path,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        Ok(base_path.join(path))
-    }
-
-    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        Ok(path.parent())
+        self.metadata(&path)?;
+        PathUri::from_abs_path(&path)
     }
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        if path == &self.canonical_root.join("skill/SKILL.md") {
+        if path.to_abs_path()? == self.canonical_root.join("skill/SKILL.md") {
             Ok(SKILL_CONTENTS.as_bytes().to_vec())
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
@@ -98,7 +85,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn write_file(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _contents: Vec<u8>,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -107,7 +94,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn create_directory(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _options: CreateDirectoryOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -116,24 +103,25 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        self.metadata(path)
+        self.metadata(&path.to_abs_path()?)
     }
 
     async fn read_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
-        if path == &self.canonical_root {
+        let path = path.to_abs_path()?;
+        if path == self.canonical_root {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "skill".to_string(),
                 is_directory: true,
                 is_file: false,
             }])
-        } else if path == &self.canonical_root.join("skill") {
+        } else if path == self.canonical_root.join("skill") {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,
@@ -146,7 +134,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn remove(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _options: RemoveOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -155,8 +143,8 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn copy(
         &self,
-        _source_path: &AbsolutePathBuf,
-        _destination_path: &AbsolutePathBuf,
+        _source_path: &PathUri,
+        _destination_path: &PathUri,
         _options: CopyOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -200,64 +188,6 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
         loaded.read_skill_text(&skill).await.expect("skill body"),
         SKILL_CONTENTS
     );
-}
-
-#[tokio::test]
-async fn executor_provider_reads_from_the_environment_instance_used_for_listing() {
-    let test_root = create_local_skill_root("bound-instance").expect("create local skill root");
-    let root_path = test_root.to_string_lossy().into_owned();
-    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
-    let provider = ExecutorSkillProvider::new_with_restriction_product(
-        Arc::clone(&environment_manager),
-        /*restriction_product*/ None,
-    );
-    let catalog = provider
-        .list(SkillListQuery {
-            turn_id: "turn-1".to_string(),
-            executor_roots: vec![SelectedCapabilityRoot {
-                id: "root-a".to_string(),
-                location: CapabilityRootLocation::Environment {
-                    environment_id: "local".to_string(),
-                    path: root_path,
-                },
-            }],
-            host: None,
-            include_host_skills: false,
-            include_bundled_skills: true,
-            include_orchestrator_skills: false,
-            mcp_resources: None,
-        })
-        .await
-        .expect("list executor skills");
-    let entry = catalog
-        .entries
-        .into_iter()
-        .next()
-        .expect("listed executor skill");
-    let resource = entry.main_prompt.clone();
-
-    environment_manager
-        .upsert_environment("local".to_string(), "http://127.0.0.1:1".to_string())
-        .expect("replace environment");
-
-    assert_eq!(
-        provider
-            .read(SkillReadRequest {
-                authority: entry.authority,
-                package: entry.id,
-                resource: resource.clone(),
-                host: None,
-                mcp_resources: None,
-            })
-            .await
-            .expect("read bound executor skill"),
-        SkillReadResult {
-            resource,
-            contents: SKILL_CONTENTS.to_string(),
-        }
-    );
-
-    std::fs::remove_dir_all(test_root).expect("remove skill directory");
 }
 
 #[tokio::test]

@@ -6416,6 +6416,12 @@
       "AppSummary": {
         "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
         "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": [
               "string",
@@ -6444,6 +6450,12 @@
       "AppTemplateSummary": {
         "properties": {
           "canonicalConnectorId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
             "type": [
               "string",
               "null"

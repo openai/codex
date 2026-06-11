@@ -61,6 +61,12 @@ pub struct PluginHookLoadOutcome {
     pub hook_load_warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginAppMetadata {
+    pub id: AppConnectorId,
+    pub category: Option<String>,
+}
+
 enum PluginLoadScope<'a> {
     AllCapabilities {
         restriction_product: Option<Product>,
@@ -123,6 +129,7 @@ struct PluginAppFile {
 #[derive(Debug, Default, Deserialize)]
 struct PluginAppConfig {
     id: String,
+    category: Option<String>,
 }
 
 pub async fn load_plugins_from_layer_stack(
@@ -848,6 +855,14 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
 }
 
 pub async fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
+    load_plugin_app_metadata(plugin_root)
+        .await
+        .into_iter()
+        .map(|app| app.id)
+        .collect()
+}
+
+pub async fn load_plugin_app_metadata(plugin_root: &Path) -> Vec<PluginAppMetadata> {
     if let Some(manifest) = load_plugin_manifest(plugin_root) {
         return load_apps_from_paths(
             plugin_root,
@@ -856,6 +871,16 @@ pub async fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
         .await;
     }
     load_apps_from_paths(plugin_root, default_app_config_paths(plugin_root)).await
+}
+
+pub fn plugin_app_metadata_from_value(value: &JsonValue) -> Vec<PluginAppMetadata> {
+    let Ok(parsed) = serde_json::from_value::<PluginAppFile>(value.clone()) else {
+        return Vec::new();
+    };
+    let mut apps = plugin_app_metadata_from_file(parsed, /*plugin_root*/ None);
+    let mut seen_connector_ids = HashSet::new();
+    apps.retain(|app| seen_connector_ids.insert(app.id.0.clone()));
+    apps
 }
 
 fn plugin_app_config_paths(
@@ -994,8 +1019,8 @@ fn append_plugin_hook_file(
 async fn load_apps_from_paths(
     plugin_root: &Path,
     app_config_paths: Vec<AbsolutePathBuf>,
-) -> Vec<AppConnectorId> {
-    let mut connector_ids = Vec::new();
+) -> Vec<PluginAppMetadata> {
+    let mut apps = Vec::new();
     for app_config_path in app_config_paths {
         let Ok(contents) = tokio::fs::read_to_string(app_config_path.as_path()).await else {
             continue;
@@ -1011,21 +1036,40 @@ async fn load_apps_from_paths(
             }
         };
 
-        connector_ids.extend(parsed.apps.into_values().filter_map(|app| {
-            if app.id.trim().is_empty() {
-                warn!(
-                    plugin = %plugin_root.display(),
-                    "plugin app config is missing an app id"
-                );
-                None
-            } else {
-                Some(AppConnectorId(app.id))
-            }
-        }));
+        apps.extend(plugin_app_metadata_from_file(parsed, Some(plugin_root)));
     }
     let mut seen_connector_ids = HashSet::new();
-    connector_ids.retain(|connector_id| seen_connector_ids.insert(connector_id.0.clone()));
-    connector_ids
+    apps.retain(|app| seen_connector_ids.insert(app.id.0.clone()));
+    apps
+}
+
+fn plugin_app_metadata_from_file(
+    parsed: PluginAppFile,
+    plugin_root: Option<&Path>,
+) -> Vec<PluginAppMetadata> {
+    parsed
+        .apps
+        .into_values()
+        .filter_map(|app| {
+            if app.id.trim().is_empty() {
+                if let Some(plugin_root) = plugin_root {
+                    warn!(
+                        plugin = %plugin_root.display(),
+                        "plugin app config is missing an app id"
+                    );
+                }
+                None
+            } else {
+                Some(PluginAppMetadata {
+                    id: AppConnectorId(app.id),
+                    category: app
+                        .category
+                        .map(|category| category.trim().to_string())
+                        .filter(|category| !category.is_empty()),
+                })
+            }
+        })
+        .collect()
 }
 
 pub async fn plugin_telemetry_metadata_from_root(
@@ -1063,7 +1107,10 @@ pub async fn plugin_telemetry_metadata_from_root(
                 plugin_root.as_path(),
                 plugin_app_config_paths(plugin_root.as_path(), manifest_paths),
             )
-            .await,
+            .await
+            .into_iter()
+            .map(|app| app.id)
+            .collect(),
         }),
     }
 }

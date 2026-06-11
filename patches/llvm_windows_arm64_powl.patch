@@ -1,0 +1,24 @@
+# What: provide and link MinGW's ARM64 long-double `powl` compatibility shim.
+# Why: Windows ARM64 uses 64-bit long doubles, but LLVM's Bazel source list
+# omits the upstream `powl -> pow` implementation and its default link flags
+# omit the MinGW extension archive that owns the shim.
+
+diff --git a/runtimes/mingw/crt_sources.bzl b/runtimes/mingw/crt_sources.bzl
+--- a/runtimes/mingw/crt_sources.bzl
++++ b/runtimes/mingw/crt_sources.bzl
+@@ -420,4 +420,5 @@
+ MINGWEX_ARM64_SRCS = [
++    "math/arm-common/powl.c",
+     "math/sincos.c",
+     "math/sincosf.c",
+     "math/arm-common/sincosl.c",
+diff --git a/toolchain/args/windows/BUILD.bazel b/toolchain/args/windows/BUILD.bazel
+--- a/toolchain/args/windows/BUILD.bazel
++++ b/toolchain/args/windows/BUILD.bazel
+@@ -49,5 +49,6 @@ cc_args(
++        "-lmingwex",
+         # For now, we force on ucrt.
+         # TODO(cerisier): make this either a constraint or a build setting
+         "-lucrt",
+     ],
+     data = [
