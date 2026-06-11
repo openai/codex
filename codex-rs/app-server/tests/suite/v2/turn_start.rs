@@ -43,7 +43,12 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::TextElement;
+use codex_app_server_protocol::ThreadDeleteParams;
+use codex_app_server_protocol::ThreadDeleteResponse;
+use codex_app_server_protocol::ThreadDeletedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -591,7 +596,15 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     write_test_skill(codex_home.path(), "alpha-skill")?;
     write_test_skill(codex_home.path(), "beta-skill")?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let isolated_home = codex_home.path().to_string_lossy();
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(isolated_home.as_ref())),
+            ("USERPROFILE", Some(isolated_home.as_ref())),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -3361,6 +3374,49 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
     .await??;
     assert_eq!(turn_completed.thread_id, thread.id);
     assert_eq!(turn_completed.turn.id, turn.turn.id);
+
+    // Reuse this live spawn setup to cover thread/delete's ThreadManager descendant path.
+    let delete_req = mcp
+        .send_thread_delete_request(ThreadDeleteParams {
+            thread_id: thread.id.clone(),
+        })
+        .await?;
+    let delete_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(delete_req)),
+    )
+    .await??;
+    let _: ThreadDeleteResponse = to_response::<ThreadDeleteResponse>(delete_resp)?;
+
+    let mut deleted_thread_ids = Vec::new();
+    for _ in 0..2 {
+        let deleted_notif = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("thread/deleted"),
+        )
+        .await??;
+        let deleted: ThreadDeletedNotification = serde_json::from_value(
+            deleted_notif
+                .params
+                .expect("thread/deleted notification params"),
+        )?;
+        deleted_thread_ids.push(deleted.thread_id);
+    }
+    assert_eq!(
+        deleted_thread_ids,
+        vec![receiver_thread_id, thread.id.clone()]
+    );
+
+    let list_req = mcp
+        .send_thread_loaded_list_request(ThreadLoadedListParams::default())
+        .await?;
+    let list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_req)),
+    )
+    .await??;
+    let ThreadLoadedListResponse { data, .. } = to_response::<ThreadLoadedListResponse>(list_resp)?;
+    assert_eq!(data, Vec::<String>::new());
 
     Ok(())
 }

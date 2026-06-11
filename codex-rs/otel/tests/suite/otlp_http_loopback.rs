@@ -186,6 +186,12 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     ))?;
 
     metrics.counter("codex.turns", /*inc*/ 1, &[("source", "test")])?;
+    metrics.gauge_with_description(
+        "codex.active",
+        "Number of active Codex operations.",
+        /*value*/ 1,
+        &[("component", "test")],
+    )?;
     metrics.shutdown()?;
 
     server.join().expect("server join");
@@ -218,6 +224,16 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     assert!(
         body.contains("codex.turns"),
         "expected metric name not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
+    assert!(
+        body.contains("codex.active"),
+        "expected gauge not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
+    assert!(
+        body.contains("component") && body.contains("test"),
+        "expected gauge tag not found; body prefix: {}",
         &body.chars().take(2000).collect::<String>()
     );
 

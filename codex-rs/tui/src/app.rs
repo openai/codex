@@ -11,6 +11,7 @@ use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
 use crate::app_event::PermissionProfileSelection;
+use crate::app_event::PluginLocation;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
@@ -37,8 +38,6 @@ use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
-use crate::external_agent_config_migration_startup::ExternalAgentConfigMigrationStartupOutcome;
-use crate::external_agent_config_migration_startup::handle_external_agent_config_migration_prompt_if_needed;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
@@ -764,7 +763,6 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
-        entered_trust_nux: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
         app_server_target: AppServerTarget,
         state_db: Option<StateDbHandle>,
@@ -786,39 +784,6 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
-        let external_agent_config_migration_outcome =
-            handle_external_agent_config_migration_prompt_if_needed(
-                tui,
-                &mut app_server,
-                &mut config,
-                &cli_kv_overrides,
-                &harness_overrides,
-                &cloud_config_bundle,
-                entered_trust_nux,
-            )
-            .await?;
-        let external_agent_config_migration_message = match external_agent_config_migration_outcome
-        {
-            ExternalAgentConfigMigrationStartupOutcome::Continue { success_message } => {
-                success_message
-            }
-            ExternalAgentConfigMigrationStartupOutcome::ExitRequested => {
-                app_server
-                    .shutdown()
-                    .await
-                    .inspect_err(|err| {
-                        tracing::warn!("app-server shutdown failed: {err}");
-                    })
-                    .ok();
-                return Ok(AppExitInfo {
-                    token_usage: TokenUsage::default(),
-                    thread_id: None,
-                    thread_name: None,
-                    update_action: None,
-                    exit_reason: ExitReason::UserRequested,
-                });
-            }
-        };
         let bootstrap = match startup_bootstrap {
             Some(bootstrap) => bootstrap,
             None => app_server.bootstrap(&config).await?,
@@ -1018,10 +983,6 @@ impl App {
         };
         chat_widget.remote_connection = remote_connection;
         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
-        if let Some(message) = external_agent_config_migration_message {
-            chat_widget.add_info_message(message, /*hint*/ None);
-        }
-
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 

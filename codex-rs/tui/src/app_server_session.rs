@@ -53,6 +53,8 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadDeleteParams;
+use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadGoalClearParams;
@@ -129,12 +131,16 @@ use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use uuid::Uuid;
 
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
+pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str =
+    "A previous agent import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 const DISABLED_FORK_UNSUPPORTED_MESSAGE: &str =
     "connected app server did not confirm that multi-agent tools were disabled for the fork";
@@ -181,6 +187,7 @@ pub(crate) struct AppServerSession {
     available_models: Vec<ModelPreset>,
     rejected_fork_thread_ids: HashSet<ThreadId>,
     disabled_forks_unsupported: bool,
+    external_agent_config_import_completion_pending: AtomicBool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,6 +239,7 @@ impl AppServerSession {
             available_models: Vec::new(),
             rejected_fork_thread_ids: HashSet::new(),
             disabled_forks_unsupported: false,
+            external_agent_config_import_completion_pending: AtomicBool::new(false),
         }
     }
 
@@ -246,6 +254,10 @@ impl AppServerSession {
 
     pub(crate) fn uses_remote_workspace(&self) -> bool {
         matches!(self.thread_params_mode, ThreadParamsMode::Remote)
+    }
+
+    pub(crate) fn uses_embedded_app_server(&self) -> bool {
+        matches!(&self.client, AppServerClient::InProcess(_))
     }
 
     pub(crate) fn server_version(&self) -> Option<&str> {
@@ -370,21 +382,48 @@ impl AppServerSession {
         self.client
             .request_typed(ClientRequest::ExternalAgentConfigDetect { request_id, params })
             .await
-            .wrap_err("externalAgentConfig/detect failed during TUI startup")
+            .wrap_err("externalAgentConfig/detect failed during agent import")
     }
 
     pub(crate) async fn external_agent_config_import(
         &mut self,
         migration_items: Vec<ExternalAgentConfigMigrationItem>,
-    ) -> Result<ExternalAgentConfigImportResponse> {
+    ) -> Result<()> {
+        // Mark the import active before sending the request so a fast completion notification
+        // cannot arrive before the TUI records it.
+        if self
+            .external_agent_config_import_completion_pending
+            .swap(true, Ordering::Relaxed)
+        {
+            color_eyre::eyre::bail!(EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE);
+        }
         let request_id = self.next_request_id();
-        self.client
+        let response: Result<ExternalAgentConfigImportResponse> = self
+            .client
             .request_typed(ClientRequest::ExternalAgentConfigImport {
                 request_id,
                 params: ExternalAgentConfigImportParams { migration_items },
             })
             .await
-            .wrap_err("externalAgentConfig/import failed during TUI startup")
+            .wrap_err("externalAgentConfig/import failed during agent import");
+        match response {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                self.external_agent_config_import_completion_pending
+                    .store(false, Ordering::Relaxed);
+                Err(err)
+            }
+        }
+    }
+
+    pub(crate) fn external_agent_config_import_in_progress(&self) -> bool {
+        self.external_agent_config_import_completion_pending
+            .load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn consume_external_agent_config_import_completion(&self) -> bool {
+        self.external_agent_config_import_completion_pending
+            .swap(false, Ordering::Relaxed)
     }
 
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
@@ -623,6 +662,21 @@ impl AppServerSession {
             })
             .await
             .wrap_err("failed to archive session")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_delete(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadDeleteResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadDelete {
+                request_id,
+                params: ThreadDeleteParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("failed to delete session")?;
         Ok(())
     }
 
@@ -1236,6 +1290,7 @@ pub(crate) fn status_account_display_from_auth_mode(
             email: None,
             plan: plan_type.map(plan_type_display_name),
         }),
+        Some(AuthMode::BedrockApiKey) => None,
         None => None,
     }
 }

@@ -653,6 +653,13 @@ pub struct ArchiveThreadParams {
     pub thread_id: ThreadId,
 }
 
+/// Parameters for deleting a thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteThreadParams {
+    /// Thread id to delete.
+    pub thread_id: ThreadId,
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;

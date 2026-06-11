@@ -61,6 +61,7 @@ pub struct TurnContext {
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
+    pub(crate) comp_hash: Option<String>,
     pub(crate) tool_mode: ToolMode,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
@@ -229,6 +230,7 @@ impl TurnContext {
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
+            comp_hash: model_info.comp_hash.clone(),
             tool_mode,
             session_telemetry: self
                 .session_telemetry
@@ -355,6 +357,7 @@ impl TurnContext {
             network: self.turn_context_network_item(),
             file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
             model: self.model_info.slug.clone(),
+            comp_hash: self.comp_hash.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
             multi_agent_version: Some(self.multi_agent_version),
@@ -531,6 +534,7 @@ impl Session {
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
+            comp_hash: model_info.comp_hash.clone(),
             tool_mode,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
@@ -724,7 +728,7 @@ impl Session {
             .unwrap_or_else(|| session_configuration.cwd().clone());
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
         {
-            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+            let mcp_connection_manager = self.services.mcp_connection_manager.load_full();
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
             mcp_connection_manager
                 .set_permission_profile(session_configuration.permission_profile());
