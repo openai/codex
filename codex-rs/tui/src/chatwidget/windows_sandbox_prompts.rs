@@ -15,7 +15,7 @@ impl ChatWidget {
 
     #[cfg(any(target_os = "windows", test))]
     pub(super) fn elevated_windows_sandbox_setup_required(&self) -> bool {
-        WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Elevated
+        crate::windows_sandbox::level_from_config(&self.config) == WindowsSandboxLevel::Elevated
             && self
                 .config
                 .config_layer_stack
@@ -23,9 +23,7 @@ impl ChatWidget {
                 .windows_sandbox_mode
                 .source
                 .is_some()
-            && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
-                self.config.codex_home.as_path(),
-            )
+            && !crate::windows_sandbox::sandbox_setup_is_complete(self.config.codex_home.as_path())
     }
 
     #[cfg(target_os = "windows")]
@@ -225,54 +223,6 @@ impl ChatWidget {
         profile_selection: Option<PermissionProfileSelection>,
     ) {
         use ratatui_macros::line;
-
-        if !crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
-            // Legacy flow (pre-NUX): explain the experimental sandbox and let the user enable it
-            // directly (no elevation prompts).
-            let mut header = ColumnRenderable::new();
-            header.push(*Box::new(
-                Paragraph::new(vec![
-                    line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()],
-                    line!["Learn more: https://developers.openai.com/codex/windows"],
-                ])
-                .wrap(Wrap { trim: false }),
-            ));
-
-            let preset_clone = preset;
-            let items = vec![
-                SelectionItem {
-                    name: "Enable experimental sandbox".to_string(),
-                    description: None,
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
-                            preset: preset_clone.clone(),
-                            mode: WindowsSandboxEnableMode::Legacy,
-                            profile_selection: profile_selection.clone(),
-                        });
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: "Go back".to_string(),
-                    description: None,
-                    actions: vec![Box::new(|tx| {
-                        tx.send(AppEvent::OpenApprovalsPopup);
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-            ];
-
-            self.bottom_pane.show_selection_view(SelectionViewParams {
-                title: None,
-                footer_hint: Some(standard_popup_hint_line()),
-                items,
-                header: Box::new(header),
-                ..Default::default()
-            });
-            return;
-        }
 
         self.session_telemetry.counter(
             "codex.windows_sandbox.elevated_prompt_shown",
@@ -508,7 +458,7 @@ impl ChatWidget {
 
     #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, show_now: bool) {
-        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+        let windows_sandbox_level = crate::windows_sandbox::level_from_config(&self.config);
         let setup_is_required = windows_sandbox_level == WindowsSandboxLevel::Disabled
             || self.elevated_windows_sandbox_setup_required();
         if show_now

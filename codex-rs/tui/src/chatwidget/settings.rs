@@ -58,13 +58,11 @@ impl ChatWidget {
     pub(crate) fn set_windows_sandbox_mode(&mut self, mode: Option<WindowsSandboxModeToml>) {
         self.config.permissions.windows_sandbox_mode = mode;
         #[cfg(target_os = "windows")]
-        self.bottom_pane.set_windows_degraded_sandbox_active(
-            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                && matches!(
-                    WindowsSandboxLevel::from_config(&self.config),
-                    WindowsSandboxLevel::RestrictedToken
-                ),
-        );
+        self.bottom_pane
+            .set_windows_degraded_sandbox_active(matches!(
+                crate::windows_sandbox::level_from_config(&self.config),
+                WindowsSandboxLevel::RestrictedToken
+            ));
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -121,13 +119,11 @@ impl ChatWidget {
             feature,
             Feature::WindowsSandbox | Feature::WindowsSandboxElevated
         ) {
-            self.bottom_pane.set_windows_degraded_sandbox_active(
-                crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                    && matches!(
-                        WindowsSandboxLevel::from_config(&self.config),
-                        WindowsSandboxLevel::RestrictedToken
-                    ),
-            );
+            self.bottom_pane
+                .set_windows_degraded_sandbox_active(matches!(
+                    crate::windows_sandbox::level_from_config(&self.config),
+                    WindowsSandboxLevel::RestrictedToken
+                ));
         }
         enabled
     }

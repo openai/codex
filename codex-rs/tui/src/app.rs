@@ -51,8 +51,6 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
-#[cfg(target_os = "windows")]
-use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::model_catalog::ModelCatalog;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -1063,7 +1061,7 @@ See the Codex keymap documentation for supported actions and examples."
         #[cfg(target_os = "windows")]
         {
             let startup_permission_profile = app.config.permissions.effective_permission_profile();
-            let should_check = WindowsSandboxLevel::from_config(&app.config)
+            let should_check = crate::windows_sandbox::level_from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
                 && managed_filesystem_sandbox_is_restricted(&startup_permission_profile)
                 && !app

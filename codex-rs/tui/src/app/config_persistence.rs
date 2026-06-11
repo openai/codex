@@ -964,7 +964,7 @@ impl App {
     fn propagate_windows_sandbox_turn_context(&self) {
         #[cfg(target_os = "windows")]
         {
-            let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+            let windows_sandbox_level = crate::windows_sandbox::level_from_config(&self.config);
             self.app_event_tx
                 .send(AppEvent::CodexOp(AppCommand::override_turn_context(
                     /*cwd*/ None,
