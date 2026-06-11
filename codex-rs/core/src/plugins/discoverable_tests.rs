@@ -215,6 +215,50 @@ remote_plugin = true
                     }
                 },
                 {
+                    "id": "plugins~Plugin_remote_databricks",
+                    "name": "databricks",
+                    "scope": "GLOBAL",
+                    "installation_policy": "AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "AVAILABLE",
+                    "release": {
+                        "display_name": "Databricks Genie",
+                        "description": "Analyze and manage Databricks",
+                        "app_ids": [],
+                        "app_templates": [
+                            {
+                                "template_id": "templated_apps_Databricks",
+                                "name": "Databricks Genie",
+                                "description": "Analyze and manage Databricks",
+                                "canonical_connector_id": "connector_databricks_canonical",
+                                "materialized_app_ids": ["asdk_app_databricks_workspace"]
+                            }
+                        ],
+                        "interface": {
+                            "short_description": "Analyze and manage Databricks",
+                            "long_description": null,
+                            "developer_name": null,
+                            "category": null,
+                            "capabilities": [],
+                            "website_url": null,
+                            "privacy_policy_url": null,
+                            "terms_of_service_url": null,
+                            "brand_color": null,
+                            "default_prompt": null,
+                            "composer_icon_url": null,
+                            "logo_url": null,
+                            "screenshot_urls": []
+                        },
+                        "skills": [
+                            {
+                                "name": "databricks",
+                                "description": "Use Databricks",
+                                "interface": null
+                            }
+                        ]
+                    }
+                },
+                {
                     "id": "plugins~Plugin_remote_unlisted",
                     "name": "remote-unlisted",
                     "scope": "GLOBAL",
@@ -401,6 +445,43 @@ remote_plugin = true
             app_connector_ids: vec!["github".to_string()],
         }]
     );
+
+    for loaded_app_connector_id in [
+        "templated_apps_Databricks",
+        "connector_databricks_canonical",
+        "asdk_app_databricks_workspace",
+    ] {
+        let discoverable_plugins = list_discoverable_plugins_with_manager_and_auth(
+            &config,
+            &plugins_manager,
+            Some(&auth),
+            &[loaded_app_connector_id.to_string()],
+        )
+        .await
+        .unwrap();
+        let remote_plugins = discoverable_plugins
+            .into_iter()
+            .filter(|plugin| plugin.id == "databricks@openai-curated-remote")
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            remote_plugins,
+            vec![DiscoverablePluginInfo {
+                id: "databricks@openai-curated-remote".to_string(),
+                remote_plugin_id: Some("plugins~Plugin_remote_databricks".to_string()),
+                name: "Databricks Genie".to_string(),
+                description: Some("Analyze and manage Databricks".to_string()),
+                has_skills: true,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: vec![
+                    "asdk_app_databricks_workspace".to_string(),
+                    "connector_databricks_canonical".to_string(),
+                    "templated_apps_Databricks".to_string(),
+                ],
+            }],
+            "expected Databricks Genie to be discoverable from {loaded_app_connector_id}"
+        );
+    }
 
     write_file(
         &codex_home.path().join(crate::config::CONFIG_TOML_FILE),

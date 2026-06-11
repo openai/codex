@@ -1247,6 +1247,14 @@ fn remote_discoverable_plugin_from_directory_item(
         non_empty_string(Some(&plugin.release.display_name)).unwrap_or_else(|| plugin.name.clone());
     let description = non_empty_string(plugin.release.interface.short_description.as_deref())
         .or_else(|| non_empty_string(Some(&plugin.release.description)));
+    let mut app_ids = plugin.release.app_ids.clone();
+    app_ids.extend(plugin.release.app_templates.iter().flat_map(|template| {
+        std::iter::once(template.template_id.clone())
+            .chain(template.canonical_connector_id.clone())
+            .chain(template.materialized_app_ids.clone())
+    }));
+    app_ids.sort_unstable();
+    app_ids.dedup();
 
     Ok(RemoteDiscoverablePlugin {
         config_id: plugin_id.as_key(),
@@ -1254,7 +1262,7 @@ fn remote_discoverable_plugin_from_directory_item(
         name: display_name,
         description,
         has_skills: !plugin.release.skills.is_empty(),
-        app_ids: plugin.release.app_ids.clone(),
+        app_ids,
         install_policy: plugin.installation_policy,
         availability: plugin.availability,
     })
