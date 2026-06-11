@@ -15,6 +15,7 @@
 //! bridging async `mpsc` channels on both sides. Queues are bounded so overload
 //! surfaces as channel-full errors rather than unbounded memory growth.
 
+mod path;
 mod remote;
 
 use std::error::Error;
@@ -53,6 +54,7 @@ pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -60,6 +62,7 @@ use tokio::time::timeout;
 use toml::Value as TomlValue;
 use tracing::warn;
 
+pub use crate::path::AppServerPath;
 pub use crate::remote::RemoteAppServerClient;
 pub use crate::remote::RemoteAppServerConnectArgs;
 pub use crate::remote::RemoteAppServerEndpoint;
@@ -840,6 +843,15 @@ impl AppServerRequestHandle {
 }
 
 impl AppServerClient {
+    pub fn codex_home(&self, local_codex_home: &AbsolutePathBuf) -> Option<AppServerPath> {
+        match self {
+            Self::InProcess(_) => Some(AppServerPath::from_app_server(
+                local_codex_home.display().to_string(),
+            )),
+            Self::Remote(client) => client.codex_home().map(AppServerPath::from_app_server),
+        }
+    }
+
     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
         match self {
             Self::InProcess(client) => client.request(request).await,

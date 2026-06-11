@@ -131,7 +131,7 @@ impl App {
         draft: goal_files::GoalDraft,
         mode: ThreadGoalSetMode,
     ) {
-        let codex_home = goal_files::codex_home_for_app_server(app_server, &self.config.codex_home);
+        let codex_home = app_server.codex_home_path(&self.config.codex_home);
         let result =
             goal_files::materialize_goal_draft(app_server, codex_home.as_ref(), draft).await;
         let objective = match result {

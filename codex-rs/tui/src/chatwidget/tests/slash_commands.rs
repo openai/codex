@@ -645,16 +645,7 @@ async fn goal_slash_command_uses_plain_text_for_mentions() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let event = rx.try_recv().expect("expected goal draft event");
-    let AppEvent::SetThreadGoalDraft {
-        thread_id: actual_thread_id,
-        draft,
-        ..
-    } = event
-    else {
-        panic!("expected SetThreadGoalDraft, got {event:?}");
-    };
-    assert_eq!(actual_thread_id, thread_id);
+    let draft = next_goal_draft(&mut rx, thread_id);
     assert_eq!(draft.objective, "use $figma for the mockup");
     assert_no_submit_op(&mut op_rx);
 }
@@ -683,16 +674,7 @@ async fn goal_slash_command_emits_attached_images() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let event = rx.try_recv().expect("expected goal draft event");
-    let AppEvent::SetThreadGoalDraft {
-        thread_id: actual_thread_id,
-        draft,
-        ..
-    } = event
-    else {
-        panic!("expected SetThreadGoalDraft, got {event:?}");
-    };
-    assert_eq!(actual_thread_id, thread_id);
+    let draft = next_goal_draft(&mut rx, thread_id);
     assert_eq!(
         draft.objective,
         format!("literal {placeholder} describe {placeholder}")
@@ -821,16 +803,7 @@ async fn queued_goal_slash_command_emits_set_goal_event_after_thread_starts() {
     chat.thread_id = Some(thread_id);
     chat.maybe_send_next_queued_input();
 
-    let event = rx.try_recv().expect("expected goal draft event");
-    let AppEvent::SetThreadGoalDraft {
-        thread_id: actual_thread_id,
-        draft,
-        ..
-    } = event
-    else {
-        panic!("expected SetThreadGoalDraft, got {event:?}");
-    };
-    assert_eq!(actual_thread_id, thread_id);
+    let draft = next_goal_draft(&mut rx, thread_id);
     assert_eq!(draft.objective, "improve benchmark coverage");
     assert_no_submit_op(&mut op_rx);
 }
@@ -863,14 +836,7 @@ async fn queued_goal_slash_command_preserves_current_draft_metadata() {
     chat.thread_id = Some(thread_id);
     chat.maybe_send_next_queued_input();
 
-    let event = rx.try_recv().expect("expected goal objective event");
-    assert_matches!(
-        event,
-        AppEvent::SetThreadGoalDraft {
-            thread_id: actual_thread_id,
-            ..
-        } if actual_thread_id == thread_id
-    );
+    let _ = next_goal_draft(&mut rx, thread_id);
     assert_no_submit_op(&mut op_rx);
     assert_eq!(chat.bottom_pane.composer_text(), draft);
     assert_eq!(chat.remote_image_urls(), vec![remote_url]);
@@ -899,16 +865,7 @@ async fn restored_queued_goal_slash_command_emits_set_goal_event() {
     restored_chat.thread_id = Some(thread_id);
     restored_chat.maybe_send_next_queued_input();
 
-    let event = restored_rx
-        .try_recv()
-        .expect("expected goal objective event");
-    assert_matches!(
-        event,
-        AppEvent::SetThreadGoalDraft {
-            thread_id: actual_thread_id,
-            ..
-        } if actual_thread_id == thread_id
-    );
+    let _ = next_goal_draft(&mut restored_rx, thread_id);
     assert_no_submit_op(&mut restored_op_rx);
 }
 

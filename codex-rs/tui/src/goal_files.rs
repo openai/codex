@@ -14,9 +14,9 @@ use crate::bottom_pane::LocalImageAttachment;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_app_server_client::AppServerPath;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::user_input::TextElement;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use uuid::Uuid;
 
 const GOAL_ATTACHMENT_DIR: &str = "attachments";
@@ -55,9 +55,7 @@ pub(crate) trait GoalFileStore {
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send;
 }
 
-/// Path syntax for goal files has to match the app-server host, not the TUI
-/// host, because remote fs APIs deserialize and resolve paths on the server.
-pub(crate) type GoalFilePath = String;
+pub(crate) type GoalFilePath = AppServerPath;
 
 impl GoalFileStore for AppServerSession {
     async fn create_directory(&mut self, path: GoalFilePath) -> Result<()> {
@@ -79,45 +77,17 @@ impl GoalFileStore for AppServerSession {
     }
 }
 
-pub(crate) fn codex_home_for_app_server(
-    app_server: &AppServerSession,
-    local_codex_home: &AbsolutePathBuf,
-) -> Option<GoalFilePath> {
-    if app_server.uses_remote_workspace() {
-        app_server.remote_codex_home().map(str::to_string)
-    } else {
-        Some(local_codex_home.display().to_string())
-    }
-}
-
-fn join_goal_path(path: &str, segment: impl AsRef<str>) -> GoalFilePath {
-    let separator = if is_windows_absolute_path(path) {
-        '\\'
-    } else {
-        '/'
-    };
-    let mut path = path.trim_end_matches(['/', '\\']).to_string();
-    if !path.ends_with(separator) {
-        path.push(separator);
-    }
-    path.push_str(segment.as_ref());
-    path
-}
-
 fn managed_goal_file_path(raw: &str) -> Option<GoalFilePath> {
-    if !is_windows_absolute_path(raw) && !raw.starts_with('/') {
-        return None;
-    }
-    let normalized = raw.replace('\\', "/");
-    let mut parts = normalized.rsplit('/').filter(|part| !part.is_empty());
-    let file_name = parts.next()?;
-    let attachment_id = parts.next()?;
-    let attachment_dir = parts.next()?;
-    if file_name == GOAL_FILE_NAME
-        && attachment_dir == GOAL_ATTACHMENT_DIR
+    let path = AppServerPath::from_absolute_str(raw)?;
+    let parts = path.components();
+    let file_name = parts.last()?;
+    let attachment_id = parts.get(parts.len().checked_sub(2)?)?;
+    let attachment_dir = parts.get(parts.len().checked_sub(3)?)?;
+    if *file_name == GOAL_FILE_NAME
+        && *attachment_dir == GOAL_ATTACHMENT_DIR
         && Uuid::parse_str(attachment_id).is_ok()
     {
-        Some(raw.to_string())
+        Some(path)
     } else {
         None
     }
@@ -133,36 +103,33 @@ pub(crate) async fn materialize_goal_draft(
         bail!("Goal objective must not be empty.");
     }
     let text_elements = draft.text_elements;
-    let mut active_paste_placeholders = active_placeholder_counts(
+    let mut active_placeholders = active_placeholder_counts(
         &objective,
         &text_elements,
         draft
             .pending_pastes
             .iter()
-            .map(|(placeholder, _)| placeholder.as_str()),
-    );
-    let mut active_image_placeholders = active_placeholder_counts(
-        &objective,
-        &text_elements,
-        draft
-            .local_images
-            .iter()
-            .map(|image| image.placeholder.as_str()),
+            .map(|(placeholder, _)| placeholder.as_str())
+            .chain(
+                draft
+                    .local_images
+                    .iter()
+                    .map(|image| image.placeholder.as_str()),
+            ),
     );
 
     let mut output_dir = None;
     let mut replacements = Vec::new();
     let mut paste_idx = 0;
     for (placeholder, text) in draft.pending_pastes.iter() {
-        if !take_active_placeholder(&mut active_paste_placeholders, placeholder) {
+        if !take_active_placeholder(&mut active_placeholders, placeholder) {
             continue;
         }
         paste_idx += 1;
-        let path = join_goal_path(
-            &ensure_output_dir(store, codex_home, &mut output_dir).await?,
-            format!("pasted-text-{paste_idx}.txt"),
-        );
-        write_file(store, path.clone(), text.as_bytes().to_vec()).await?;
+        let path = ensure_goal_output_dir(store, codex_home, &mut output_dir)
+            .await?
+            .join(format!("pasted-text-{paste_idx}.txt"));
+        write_goal_file(store, path.clone(), text.as_bytes().to_vec()).await?;
 
         if !placeholder.is_empty() {
             replacements.push((placeholder.clone(), format!("pasted text file: {path}")));
@@ -172,18 +139,17 @@ pub(crate) async fn materialize_goal_draft(
     let mut image_lines = Vec::new();
     for (idx, image) in draft.local_images.iter().enumerate() {
         if !image.placeholder.is_empty()
-            && !take_active_placeholder(&mut active_image_placeholders, &image.placeholder)
+            && !take_active_placeholder(&mut active_placeholders, &image.placeholder)
         {
             continue;
         }
         let extension = image_extension(&image.path);
-        let path = join_goal_path(
-            &ensure_output_dir(store, codex_home, &mut output_dir).await?,
-            format!("image-{}.{}", idx + 1, extension),
-        );
+        let path = ensure_goal_output_dir(store, codex_home, &mut output_dir)
+            .await?
+            .join(format!("image-{}.{}", idx + 1, extension));
         let bytes = fs::read(&image.path)
             .with_context(|| format!("Could not read goal image {}", image.path.display()))?;
-        write_file(store, path.clone(), bytes).await?;
+        write_goal_file(store, path.clone(), bytes).await?;
         if image.placeholder.is_empty() {
             image_lines.push(format!("- [Image #{}]: {path}", idx + 1));
         } else {
@@ -206,11 +172,10 @@ pub(crate) async fn materialize_goal_draft(
     );
 
     if objective.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
-        let path = join_goal_path(
-            &ensure_output_dir(store, codex_home, &mut output_dir).await?,
-            GOAL_FILE_NAME,
-        );
-        write_file(store, path.clone(), objective.as_bytes().to_vec()).await?;
+        let path = ensure_goal_output_dir(store, codex_home, &mut output_dir)
+            .await?
+            .join(GOAL_FILE_NAME);
+        write_goal_file(store, path.clone(), objective.as_bytes().to_vec()).await?;
         objective = objective_file_reference(&path)?;
     }
 
@@ -290,7 +255,7 @@ pub(crate) fn objective_file_reference(path: &GoalFilePath) -> Result<String> {
     Ok(reference)
 }
 
-async fn ensure_output_dir(
+async fn ensure_goal_output_dir(
     store: &mut impl GoalFileStore,
     codex_home: Option<&GoalFilePath>,
     output_dir: &mut Option<GoalFilePath>,
@@ -300,10 +265,9 @@ async fn ensure_output_dir(
     }
     let codex_home = codex_home
         .context("App server did not report $CODEX_HOME; cannot materialize goal files")?;
-    let path = join_goal_path(
-        &join_goal_path(codex_home, GOAL_ATTACHMENT_DIR),
-        Uuid::new_v4().to_string(),
-    );
+    let path = codex_home
+        .join(GOAL_ATTACHMENT_DIR)
+        .join(Uuid::new_v4().to_string());
     store
         .create_directory(path.clone())
         .await
@@ -312,7 +276,7 @@ async fn ensure_output_dir(
     Ok(path)
 }
 
-async fn write_file(
+async fn write_goal_file(
     store: &mut impl GoalFileStore,
     path: GoalFilePath,
     bytes: Vec<u8>,
@@ -321,16 +285,6 @@ async fn write_file(
         .write_file(path.clone(), bytes)
         .await
         .with_context(|| format!("Could not write goal file {path}"))
-}
-
-fn is_windows_absolute_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    (bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'\\' | b'/'))
-        || path.starts_with("\\\\")
-        || path.starts_with("//")
 }
 
 fn append_section(objective: &mut String, heading: &str, lines: Vec<String>) {

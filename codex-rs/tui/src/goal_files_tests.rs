@@ -15,7 +15,7 @@ impl GoalFileStore for RecordingStore {
     }
 
     async fn write_file(&mut self, path: GoalFilePath, bytes: Vec<u8>) -> Result<()> {
-        self.writes.push((path, bytes));
+        self.writes.push((path.as_str().to_string(), bytes));
         Ok(())
     }
 
@@ -49,7 +49,8 @@ async fn materializes_oversized_objective_with_remote_windows_path() {
             )
         })
         .collect();
-    let codex_home = r"C:\Users\codex\.codex".to_string();
+    let codex_home =
+        codex_app_server_client::AppServerPath::from_app_server(r"C:\Users\codex\.codex");
     let mut store = RecordingStore::default();
 
     let reference = materialize_goal_draft(
@@ -103,27 +104,7 @@ async fn plain_objective_does_not_need_codex_home() {
 }
 
 #[tokio::test]
-async fn deleted_paste_placeholder_does_not_materialize_or_need_codex_home() {
-    let mut store = RecordingStore::default();
-
-    let objective = materialize_goal_draft(
-        &mut store,
-        /*codex_home*/ None,
-        GoalDraft {
-            objective: "small goal".to_string(),
-            pending_pastes: vec![("[Pasted Content 5 chars]".to_string(), "hello".to_string())],
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("materialize plain goal draft");
-
-    assert_eq!(objective, "small goal");
-    assert!(store.writes.is_empty());
-}
-
-#[tokio::test]
-async fn deleted_image_placeholder_does_not_materialize_or_need_codex_home() {
+async fn deleted_placeholders_do_not_materialize_or_need_codex_home() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let image_path = temp_dir.path().join("local-image.png");
     fs::write(&image_path, b"png bytes").expect("write image");
@@ -134,6 +115,7 @@ async fn deleted_image_placeholder_does_not_materialize_or_need_codex_home() {
         /*codex_home*/ None,
         GoalDraft {
             objective: "small goal".to_string(),
+            pending_pastes: vec![("[Pasted Content 5 chars]".to_string(), "hello".to_string())],
             local_images: vec![LocalImageAttachment {
                 placeholder: "[Image #1]".to_string(),
                 path: image_path,

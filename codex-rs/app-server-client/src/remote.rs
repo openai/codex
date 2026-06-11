@@ -495,30 +495,7 @@ impl RemoteAppServerClient {
     }
 
     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
-        self.request_json_rpc(jsonrpc_request_from_client_request(request))
-            .await
-    }
-
-    async fn request_json_rpc(&self, request: JSONRPCRequest) -> IoResult<RequestResult> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(RemoteClientCommand::Request {
-                request: Box::new(request),
-                response_tx,
-            })
-            .await
-            .map_err(|_| {
-                IoError::new(
-                    ErrorKind::BrokenPipe,
-                    "remote app-server worker channel is closed",
-                )
-            })?;
-        response_rx.await.map_err(|_| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                "remote app-server request channel is closed",
-            )
-        })?
+        self.request_handle().request(request).await
     }
 
     pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>

@@ -26,22 +26,6 @@ fn queue_composer_text_with_tab(chat: &mut ChatWidget, text: &str) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 }
 
-fn next_goal_draft(
-    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-    expected_thread_id: ThreadId,
-) -> crate::goal_files::GoalDraft {
-    loop {
-        let event = rx.try_recv().expect("expected goal draft event");
-        if let AppEvent::SetThreadGoalDraft {
-            thread_id, draft, ..
-        } = event
-        {
-            assert_eq!(thread_id, expected_thread_id);
-            return draft;
-        }
-    }
-}
-
 #[tokio::test]
 async fn goal_slash_command_emits_only_inserted_paste_text_element() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

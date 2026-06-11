@@ -4183,7 +4183,7 @@ async fn set_thread_goal_draft_materializes_long_objective_before_goal_set() -> 
         .expect("goal should be set");
     let path = crate::goal_files::objective_file_path(&goal.objective)
         .expect("goal objective should be a managed file reference");
-    assert!(path.contains("attachments"));
+    assert!(path.as_str().contains("attachments"));
     assert_eq!(
         crate::goal_files::objective_text_for_edit(&mut app_server, &goal.objective)
             .await

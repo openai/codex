@@ -16,6 +16,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_client::AppServerPath;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
@@ -256,11 +257,11 @@ impl AppServerSession {
         matches!(&self.client, AppServerClient::InProcess(_))
     }
 
-    pub(crate) fn remote_codex_home(&self) -> Option<&str> {
-        let AppServerClient::Remote(client) = &self.client else {
-            return None;
-        };
-        client.codex_home()
+    pub(crate) fn codex_home_path(
+        &self,
+        local_codex_home: &AbsolutePathBuf,
+    ) -> Option<AppServerPath> {
+        self.client.codex_home(local_codex_home)
     }
 
     pub(crate) fn server_version(&self) -> Option<&str> {
@@ -944,9 +945,10 @@ impl AppServerSession {
 
     pub(crate) async fn fs_create_directory_path(
         &mut self,
-        path: &str,
+        path: &AppServerPath,
         recursive: bool,
     ) -> Result<()> {
+        let path_str = path.as_str();
         let _: FsCreateDirectoryResponse = self
             .request_fs_path(
                 "fs/createDirectory",
@@ -959,7 +961,7 @@ impl AppServerSession {
                     },
                 },
                 json!({
-                    "path": path,
+                    "path": path_str,
                     "recursive": recursive,
                 }),
             )
@@ -967,8 +969,13 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn fs_write_file_path(&mut self, path: &str, bytes: Vec<u8>) -> Result<()> {
+    pub(crate) async fn fs_write_file_path(
+        &mut self,
+        path: &AppServerPath,
+        bytes: Vec<u8>,
+    ) -> Result<()> {
         let data_base64 = STANDARD.encode(bytes);
+        let path_str = path.as_str();
         let _: FsWriteFileResponse = self
             .request_fs_path(
                 "fs/writeFile",
@@ -981,7 +988,7 @@ impl AppServerSession {
                     },
                 },
                 json!({
-                    "path": path,
+                    "path": path_str,
                     "dataBase64": data_base64,
                 }),
             )
@@ -989,7 +996,7 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn fs_read_file_path(&mut self, path: &str) -> Result<Vec<u8>> {
+    pub(crate) async fn fs_read_file_path(&mut self, path: &AppServerPath) -> Result<Vec<u8>> {
         let response: FsReadFileResponse = self
             .request_fs_path(
                 "fs/readFile",
@@ -998,7 +1005,7 @@ impl AppServerSession {
                     request_id,
                     params: FsReadFileParams { path },
                 },
-                json!({ "path": path }),
+                json!({ "path": path.as_str() }),
             )
             .await?;
         STANDARD
@@ -1009,7 +1016,7 @@ impl AppServerSession {
     async fn request_fs_path<T>(
         &mut self,
         method: &str,
-        path: &str,
+        path: &AppServerPath,
         local_request: impl FnOnce(RequestId, AbsolutePathBuf) -> ClientRequest,
         remote_params: serde_json::Value,
     ) -> Result<T>
@@ -1022,7 +1029,7 @@ impl AppServerSession {
                 .request_remote_json_rpc_typed(request_id, method, remote_params)
                 .await;
         }
-        let path = AbsolutePathBuf::from_absolute_path_checked(path)
+        let path = AbsolutePathBuf::from_absolute_path_checked(path.as_str())
             .wrap_err_with(|| format!("invalid local app-server fs path {path}"))?;
         self.client
             .request_typed(local_request(request_id, path))
