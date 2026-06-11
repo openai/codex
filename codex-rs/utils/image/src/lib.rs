@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -9,8 +10,10 @@ use codex_utils_cache::sha1_digest;
 use image::ColorType;
 use image::DynamicImage;
 use image::GenericImageView;
+use image::ImageDecoder;
 use image::ImageEncoder;
 use image::ImageFormat;
+use image::ImageReader;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::codecs::webp::WebPEncoder;
@@ -63,6 +66,11 @@ pub struct PromptImageResizeLimits {
     pub max_patches: usize,
 }
 
+struct ImageMetadata {
+    icc_profile: Option<Vec<u8>>,
+    exif: Option<Vec<u8>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ImageCacheKey {
     digest: [u8; 20],
@@ -85,15 +93,34 @@ pub fn load_for_prompt_bytes(
     };
 
     IMAGE_CACHE.get_or_try_insert_with(key, move || {
-        let format = match image::guess_format(&file_bytes) {
-            Ok(ImageFormat::Png) => Some(ImageFormat::Png),
-            Ok(ImageFormat::Jpeg) => Some(ImageFormat::Jpeg),
-            Ok(ImageFormat::Gif) => Some(ImageFormat::Gif),
-            Ok(ImageFormat::WebP) => Some(ImageFormat::WebP),
+        let guessed_format = image::guess_format(&file_bytes)
+            .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
+        let format = match guessed_format {
+            ImageFormat::Png => Some(ImageFormat::Png),
+            ImageFormat::Jpeg => Some(ImageFormat::Jpeg),
+            ImageFormat::Gif => Some(ImageFormat::Gif),
+            ImageFormat::WebP => Some(ImageFormat::WebP),
             _ => None,
         };
 
-        let dynamic = image::load_from_memory(&file_bytes)
+        let mut decoder = ImageReader::with_format(Cursor::new(&file_bytes), guessed_format)
+            .into_decoder()
+            .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
+        // Preserve the metadata most important for rendering prompt images faithfully: the color
+        // profile and EXIF data, including orientation. Other format-specific metadata is
+        // intentionally not copied.
+        let metadata = ImageMetadata {
+            // Only RGB profiles are safe across every re-encoding path. For example, JPEG decoding
+            // can convert CMYK/YCCK pixels to RGB while retaining the source profile; copying it
+            // would mislabel the output. Bytes 16..20 are the ICC data color space signature.
+            icc_profile: decoder
+                .icc_profile()
+                .ok()
+                .flatten()
+                .filter(|profile| profile.get(16..20) == Some(b"RGB ")),
+            exif: decoder.exif_metadata().ok().flatten(),
+        };
+        let dynamic = DynamicImage::from_decoder(decoder)
             .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
 
         let (width, height) = dynamic.dimensions();
@@ -121,7 +148,7 @@ pub fn load_for_prompt_bytes(
             let target_format = format
                 .filter(|format| can_preserve_source_bytes(*format))
                 .unwrap_or(ImageFormat::Png);
-            let (bytes, output_format) = encode_image(&resized, target_format)?;
+            let (bytes, output_format) = encode_image(&resized, target_format, metadata)?;
             let mime = format_to_mime(output_format);
             EncodedImage {
                 bytes,
@@ -139,7 +166,7 @@ pub fn load_for_prompt_bytes(
                     height,
                 }
             } else {
-                let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png)?;
+                let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png, metadata)?;
                 let mime = format_to_mime(output_format);
                 EncodedImage {
                     bytes,
@@ -261,6 +288,7 @@ fn can_preserve_source_bytes(format: ImageFormat) -> bool {
 fn encode_image(
     image: &DynamicImage,
     preferred_format: ImageFormat,
+    metadata: ImageMetadata,
 ) -> Result<(Vec<u8>, ImageFormat), ImageProcessingError> {
     let target_format = match preferred_format {
         ImageFormat::Jpeg => ImageFormat::Jpeg,
@@ -269,11 +297,13 @@ fn encode_image(
     };
 
     let mut buffer = Vec::new();
+    let ImageMetadata { icc_profile, exif } = metadata;
 
     match target_format {
         ImageFormat::Png => {
             let rgba = image.to_rgba8();
-            let encoder = PngEncoder::new(&mut buffer);
+            let mut encoder = PngEncoder::new(&mut buffer);
+            apply_image_metadata(&mut encoder, icc_profile, exif, target_format)?;
             encoder
                 .write_image(
                     rgba.as_raw(),
@@ -288,6 +318,7 @@ fn encode_image(
         }
         ImageFormat::Jpeg => {
             let mut encoder = JpegEncoder::new_with_quality(&mut buffer, 85);
+            apply_image_metadata(&mut encoder, icc_profile, exif, target_format)?;
             encoder
                 .encode_image(image)
                 .map_err(|source| ImageProcessingError::Encode {
@@ -297,7 +328,8 @@ fn encode_image(
         }
         ImageFormat::WebP => {
             let rgba = image.to_rgba8();
-            let encoder = WebPEncoder::new_lossless(&mut buffer);
+            let mut encoder = WebPEncoder::new_lossless(&mut buffer);
+            apply_image_metadata(&mut encoder, icc_profile, exif, target_format)?;
             encoder
                 .write_image(
                     rgba.as_raw(),
@@ -314,6 +346,31 @@ fn encode_image(
     }
 
     Ok((buffer, target_format))
+}
+
+fn apply_image_metadata(
+    encoder: &mut impl ImageEncoder,
+    icc_profile: Option<Vec<u8>>,
+    exif: Option<Vec<u8>>,
+    format: ImageFormat,
+) -> Result<(), ImageProcessingError> {
+    if let Some(icc_profile) = icc_profile {
+        encoder
+            .set_icc_profile(icc_profile)
+            .map_err(|source| ImageProcessingError::Encode {
+                format,
+                source: image::ImageError::Unsupported(source),
+            })?;
+    }
+    if let Some(exif) = exif {
+        encoder
+            .set_exif_metadata(exif)
+            .map_err(|source| ImageProcessingError::Encode {
+                format,
+                source: image::ImageError::Unsupported(source),
+            })?;
+    }
+    Ok(())
 }
 
 fn format_to_mime(format: ImageFormat) -> String {

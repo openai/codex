@@ -3,7 +3,16 @@ use std::io::Cursor;
 use super::*;
 use image::GenericImageView;
 use image::ImageBuffer;
+use image::ImageDecoder;
 use image::Rgba;
+use image::metadata::Orientation;
+
+const TEST_RGB_ICC_PROFILE: &[u8] = b"0123456789abcdefRGB ";
+const TEST_CMYK_ICC_PROFILE: &[u8] = b"0123456789abcdefCMYK";
+const ROTATE_90_EXIF: &[u8] = &[
+    0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x12, 0x01, 0x03, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
 
 fn image_bytes(image: &ImageBuffer<Rgba<u8>, Vec<u8>>, format: ImageFormat) -> Vec<u8> {
     let mut encoded = Cursor::new(Vec::new());
@@ -11,6 +20,64 @@ fn image_bytes(image: &ImageBuffer<Rgba<u8>, Vec<u8>>, format: ImageFormat) -> V
         .write_to(&mut encoded, format)
         .expect("encode image to bytes");
     encoded.into_inner()
+}
+
+fn image_bytes_with_metadata(
+    image: &ImageBuffer<Rgba<u8>, Vec<u8>>,
+    format: ImageFormat,
+    icc_profile: &[u8],
+) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    match format {
+        ImageFormat::Png => {
+            let mut encoder = PngEncoder::new(&mut encoded);
+            encoder
+                .set_icc_profile(icc_profile.to_vec())
+                .expect("set PNG ICC profile");
+            encoder
+                .set_exif_metadata(ROTATE_90_EXIF.to_vec())
+                .expect("set PNG EXIF metadata");
+            encoder
+                .write_image(
+                    image.as_raw(),
+                    image.width(),
+                    image.height(),
+                    ColorType::Rgba8.into(),
+                )
+                .expect("encode PNG with metadata");
+        }
+        ImageFormat::Jpeg => {
+            let mut encoder = JpegEncoder::new_with_quality(&mut encoded, 90);
+            encoder
+                .set_icc_profile(icc_profile.to_vec())
+                .expect("set JPEG ICC profile");
+            encoder
+                .set_exif_metadata(ROTATE_90_EXIF.to_vec())
+                .expect("set JPEG EXIF metadata");
+            encoder
+                .encode_image(&DynamicImage::ImageRgba8(image.clone()))
+                .expect("encode JPEG with metadata");
+        }
+        ImageFormat::WebP => {
+            let mut encoder = WebPEncoder::new_lossless(&mut encoded);
+            encoder
+                .set_icc_profile(icc_profile.to_vec())
+                .expect("set WebP ICC profile");
+            encoder
+                .set_exif_metadata(ROTATE_90_EXIF.to_vec())
+                .expect("set WebP EXIF metadata");
+            encoder
+                .write_image(
+                    image.as_raw(),
+                    image.width(),
+                    image.height(),
+                    ColorType::Rgba8.into(),
+                )
+                .expect("encode WebP with metadata");
+        }
+        _ => panic!("unsupported test format"),
+    }
+    encoded
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -81,6 +148,66 @@ async fn downscales_tall_image_to_fit_square_bounds() {
     assert_eq!(processed.width, 512);
     assert_eq!(processed.height, MAX_DIMENSION);
     assert_eq!(processed.mime, "image/png");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resizing_preserves_supported_metadata() {
+    for format in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::WebP] {
+        let image = ImageBuffer::from_pixel(2050, 2, Rgba([200u8, 10, 10, 255]));
+        let original_bytes = image_bytes_with_metadata(&image, format, TEST_RGB_ICC_PROFILE);
+
+        let processed = load_for_prompt_bytes(
+            Path::new("in-memory-image"),
+            original_bytes,
+            PromptImageMode::ResizeToFit,
+        )
+        .expect("process image");
+
+        assert_eq!((processed.width, processed.height), (2048, 2));
+
+        let mut decoder = ImageReader::with_format(Cursor::new(&processed.bytes), format)
+            .into_decoder()
+            .expect("create decoder");
+        assert_eq!(
+            (
+                decoder.dimensions(),
+                decoder.orientation().expect("read orientation"),
+                decoder.icc_profile().expect("read ICC profile"),
+                decoder.exif_metadata().expect("read EXIF metadata"),
+            ),
+            (
+                (2048, 2),
+                Orientation::Rotate90,
+                Some(TEST_RGB_ICC_PROFILE.to_vec()),
+                Some(ROTATE_90_EXIF.to_vec()),
+            )
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resizing_drops_non_rgb_icc_profile() {
+    let image = ImageBuffer::from_pixel(2050, 2, Rgba([200u8, 10, 10, 255]));
+    let original_bytes =
+        image_bytes_with_metadata(&image, ImageFormat::Jpeg, TEST_CMYK_ICC_PROFILE);
+
+    let processed = load_for_prompt_bytes(
+        Path::new("in-memory-image"),
+        original_bytes,
+        PromptImageMode::ResizeToFit,
+    )
+    .expect("process image");
+
+    let mut decoder = ImageReader::with_format(Cursor::new(&processed.bytes), ImageFormat::Jpeg)
+        .into_decoder()
+        .expect("create decoder");
+    assert_eq!(
+        (
+            decoder.icc_profile().expect("read ICC profile"),
+            decoder.exif_metadata().expect("read EXIF metadata"),
+        ),
+        (None, Some(ROTATE_90_EXIF.to_vec()))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
