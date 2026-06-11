@@ -1645,6 +1645,7 @@ mod tests {
             Some(Anchor {
                 ts: DateTime::<Utc>::from_timestamp_millis(1_700_000_300_000)
                     .expect("valid timestamp"),
+                thread_id: Some(second_id),
             })
         );
 
@@ -1707,6 +1708,7 @@ mod tests {
         ];
         let anchor = Anchor {
             ts: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("valid timestamp"),
+            thread_id: None,
         };
         for (sort_key, visible_index, cwd_index) in [
             (
