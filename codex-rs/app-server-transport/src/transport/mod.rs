@@ -30,11 +30,13 @@ mod unix_socket;
 mod unix_socket_tests;
 mod websocket;
 
+pub use remote_control::REMOTE_CONTROL_DISABLED_ENV_VAR;
 pub use remote_control::RemoteControlHandle;
 pub use remote_control::RemoteControlStartConfig;
 pub use remote_control::RemoteControlStartupMode;
 pub use remote_control::RemoteControlUnavailable;
 pub use remote_control::start_remote_control;
+pub use remote_control::take_remote_control_disabled_env;
 pub use stdio::start_stdio_connection;
 pub use unix_socket::AppServerStartupLock;
 pub use unix_socket::acquire_app_server_startup_lock;

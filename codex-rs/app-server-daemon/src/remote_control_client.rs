@@ -26,8 +26,7 @@ use crate::RemoteControlReadyStatus;
 use crate::client;
 
 const REMOTE_CONTROL_READY_TIMEOUT: Duration = Duration::from_secs(10);
-const REMOTE_CONTROL_ENABLE_REQUEST_ID: RequestId = RequestId::Integer(2);
-const REMOTE_CONTROL_DISABLE_REQUEST_ID: RequestId = RequestId::Integer(2);
+const REMOTE_CONTROL_REQUEST_ID: RequestId = RequestId::Integer(2);
 const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 enum RemoteControlRpcResponse<T> {
@@ -44,25 +43,12 @@ pub(crate) async fn disable_remote_control(socket_path: &Path) -> Result<RemoteC
     let mut websocket = client::connect(socket_path).await?;
     initialize_client(&mut websocket).await?;
     let params = serde_json::to_value(RemoteControlDisableParams { ephemeral: true })?;
-    send_remote_control_request(
+    let response: RemoteControlDisableResponse = request_remote_control_with_legacy_fallback(
         &mut websocket,
-        REMOTE_CONTROL_DISABLE_REQUEST_ID.clone(),
         "remoteControl/disable",
-        Some(params),
+        params,
     )
     .await?;
-    let response = match read_remote_control_response::<_, RemoteControlDisableResponse>(
-        &mut websocket,
-        &REMOTE_CONTROL_DISABLE_REQUEST_ID,
-        "remoteControl/disable",
-    )
-    .await?
-    {
-        RemoteControlRpcResponse::Success(response) => response,
-        RemoteControlRpcResponse::InvalidParams => {
-            return Err(anyhow!("remoteControl/disable rejected ephemeral params"));
-        }
-    };
     websocket.close(None).await.ok();
     Ok(RemoteControlReadyStatus::from(response))
 }
@@ -86,46 +72,12 @@ where
 {
     initialize_client(websocket).await?;
 
-    send_remote_control_request(
+    let response: RemoteControlEnableResponse = request_remote_control_with_legacy_fallback(
         websocket,
-        REMOTE_CONTROL_ENABLE_REQUEST_ID.clone(),
         "remoteControl/enable",
-        Some(serde_json::to_value(RemoteControlEnableParams {
-            ephemeral: true,
-        })?),
+        serde_json::to_value(RemoteControlEnableParams { ephemeral: true })?,
     )
     .await?;
-
-    let response = match read_remote_control_response::<_, RemoteControlEnableResponse>(
-        websocket,
-        &REMOTE_CONTROL_ENABLE_REQUEST_ID,
-        "remoteControl/enable",
-    )
-    .await?
-    {
-        RemoteControlRpcResponse::Success(response) => response,
-        RemoteControlRpcResponse::InvalidParams => {
-            send_remote_control_request(
-                websocket,
-                REMOTE_CONTROL_ENABLE_REQUEST_ID.clone(),
-                "remoteControl/enable",
-                /*params*/ None,
-            )
-            .await?;
-            match read_remote_control_response(
-                websocket,
-                &REMOTE_CONTROL_ENABLE_REQUEST_ID,
-                "remoteControl/enable",
-            )
-            .await?
-            {
-                RemoteControlRpcResponse::Success(response) => response,
-                RemoteControlRpcResponse::InvalidParams => {
-                    return Err(anyhow!("remoteControl/enable rejected legacy params"));
-                }
-            }
-        }
-    };
     let mut latest = RemoteControlReadyStatus::from(response);
     if latest.status == RemoteControlConnectionStatus::Connecting {
         latest = wait_for_remote_control_status(websocket, latest, ready_timeout).await?;
@@ -166,6 +118,44 @@ where
     client::send_message(websocket, &request)
         .await
         .with_context(|| format!("failed to send {method} request"))
+}
+
+async fn request_remote_control_with_legacy_fallback<S, T>(
+    websocket: &mut WebSocketStream<S>,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<T>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    T: DeserializeOwned,
+{
+    send_remote_control_request(
+        websocket,
+        REMOTE_CONTROL_REQUEST_ID.clone(),
+        method,
+        Some(params),
+    )
+    .await?;
+    match read_remote_control_response(websocket, &REMOTE_CONTROL_REQUEST_ID, method).await? {
+        RemoteControlRpcResponse::Success(response) => Ok(response),
+        RemoteControlRpcResponse::InvalidParams => {
+            send_remote_control_request(
+                websocket,
+                REMOTE_CONTROL_REQUEST_ID.clone(),
+                method,
+                /*params*/ None,
+            )
+            .await?;
+            match read_remote_control_response(websocket, &REMOTE_CONTROL_REQUEST_ID, method)
+                .await?
+            {
+                RemoteControlRpcResponse::Success(response) => Ok(response),
+                RemoteControlRpcResponse::InvalidParams => {
+                    Err(anyhow!("{method} rejected legacy params"))
+                }
+            }
+        }
+    }
 }
 
 async fn connect_with_retry(
@@ -483,7 +473,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disable_remote_control_sends_ephemeral_request() -> Result<()> {
+    async fn disable_remote_control_retries_without_params_for_older_servers() -> Result<()> {
         let dir = TempDir::new()?;
         let socket_path = dir.path().join("app-server.sock");
         let listener = UnixListener::bind(&socket_path).await?;
@@ -493,7 +483,7 @@ mod tests {
             let JSONRPCMessage::Request(disable) = disable else {
                 panic!("expected remoteControl/disable request");
             };
-            assert_eq!(disable.id, REMOTE_CONTROL_DISABLE_REQUEST_ID);
+            assert_eq!(disable.id, REMOTE_CONTROL_REQUEST_ID);
             assert_eq!(disable.method, "remoteControl/disable");
             assert_eq!(
                 disable.params,
@@ -501,8 +491,27 @@ mod tests {
             );
             client::send_message(
                 &mut websocket,
+                &JSONRPCMessage::Error(JSONRPCError {
+                    id: REMOTE_CONTROL_REQUEST_ID,
+                    error: JSONRPCErrorError {
+                        code: INVALID_PARAMS_ERROR_CODE,
+                        message: "Invalid params".to_string(),
+                        data: None,
+                    },
+                }),
+            )
+            .await?;
+            let fallback = client::read_message(&mut websocket).await?;
+            let JSONRPCMessage::Request(fallback) = fallback else {
+                panic!("expected fallback remoteControl/disable request");
+            };
+            assert_eq!(fallback.id, REMOTE_CONTROL_REQUEST_ID);
+            assert_eq!(fallback.method, "remoteControl/disable");
+            assert_eq!(fallback.params, None);
+            client::send_message(
+                &mut websocket,
                 &JSONRPCMessage::Response(JSONRPCResponse {
-                    id: REMOTE_CONTROL_DISABLE_REQUEST_ID,
+                    id: REMOTE_CONTROL_REQUEST_ID,
                     result: serde_json::to_value(RemoteControlDisableResponse::from(
                         remote_control_status(
                             RemoteControlConnectionStatus::Disabled,
@@ -565,7 +574,7 @@ mod tests {
         let JSONRPCMessage::Request(enable) = enable else {
             panic!("expected remoteControl/enable request");
         };
-        assert_eq!(enable.id, REMOTE_CONTROL_ENABLE_REQUEST_ID);
+        assert_eq!(enable.id, REMOTE_CONTROL_REQUEST_ID);
         assert_eq!(enable.method, "remoteControl/enable");
         assert_eq!(
             enable.params,
@@ -575,7 +584,7 @@ mod tests {
             client::send_message(
                 &mut websocket,
                 &JSONRPCMessage::Error(JSONRPCError {
-                    id: REMOTE_CONTROL_ENABLE_REQUEST_ID,
+                    id: REMOTE_CONTROL_REQUEST_ID,
                     error: JSONRPCErrorError {
                         code: INVALID_PARAMS_ERROR_CODE,
                         message: "Invalid params".to_string(),
@@ -588,14 +597,14 @@ mod tests {
             let JSONRPCMessage::Request(fallback) = fallback else {
                 panic!("expected fallback remoteControl/enable request");
             };
-            assert_eq!(fallback.id, REMOTE_CONTROL_ENABLE_REQUEST_ID);
+            assert_eq!(fallback.id, REMOTE_CONTROL_REQUEST_ID);
             assert_eq!(fallback.method, "remoteControl/enable");
             assert_eq!(fallback.params, None);
         }
         client::send_message(
             &mut websocket,
             &JSONRPCMessage::Response(JSONRPCResponse {
-                id: REMOTE_CONTROL_ENABLE_REQUEST_ID,
+                id: REMOTE_CONTROL_REQUEST_ID,
                 result: serde_json::to_value(RemoteControlEnableResponse::from(
                     scenario.enable_response,
                 ))?,

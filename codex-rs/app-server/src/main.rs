@@ -65,7 +65,8 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
+    let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
+    arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
         let AppServerArgs {
             config_overrides,
             listen,
@@ -90,11 +91,14 @@ fn main() -> anyhow::Result<()> {
         if disable_plugin_startup_tasks_for_tests {
             runtime_options.plugin_startup_tasks = PluginStartupTasks::Skip;
         }
-        runtime_options.remote_control_startup_mode = match remote_control {
-            Some(true) => codex_app_server::RemoteControlStartupMode::EnabledEphemeral,
-            Some(false) => codex_app_server::RemoteControlStartupMode::DisabledEphemeral,
-            None => codex_app_server::RemoteControlStartupMode::ResolvePersisted,
-        };
+        runtime_options.remote_control_startup_mode =
+            match (remote_control, remote_control_disabled) {
+                (Some(true), _) => codex_app_server::RemoteControlStartupMode::EnabledEphemeral,
+                (Some(false), _) | (None, true) => {
+                    codex_app_server::RemoteControlStartupMode::DisabledEphemeral
+                }
+                (None, false) => codex_app_server::RemoteControlStartupMode::ResolvePersisted,
+            };
 
         run_main_with_transport_options(
             arg0_paths,

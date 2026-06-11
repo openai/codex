@@ -3,6 +3,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
+use codex_app_server_transport::REMOTE_CONTROL_DISABLED_ENV_VAR;
+
 use super::PidBackend;
 use super::PidCommandKind;
 use super::PidFileState;
@@ -175,7 +177,7 @@ fn app_server_remote_control_uses_runtime_flag() {
 }
 
 #[test]
-fn app_server_disabled_remote_control_uses_runtime_flag() {
+fn app_server_disabled_remote_control_uses_compatible_args_and_runtime_env() {
     let backend = PidBackend::new(
         "codex".into(),
         "app-server.pid".into(),
@@ -184,12 +186,11 @@ fn app_server_disabled_remote_control_uses_runtime_flag() {
 
     assert_eq!(
         backend.command_args(),
-        vec![
-            "app-server",
-            "--remote-control=false",
-            "--listen",
-            "unix://"
-        ]
+        vec!["app-server", "--listen", "unix://"]
+    );
+    assert_eq!(
+        backend.command_env(),
+        Some((REMOTE_CONTROL_DISABLED_ENV_VAR, "1"))
     );
 }
 

@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_app_server_transport::REMOTE_CONTROL_DISABLED_ENV_VAR;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::fs;
@@ -164,6 +165,9 @@ impl PidBackend {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr_log.into_std().await));
+        if let Some((key, value)) = self.command_env() {
+            command.env(key, value);
+        }
 
         #[cfg(unix)]
         {
@@ -402,13 +406,21 @@ impl PidBackend {
             } => vec!["app-server", "--remote-control", "--listen", "unix://"],
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
-            } => vec![
-                "app-server",
-                "--remote-control=false",
-                "--listen",
-                "unix://",
-            ],
+            } => vec!["app-server", "--listen", "unix://"],
             PidCommandKind::UpdateLoop => vec!["app-server", "daemon", "pid-update-loop"],
+        }
+    }
+
+    #[cfg(unix)]
+    fn command_env(&self) -> Option<(&'static str, &'static str)> {
+        match self.command_kind {
+            PidCommandKind::AppServer {
+                remote_control_enabled: false,
+            } => Some((REMOTE_CONTROL_DISABLED_ENV_VAR, "1")),
+            PidCommandKind::AppServer {
+                remote_control_enabled: true,
+            }
+            | PidCommandKind::UpdateLoop => None,
         }
     }
 

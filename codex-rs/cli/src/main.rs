@@ -925,13 +925,17 @@ fn stage_str(stage: Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
-        cli_main(arg0_paths).await?;
+    let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
+    arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
+        cli_main(arg0_paths, remote_control_disabled).await?;
         Ok(())
     })
 }
 
-async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+async fn cli_main(
+    arg0_paths: Arg0DispatchPaths,
+    remote_control_disabled: bool,
+) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
@@ -1090,14 +1094,17 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     };
                     let auth = auth.try_into_settings()?;
                     let runtime_options = codex_app_server::AppServerRuntimeOptions {
-                        remote_control_startup_mode: match remote_control {
-                            Some(true) => {
+                        remote_control_startup_mode: match (remote_control, remote_control_disabled)
+                        {
+                            (Some(true), _) => {
                                 codex_app_server::RemoteControlStartupMode::EnabledEphemeral
                             }
-                            Some(false) => {
+                            (Some(false), _) | (None, true) => {
                                 codex_app_server::RemoteControlStartupMode::DisabledEphemeral
                             }
-                            None => codex_app_server::RemoteControlStartupMode::ResolvePersisted,
+                            (None, false) => {
+                                codex_app_server::RemoteControlStartupMode::ResolvePersisted
+                            }
                         },
                         ..Default::default()
                     };
