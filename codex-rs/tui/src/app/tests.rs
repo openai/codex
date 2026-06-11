@@ -4217,6 +4217,29 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
         .expect("outside goal file reference should not be read"),
         reference
     );
+    let escaped_path = codex_home
+        .as_ref()
+        .expect("codex home")
+        .join("..")
+        .join("other")
+        .join("attachments")
+        .join("00000000-0000-4000-8000-000000000000")
+        .join("goal-objective.md");
+    let escaped_reference = crate::goal_files::objective_file_reference(&escaped_path)
+        .expect("escaped goal objective reference");
+    assert!(
+        crate::goal_files::objective_file_path(&escaped_reference, codex_home.as_ref()).is_none()
+    );
+    assert_eq!(
+        crate::goal_files::objective_text_for_edit(
+            &mut app_server,
+            codex_home.as_ref(),
+            &escaped_reference
+        )
+        .await
+        .expect("escaped goal file reference should not be read"),
+        escaped_reference
+    );
     app_server.shutdown().await?;
     Ok(())
 }

@@ -63,8 +63,16 @@ pub(crate) fn objective_file_path(
     let path = parse_objective_file_path(objective)?;
     let codex_home = codex_home?;
     let codex_home_parts = codex_home.components();
-    (!codex_home_parts.is_empty() && path.components().starts_with(&codex_home_parts))
-        .then_some(path)
+    let path_parts = path.components();
+    (!codex_home_parts.is_empty()
+        && !has_normalization_component(&codex_home_parts)
+        && !has_normalization_component(&path_parts)
+        && path_parts.starts_with(&codex_home_parts))
+    .then_some(path)
+}
+
+fn has_normalization_component(parts: &[&str]) -> bool {
+    parts.iter().any(|part| matches!(*part, "." | ".."))
 }
 
 fn parse_objective_file_path(objective: &str) -> Option<GoalFilePath> {
