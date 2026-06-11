@@ -14,8 +14,9 @@ pub(super) enum RemoteControlDesiredState {
     // `Unknown` exists only on plain startup before auth and enrollment scope resolve. Persisted
     // `1` is `Enabled { persistence_preference: Some(true) }`; `0`, `NULL`, or no row are
     // `Disabled`. Runtime-only enable is `Enabled { persistence_preference: None }`, so new rows
-    // keep `NULL`; durable RPC enable uses `Some(true)`, so new rows get `1`. Disabled sessions do
-    // not create enrollments.
+    // keep `NULL`; durable RPC enable uses `Some(true)`, so new rows get `1`. Durable disable writes
+    // `0` before entering `Disabled`; runtime-only disable does not write. `Disabled` carries no
+    // preference because disabled sessions do not create enrollments.
     Unknown,
     Disabled,
     Enabled {
