@@ -120,6 +120,11 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
     assert_eq!("developer", fragments[0].role());
     assert!(fragments[0].render().contains("demo"));
     assert!(fragments[0].render().contains(&skill_prompt_path));
+    assert!(
+        fragments[0]
+            .render()
+            .contains(&format!("(file: {skill_prompt_path})"))
+    );
     assert_eq!("user", fragments[1].role());
     assert!(fragments[1].render().contains("<name>demo</name>"));
     assert!(fragments[1].render().contains("# Demo"));
@@ -187,6 +192,11 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
             .starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
     );
     assert!(prompt_fragments[0].text().contains("lint-fix"));
+    assert!(
+        prompt_fragments[0]
+            .text()
+            .contains("(environment resource: skill://executor/lint-fix/SKILL.md)")
+    );
 
     let turn_store = ExtensionData::new("turn-1");
     let fragments = registry.turn_input_contributors()[0]
