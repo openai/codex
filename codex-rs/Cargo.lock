@@ -4612,7 +4612,7 @@ dependencies = [
  "assert_cmd",
  "base64 0.22.1",
  "codex-arg0",
- "codex-code-mode",
+ "codex-code-mode-client",
  "codex-config",
  "codex-core",
  "codex-exec-server",

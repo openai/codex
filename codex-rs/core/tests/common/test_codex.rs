@@ -12,6 +12,8 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_code_mode_client::CodeModeHostCommand;
+use codex_code_mode_client::IpcCodeModeSessionProvider;
 use codex_config::CloudConfigBundleLoader;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
@@ -520,13 +522,16 @@ impl TestCodexBuilder {
             installation_id,
             /*attestation_provider*/ None,
         );
-        let thread_manager = if std::env::var_os("CODEX_CODE_MODE_HOST_PATH").is_some() {
-            thread_manager
-        } else {
-            thread_manager.with_code_mode_session_provider(Arc::new(
-                codex_code_mode::InProcessCodeModeSessionProvider,
-            ))
-        };
+        let code_mode_session_provider =
+            match codex_utils_cargo_bin::cargo_bin("codex-code-mode-host") {
+                Ok(program) => IpcCodeModeSessionProvider::new(CodeModeHostCommand {
+                    program,
+                    args: Vec::new(),
+                }),
+                Err(_) => IpcCodeModeSessionProvider::default(),
+            };
+        let thread_manager =
+            thread_manager.with_code_mode_session_provider(Arc::new(code_mode_session_provider));
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
 
