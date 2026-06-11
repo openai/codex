@@ -10,6 +10,7 @@ use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -130,9 +131,15 @@ impl SkillProvider for ExecutorSkillProvider {
                     "executor skill resource references unavailable environment `{environment_id}`"
                 )));
             };
+            let resource_path = PathUri::from_abs_path(resource_path).map_err(|err| {
+                SkillProviderError::new(format!(
+                    "failed to read executor skill resource {}: {err}",
+                    request.resource.as_str()
+                ))
+            })?;
             let contents = environment
                 .get_filesystem()
-                .read_file_text(resource_path, /*sandbox*/ None)
+                .read_file_text(&resource_path, /*sandbox*/ None)
                 .await
                 .map_err(|err| {
                     SkillProviderError::new(format!(

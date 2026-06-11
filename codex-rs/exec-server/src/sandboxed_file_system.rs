@@ -2,8 +2,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_utils_absolute_path::AbsolutePathBuf;
-use std::path::Path;
+use codex_utils_path_uri::PathUri;
 use tokio::io;
 
 use crate::CopyOptions;
@@ -55,39 +54,27 @@ impl SandboxedFileSystem {
 impl ExecutorFileSystem for SandboxedFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
+    ) -> FileSystemResult<PathUri> {
         let sandbox = require_platform_sandbox(sandbox)?;
         let response = self
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::Canonicalize(FsCanonicalizeParams {
-                    path: path.clone(),
+                    path: path.to_abs_path()?,
                     sandbox: None,
                 }),
             )
             .await?
             .expect_canonicalize()
             .map_err(map_sandbox_error)?;
-        Ok(response.path)
-    }
-
-    async fn join(
-        &self,
-        base_path: &AbsolutePathBuf,
-        path: &Path,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        Ok(base_path.join(path))
-    }
-
-    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        Ok(path.parent())
+        PathUri::from_abs_path(&response.path)
     }
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         let sandbox = require_platform_sandbox(sandbox)?;
@@ -95,7 +82,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::ReadFile(FsReadFileParams {
-                    path: path.clone(),
+                    path: path.to_abs_path()?,
                     sandbox: None,
                 }),
             )
@@ -112,7 +99,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn write_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         contents: Vec<u8>,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -120,7 +107,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::WriteFile(FsWriteFileParams {
-                path: path.clone(),
+                path: path.to_abs_path()?,
                 data_base64: STANDARD.encode(contents),
                 sandbox: None,
             }),
@@ -133,7 +120,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn create_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -141,7 +128,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::CreateDirectory(FsCreateDirectoryParams {
-                path: path.clone(),
+                path: path.to_abs_path()?,
                 recursive: Some(options.recursive),
                 sandbox: None,
             }),
@@ -154,7 +141,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         let sandbox = require_platform_sandbox(sandbox)?;
@@ -162,7 +149,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::GetMetadata(FsGetMetadataParams {
-                    path: path.clone(),
+                    path: path.to_abs_path()?,
                     sandbox: None,
                 }),
             )
@@ -180,7 +167,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn read_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         let sandbox = require_platform_sandbox(sandbox)?;
@@ -188,7 +175,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::ReadDirectory(FsReadDirectoryParams {
-                    path: path.clone(),
+                    path: path.to_abs_path()?,
                     sandbox: None,
                 }),
             )
@@ -208,7 +195,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn remove(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         remove_options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -216,7 +203,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Remove(FsRemoveParams {
-                path: path.clone(),
+                path: path.to_abs_path()?,
                 recursive: Some(remove_options.recursive),
                 force: Some(remove_options.force),
                 sandbox: None,
@@ -230,8 +217,8 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     async fn copy(
         &self,
-        source_path: &AbsolutePathBuf,
-        destination_path: &AbsolutePathBuf,
+        source_path: &PathUri,
+        destination_path: &PathUri,
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -239,8 +226,8 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Copy(FsCopyParams {
-                source_path: source_path.clone(),
-                destination_path: destination_path.clone(),
+                source_path: source_path.to_abs_path()?,
+                destination_path: destination_path.to_abs_path()?,
                 recursive: options.recursive,
                 sandbox: None,
             }),
@@ -272,3 +259,7 @@ fn map_sandbox_error(error: JSONRPCErrorError) -> io::Error {
         _ => io::Error::other(error.message),
     }
 }
+
+#[cfg(all(test, any(unix, windows)))]
+#[path = "sandboxed_file_system_path_uri_tests.rs"]
+mod path_uri_tests;

@@ -1,5 +1,4 @@
 use std::io;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -24,6 +23,7 @@ use codex_skills_extension::ExecutorSkillProvider;
 use codex_skills_extension::provider::SkillListQuery;
 use codex_skills_extension::provider::SkillProvider;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
 const SKILL_CONTENTS: &str =
@@ -60,34 +60,23 @@ impl SyntheticFileSystem {
 impl ExecutorFileSystem for SyntheticFileSystem {
     async fn canonicalize(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        if path == &self.alias_root {
-            return Ok(self.canonical_root.clone());
+    ) -> FileSystemResult<PathUri> {
+        let path = path.to_abs_path()?;
+        if path == self.alias_root {
+            return PathUri::from_abs_path(&self.canonical_root);
         }
-        self.metadata(path)?;
-        Ok(path.clone())
-    }
-
-    async fn join(
-        &self,
-        base_path: &AbsolutePathBuf,
-        path: &Path,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        Ok(base_path.join(path))
-    }
-
-    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        Ok(path.parent())
+        self.metadata(&path)?;
+        PathUri::from_abs_path(&path)
     }
 
     async fn read_file(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        if path == &self.canonical_root.join("skill/SKILL.md") {
+        if path.to_abs_path()? == self.canonical_root.join("skill/SKILL.md") {
             Ok(SKILL_CONTENTS.as_bytes().to_vec())
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
@@ -96,7 +85,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn write_file(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _contents: Vec<u8>,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -105,7 +94,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn create_directory(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _options: CreateDirectoryOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -114,24 +103,25 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn get_metadata(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        self.metadata(path)
+        self.metadata(&path.to_abs_path()?)
     }
 
     async fn read_directory(
         &self,
-        path: &AbsolutePathBuf,
+        path: &PathUri,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
-        if path == &self.canonical_root {
+        let path = path.to_abs_path()?;
+        if path == self.canonical_root {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "skill".to_string(),
                 is_directory: true,
                 is_file: false,
             }])
-        } else if path == &self.canonical_root.join("skill") {
+        } else if path == self.canonical_root.join("skill") {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,
@@ -144,7 +134,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn remove(
         &self,
-        _path: &AbsolutePathBuf,
+        _path: &PathUri,
         _options: RemoveOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
@@ -153,8 +143,8 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 
     async fn copy(
         &self,
-        _source_path: &AbsolutePathBuf,
-        _destination_path: &AbsolutePathBuf,
+        _source_path: &PathUri,
+        _destination_path: &PathUri,
         _options: CopyOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {

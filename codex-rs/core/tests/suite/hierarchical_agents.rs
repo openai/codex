@@ -1,4 +1,5 @@
 use codex_features::Feature;
+use codex_utils_path_uri::PathUri;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -27,7 +28,8 @@ async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
         })
         .with_workspace_setup(|cwd, fs| async move {
             let agents_md = cwd.join("AGENTS.md");
-            fs.write_file(&agents_md, b"be nice".to_vec(), /*sandbox*/ None)
+            let agents_md_uri = PathUri::from_path(&agents_md)?;
+            fs.write_file(&agents_md_uri, b"be nice".to_vec(), /*sandbox*/ None)
                 .await?;
             Ok::<(), anyhow::Error>(())
         });

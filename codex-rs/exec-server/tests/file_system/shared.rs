@@ -9,6 +9,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -61,7 +62,7 @@ async fn file_system_get_metadata_reports_files_and_directories(
     std::fs::create_dir(&directory_path)?;
 
     let file_metadata = file_system
-        .get_metadata(&absolute_path(&file_path), /*sandbox*/ None)
+        .get_metadata(&PathUri::from_path(&file_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(file_metadata.is_directory, false);
@@ -70,7 +71,7 @@ async fn file_system_get_metadata_reports_files_and_directories(
     assert!(file_metadata.modified_at_ms > 0);
 
     let directory_metadata = file_system
-        .get_metadata(&absolute_path(&directory_path), /*sandbox*/ None)
+        .get_metadata(&PathUri::from_path(&directory_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(directory_metadata.is_directory, true);
@@ -95,7 +96,7 @@ async fn file_system_create_directory_creates_nested_directories(
 
     file_system
         .create_directory(
-            &absolute_path(&nested_dir),
+            &PathUri::from_path(&nested_dir)?,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -119,7 +120,7 @@ async fn file_system_write_file_writes_bytes(
     let file_path = tmp.path().join("note.txt");
     file_system
         .write_file(
-            &absolute_path(&file_path),
+            &PathUri::from_path(&file_path)?,
             b"hello from trait".to_vec(),
             /*sandbox*/ None,
         )
@@ -130,42 +131,26 @@ async fn file_system_write_file_writes_bytes(
     Ok(())
 }
 
-#[test_case(FileSystemImplementation::Local ; "local")]
-#[test_case(FileSystemImplementation::Remote ; "remote")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_join_and_parent_preserve_lexical_paths(
-    implementation: FileSystemImplementation,
-) -> Result<()> {
-    let context = create_file_system_context(implementation).await?;
-    let file_system = context.file_system;
-
+#[test]
+fn path_uri_join_and_parent_preserve_lexical_paths() -> Result<()> {
     let tmp = TempDir::new()?;
     let source_dir = tmp.path().join("source");
-    let joined_nested = file_system
-        .join(&absolute_path(&source_dir), Path::new("nested/note.txt"))
-        .await
-        .with_context(|| format!("mode={implementation}"))?;
+    let source_dir_uri = PathUri::from_path(&source_dir)?;
+    let joined_nested = source_dir_uri.join("nested/note.txt")?;
     assert_eq!(
         joined_nested,
-        absolute_path(source_dir.join("nested").join("note.txt"))
+        PathUri::from_path(source_dir.join("nested").join("note.txt"))?
     );
-    let joined_parent = file_system
-        .parent(&joined_nested)
-        .await
-        .with_context(|| format!("mode={implementation}"))?;
+    let joined_parent = joined_nested.parent();
     assert_eq!(
         joined_parent,
-        Some(absolute_path(source_dir.join("nested")))
+        Some(PathUri::from_path(source_dir.join("nested"))?)
     );
-    let joined_parent_traversal = file_system
-        .join(&absolute_path(&source_dir), Path::new("../outside"))
-        .await
-        .with_context(|| format!("mode={implementation}"))?;
+    let joined_parent_traversal = source_dir_uri.join("../outside")?;
     assert_eq!(
         joined_parent_traversal,
-        absolute_path(source_dir.join("../outside"))
+        PathUri::from_path(source_dir.join("../outside"))?
     );
-
     Ok(())
 }
 
@@ -183,7 +168,7 @@ async fn file_system_read_file_returns_bytes(
     std::fs::write(&file_path, "hello from trait")?;
 
     let contents = file_system
-        .read_file(&absolute_path(&file_path), /*sandbox*/ None)
+        .read_file(&PathUri::from_path(&file_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, b"hello from trait");
@@ -205,7 +190,7 @@ async fn file_system_read_file_text_returns_string(
     std::fs::write(&file_path, "hello from trait")?;
 
     let contents = file_system
-        .read_file_text(&absolute_path(&file_path), /*sandbox*/ None)
+        .read_file_text(&PathUri::from_path(&file_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, "hello from trait");
@@ -227,8 +212,8 @@ async fn file_system_copy_copies_file(implementation: FileSystemImplementation) 
 
     file_system
         .copy(
-            &absolute_path(&source_file),
-            &absolute_path(&copied_file),
+            &PathUri::from_path(&source_file)?,
+            &PathUri::from_path(&copied_file)?,
             CopyOptions { recursive: false },
             /*sandbox*/ None,
         )
@@ -258,8 +243,8 @@ async fn file_system_copy_copies_directory_recursively(
 
     file_system
         .copy(
-            &absolute_path(&source_dir),
-            &absolute_path(&copied_dir),
+            &PathUri::from_path(&source_dir)?,
+            &PathUri::from_path(&copied_dir)?,
             CopyOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -288,7 +273,7 @@ async fn file_system_read_directory_lists_entries(
     std::fs::write(source_dir.join("root.txt"), "hello")?;
 
     let mut entries = file_system
-        .read_directory(&absolute_path(&source_dir), /*sandbox*/ None)
+        .read_directory(&PathUri::from_path(&source_dir)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
     entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));
@@ -326,7 +311,7 @@ async fn file_system_remove_removes_directory(
 
     file_system
         .remove(
-            &absolute_path(&directory_path),
+            &PathUri::from_path(&directory_path)?,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -354,7 +339,7 @@ async fn file_system_write_file_reports_missing_parent(
 
     let error = match file_system
         .write_file(
-            &absolute_path(&missing_parent_path),
+            &PathUri::from_path(&missing_parent_path)?,
             b"hello from trait".to_vec(),
             /*sandbox*/ None,
         )
@@ -388,8 +373,8 @@ async fn file_system_copy_rejects_directory_without_recursive(
 
     let error = file_system
         .copy(
-            &absolute_path(&source_dir),
-            &absolute_path(tmp.path().join("dest")),
+            &PathUri::from_path(&source_dir)?,
+            &PathUri::from_path(tmp.path().join("dest"))?,
             CopyOptions { recursive: false },
             /*sandbox*/ None,
         )
@@ -424,7 +409,7 @@ async fn file_system_sandboxed_read_allows_readable_root(
     let sandbox = read_only_sandbox(allowed_dir);
 
     let contents = file_system
-        .read_file(&absolute_path(&file_path), Some(&sandbox))
+        .read_file(&PathUri::from_path(&file_path)?, Some(&sandbox))
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, b"sandboxed hello");
@@ -448,8 +433,8 @@ pub(crate) async fn assert_canonicalize_resolves_directory_alias(
     std::fs::write(&file_path, "canonical hello")?;
     create_directory_alias(&source_dir, &alias_dir)?;
 
-    let requested_path = absolute_path(alias_dir.join("nested").join("note.txt"));
-    let expected_path = absolute_path(std::fs::canonicalize(&file_path)?);
+    let requested_path = PathUri::from_path(alias_dir.join("nested").join("note.txt"))?;
+    let expected_path = PathUri::from_path(std::fs::canonicalize(&file_path)?)?;
     assert_ne!(requested_path, expected_path);
 
     let canonical_path = file_system
@@ -478,8 +463,8 @@ pub(crate) async fn assert_sandboxed_canonicalize_resolves_directory_alias(
     create_directory_alias(&source_dir, &alias_dir)?;
     let sandbox = read_only_sandbox(tmp.path().to_path_buf());
 
-    let requested_path = absolute_path(alias_dir.join("nested").join("note.txt"));
-    let expected_path = absolute_path(std::fs::canonicalize(&file_path)?);
+    let requested_path = PathUri::from_path(alias_dir.join("nested").join("note.txt"))?;
+    let expected_path = PathUri::from_path(std::fs::canonicalize(&file_path)?)?;
     assert_ne!(requested_path, expected_path);
 
     let canonical_path = file_system
@@ -532,7 +517,7 @@ async fn file_system_sandboxed_write_allows_additional_write_root(
 
     file_system
         .write_file(
-            &absolute_path(&file_path),
+            &PathUri::from_path(&file_path)?,
             b"created".to_vec(),
             Some(&sandbox),
         )
@@ -558,8 +543,8 @@ async fn file_system_copy_rejects_copying_directory_into_descendant(
 
     let error = file_system
         .copy(
-            &absolute_path(&source_dir),
-            &absolute_path(source_dir.join("nested").join("copy")),
+            &PathUri::from_path(&source_dir)?,
+            &PathUri::from_path(source_dir.join("nested").join("copy"))?,
             CopyOptions { recursive: true },
             /*sandbox*/ None,
         )
