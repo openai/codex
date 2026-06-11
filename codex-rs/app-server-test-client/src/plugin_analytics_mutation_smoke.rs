@@ -2,9 +2,9 @@ use super::CodexClient;
 use super::plugin_analytics_capture::PluginEventIdentity;
 use super::plugin_analytics_capture::read_events_for_remote_plugin;
 use super::plugin_analytics_capture::validate_mutation_events;
-use super::plugin_analytics_capture::wait_until_capture_is_ready;
 use super::plugin_analytics_smoke::ANALYTICS_CAPTURE_ENV_VAR;
 use super::plugin_analytics_smoke::prepare_capture_file;
+use super::plugin_analytics_smoke::wait_until_capture_is_ready;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -49,6 +49,7 @@ pub(super) fn run(
     prepare_capture_file(&capture_path)?;
     let mut client = spawn_client(codex_bin, config_overrides, &capture_path)?;
     wait_until_capture_is_ready(&capture_path)?;
+    client.initialize()?;
 
     let initial = read_remote_plugin(&mut client, remote_plugin_id)?;
     validate_initial_plugin(&initial, remote_plugin_id)?;
@@ -127,6 +128,8 @@ pub(super) fn run_cleanup(
     });
     prepare_capture_file(&capture_path)?;
     let mut client = spawn_client(codex_bin, config_overrides, &capture_path)?;
+    wait_until_capture_is_ready(&capture_path)?;
+    client.initialize()?;
     println!("capture file: {}", capture_path.display());
 
     match restore_uninstalled_state(&mut client, remote_plugin_id) {
@@ -205,9 +208,7 @@ fn spawn_client(
         OsString::from(ANALYTICS_CAPTURE_ENV_VAR),
         capture_path.as_os_str().to_os_string(),
     )];
-    let mut client = CodexClient::spawn_stdio_with_env(codex_bin, &overrides, &environment)?;
-    client.initialize()?;
-    Ok(client)
+    CodexClient::spawn_stdio_with_env(codex_bin, &overrides, &environment)
 }
 
 #[derive(Clone, Debug)]
@@ -319,7 +320,7 @@ fn run_mutation_sequence(
         let events = validate_mutation_events(
             events,
             PluginEventIdentity {
-                plugin_id: &expected.plugin_id,
+                local_plugin_id: &expected.plugin_id,
                 remote_plugin_id: &expected.remote_plugin_id,
                 plugin_name: &expected.plugin_name,
                 marketplace_name: &expected.marketplace_name,

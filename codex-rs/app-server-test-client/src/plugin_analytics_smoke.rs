@@ -29,6 +29,7 @@ use std::time::Instant;
 
 pub(super) const ANALYTICS_CAPTURE_ENV_VAR: &str = "CODEX_ANALYTICS_EVENTS_CAPTURE_FILE";
 const TEST_USER_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_TEST_USER_CONFIG_FILE";
+const CAPTURE_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
 const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MOCK_MODEL_SLUG: &str = "plugin-analytics-smoke";
@@ -64,6 +65,7 @@ pub(super) fn run(
         ),
     ];
     let mut client = CodexClient::spawn_stdio_with_env(codex_bin, &overrides, &child_environment)?;
+    wait_until_capture_is_ready(&capture_path)?;
     client.initialize()?;
 
     let installed = plugin_installed(&mut client)?;
@@ -260,6 +262,27 @@ pub(super) fn prepare_capture_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn wait_until_capture_is_ready(path: &Path) -> Result<()> {
+    let deadline = Instant::now() + CAPTURE_READY_TIMEOUT;
+    loop {
+        match fs::metadata(path) {
+            Ok(_) => return Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("inspect capture file {}", path.display()));
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "analytics capture did not become ready at {}; use a debug Codex binary",
+                path.display()
+            );
+        }
+        thread::sleep(CAPTURE_POLL_INTERVAL);
+    }
+}
+
 fn wait_for_plugin_events(path: &Path, plugin_id: &str) -> Result<Vec<Value>> {
     let deadline = Instant::now() + CAPTURE_TIMEOUT;
     loop {
@@ -358,6 +381,7 @@ fn event_count(events: &[Value], event_type: &str) -> usize {
 fn validate_identity(event: &Value, expected: &ExpectedPlugin) -> Result<()> {
     let params = &event["event_params"];
     require_string(params, "plugin_id", &expected.plugin_id)?;
+    require_string(params, "local_plugin_id", &expected.plugin_id)?;
     require_string(params, "remote_plugin_id", &expected.remote_plugin_id)?;
     require_string(params, "plugin_name", &expected.plugin_name)?;
     require_string(params, "marketplace_name", &expected.marketplace_name)

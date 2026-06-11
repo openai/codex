@@ -62,6 +62,7 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
+use codex_plugin::PluginTelemetryLegacyIdSource;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::protocol::HookEventName;
@@ -539,15 +540,34 @@ impl PluginsManager {
     }
 
     fn remote_plugin_id_for(&self, plugin_id: &PluginId) -> Option<String> {
-        let cache = match self.remote_installed_plugins_cache.read() {
-            Ok(cache) => cache,
-            Err(err) => err.into_inner(),
+        let cached_remote_plugin_id = {
+            let cache = match self.remote_installed_plugins_cache.read() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+            cache.as_ref().and_then(|plugins| {
+                plugins.iter().find_map(|plugin| {
+                    (plugin.name == plugin_id.plugin_name
+                        && plugin.marketplace_name == plugin_id.marketplace_name)
+                        .then(|| plugin.id.clone())
+                })
+            })
         };
-        cache.as_ref()?.iter().find_map(|plugin| {
-            (plugin.name == plugin_id.plugin_name
-                && plugin.marketplace_name == plugin_id.marketplace_name)
-                .then(|| plugin.id.clone())
-        })
+        if cached_remote_plugin_id.is_some() {
+            return cached_remote_plugin_id;
+        }
+
+        match self.store.remote_plugin_id(plugin_id) {
+            Ok(remote_plugin_id) => remote_plugin_id,
+            Err(err) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id.as_key(),
+                    error = %err,
+                    "failed to read persisted remote plugin identity"
+                );
+                None
+            }
+        }
     }
 
     pub async fn telemetry_metadata_for_installed_plugin(
@@ -561,6 +581,7 @@ impl PluginsManager {
         PluginTelemetryMetadata {
             plugin_id: plugin_id.clone(),
             remote_plugin_id: self.remote_plugin_id_for(plugin_id),
+            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary,
         }
     }
@@ -577,6 +598,7 @@ impl PluginsManager {
         PluginTelemetryMetadata {
             plugin_id: plugin_id.clone(),
             remote_plugin_id: Some(remote_plugin_id.to_string()),
+            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Remote,
             capability_summary,
         }
     }
@@ -589,6 +611,7 @@ impl PluginsManager {
         Some(PluginTelemetryMetadata {
             remote_plugin_id: self.remote_plugin_id_for(&plugin_id),
             plugin_id,
+            legacy_plugin_id_source: PluginTelemetryLegacyIdSource::Local,
             capability_summary: Some(summary.clone()),
         })
     }

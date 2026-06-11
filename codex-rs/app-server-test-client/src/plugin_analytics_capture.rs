@@ -5,33 +5,6 @@ use serde_json::Value;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
-
-const CAPTURE_READY_TIMEOUT: Duration = Duration::from_secs(5);
-const CAPTURE_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
-
-pub(super) fn wait_until_capture_is_ready(path: &Path) -> Result<()> {
-    let deadline = Instant::now() + CAPTURE_READY_TIMEOUT;
-    loop {
-        match fs::metadata(path) {
-            Ok(_) => return Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("inspect capture file {}", path.display()));
-            }
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!(
-                "analytics capture did not become ready at {}; use an authenticated profile and a debug Codex binary",
-                path.display()
-            );
-        }
-        thread::sleep(CAPTURE_READY_POLL_INTERVAL);
-    }
-}
 
 pub(super) fn read_events_for_remote_plugin(
     path: &Path,
@@ -70,7 +43,7 @@ pub(super) fn read_events_for_remote_plugin(
 }
 
 pub(super) struct PluginEventIdentity<'a> {
-    pub(super) plugin_id: &'a str,
+    pub(super) local_plugin_id: &'a str,
     pub(super) remote_plugin_id: &'a str,
     pub(super) plugin_name: &'a str,
     pub(super) marketplace_name: &'a str,
@@ -101,7 +74,8 @@ pub(super) fn validate_mutation_events(
 
 fn validate_event(event: &Value, expected: &PluginEventIdentity<'_>) -> Result<()> {
     let params = &event["event_params"];
-    require_string(params, "plugin_id", expected.plugin_id)?;
+    require_string(params, "plugin_id", expected.remote_plugin_id)?;
+    require_string(params, "local_plugin_id", expected.local_plugin_id)?;
     require_string(params, "remote_plugin_id", expected.remote_plugin_id)?;
     require_string(params, "plugin_name", expected.plugin_name)?;
     require_string(params, "marketplace_name", expected.marketplace_name)?;

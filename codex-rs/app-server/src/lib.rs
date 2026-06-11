@@ -1156,8 +1156,11 @@ fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransp
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+    #[cfg(debug_assertions)]
     use super::loader_overrides_with_test_user_config_file;
+    #[cfg(debug_assertions)]
     use codex_config::LoaderOverrides;
+    #[cfg(debug_assertions)]
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
@@ -1179,6 +1182,7 @@ mod tests {
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn debug_test_user_config_file_overrides_loader_path() {
         let path = std::env::temp_dir().join("codex-app-server-test-config.toml");

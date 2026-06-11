@@ -39,11 +39,21 @@ pub struct PluginHookSource {
     pub hooks: HookEventsToml,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginTelemetryLegacyIdSource {
+    /// Preserve the local Codex plugin ID in the legacy `plugin_id` field.
+    Local,
+    /// Preserve the backend plugin ID in the legacy `plugin_id` field.
+    Remote,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginTelemetryMetadata {
     /// Local plugin identifier used by Codex configuration and the plugin cache.
     pub plugin_id: PluginId,
     /// Optional backend identifier for remote plugins.
     pub remote_plugin_id: Option<String>,
+    /// Selects the identity serialized into the compatibility `plugin_id` field.
+    pub legacy_plugin_id_source: PluginTelemetryLegacyIdSource,
     pub capability_summary: Option<PluginCapabilitySummary>,
 }

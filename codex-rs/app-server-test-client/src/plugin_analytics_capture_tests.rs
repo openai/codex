@@ -74,7 +74,8 @@ fn mutation_event(event_type: &str) -> Value {
     json!({
         "event_type": event_type,
         "event_params": {
-            "plugin_id": "sample@openai-curated-remote",
+            "plugin_id": REMOTE_PLUGIN_ID,
+            "local_plugin_id": "sample@openai-curated-remote",
             "remote_plugin_id": REMOTE_PLUGIN_ID,
             "plugin_name": "sample",
             "marketplace_name": "openai-curated-remote",
@@ -88,7 +89,7 @@ fn mutation_event(event_type: &str) -> Value {
 
 fn expected_identity() -> PluginEventIdentity<'static> {
     PluginEventIdentity {
-        plugin_id: "sample@openai-curated-remote",
+        local_plugin_id: "sample@openai-curated-remote",
         remote_plugin_id: REMOTE_PLUGIN_ID,
         plugin_name: "sample",
         marketplace_name: "openai-curated-remote",
