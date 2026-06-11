@@ -26,6 +26,7 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::io;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -58,7 +59,19 @@ impl<'a> AgentsMdManager<'a> {
         let base = codex_dir?;
         for candidate in [LOCAL_AGENTS_MD_FILENAME, DEFAULT_AGENTS_MD_FILENAME] {
             let path = base.join(candidate);
-            let data = match fs.read_file(&path, /*sandbox*/ None).await {
+            // A missing global instructions file is normal, but an unrepresentable
+            // configured path means Codex cannot honor the workspace configuration.
+            let path_uri = match PathUri::from_abs_path(&path) {
+                Ok(path_uri) => path_uri,
+                Err(err) => {
+                    startup_warnings.push(format!(
+                        "Failed to read global AGENTS.md instructions from `{}`: {err}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            let data = match fs.read_file(&path_uri, /*sandbox*/ None).await {
                 Ok(data) => data,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
                 Err(err) if err.kind() == io::ErrorKind::IsADirectory => continue,
@@ -149,14 +162,15 @@ impl<'a> AgentsMdManager<'a> {
                 break;
             }
 
-            match fs.get_metadata(&p, /*sandbox*/ None).await {
+            let path_uri = PathUri::from_abs_path(&p)?;
+            match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
                 Ok(metadata) if !metadata.is_file => continue,
                 Ok(_) => {}
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
                 Err(err) => return Err(err),
             }
 
-            let mut data = match fs.read_file(&p, /*sandbox*/ None).await {
+            let mut data = match fs.read_file(&path_uri, /*sandbox*/ None).await {
                 Ok(data) => data,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
                 Err(err) => return Err(err),
@@ -231,12 +245,13 @@ impl<'a> AgentsMdManager<'a> {
             for ancestor in dir.ancestors() {
                 for marker in &project_root_markers {
                     let marker_path = ancestor.join(marker);
-                    let marker_exists = match fs.get_metadata(&marker_path, /*sandbox*/ None).await
-                    {
-                        Ok(_) => true,
-                        Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-                        Err(err) => return Err(err),
-                    };
+                    let marker_path_uri = PathUri::from_abs_path(&marker_path)?;
+                    let marker_exists =
+                        match fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await {
+                            Ok(_) => true,
+                            Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                            Err(err) => return Err(err),
+                        };
                     if marker_exists {
                         project_root = Some(ancestor.clone());
                         break;
@@ -272,7 +287,8 @@ impl<'a> AgentsMdManager<'a> {
         for d in search_dirs {
             for name in &candidate_filenames {
                 let candidate = d.join(name);
-                match fs.get_metadata(&candidate, /*sandbox*/ None).await {
+                let candidate_uri = PathUri::from_abs_path(&candidate)?;
+                match fs.get_metadata(&candidate_uri, /*sandbox*/ None).await {
                     Ok(md) if md.is_file => {
                         found.push(candidate);
                         break;
