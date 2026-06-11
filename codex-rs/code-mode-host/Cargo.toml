@@ -14,7 +14,6 @@ workspace = true
 [dependencies]
 codex-code-mode = { workspace = true }
 codex-code-mode-protocol = { workspace = true }
-serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync"] }
 tokio-util = { workspace = true, features = ["rt"] }
 # The host owns V8 process configuration, so enable the sandbox without an
@@ -24,3 +23,8 @@ v8 = { workspace = true, features = ["v8_enable_sandbox"] }
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[package.metadata.cargo-shear]
+# This direct dependency intentionally selects the V8 sandbox feature for the
+# host without activating an internal workspace-crate feature.
+ignored = ["v8"]

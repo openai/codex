@@ -107,7 +107,7 @@ impl CodeModeService {
     }
 
     pub fn with_delegate(delegate: Arc<dyn CodeModeSessionDelegate>) -> Self {
-        Self::with_inner(delegate, None)
+        Self::with_inner(delegate, /*cell_id_prefix*/ None)
     }
 
     pub fn with_delegate_and_cell_id_prefix(
