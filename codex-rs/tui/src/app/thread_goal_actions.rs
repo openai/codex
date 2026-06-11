@@ -144,6 +144,31 @@ impl App {
         mode: ThreadGoalSetMode,
     ) -> bool {
         let codex_home = app_server.codex_home_path(&self.config.codex_home);
+        let mode = if matches!(mode, ThreadGoalSetMode::ConfirmIfExists) {
+            let result = app_server.thread_goal_get(thread_id).await;
+            if self.current_displayed_thread_id() != Some(thread_id) {
+                return false;
+            }
+
+            match result {
+                Ok(response) => match response.goal.as_ref() {
+                    Some(goal) if should_confirm_before_replacing_goal(goal) => {
+                        self.show_replace_thread_goal_confirmation(thread_id, objective);
+                        return false;
+                    }
+                    Some(_) => ThreadGoalSetMode::ReplaceExisting,
+                    None => mode,
+                },
+                Err(err) => {
+                    self.chat_widget
+                        .add_error_message(thread_goal_error_message("read", &err));
+                    return true;
+                }
+            }
+        } else {
+            mode
+        };
+
         let objective = match goal_files::materialize_goal_objective(
             app_server,
             codex_home.as_ref(),
@@ -159,35 +184,6 @@ impl App {
                 }
                 return false;
             }
-        };
-
-        let mode = if matches!(mode, ThreadGoalSetMode::ConfirmIfExists) {
-            let result = app_server.thread_goal_get(thread_id).await;
-            if self.current_displayed_thread_id() != Some(thread_id) {
-                return false;
-            }
-
-            match result {
-                Ok(response) => match response.goal.as_ref() {
-                    Some(goal) if should_confirm_before_replacing_goal(goal) => {
-                        self.show_replace_thread_goal_confirmation(
-                            thread_id,
-                            objective,
-                            codex_home.as_ref(),
-                        );
-                        return false;
-                    }
-                    Some(_) => ThreadGoalSetMode::ReplaceExisting,
-                    None => mode,
-                },
-                Err(err) => {
-                    self.chat_widget
-                        .add_error_message(thread_goal_error_message("read", &err));
-                    return true;
-                }
-            }
-        } else {
-            mode
         };
 
         let replacing_goal = matches!(mode, ThreadGoalSetMode::ReplaceExisting);
@@ -293,18 +289,8 @@ impl App {
         }
     }
 
-    fn show_replace_thread_goal_confirmation(
-        &mut self,
-        thread_id: ThreadId,
-        objective: String,
-        codex_home: Option<&goal_files::GoalFilePath>,
-    ) {
+    fn show_replace_thread_goal_confirmation(&mut self, thread_id: ThreadId, objective: String) {
         let replace_objective = objective.clone();
-        let subtitle = if let Some(path) = goal_files::objective_file_path(&objective, codex_home) {
-            format!("New objective file: {path}")
-        } else {
-            format!("New objective: {objective}")
-        };
         let replace_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::SetThreadGoalObjective {
                 thread_id,
@@ -329,7 +315,7 @@ impl App {
         ];
         self.chat_widget.show_selection_view(SelectionViewParams {
             title: Some("Replace goal?".to_string()),
-            subtitle: Some(subtitle),
+            subtitle: Some(format!("New objective: {objective}")),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
