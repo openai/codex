@@ -125,6 +125,66 @@ def _windows_workspace_root_setup(ctx):
     return """set "INSTA_WORKSPACE_ROOT=%workspace_root%"
 cd /d "%workspace_root%" || exit /b 1"""
 
+def _runfile_env_binary_impl(ctx):
+    is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
+    launcher = ctx.actions.declare_file(ctx.label.name + ".bat" if is_windows else ctx.label.name)
+    binary = ctx.executable.binary
+    launcher_template = ctx.file._windows_launcher_template if is_windows else ctx.file._bash_launcher_template
+    runfile_env_exports = _windows_runfile_env_exports(ctx) if is_windows else _bash_runfile_env_exports(ctx)
+    ctx.actions.expand_template(
+        template = launcher_template,
+        output = launcher,
+        is_executable = True,
+        substitutions = {
+            "__BINARY__": binary.short_path,
+            "__RUNFILE_ENV_EXPORTS__": runfile_env_exports,
+            "__WORKSPACE_NAME__": ctx.workspace_name,
+        },
+    )
+
+    runfiles = ctx.runfiles(files = [binary]).merge(ctx.attr.binary[DefaultInfo].default_runfiles)
+    for runfile_dep in ctx.attr.runfile_env:
+        executable = runfile_dep[DefaultInfo].files_to_run.executable
+        if executable == None:
+            fail("{} does not provide an executable for runfile_env".format(runfile_dep.label))
+        runfiles = runfiles.merge(ctx.runfiles(files = [executable]))
+        runfiles = runfiles.merge(runfile_dep[DefaultInfo].default_runfiles)
+
+    return [DefaultInfo(
+        executable = launcher,
+        files = depset([launcher]),
+        runfiles = runfiles,
+    )]
+
+runfile_env_binary = rule(
+    implementation = _runfile_env_binary_impl,
+    executable = True,
+    toolchains = ["@bazel_tools//tools/test:default_test_toolchain_type"],
+    attrs = {
+        "binary": attr.label(
+            cfg = "target",
+            executable = True,
+            mandatory = True,
+        ),
+        "runfile_env": attr.label_keyed_string_dict(
+            cfg = "target",
+        ),
+        "_windows_constraint": attr.label(
+            default = "@platforms//os:windows",
+            providers = [platform_common.ConstraintValueInfo],
+        ),
+        "_bash_launcher_template": attr.label(
+            allow_single_file = True,
+            default = "//:runfile_env_binary_launcher.sh.tpl",
+        ),
+        "_windows_launcher_template": attr.label(
+            allow_single_file = True,
+            default = "//:runfile_env_binary_launcher.bat.tpl",
+        ),
+    },
+    doc = "Runs a binary with environment variables resolved from executable runfiles.",
+)
+
 workspace_root_test = rule(
     implementation = _workspace_root_test_impl,
     test = True,

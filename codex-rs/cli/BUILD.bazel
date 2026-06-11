@@ -1,4 +1,4 @@
-load("//:defs.bzl", "MACOS_WEBRTC_RUSTC_LINK_FLAGS", "codex_rust_crate")
+load("//:defs.bzl", "MACOS_WEBRTC_RUSTC_LINK_FLAGS", "codex_rust_crate", "runfile_env_binary")
 load("//bazel/platforms:release_binaries.bzl", "multiplatform_binaries")
 
 codex_rust_crate(
@@ -12,4 +12,12 @@ codex_rust_crate(
 
 multiplatform_binaries(
     name = "codex",
+)
+
+runfile_env_binary(
+    name = "codex-with-code-mode",
+    binary = ":codex",
+    runfile_env = {
+        "//codex-rs/code-mode-host:codex-code-mode-host": "CODEX_CODE_MODE_HOST_PATH",
+    },
 )
