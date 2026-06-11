@@ -4194,13 +4194,11 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
         objective
     );
     assert_goal_reference_remains_literal(
-        &mut app_server,
         codex_home.as_ref(),
         codex_app_server_client::AppServerPath::from_app_server(
             "/tmp/attachments/00000000-0000-4000-8000-000000000000/goal-objective.md",
         ),
-    )
-    .await?;
+    );
     let escaped_path = codex_home
         .as_ref()
         .expect("codex home")
@@ -4209,21 +4207,18 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
         .join("attachments")
         .join("00000000-0000-4000-8000-000000000000")
         .join("goal-objective.md");
-    assert_goal_reference_remains_literal(&mut app_server, codex_home.as_ref(), escaped_path)
-        .await?;
+    assert_goal_reference_remains_literal(codex_home.as_ref(), escaped_path);
     let attachments_dir = app.chat_widget.config_ref().codex_home.join("attachments");
     let attachment_count = std::fs::read_dir(&attachments_dir)?.count();
 
-    let accepted = app
-        .set_thread_goal_objective(
-            &mut app_server,
-            thread_id,
-            "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1),
-            crate::app_event::ThreadGoalSetMode::ConfirmIfExists,
-        )
-        .await;
+    app.set_thread_goal_objective(
+        &mut app_server,
+        thread_id,
+        "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1),
+        crate::app_event::ThreadGoalSetMode::ConfirmIfExists,
+    )
+    .await;
 
-    assert!(!accepted);
     assert_eq!(
         std::fs::read_dir(&attachments_dir)?.count(),
         attachment_count
@@ -4241,21 +4236,13 @@ async fn set_thread_goal_objective_materializes_long_objective_before_goal_set()
     Ok(())
 }
 
-async fn assert_goal_reference_remains_literal(
-    app_server: &mut crate::app_server_session::AppServerSession,
+fn assert_goal_reference_remains_literal(
     codex_home: Option<&codex_app_server_client::AppServerPath>,
     path: codex_app_server_client::AppServerPath,
-) -> Result<()> {
+) {
     let reference =
         crate::goal_files::objective_file_reference(&path).expect("goal objective reference");
     assert!(crate::goal_files::objective_file_path(&reference, codex_home).is_none());
-    assert_eq!(
-        crate::goal_files::objective_text_for_edit(app_server, codex_home, &reference)
-            .await
-            .expect("literal goal file reference should not be read"),
-        reference
-    );
-    Ok(())
 }
 
 fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {

@@ -78,6 +78,8 @@ pub(crate) fn objective_file_path(
     let codex_home = codex_home?;
     let codex_home_parts = codex_home.components();
     let path_parts = path.components();
+    let has_normalization_component =
+        |parts: &[&str]| parts.iter().any(|part| matches!(*part, "." | ".."));
     (!codex_home_parts.is_empty()
         && !has_normalization_component(&codex_home_parts)
         && !has_normalization_component(&path_parts)
@@ -85,26 +87,21 @@ pub(crate) fn objective_file_path(
     .then_some(path)
 }
 
-fn has_normalization_component(parts: &[&str]) -> bool {
-    parts.iter().any(|part| matches!(*part, "." | ".."))
-}
-
 fn parse_objective_file_path(objective: &str) -> Option<GoalFilePath> {
-    let mut lines = objective.lines();
-    let path = lines
-        .next()?
+    let (path, instruction) = objective.split_once('\n')?;
+    if instruction != GOAL_FILE_INSTRUCTION {
+        return None;
+    }
+    let path = path
         .strip_prefix(GOAL_FILE_PREFIX)
         .map(str::trim)
         .filter(|path| !path.is_empty())?;
-    if lines.next() != Some(GOAL_FILE_INSTRUCTION) {
-        return None;
-    }
 
     let path = AppServerPath::from_absolute_str(path)?;
     let parts = path.components();
-    let file_name = parts.last()?;
-    let attachment_id = parts.get(parts.len().checked_sub(2)?)?;
-    let attachment_dir = parts.get(parts.len().checked_sub(3)?)?;
+    let [.., attachment_dir, attachment_id, file_name] = parts.as_slice() else {
+        return None;
+    };
     (*file_name == GOAL_FILE_NAME
         && *attachment_dir == GOAL_ATTACHMENT_DIR
         && Uuid::parse_str(attachment_id).is_ok())

@@ -98,13 +98,19 @@ fn goal_summary_lines(
     goal: &AppThreadGoal,
     codex_home: Option<&goal_files::GoalFilePath>,
 ) -> Vec<Line<'static>> {
+    let objective_line =
+        if let Some(path) = goal_files::objective_file_path(&goal.objective, codex_home) {
+            Line::from(vec!["Objective file: ".dim(), path.to_string().into()])
+        } else {
+            Line::from(vec!["Objective: ".dim(), goal.objective.clone().into()])
+        };
     let mut lines = vec![
         Line::from("Goal".bold()),
         Line::from(vec![
             "Status: ".dim(),
             goal_status_label(goal.status).to_string().into(),
         ]),
-        goal_objective_line(&goal.objective, codex_home),
+        objective_line,
         Line::from(vec![
             "Time used: ".dim(),
             format_goal_elapsed_seconds(goal.time_used_seconds).into(),
@@ -132,17 +138,6 @@ fn goal_summary_lines(
     lines.push(Line::default());
     lines.push(Line::from(command_hint.dim()));
     lines
-}
-
-fn goal_objective_line(
-    objective: &str,
-    codex_home: Option<&goal_files::GoalFilePath>,
-) -> Line<'static> {
-    if let Some(path) = goal_files::objective_file_path(objective, codex_home) {
-        Line::from(vec!["Objective file: ".dim(), path.to_string().into()])
-    } else {
-        Line::from(vec!["Objective: ".dim(), objective.to_string().into()])
-    }
 }
 
 fn goal_status_label(status: AppThreadGoalStatus) -> &'static str {

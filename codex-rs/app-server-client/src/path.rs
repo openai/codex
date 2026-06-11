@@ -14,7 +14,7 @@ impl AppServerPath {
     }
 
     pub fn from_absolute_str(raw: &str) -> Option<Self> {
-        is_absolute_app_server_path(raw).then(|| Self(raw.to_string()))
+        (raw.starts_with('/') || is_windows_absolute_path(raw)).then(|| Self(raw.to_string()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -35,9 +35,7 @@ impl AppServerPath {
             '/'
         };
         let mut raw = self.0.trim_end_matches(['/', '\\']).to_string();
-        if !raw.ends_with(separator) {
-            raw.push(separator);
-        }
+        raw.push(separator);
         raw.push_str(segment.as_ref());
         Self(raw)
     }
@@ -47,10 +45,6 @@ impl fmt::Display for AppServerPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
-}
-
-fn is_absolute_app_server_path(path: &str) -> bool {
-    path.starts_with('/') || is_windows_absolute_path(path)
 }
 
 fn is_windows_absolute_path(path: &str) -> bool {

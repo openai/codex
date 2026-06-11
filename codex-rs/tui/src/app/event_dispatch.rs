@@ -730,12 +730,8 @@ impl App {
                 objective,
                 mode,
             } => {
-                if self
-                    .set_thread_goal_objective(app_server, thread_id, objective, mode)
-                    .await
-                {
-                    self.chat_widget.maybe_send_next_queued_input();
-                }
+                self.set_thread_goal_objective(app_server, thread_id, objective, mode)
+                    .await;
             }
             AppEvent::SetThreadGoalStatus { thread_id, status } => {
                 self.set_thread_goal_status(app_server, thread_id, status)
