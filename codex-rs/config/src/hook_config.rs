@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HooksFile {
     #[serde(default)]
     pub hooks: HookEventsToml,
