@@ -1,6 +1,8 @@
 use codex_utils_string::take_bytes_at_char_boundary;
 
 use crate::catalog::SkillCatalog;
+use crate::catalog::SkillCatalogEntry;
+use crate::catalog::SkillSourceKind;
 use crate::fragments::AvailableSkillsInstructions;
 
 const MAX_AVAILABLE_SKILLS_BYTES: usize = 8_000;
@@ -24,7 +26,7 @@ pub(crate) fn available_skills_fragment(
             .short_description
             .as_deref()
             .unwrap_or(entry.description.as_str());
-        let line = render_skill_line(entry.name.as_str(), description, entry.rendered_path());
+        let line = render_skill_line(entry, description);
         let next_bytes = total_bytes.saturating_add(line.len());
         if next_bytes > MAX_AVAILABLE_SKILLS_BYTES {
             omitted = omitted.saturating_add(1);
@@ -47,11 +49,19 @@ pub(crate) fn available_skills_fragment(
     Some(AvailableSkillsInstructions::from_skill_lines(skill_lines))
 }
 
-fn render_skill_line(name: &str, description: &str, path: &str) -> String {
+fn render_skill_line(entry: &SkillCatalogEntry, description: &str) -> String {
+    let locator_kind = match &entry.authority.kind {
+        SkillSourceKind::Host => "file",
+        SkillSourceKind::Executor => "environment resource",
+        SkillSourceKind::Orchestrator => "orchestrator resource",
+        SkillSourceKind::Custom(_) => "custom resource",
+    };
+    let name = entry.name.as_str();
+    let path = entry.rendered_path();
     if description.is_empty() {
-        format!("- {name}: (file: {path})")
+        format!("- {name}: ({locator_kind}: {path})")
     } else {
-        format!("- {name}: {description} (file: {path})")
+        format!("- {name}: {description} ({locator_kind}: {path})")
     }
 }
 

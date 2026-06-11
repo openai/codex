@@ -190,6 +190,11 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
             .starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
     );
     assert!(prompt_fragments[0].text().contains("lint-fix"));
+    assert!(
+        prompt_fragments[0]
+            .text()
+            .contains("(environment resource: skill://executor/lint-fix/SKILL.md)")
+    );
 
     let turn_store = ExtensionData::new("turn-1");
     let fragments = registry.turn_input_contributors()[0]
