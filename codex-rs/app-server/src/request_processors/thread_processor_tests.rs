@@ -176,7 +176,7 @@ mod thread_processor_behavior_tests {
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
         let tools = vec![dynamic_tool(
-            None,
+            /*namespace*/ None,
             "my_tool",
             json!({"type": "null"}),
             /*defer_loading*/ false,
@@ -188,7 +188,7 @@ mod thread_processor_behavior_tests {
     #[test]
     fn validate_dynamic_tools_accepts_sanitizable_input_schema() {
         let tools = vec![dynamic_tool(
-            None,
+            /*namespace*/ None,
             "my_tool",
             // Missing `type` is common; core sanitizes these to a supported schema.
             json!({"properties": {}}),
@@ -200,7 +200,7 @@ mod thread_processor_behavior_tests {
     #[test]
     fn validate_dynamic_tools_accepts_nullable_field_schema() {
         let tools = vec![dynamic_tool(
-            None,
+            /*namespace*/ None,
             "my_tool",
             json!({
                 "type": "object",
@@ -359,7 +359,7 @@ mod thread_processor_behavior_tests {
     #[test]
     fn validate_dynamic_tools_rejects_name_not_supported_by_responses() {
         let tools = vec![dynamic_tool(
-            None,
+            /*namespace*/ None,
             "lookup.ticket",
             json!({
                 "type": "object",
@@ -400,7 +400,7 @@ mod thread_processor_behavior_tests {
     fn validate_dynamic_tools_rejects_name_longer_than_responses_limit() {
         let long_name = "a".repeat(129);
         let tools = vec![dynamic_tool(
-            None,
+            /*namespace*/ None,
             long_name.clone(),
             json!({
                 "type": "object",

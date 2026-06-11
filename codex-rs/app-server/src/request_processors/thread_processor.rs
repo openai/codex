@@ -289,7 +289,7 @@ fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
     for spec in tools {
         match spec {
             DynamicToolSpec::Function(tool) => {
-                validate_dynamic_tool(tool, None, &mut seen_tools)?;
+                validate_dynamic_tool(tool, /*namespace*/ None, &mut seen_tools)?;
             }
             DynamicToolSpec::Namespace(namespace) => {
                 let name = namespace.name.trim();
