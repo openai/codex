@@ -3,9 +3,94 @@ use codex_api::ResponsesApiRequest;
 use codex_api::TextControls;
 use codex_api::create_text_param_for_request;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use pretty_assertions::assert_eq;
 
 use super::*;
+
+fn prompt_with_image_outputs() -> Prompt {
+    Prompt {
+        input: vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputImage {
+                    image_url: "https://example.com/image.png".to_string(),
+                    detail: Some(ImageDetail::Original),
+                }],
+                phase: None,
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "function-call".to_string(),
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,function".to_string(),
+                        detail: Some(ImageDetail::High),
+                    },
+                ]),
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id: "custom-call".to_string(),
+                name: None,
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,custom".to_string(),
+                        detail: Some(ImageDetail::Auto),
+                    },
+                ]),
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn responses_lite_request_copies_strip_image_details() {
+    let prompt = prompt_with_image_outputs();
+    let original = prompt.input.clone();
+
+    let stripped = prompt.get_formatted_input_for_request(/*use_responses_lite*/ true);
+
+    assert_eq!(
+        stripped,
+        vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputImage {
+                    image_url: "https://example.com/image.png".to_string(),
+                    detail: None,
+                }],
+                phase: None,
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "function-call".to_string(),
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,function".to_string(),
+                        detail: None,
+                    },
+                ]),
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id: "custom-call".to_string(),
+                name: None,
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,custom".to_string(),
+                        detail: None,
+                    },
+                ]),
+            },
+        ]
+    );
+    assert_eq!(prompt.input, original);
+    assert_eq!(
+        prompt.get_formatted_input_for_request(/*use_responses_lite*/ false),
+        original
+    );
+}
 
 #[test]
 fn serializes_text_verbosity_when_set() {
