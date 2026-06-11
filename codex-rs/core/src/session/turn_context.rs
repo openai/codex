@@ -8,6 +8,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_utils_path::normalize_input_path_for_wsl;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -268,8 +269,10 @@ impl TurnContext {
     }
 
     pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
-        path.as_ref()
-            .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
+        path.as_ref().map_or_else(
+            || self.cwd.clone(),
+            |path| self.cwd.join(normalize_input_path_for_wsl(path)),
+        )
     }
 
     pub(crate) fn file_system_sandbox_context(

@@ -24,6 +24,8 @@ mod symlinks {
 #[cfg(target_os = "linux")]
 mod wsl {
     use super::super::normalize_for_wsl_with_flag;
+    use super::super::normalize_input_path_for_wsl_with_flag;
+    use super::super::win_path_to_wsl;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -49,6 +51,33 @@ mod wsl {
         let normalized = normalize_for_wsl_with_flag(path.clone(), /*is_wsl*/ true);
 
         assert_eq!(normalized, path);
+    }
+
+    #[test]
+    fn converts_windows_drive_paths_to_wsl_mounts() {
+        assert_eq!(
+            win_path_to_wsl(r"C:\Users\SLee\AppData\Local\Temp\image.png").as_deref(),
+            Some("/mnt/c/Users/SLee/AppData/Local/Temp/image.png")
+        );
+        assert_eq!(
+            win_path_to_wsl("D:/Work/codex.png").as_deref(),
+            Some("/mnt/d/Work/codex.png")
+        );
+    }
+
+    #[test]
+    fn normalize_input_path_maps_windows_paths_in_wsl() {
+        assert_eq!(
+            normalize_input_path_for_wsl_with_flag(
+                r"C:\Users\SLee\AppData\Local\Temp\image.png",
+                /*is_wsl*/ true
+            ),
+            PathBuf::from("/mnt/c/Users/SLee/AppData/Local/Temp/image.png")
+        );
+        assert_eq!(
+            normalize_input_path_for_wsl_with_flag("/tmp/copied-image.png", /*is_wsl*/ true),
+            PathBuf::from("/tmp/copied-image.png")
+        );
     }
 }
 

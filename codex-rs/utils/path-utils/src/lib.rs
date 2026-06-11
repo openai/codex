@@ -32,6 +32,42 @@ pub fn normalize_for_native_workdir(path: impl AsRef<Path>) -> PathBuf {
     normalize_for_native_workdir_with_flag(path.as_ref().to_path_buf(), cfg!(windows))
 }
 
+/// Convert a Windows absolute path (`C:\foo\bar` or `C:/foo/bar`) to a WSL mount
+/// path (`/mnt/c/foo/bar`). Returns `None` if the input does not look like a Windows
+/// drive path.
+pub fn win_path_to_wsl(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    if bytes.len() < 3
+        || bytes[1] != b':'
+        || !(bytes[2] == b'\\' || bytes[2] == b'/')
+        || !bytes[0].is_ascii_alphabetic()
+    {
+        return None;
+    }
+
+    let drive = (bytes[0] as char).to_ascii_lowercase();
+    let tail = path[3..].replace('\\', "/");
+    if tail.is_empty() {
+        return Some(format!("/mnt/{drive}"));
+    }
+
+    Some(format!("/mnt/{drive}/{tail}"))
+}
+
+/// When running under WSL, translate Windows drive paths into the equivalent
+/// `/mnt/<drive>/...` form before path resolution. Other inputs are returned unchanged.
+pub fn normalize_input_path_for_wsl(path: &str) -> PathBuf {
+    normalize_input_path_for_wsl_with_flag(path, env::is_wsl())
+}
+
+fn normalize_input_path_for_wsl_with_flag(path: &str, is_wsl: bool) -> PathBuf {
+    if is_wsl && let Some(mapped) = win_path_to_wsl(path) {
+        return PathBuf::from(mapped);
+    }
+
+    PathBuf::from(path)
+}
+
 pub struct SymlinkWritePaths {
     pub read_path: Option<PathBuf>,
     pub write_path: PathBuf,
