@@ -46,11 +46,6 @@ impl McpManager {
     /// runtime-only extension overlays.
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
         let mut mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
-        let disabled_server_names = mcp_config
-            .mcp_server_catalog
-            .disabled_server_names()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
         let mut catalog = mcp_config.mcp_server_catalog.to_builder();
         if mcp_config.apps_enabled {
             catalog.register(McpServerRegistration::from_compatibility(
@@ -87,9 +82,6 @@ impl McpManager {
                 }
                 contribution_order += 1;
             }
-        }
-        for name in disabled_server_names {
-            catalog.disable(name);
         }
         let catalog = catalog.build();
         for conflict in catalog.conflicts() {

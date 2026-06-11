@@ -69,6 +69,8 @@ fn remove(source: McpServerSource) -> McpServerConflictAction {
 #[test]
 fn source_precedence_preserves_the_winning_registration() {
     let extension = server("https://extension.example/mcp");
+    let mut plugin = server("https://plugin.example/mcp");
+    plugin.enabled = false;
     let mut builder = ResolvedMcpCatalog::builder();
     builder.register(McpServerRegistration::from_extension(
         "docs".to_string(),
@@ -80,7 +82,7 @@ fn source_precedence_preserves_the_winning_registration() {
         "docs".to_string(),
         "plugin@test".to_string(),
         /*plugin_order*/ 0,
-        server("https://plugin.example/mcp"),
+        plugin,
     ));
     builder.register(McpServerRegistration::from_plugin(
         "docs".to_string(),
@@ -144,6 +146,36 @@ fn disabled_veto_only_disables_the_winning_registration() {
         .clone();
 
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn disabled_winner_remains_a_veto_when_the_catalog_is_extended() {
+    let mut disabled = server("https://config.example/mcp");
+    disabled.enabled = false;
+    let mut expected = server("https://extension.example/mcp");
+    expected.enabled = false;
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(McpServerRegistration::from_config(
+        "docs".to_string(),
+        disabled,
+    ));
+    let mut builder = builder.build().to_builder();
+    builder.register(McpServerRegistration::from_extension(
+        "docs".to_string(),
+        "hosted",
+        /*contribution_order*/ 0,
+        server("https://extension.example/mcp"),
+    ));
+
+    let resolved = builder.build();
+
+    assert_eq!(
+        resolved.server("docs"),
+        Some(&super::ResolvedMcpServer {
+            source: extension_source("hosted"),
+            config: expected,
+        })
+    );
 }
 
 #[test]

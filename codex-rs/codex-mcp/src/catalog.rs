@@ -230,13 +230,16 @@ impl McpCatalogBuilder {
             });
         }
 
+        let mut disabled_server_names = self.disabled_server_names;
         let servers = winners
             .into_iter()
             .filter_map(|(name, action)| match action {
                 CatalogAction::Register(registration) => {
                     let mut registration = *registration;
-                    if self.disabled_server_names.contains(&name) {
+                    // Effective disabled winners remain name-scoped vetoes for later overlays.
+                    if !registration.config.enabled || disabled_server_names.contains(&name) {
                         registration.config.enabled = false;
+                        disabled_server_names.insert(name.clone());
                     }
                     Some((
                         name,
@@ -252,7 +255,7 @@ impl McpCatalogBuilder {
 
         ResolvedMcpCatalog {
             actions: self.actions,
-            disabled_server_names: self.disabled_server_names,
+            disabled_server_names,
             servers,
             conflicts,
         }
@@ -299,13 +302,6 @@ impl ResolvedMcpCatalog {
 
     pub fn server(&self, name: &str) -> Option<&ResolvedMcpServer> {
         self.servers.get(name)
-    }
-
-    pub fn disabled_server_names(&self) -> impl Iterator<Item = &str> {
-        self.servers
-            .iter()
-            .filter(|(_, server)| !server.config.enabled)
-            .map(|(name, _)| name.as_str())
     }
 
     pub fn configured_servers(&self) -> HashMap<String, McpServerConfig> {
