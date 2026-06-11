@@ -62,6 +62,7 @@ async fn queued_goal_before_thread_preserves_large_paste() {
     chat.bottom_pane
         .set_composer_text("/goal ".to_string(), Vec::new(), Vec::new());
     let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
+    let placeholder = format!("[Pasted Content {} chars]", objective.chars().count());
     chat.handle_paste(objective.clone());
 
     submit_current_composer(&mut chat);
@@ -73,8 +74,8 @@ async fn queued_goal_before_thread_preserves_large_paste() {
     chat.maybe_send_next_queued_input();
 
     let draft = next_goal_draft(&mut rx, thread_id);
-    assert_eq!(draft.objective, objective);
-    assert!(draft.pending_pastes.is_empty());
+    assert_eq!(draft.objective, placeholder);
+    assert_eq!(draft.pending_pastes, vec![(placeholder, objective)]);
 }
 
 #[tokio::test]

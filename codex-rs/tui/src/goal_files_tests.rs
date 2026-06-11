@@ -104,6 +104,32 @@ async fn plain_objective_does_not_need_codex_home() {
 }
 
 #[tokio::test]
+async fn whitespace_paste_only_objective_is_empty() {
+    let placeholder = "[Pasted Content 3 chars]";
+    let mut store = RecordingStore::default();
+    let codex_home = codex_app_server_client::AppServerPath::from_app_server("/tmp/codex");
+
+    let err = materialize_goal_draft(
+        &mut store,
+        Some(&codex_home),
+        GoalDraft {
+            objective: placeholder.to_string(),
+            text_elements: vec![TextElement::new(
+                (0..placeholder.len()).into(),
+                Some(placeholder.to_string()),
+            )],
+            pending_pastes: vec![(placeholder.to_string(), " \n\t".to_string())],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("whitespace-only paste should be rejected");
+
+    assert_eq!(err.to_string(), "Goal objective must not be empty.");
+    assert!(store.writes.is_empty());
+}
+
+#[tokio::test]
 async fn deleted_placeholders_do_not_materialize_or_need_codex_home() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let image_path = temp_dir.path().join("local-image.png");

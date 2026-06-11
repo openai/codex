@@ -103,6 +103,16 @@ pub(crate) async fn materialize_goal_draft(
         bail!("Goal objective must not be empty.");
     }
     let text_elements = draft.text_elements;
+    if !draft.pending_pastes.is_empty() {
+        let (expanded_objective, _) = ChatComposer::expand_pending_pastes(
+            &objective,
+            text_elements.clone(),
+            &draft.pending_pastes,
+        );
+        if expanded_objective.trim().is_empty() {
+            bail!("Goal objective must not be empty.");
+        }
+    }
     let mut active_placeholders = active_placeholder_counts(
         &objective,
         &text_elements,

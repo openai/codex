@@ -7,7 +7,6 @@
 
 use super::*;
 use crate::app_event::ThreadGoalSetMode;
-use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
@@ -25,6 +24,7 @@ enum SlashCommandDispatchSource {
 struct PreparedSlashCommandArgs {
     args: String,
     text_elements: Vec<TextElement>,
+    pending_pastes: Vec<(String, String)>,
     local_images: Vec<LocalImageAttachment>,
     remote_image_urls: Vec<String>,
     mention_bindings: Vec<MentionBinding>,
@@ -550,6 +550,7 @@ impl ChatWidget {
                 PreparedSlashCommandArgs {
                     args,
                     text_elements,
+                    pending_pastes: self.bottom_pane.composer_pending_pastes(),
                     local_images: self.bottom_pane.composer_local_images(),
                     remote_image_urls: self.bottom_pane.remote_image_urls(),
                     mention_bindings: Vec::new(),
@@ -569,6 +570,7 @@ impl ChatWidget {
             PreparedSlashCommandArgs {
                 args: prepared_args,
                 text_elements: prepared_elements,
+                pending_pastes: Vec::new(),
                 local_images: Vec::new(),
                 remote_image_urls: Vec::new(),
                 mention_bindings: Vec::new(),
@@ -629,6 +631,7 @@ impl ChatWidget {
         let PreparedSlashCommandArgs {
             args,
             text_elements,
+            pending_pastes,
             local_images,
             remote_image_urls,
             mention_bindings,
@@ -756,11 +759,6 @@ impl ChatWidget {
                     }
                     return self.queued_command_drain_result(cmd);
                 }
-                let pending_pastes = if source == SlashCommandDispatchSource::Live {
-                    self.bottom_pane.composer_pending_pastes()
-                } else {
-                    Vec::new()
-                };
                 let draft = GoalDraft {
                     objective: args,
                     text_elements,
@@ -771,12 +769,8 @@ impl ChatWidget {
                 let Some(thread_id) = self.thread_id else {
                     if source == SlashCommandDispatchSource::Live {
                         const GOAL_PREFIX: &str = "/goal ";
-                        let (objective, text_elements) = ChatComposer::expand_pending_pastes(
-                            &draft.objective,
-                            draft.text_elements,
-                            &draft.pending_pastes,
-                        );
-                        let text_elements = text_elements
+                        let text_elements = draft
+                            .text_elements
                             .into_iter()
                             .map(|element| {
                                 element.map_range(|range| ByteRange {
@@ -787,13 +781,14 @@ impl ChatWidget {
                             .collect();
                         self.queue_user_message_with_options(
                             UserMessage {
-                                text: format!("{GOAL_PREFIX}{objective}"),
+                                text: format!("{GOAL_PREFIX}{}", draft.objective),
                                 local_images: draft.local_images,
                                 remote_image_urls: draft.remote_image_urls,
                                 text_elements,
                                 mention_bindings: Vec::new(),
                             },
                             QueuedInputAction::ParseSlash,
+                            draft.pending_pastes,
                         );
                         self.clear_live_goal_submission();
                     } else {
@@ -865,7 +860,15 @@ impl ChatWidget {
         self.queued_command_drain_result(cmd)
     }
 
-    pub(super) fn submit_queued_slash_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
+    pub(super) fn submit_queued_slash_prompt(
+        &mut self,
+        queued_message: QueuedUserMessage,
+    ) -> QueueDrain {
+        let QueuedUserMessage {
+            user_message,
+            pending_pastes,
+            ..
+        } = queued_message;
         let UserMessage {
             text,
             local_images,
@@ -955,6 +958,7 @@ impl ChatWidget {
             PreparedSlashCommandArgs {
                 args: trimmed_rest.to_string(),
                 text_elements: args_elements,
+                pending_pastes,
                 local_images,
                 remote_image_urls,
                 mention_bindings,

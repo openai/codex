@@ -59,6 +59,7 @@ pub(super) enum ShellEscapePolicy {
 pub(super) struct QueuedUserMessage {
     pub(super) user_message: UserMessage,
     pub(super) action: QueuedInputAction,
+    pub(super) pending_pastes: Vec<(String, String)>,
 }
 
 impl QueuedUserMessage {
@@ -66,6 +67,7 @@ impl QueuedUserMessage {
         Self {
             user_message,
             action,
+            pending_pastes: Vec::new(),
         }
     }
 
