@@ -779,6 +779,14 @@ async fn run_pre_sampling_compact(
     Ok(())
 }
 
+/// Returns true only when both turns declare compaction compatibility hashes and they differ.
+/// A missing hash does not provide enough information to trigger compaction.
+fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
+    previous
+        .zip(current)
+        .is_some_and(|(previous, current)| previous != current)
+}
+
 /// Runs pre-sampling compaction against the previous model when its compaction compatibility
 /// hash changed or when switching to a smaller context-window model.
 ///
@@ -791,18 +799,17 @@ async fn maybe_run_previous_model_inline_compact(
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(());
     };
-    let comp_hash_changed = previous_turn_settings
-        .comp_hash
-        .as_deref()
-        .zip(turn_context.comp_hash.as_deref())
-        .is_some_and(|(previous, current)| previous != current);
+    let should_compact_for_comp_hash_change = comp_hash_changed(
+        previous_turn_settings.comp_hash.as_deref(),
+        turn_context.comp_hash.as_deref(),
+    );
     let previous_model_turn_context = Arc::new(
         turn_context
             .with_model(previous_turn_settings.model, &sess.services.models_manager)
             .await,
     );
 
-    if comp_hash_changed {
+    if should_compact_for_comp_hash_change {
         run_auto_compact(
             sess,
             &previous_model_turn_context,
