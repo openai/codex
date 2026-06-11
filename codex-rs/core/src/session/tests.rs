@@ -423,12 +423,9 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         .expect("test thread id should be valid");
     crate::client::ModelClient::new(
         /*auth_manager*/ None,
-        thread_id.into(),
         thread_id,
-        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
-        /*parent_thread_id*/ None,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
@@ -4996,12 +4993,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         attestation_provider: None,
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
-            thread_id.into(),
             thread_id,
-            /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
-            session_configuration.parent_thread_id,
             config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
@@ -7074,12 +7068,9 @@ where
         attestation_provider: None,
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
-            thread_id.into(),
             thread_id,
-            /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
-            session_configuration.parent_thread_id,
             config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),

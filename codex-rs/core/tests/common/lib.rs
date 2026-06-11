@@ -15,6 +15,8 @@ use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+pub use codex_core::test_support::TestCodexResponsesRequestKind;
+pub use codex_core::test_support::responses_metadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use codex_utils_absolute_path::test_support::PathBufExt;
 pub use codex_utils_absolute_path::test_support::PathExt;

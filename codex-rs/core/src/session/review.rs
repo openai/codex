@@ -91,7 +91,6 @@ pub(super) async fn spawn_review_thread(
         forked_from_thread_id,
         parent_turn_context.parent_thread_id,
         &session_source,
-        parent_turn_context.thread_source.clone(),
         review_turn_id.clone(),
         #[allow(deprecated)]
         parent_turn_context.cwd.clone(),

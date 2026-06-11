@@ -20,13 +20,19 @@ use codex_models_manager::collaboration_mode_presets;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::SessionSource;
 use once_cell::sync::Lazy;
 
 use crate::ThreadManager;
 use crate::config::Config;
+use crate::responses_metadata::CodexResponsesMetadata;
+use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_metadata::subagent_header_value;
+use crate::responses_metadata::subagent_metadata_kind;
 use crate::thread_manager;
 use crate::unified_exec;
 
@@ -144,6 +150,44 @@ pub fn get_model_offline(model: Option<&str>) -> String {
 
 pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
     construct_model_info_offline_for_tests(model, &config.to_models_manager_config())
+}
+
+#[derive(Clone, Copy)]
+pub enum TestCodexResponsesRequestKind {
+    Turn,
+    Prewarm,
+    WebsocketConnection,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn responses_metadata(
+    installation_id: &str,
+    session_id: &str,
+    thread_id: &str,
+    turn_id: Option<&str>,
+    window_id: String,
+    session_source: &SessionSource,
+    parent_thread_id: Option<ThreadId>,
+    request_kind: TestCodexResponsesRequestKind,
+) -> CodexResponsesMetadata {
+    let request_kind = match request_kind {
+        TestCodexResponsesRequestKind::Turn => Some(CodexResponsesRequestKind::Turn),
+        TestCodexResponsesRequestKind::Prewarm => Some(CodexResponsesRequestKind::Prewarm),
+        TestCodexResponsesRequestKind::WebsocketConnection => None,
+    };
+    CodexResponsesMetadata {
+        turn_id: request_kind.and(turn_id.map(ToString::to_string)),
+        request_kind,
+        parent_thread_id,
+        subagent_header: subagent_header_value(session_source),
+        subagent_kind: request_kind.and_then(|_| subagent_metadata_kind(session_source)),
+        ..CodexResponsesMetadata::new(
+            installation_id.to_string(),
+            session_id.to_string(),
+            thread_id.to_string(),
+            window_id,
+        )
+    }
 }
 
 pub fn all_model_presets() -> &'static Vec<ModelPreset> {
