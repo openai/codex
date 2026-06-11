@@ -812,6 +812,17 @@ pub fn ev_image_generation_call(
     })
 }
 
+pub fn ev_image_generation_call_added(id: &str, status: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.added",
+        "item": {
+            "type": "image_generation_call",
+            "id": id,
+            "status": status,
+        }
+    })
+}
+
 pub fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
     serde_json::json!({
         "type": "response.output_item.done",
