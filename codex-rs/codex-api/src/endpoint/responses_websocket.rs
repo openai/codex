@@ -692,7 +692,8 @@ async fn run_websocket_response_stream(
                     }
                     continue;
                 }
-                if let Some(model) = event.response_model()
+                let model_metadata = event.response_model_metadata();
+                if let Some(model) = model_metadata.warning_model
                     && last_server_model.as_deref() != Some(model.as_str())
                 {
                     let _ = tx_event
@@ -700,7 +701,7 @@ async fn run_websocket_response_stream(
                         .await;
                     last_server_model = Some(model);
                 }
-                let server_model_identity = event.response_model_identity();
+                let server_model_identity = model_metadata.execution_identity;
                 if (server_model_identity.final_model.is_some()
                     || server_model_identity.model_snapshot.is_some())
                     && last_server_model_identity.as_ref() != Some(&server_model_identity)

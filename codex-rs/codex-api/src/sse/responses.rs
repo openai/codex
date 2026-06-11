@@ -177,42 +177,44 @@ pub struct ResponsesStreamEvent {
     content_index: Option<i64>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ResponseModelMetadata {
+    pub(crate) warning_model: Option<String>,
+    pub(crate) execution_identity: ResponseModelIdentity,
+}
+
 impl ResponsesStreamEvent {
     pub fn kind(&self) -> &str {
         &self.kind
     }
 
-    fn response_headers(&self) -> Option<&Value> {
-        self.response
+    /// Parses model headers once while preserving their two selection rules.
+    pub(crate) fn response_model_metadata(&self) -> ResponseModelMetadata {
+        let response_identity = self
+            .response
             .as_ref()
             .and_then(|response| response.get("headers"))
-            .filter(|headers| headers.is_object())
-            .or_else(|| self.headers.as_ref().filter(|headers| headers.is_object()))
-    }
-
-    /// Returns the execution-model identity reported by the server, if present.
-    ///
-    /// Both fields are read from one container: `response.headers` takes
-    /// precedence over the top-level `headers` used by websocket metadata.
-    pub fn response_model_identity(&self) -> ResponseModelIdentity {
-        let headers = self.response_headers();
-        ResponseModelIdentity {
-            final_model: headers.and_then(header_openai_model_value_from_json),
-            model_snapshot: headers.and_then(header_openai_model_snapshot_value_from_json),
-        }
-    }
-
-    /// Preserves the legacy model-warning fallback across metadata containers.
-    pub(crate) fn response_model(&self) -> Option<String> {
-        self.response
+            .and_then(response_model_identity_from_json);
+        let top_level_identity = self
+            .headers
             .as_ref()
-            .and_then(|response| response.get("headers"))
-            .and_then(header_openai_model_value_from_json)
+            .and_then(response_model_identity_from_json);
+        let warning_model = response_identity
+            .as_ref()
+            .and_then(|identity| identity.final_model.clone())
             .or_else(|| {
-                self.headers
+                top_level_identity
                     .as_ref()
-                    .and_then(header_openai_model_value_from_json)
-            })
+                    .and_then(|identity| identity.final_model.clone())
+            });
+        // Keep the pair atomic: if `response.headers` exists, both identity
+        // fields come from it rather than being filled from top-level headers.
+        let execution_identity = response_identity.or(top_level_identity).unwrap_or_default();
+
+        ResponseModelMetadata {
+            warning_model,
+            execution_identity,
+        }
     }
 
     pub(crate) fn model_verifications(&self) -> Option<Vec<ModelVerification>> {
@@ -239,27 +241,22 @@ impl ResponsesStreamEvent {
     }
 }
 
-fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
+fn response_model_identity_from_json(value: &Value) -> Option<ResponseModelIdentity> {
     let headers = value.as_object()?;
-    headers.iter().find_map(|(name, value)| {
-        if name.eq_ignore_ascii_case("openai-model") || name.eq_ignore_ascii_case("x-openai-model")
+    let mut identity = ResponseModelIdentity::default();
+    for (name, value) in headers {
+        if identity.final_model.is_none()
+            && (name.eq_ignore_ascii_case("openai-model")
+                || name.eq_ignore_ascii_case("x-openai-model"))
         {
-            json_value_as_string(value)
-        } else {
-            None
+            identity.final_model = json_value_as_string(value);
+        } else if identity.model_snapshot.is_none()
+            && name.eq_ignore_ascii_case(OPENAI_MODEL_SNAPSHOT_HEADER)
+        {
+            identity.model_snapshot = json_value_as_string(value);
         }
-    })
-}
-
-fn header_openai_model_snapshot_value_from_json(value: &Value) -> Option<String> {
-    let headers = value.as_object()?;
-    headers.iter().find_map(|(name, value)| {
-        if name.eq_ignore_ascii_case(OPENAI_MODEL_SNAPSHOT_HEADER) {
-            json_value_as_string(value)
-        } else {
-            None
-        }
-    })
+    }
+    Some(identity)
 }
 
 fn model_verifications_from_json_value(value: &Value) -> Option<Vec<ModelVerification>> {
@@ -502,7 +499,8 @@ pub async fn process_sse(
         let model_verifications = event.model_verifications();
         let turn_moderation_metadata = event.turn_moderation_metadata();
 
-        if let Some(model) = event.response_model()
+        let model_metadata = event.response_model_metadata();
+        if let Some(model) = model_metadata.warning_model
             && last_server_model.as_deref() != Some(model.as_str())
         {
             if tx_event
@@ -514,7 +512,7 @@ pub async fn process_sse(
             }
             last_server_model = Some(model);
         }
-        let server_model_identity = event.response_model_identity();
+        let server_model_identity = model_metadata.execution_identity;
         if (server_model_identity.final_model.is_some()
             || server_model_identity.model_snapshot.is_some())
             && last_server_model_identity.as_ref() != Some(&server_model_identity)
@@ -1382,10 +1380,13 @@ mod tests {
         .expect("expected event to deserialize");
 
         assert_eq!(
-            ev.response_model_identity(),
-            ResponseModelIdentity {
-                final_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
-                model_snapshot: Some(MODEL_SNAPSHOT_FOR_TESTS.to_string()),
+            ev.response_model_metadata(),
+            ResponseModelMetadata {
+                warning_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
+                execution_identity: ResponseModelIdentity {
+                    final_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
+                    model_snapshot: Some(MODEL_SNAPSHOT_FOR_TESTS.to_string()),
+                },
             }
         );
     }
@@ -1409,10 +1410,13 @@ mod tests {
         .expect("expected event to deserialize");
 
         assert_eq!(
-            ev.response_model_identity(),
-            ResponseModelIdentity {
-                final_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
-                model_snapshot: Some(MODEL_SNAPSHOT_FOR_TESTS.to_string()),
+            ev.response_model_metadata(),
+            ResponseModelMetadata {
+                warning_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
+                execution_identity: ResponseModelIdentity {
+                    final_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
+                    model_snapshot: Some(MODEL_SNAPSHOT_FOR_TESTS.to_string()),
+                },
             }
         );
     }
@@ -1434,10 +1438,13 @@ mod tests {
         .expect("expected event to deserialize");
 
         assert_eq!(
-            ev.response_model_identity(),
-            ResponseModelIdentity {
-                final_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
-                model_snapshot: None,
+            ev.response_model_metadata(),
+            ResponseModelMetadata {
+                warning_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
+                execution_identity: ResponseModelIdentity {
+                    final_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
+                    model_snapshot: None,
+                },
             }
         );
     }
@@ -1458,12 +1465,14 @@ mod tests {
         }))
         .expect("expected event to deserialize");
 
-        assert_eq!(ev.response_model().as_deref(), Some("top-level-model"));
         assert_eq!(
-            ev.response_model_identity(),
-            ResponseModelIdentity {
-                final_model: None,
-                model_snapshot: Some(MODEL_SNAPSHOT_FOR_TESTS.to_string()),
+            ev.response_model_metadata(),
+            ResponseModelMetadata {
+                warning_model: Some("top-level-model".to_string()),
+                execution_identity: ResponseModelIdentity {
+                    final_model: None,
+                    model_snapshot: Some(MODEL_SNAPSHOT_FOR_TESTS.to_string()),
+                },
             }
         );
     }
