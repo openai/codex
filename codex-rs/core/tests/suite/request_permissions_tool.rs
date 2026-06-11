@@ -73,6 +73,19 @@ fn build_add_file_patch(patch_path: &Path, content: &str) -> String {
     )
 }
 
+fn guardian_allow_message(message_id: &str, rationale: &str) -> Value {
+    ev_assistant_message(
+        message_id,
+        &serde_json::json!({
+            "risk_level": "low",
+            "user_authorization": "high",
+            "outcome": "allow",
+            "rationale": rationale,
+        })
+        .to_string(),
+    )
+}
+
 fn workspace_write_excluding_tmp() -> PermissionProfile {
     PermissionProfile::workspace_write_with(
         &[],
@@ -287,6 +300,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
                 permissions: normalized_requested_permissions,
                 scope: PermissionGrantScope::Turn,
                 strict_auto_review: false,
+                approvals_reviewer: None,
             },
         })
         .await?;
@@ -334,13 +348,68 @@ async fn approved_folder_write_request_permissions_unblocks_later_apply_patch() 
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
-    apply_patch_after_request_permissions(/*strict_auto_review*/ false).await?;
-    apply_patch_after_request_permissions(/*strict_auto_review*/ true).await?;
+    for review_after_grant in [
+        ReviewAfterGrant::None,
+        ReviewAfterGrant::LegacyStrictAutoReview,
+        ReviewAfterGrant::ExplicitAutoReview,
+    ] {
+        apply_patch_after_request_permissions(review_after_grant).await?;
+    }
 
     Ok(())
 }
 
-async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Result<()> {
+#[derive(Clone, Copy)]
+enum ReviewAfterGrant {
+    None,
+    LegacyStrictAutoReview,
+    ExplicitAutoReview,
+}
+
+impl ReviewAfterGrant {
+    fn routes_to_guardian(self) -> bool {
+        match self {
+            Self::None => false,
+            Self::LegacyStrictAutoReview | Self::ExplicitAutoReview => true,
+        }
+    }
+
+    fn requested_file_name(self) -> &'static str {
+        match self {
+            Self::None => "allowed-patch.txt",
+            Self::LegacyStrictAutoReview => "strict-allowed-patch.txt",
+            Self::ExplicitAutoReview => "reviewer-override-allowed-patch.txt",
+        }
+    }
+
+    fn patch_content(self) -> &'static str {
+        match self {
+            Self::None => "patched-via-request-permissions",
+            Self::LegacyStrictAutoReview => "patched-after-strict-review",
+            Self::ExplicitAutoReview => "patched-after-reviewer-override",
+        }
+    }
+
+    fn response_prefix(self) -> &'static str {
+        match self {
+            Self::None => "resp-request-permissions-patch",
+            Self::LegacyStrictAutoReview => "resp-strict-request-permissions-patch",
+            Self::ExplicitAutoReview => "resp-reviewer-override-request-permissions-patch",
+        }
+    }
+
+    fn response(self, permissions: RequestPermissionProfile) -> RequestPermissionsResponse {
+        RequestPermissionsResponse {
+            permissions,
+            scope: PermissionGrantScope::Turn,
+            strict_auto_review: matches!(self, Self::LegacyStrictAutoReview),
+            approvals_reviewer: matches!(self, Self::ExplicitAutoReview)
+                .then_some(ApprovalsReviewer::AutoReview),
+        }
+    }
+}
+
+async fn apply_patch_after_request_permissions(review_after_grant: ReviewAfterGrant) -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let permission_profile = workspace_write_excluding_tmp();
@@ -364,16 +433,8 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
     let test = builder.build(&server).await?;
 
     let requested_dir = tempfile::tempdir()?;
-    let requested_file_name = if strict_auto_review {
-        "strict-allowed-patch.txt"
-    } else {
-        "allowed-patch.txt"
-    };
-    let patch_content = if strict_auto_review {
-        "patched-after-strict-review"
-    } else {
-        "patched-via-request-permissions"
-    };
+    let requested_file_name = review_after_grant.requested_file_name();
+    let patch_content = review_after_grant.patch_content();
     let requested_file = requested_dir
         .path()
         .canonicalize()?
@@ -383,11 +444,7 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
         normalized_directory_write_permissions(requested_dir.path())?;
     let patch = build_add_file_patch(&requested_file, patch_content);
 
-    let response_prefix = if strict_auto_review {
-        "resp-strict-request-permissions-patch"
-    } else {
-        "resp-request-permissions-patch"
-    };
+    let response_prefix = review_after_grant.response_prefix();
     let mut sse_sequence = vec![
         sse(vec![
             ev_response_created(&format!("{response_prefix}-1")),
@@ -404,18 +461,12 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
             ev_completed(&format!("{response_prefix}-2")),
         ]),
     ];
-    if strict_auto_review {
+    if review_after_grant.routes_to_guardian() {
         sse_sequence.push(sse(vec![
             ev_response_created(&format!("{response_prefix}-guardian")),
-            ev_assistant_message(
+            guardian_allow_message(
                 "msg-strict-request-permissions-patch-guardian",
-                &serde_json::json!({
-                    "risk_level": "low",
-                    "user_authorization": "high",
-                    "outcome": "allow",
-                    "rationale": "The patch stays within the strict turn grant.",
-                })
-                .to_string(),
+                "The patch stays within the turn grant.",
             ),
             ev_completed(&format!("{response_prefix}-guardian")),
         ]));
@@ -444,15 +495,11 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
     test.codex
         .submit(Op::RequestPermissionsResponse {
             id: "permissions-call".to_string(),
-            response: RequestPermissionsResponse {
-                permissions: normalized_requested_permissions,
-                scope: PermissionGrantScope::Turn,
-                strict_auto_review,
-            },
+            response: review_after_grant.response(normalized_requested_permissions),
         })
         .await?;
 
-    if strict_auto_review {
+    if review_after_grant.routes_to_guardian() {
         wait_for_completion(&test).await;
         let guardian_request = responses
             .requests()
@@ -508,6 +555,179 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
     assert_eq!(
         fs::read_to_string(&requested_file)?,
         format!("{patch_content}\n")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
+async fn session_request_permissions_reviewer_override_is_turn_scoped() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let permission_profile = workspace_write_excluding_tmp();
+    let permission_profile_for_config = permission_profile.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config
+            .permissions
+            .set_permission_profile(permission_profile_for_config)
+            .expect("set permission profile");
+        config
+            .features
+            .enable(Feature::ExecPermissionApprovals)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let requested_dir = tempfile::tempdir()?;
+    let first_file = requested_dir
+        .path()
+        .canonicalize()?
+        .join("session-reviewer-override-first.txt");
+    let second_file = requested_dir
+        .path()
+        .canonicalize()?
+        .join("session-reviewer-override-second.txt");
+    let requested_permissions = requested_directory_write_permissions(requested_dir.path());
+    let normalized_requested_permissions =
+        normalized_directory_write_permissions(requested_dir.path())?;
+    let first_patch = build_add_file_patch(&first_file, "first-turn-reviewed");
+    let second_patch = build_add_file_patch(&second_file, "second-turn-not-reviewed");
+
+    let first_turn = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-session-reviewer-override-1"),
+                request_permissions_tool_event(
+                    "permissions-call",
+                    "Allow patching outside the workspace",
+                    &requested_permissions,
+                )?,
+                ev_completed("resp-session-reviewer-override-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-session-reviewer-override-2"),
+                ev_apply_patch_custom_tool_call("apply-patch-call-1", &first_patch),
+                ev_completed("resp-session-reviewer-override-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-session-reviewer-override-guardian"),
+                guardian_allow_message(
+                    "msg-session-reviewer-override-guardian",
+                    "The patch stays within the session permission grant.",
+                ),
+                ev_completed("resp-session-reviewer-override-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-session-reviewer-override-3"),
+                ev_assistant_message("msg-session-reviewer-override-1", "done"),
+                ev_completed("resp-session-reviewer-override-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "grant session permissions and auto review this turn",
+        approval_policy,
+        permission_profile.clone(),
+        Some(ApprovalsReviewer::User),
+    )
+    .await?;
+
+    let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
+    assert_eq!(
+        granted_permissions,
+        normalized_requested_permissions.clone()
+    );
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: normalized_requested_permissions,
+                scope: PermissionGrantScope::Session,
+                strict_auto_review: false,
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let first_guardian_requests = first_turn
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request
+                .instructions_text()
+                .starts_with("You are judging one planned coding-agent action.")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(first_guardian_requests.len(), 1);
+    assert!(first_guardian_requests[0].body_contains_text("session-reviewer-override-first.txt"));
+    assert_eq!(fs::read_to_string(&first_file)?, "first-turn-reviewed\n");
+
+    let second_turn = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-session-reviewer-override-4"),
+                ev_apply_patch_custom_tool_call("apply-patch-call-2", &second_patch),
+                ev_completed("resp-session-reviewer-override-4"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-session-reviewer-override-guardian-unexpected"),
+                guardian_allow_message(
+                    "msg-session-reviewer-override-unexpected-guardian",
+                    "This response is only consumed if the reviewer override leaks.",
+                ),
+                ev_completed("resp-session-reviewer-override-guardian-unexpected"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-session-reviewer-override-5"),
+                ev_assistant_message("msg-session-reviewer-override-2", "done"),
+                ev_completed("resp-session-reviewer-override-5"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "reuse the session permission in a later turn",
+        approval_policy,
+        permission_profile,
+        Some(ApprovalsReviewer::User),
+    )
+    .await?;
+    wait_for_completion(&test).await;
+
+    assert_eq!(
+        fs::read_to_string(&second_file)?,
+        "second-turn-not-reviewed\n"
+    );
+    let second_guardian_requests = second_turn
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request
+                .instructions_text()
+                .starts_with("You are judging one planned coding-agent action.")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        second_guardian_requests.is_empty(),
+        "session-scoped permission grants must not carry the auto-review override into later turns"
     );
 
     Ok(())
