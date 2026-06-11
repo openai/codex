@@ -107,9 +107,6 @@ impl LiveThread {
         let include_archived = params.include_archived;
         thread_store.resume_thread(params.clone()).await?;
         if should_load_history {
-            // Let the store resolve any implementation-specific resume inputs before history is
-            // loaded. For the local store, an explicit rollout path becomes the live writer path
-            // during `resume_thread`, so this can stay a generic thread-id history read.
             match thread_store
                 .load_history(LoadThreadHistoryParams {
                     thread_id,
