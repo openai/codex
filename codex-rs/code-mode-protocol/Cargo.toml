@@ -1,29 +1,23 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "codex-code-mode"
+name = "codex-code-mode-protocol"
 version.workspace = true
 
 [lib]
 doctest = false
-name = "codex_code_mode"
+name = "codex_code_mode_protocol"
 path = "src/lib.rs"
-
-[features]
-sandbox = ["v8/v8_enable_sandbox"]
 
 [lints]
 workspace = true
 
 [dependencies]
-codex-code-mode-protocol = { workspace = true }
 codex-protocol = { workspace = true }
-deno_core_icudata = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "sync"] }
 tokio-util = { workspace = true, features = ["rt"] }
-tracing = { workspace = true }
-v8 = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
