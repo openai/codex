@@ -143,7 +143,7 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let metadata =
         lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
-    let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, metadata.as_ref());
+    let item_metadata = McpToolCallItemMetadata::from_tool_metadata(metadata.as_ref());
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
         let annotations = metadata
             .as_ref()
@@ -314,12 +314,9 @@ struct McpToolCallItemMetadata {
 }
 
 impl McpToolCallItemMetadata {
-    fn from_tool_metadata(server: &str, metadata: Option<&McpToolApprovalMetadata>) -> Self {
-        let trusted_mcp_app_metadata = if server == CODEX_APPS_MCP_SERVER_NAME {
-            metadata
-        } else {
-            None
-        };
+    fn from_tool_metadata(metadata: Option<&McpToolApprovalMetadata>) -> Self {
+        let trusted_mcp_app_metadata =
+            metadata.filter(|metadata| metadata.trusted_codex_apps_identity);
         Self {
             connector_id: trusted_mcp_app_metadata
                 .and_then(|metadata| metadata.connector_id.clone()),
@@ -1014,6 +1011,7 @@ enum McpToolApprovalDecision {
 
 pub(crate) struct McpToolApprovalMetadata {
     annotations: Option<ToolAnnotations>,
+    trusted_codex_apps_identity: bool,
     connector_id: Option<String>,
     link_id: Option<String>,
     connector_name: Option<String>,
@@ -1481,10 +1479,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     let plugin_id = manager
         .plugin_id_for_mcp_server_name(server)
         .map(str::to_string);
-    let tools = manager.list_all_tools().await;
-    let tool_info = tools
-        .into_iter()
-        .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
+    let tool_info = manager.tool_info_for_invocation(server, tool_name).await?;
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
@@ -1511,6 +1506,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
 
     Some(McpToolApprovalMetadata {
         annotations: tool_info.tool.annotations,
+        trusted_codex_apps_identity: manager.is_host_owned_codex_apps_server(server),
         connector_id: tool_info.connector_id,
         link_id: tool_info
             .tool

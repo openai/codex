@@ -572,16 +572,9 @@ impl ThreadHistoryBuilder {
 
     fn handle_item_started(&mut self, payload: &ItemStartedEvent) {
         match &payload.item {
-            codex_protocol::items::TurnItem::Plan(plan) => {
-                if plan.text.is_empty() {
-                    return;
-                }
-                self.upsert_item_in_turn_id(
-                    &payload.turn_id,
-                    ThreadItem::from(payload.item.clone()),
-                );
-            }
-            codex_protocol::items::TurnItem::Sleep(_)
+            codex_protocol::items::TurnItem::Plan(plan) if plan.text.is_empty() => {}
+            codex_protocol::items::TurnItem::Plan(_)
+            | codex_protocol::items::TurnItem::Sleep(_)
             | codex_protocol::items::TurnItem::McpToolCall(_) => {
                 self.upsert_item_in_turn_id(
                     &payload.turn_id,
@@ -611,7 +604,8 @@ impl ThreadHistoryBuilder {
                     ThreadItem::from(payload.item.clone()),
                 );
             }
-            codex_protocol::items::TurnItem::Sleep(_) => {
+            codex_protocol::items::TurnItem::Sleep(_)
+            | codex_protocol::items::TurnItem::McpToolCall(_) => {
                 self.upsert_item_in_turn_id(
                     &payload.turn_id,
                     ThreadItem::from(payload.item.clone()),
@@ -625,7 +619,6 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
             | codex_protocol::items::TurnItem::FileChange(_)
-            | codex_protocol::items::TurnItem::McpToolCall(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
     }
@@ -756,9 +749,7 @@ impl ThreadHistoryBuilder {
 
     fn handle_mcp_tool_call_begin(&mut self, payload: &McpToolCallBeginEvent) {
         // The canonical started item carries app identity that this deprecated event cannot.
-        if self.ensure_turn().items.iter().any(
-            |item| matches!(item, ThreadItem::McpToolCall { id, .. } if id == &payload.call_id),
-        ) {
+        if self.contains_item(&payload.call_id) {
             return;
         }
         let item = ThreadItem::McpToolCall {
@@ -823,7 +814,11 @@ impl ThreadHistoryBuilder {
             error,
             duration_ms,
         };
-        self.upsert_item_in_current_turn(item);
+        if payload.turn_id.is_empty() {
+            self.upsert_item_in_current_turn(item);
+        } else {
+            self.upsert_item_in_turn_id(&payload.turn_id, item);
+        }
     }
 
     fn handle_view_image_tool_call(&mut self, payload: &ViewImageToolCallEvent) {
@@ -1409,6 +1404,16 @@ impl ThreadHistoryBuilder {
         }
     }
 
+    fn contains_item(&self, item_id: &str) -> bool {
+        self.current_turn
+            .as_ref()
+            .is_some_and(|turn| turn.items.iter().any(|item| item.id() == item_id))
+            || self
+                .turns
+                .iter()
+                .any(|turn| turn.items.iter().any(|item| item.id() == item_id))
+    }
+
     fn next_item_id(&mut self) -> String {
         let id = format!("item-{}", self.next_item_index);
         self.next_item_index += 1;
@@ -1856,7 +1861,7 @@ mod tests {
     }
 
     #[test]
-    fn active_turn_snapshot_preserves_started_mcp_app_identity() {
+    fn deprecated_mcp_begin_does_not_overwrite_started_item_app_identity() {
         let turn_id = "turn-1";
         let call_id = "mcp-1";
         let arguments = serde_json::json!({"title":"Planning"});
@@ -1909,13 +1914,213 @@ mod tests {
                 arguments,
                 connector_id: Some("calendar".into()),
                 mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
-                link_id: Some("link_calendar".into(),),
+                link_id: Some("link_calendar".into()),
                 plugin_id: Some("sample@test".into()),
                 result: None,
                 error: None,
                 duration_ms: None,
             }]
         );
+    }
+
+    #[test]
+    fn canonical_mcp_completion_stays_with_original_turn() {
+        let first_turn_id = "turn-1";
+        let call_id = "mcp-1";
+        let invocation = McpInvocation {
+            server: "codex_apps".into(),
+            tool: "calendar_create_event".into(),
+            arguments: Some(serde_json::json!({"title":"Planning"})),
+        };
+        let result = CallToolResult {
+            content: vec![serde_json::json!({"type":"text","text":"created"})],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+        let item = |status, result, duration| {
+            CoreTurnItem::McpToolCall(CoreMcpToolCallItem {
+                id: call_id.into(),
+                server: invocation.server.clone(),
+                tool: invocation.tool.clone(),
+                arguments: invocation.arguments.clone().expect("arguments"),
+                connector_id: Some("calendar".into()),
+                mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
+                link_id: Some("link_calendar".into()),
+                plugin_id: Some("sample@test".into()),
+                status,
+                result,
+                error: None,
+                duration,
+            })
+        };
+        let mut builder = ThreadHistoryBuilder::new();
+        builder.handle_event(&EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: first_turn_id.into(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        }));
+        builder.handle_event(&EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: first_turn_id.into(),
+            item: item(CoreMcpToolCallStatus::InProgress, None, None),
+            started_at_ms: 0,
+        }));
+        builder.handle_event(&EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-2".into(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        }));
+        builder.handle_event(&EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: first_turn_id.into(),
+            item: item(
+                CoreMcpToolCallStatus::Completed,
+                Some(result.clone()),
+                Some(Duration::from_millis(42)),
+            ),
+            completed_at_ms: 0,
+        }));
+        builder.handle_event(&EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id: call_id.into(),
+            turn_id: first_turn_id.into(),
+            invocation,
+            connector_id: Some("calendar".into()),
+            mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
+            link_id: Some("link_calendar".into()),
+            plugin_id: Some("sample@test".into()),
+            duration: Duration::from_millis(42),
+            result: Ok(result),
+        }));
+
+        let turns = builder.finish();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(
+            turns[0].items,
+            vec![ThreadItem::McpToolCall {
+                id: call_id.into(),
+                server: "codex_apps".into(),
+                tool: "calendar_create_event".into(),
+                status: McpToolCallStatus::Completed,
+                arguments: serde_json::json!({"title":"Planning"}),
+                connector_id: Some("calendar".into()),
+                mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
+                link_id: Some("link_calendar".into()),
+                plugin_id: Some("sample@test".into()),
+                result: Some(Box::new(McpToolCallResult {
+                    content: vec![serde_json::json!({"type":"text","text":"created"})],
+                    structured_content: None,
+                    meta: None,
+                })),
+                error: None,
+                duration_ms: Some(42),
+            }]
+        );
+        assert!(turns[1].items.is_empty());
+    }
+
+    #[test]
+    fn persisted_mcp_completion_stays_with_original_turn() {
+        let mut builder = ThreadHistoryBuilder::new();
+        for turn_id in ["turn-1", "turn-2"] {
+            builder.handle_event(&EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.into(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }));
+        }
+        builder.handle_event(&EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id: "mcp-1".into(),
+            turn_id: "turn-1".into(),
+            invocation: McpInvocation {
+                server: "codex_apps".into(),
+                tool: "calendar_create_event".into(),
+                arguments: Some(serde_json::json!({"title":"Planning"})),
+            },
+            connector_id: Some("calendar".into()),
+            mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
+            link_id: Some("link_calendar".into()),
+            plugin_id: Some("sample@test".into()),
+            duration: Duration::from_millis(42),
+            result: Ok(CallToolResult {
+                content: vec![serde_json::json!({"type":"text","text":"created"})],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        }));
+
+        let turns = builder.finish();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(
+            turns[0].items,
+            vec![ThreadItem::McpToolCall {
+                id: "mcp-1".into(),
+                server: "codex_apps".into(),
+                tool: "calendar_create_event".into(),
+                status: McpToolCallStatus::Completed,
+                arguments: serde_json::json!({"title":"Planning"}),
+                connector_id: Some("calendar".into()),
+                mcp_app_resource_uri: Some("ui://widget/calendar-create-event.html".into()),
+                link_id: Some("link_calendar".into()),
+                plugin_id: Some("sample@test".into()),
+                result: Some(Box::new(McpToolCallResult {
+                    content: vec![serde_json::json!({"type":"text","text":"created"})],
+                    structured_content: None,
+                    meta: None,
+                })),
+                error: None,
+                duration_ms: Some(42),
+            }]
+        );
+        assert!(turns[1].items.is_empty());
+    }
+
+    #[test]
+    fn legacy_mcp_end_replaces_legacy_begin() {
+        let invocation = McpInvocation {
+            server: "docs".into(),
+            tool: "lookup".into(),
+            arguments: Some(serde_json::json!({"id":"123"})),
+        };
+        let mut builder = ThreadHistoryBuilder::new();
+        builder.handle_event(&EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: "mcp-1".into(),
+            invocation: invocation.clone(),
+            mcp_app_resource_uri: None,
+            plugin_id: None,
+        }));
+        builder.handle_event(&EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id: "mcp-1".into(),
+            turn_id: String::new(),
+            invocation,
+            connector_id: None,
+            mcp_app_resource_uri: None,
+            link_id: None,
+            plugin_id: None,
+            duration: Duration::from_millis(8),
+            result: Ok(CallToolResult {
+                content: vec![serde_json::json!({"type":"text","text":"ok"})],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        }));
+
+        assert!(matches!(
+            builder.active_turn_snapshot().expect("active turn").items.as_slice(),
+            [ThreadItem::McpToolCall {
+                status: McpToolCallStatus::Completed,
+                duration_ms: Some(8),
+                ..
+            }]
+        ));
     }
 
     #[test]
@@ -2467,6 +2672,7 @@ mod tests {
             }),
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: "mcp-1".into(),
+                turn_id: "turn-1".into(),
                 invocation: McpInvocation {
                     server: "docs".into(),
                     tool: "lookup".into(),
@@ -2549,6 +2755,7 @@ mod tests {
             }),
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: "mcp-1".into(),
+                turn_id: "turn-1".into(),
                 invocation: McpInvocation {
                     server: "docs".into(),
                     tool: "lookup".into(),
@@ -2589,7 +2796,7 @@ mod tests {
                 arguments: serde_json::json!({"id":"123"}),
                 connector_id: Some("calendar".into()),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
-                link_id: Some("link_calendar".into(),),
+                link_id: Some("link_calendar".into()),
                 plugin_id: Some("sample@test".into()),
                 result: Some(Box::new(McpToolCallResult {
                     content: vec![serde_json::json!({

@@ -848,6 +848,43 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
 }
 
 #[tokio::test]
+async fn tool_info_for_invocation_waits_for_live_client_despite_startup_snapshot() {
+    let startup_tools = vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "calendar_create_event",
+    )];
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(10),
+        manager.tool_info_for_invocation(CODEX_APPS_MCP_SERVER_NAME, "calendar_create_event"),
+    )
+    .await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
 async fn list_available_server_infos_uses_cache_while_client_is_pending() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()

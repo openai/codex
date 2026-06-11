@@ -882,6 +882,7 @@ fn append_resume_redaction_history(
     let appended_rollout = [
         EventMsg::McpToolCallEnd(McpToolCallEndEvent {
             call_id: "mcp-1".to_string(),
+            turn_id: "turn-1".to_string(),
             invocation: McpInvocation {
                 server: "docs".to_string(),
                 tool: "lookup".to_string(),

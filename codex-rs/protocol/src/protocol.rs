@@ -1795,6 +1795,10 @@ impl HasLegacyEvent for ItemCompletedEvent {
                 .as_legacy_end_event(self.turn_id.clone())
                 .into_iter()
                 .collect(),
+            TurnItem::McpToolCall(item) => item
+                .as_legacy_end_event(self.turn_id.clone())
+                .into_iter()
+                .collect(),
             _ => self.item.as_legacy_events(show_raw_agent_reasoning),
         }
     }
@@ -2334,6 +2338,8 @@ pub struct McpToolCallBeginEvent {
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
+    #[serde(default)]
+    pub turn_id: String,
     pub invocation: McpInvocation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -5076,6 +5082,7 @@ mod tests {
         match &legacy_events[0] {
             EventMsg::McpToolCallEnd(event) => {
                 assert_eq!(event.call_id, "mcp-1");
+                assert_eq!(event.turn_id, "turn-1");
                 assert_eq!(event.invocation.server, "server");
                 assert_eq!(event.invocation.tool, "tool");
                 assert_eq!(event.connector_id.as_deref(), Some("connector"));
@@ -5093,9 +5100,10 @@ mod tests {
     }
 
     #[test]
-    fn mcp_tool_call_end_event_defaults_missing_app_identity() {
+    fn mcp_tool_call_end_event_defaults_missing_turn_and_app_identity() {
         let event = McpToolCallEndEvent {
             call_id: "mcp-1".into(),
+            turn_id: "turn-1".into(),
             invocation: McpInvocation {
                 server: "server".into(),
                 tool: "tool".into(),
@@ -5119,6 +5127,7 @@ mod tests {
             .expect("MCP tool call end event should serialize as an object");
         object.remove("connector_id");
         object.remove("link_id");
+        object.remove("turn_id");
 
         let deserialized: McpToolCallEndEvent =
             serde_json::from_value(value).expect("deserialize legacy MCP tool call end event");
@@ -5126,6 +5135,7 @@ mod tests {
         assert_eq!(
             deserialized,
             McpToolCallEndEvent {
+                turn_id: String::new(),
                 connector_id: None,
                 link_id: None,
                 ..event
