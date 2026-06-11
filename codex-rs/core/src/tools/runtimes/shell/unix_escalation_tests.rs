@@ -9,8 +9,11 @@ use super::join_program_and_argv;
 use super::map_exec_result;
 use crate::config::Constrained;
 use crate::guardian::can_fallback_to_manual_after_guardian_timeout;
+use crate::guardian::guardian_timeout_message;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::tests::make_session_and_context;
+use crate::session::tests::make_session_and_context_with_rx;
+use crate::state::ActiveTurn;
 use anyhow::Context;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
@@ -31,8 +34,10 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianCommandSource;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
@@ -141,6 +146,71 @@ fn execve_guardian_timeout_manual_fallback_is_limited_to_interactive_sources() {
     assert!(!can_fallback_to_manual_after_guardian_timeout(
         &SessionSource::Exec
     ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn execve_guardian_timeout_falls_back_to_manual_approval() -> anyhow::Result<()> {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    Arc::get_mut(&mut turn_context)
+        .expect("turn context should be unique")
+        .manual_approval_fallback_enabled = true;
+
+    let approval_id = "execve-approval".to_string();
+    let command = vec![
+        "/usr/bin/touch".to_string(),
+        "/tmp/execve-guardian-timeout-fallback".to_string(),
+    ];
+    let workdir = AbsolutePathBuf::try_from(std::env::current_dir()?)?;
+    let prompt_request = super::ExecvePromptRequest {
+        session: Arc::clone(&session),
+        turn: Arc::clone(&turn_context),
+        call_id: "execve-call".to_string(),
+        approval_id: Some(approval_id.clone()),
+        command: command.clone(),
+        workdir: workdir.clone(),
+        additional_permissions: None,
+    };
+
+    let prompt_handle = tokio::spawn(async move {
+        prompt_request
+            .resolve_guardian_decision(
+                Some("guardian-review-id".to_string()),
+                ReviewDecision::TimedOut,
+            )
+            .await
+    });
+
+    let event = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .context("timed out waiting for execve approval request")??;
+    let EventMsg::ExecApprovalRequest(approval) = event.msg else {
+        panic!("expected exec approval request event");
+    };
+    assert_eq!(approval.effective_approval_id(), approval_id);
+    assert_eq!(approval.command, command);
+    assert_eq!(approval.cwd, workdir);
+    assert_eq!(approval.reason, Some(guardian_timeout_message()));
+    assert_eq!(
+        approval.available_decisions,
+        Some(vec![ReviewDecision::Approved, ReviewDecision::Abort])
+    );
+
+    session
+        .notify_approval(&approval.effective_approval_id(), ReviewDecision::Approved)
+        .await;
+    let prompt_decision = tokio::time::timeout(Duration::from_secs(1), prompt_handle)
+        .await
+        .context("timed out waiting for manual approval decision")??;
+    assert_eq!(
+        prompt_decision.decision,
+        ReviewDecision::Approved,
+        "manual approval should replace the Guardian timeout decision"
+    );
+    assert_eq!(prompt_decision.guardian_review_id, None);
+    assert_eq!(prompt_decision.rejection_message, None);
+
+    Ok(())
 }
 
 #[test]
