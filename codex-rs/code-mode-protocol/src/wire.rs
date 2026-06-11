@@ -16,7 +16,10 @@ use crate::RuntimeResponse;
 use crate::WaitOutcome;
 use crate::WaitRequest;
 
-const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+// Keep allocations from untrusted frame lengths bounded while leaving enough
+// room for large inline image results. These are base64 encoded and can easily
+// exceed the previous 16 MiB limit before downstream output truncation runs.
+const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
 
 pub type RequestId = u64;
 pub type SessionId = u64;
