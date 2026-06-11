@@ -1414,7 +1414,7 @@ pub(super) fn plugins_test_detail(
     description: Option<&str>,
     skills: &[&str],
     hooks: &[(codex_app_server_protocol::HookEventName, usize)],
-    apps: &[(&str, bool)],
+    apps: &[&str],
     mcp_servers: &[&str],
 ) -> PluginDetail {
     PluginDetail {
@@ -1449,12 +1449,11 @@ pub(super) fn plugins_test_detail(
             .collect(),
         apps: apps
             .iter()
-            .map(|(name, needs_auth)| AppSummary {
+            .map(|name| AppSummary {
                 id: format!("{name}-id"),
                 name: (*name).to_string(),
                 description: Some(format!("{name} app")),
                 install_url: Some(format!("https://example.test/{name}")),
-                needs_auth: *needs_auth,
             })
             .collect(),
         app_templates: Vec::new(),

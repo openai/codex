@@ -1035,14 +1035,7 @@ impl PluginRequestProcessor {
                     }
                     None => None,
                 };
-                let environment_manager = self.thread_manager.environment_manager();
-                let app_summaries = load_plugin_app_summaries(
-                    &config,
-                    &outcome.plugin.apps,
-                    Arc::clone(&environment_manager),
-                    self.thread_manager.mcp_manager(),
-                )
-                .await;
+                let app_summaries = load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
                 let visible_skills = outcome
                     .plugin
                     .skills
@@ -1118,14 +1111,7 @@ impl PluginRequestProcessor {
                     .cloned()
                     .map(codex_plugin::AppConnectorId)
                     .collect::<Vec<_>>();
-                let environment_manager = self.thread_manager.environment_manager();
-                let app_summaries = load_plugin_app_summaries(
-                    &config,
-                    &plugin_apps,
-                    Arc::clone(&environment_manager),
-                    self.thread_manager.mcp_manager(),
-                )
-                .await;
+                let app_summaries = load_plugin_app_summaries(&config, &plugin_apps).await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
@@ -1582,7 +1568,6 @@ impl PluginRequestProcessor {
                             name: connector.name,
                             description: connector.description,
                             install_url: connector.install_url,
-                            needs_auth: true,
                         })
                         .collect()
                 }
@@ -1887,8 +1872,6 @@ impl PluginRequestProcessor {
 async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[codex_plugin::AppConnectorId],
-    environment_manager: Arc<EnvironmentManager>,
-    mcp_manager: Arc<McpManager>,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
@@ -1906,49 +1889,9 @@ async fn load_plugin_app_summaries(
         };
 
     let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
-
-    let accessible_connectors =
-        match connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
-            config,
-            /*force_refetch*/ false,
-            environment_manager,
-            mcp_manager,
-        )
-        .await
-        {
-            Ok(status) if status.codex_apps_ready => status.connectors,
-            Ok(_) => {
-                return plugin_connectors
-                    .into_iter()
-                    .map(AppSummary::from)
-                    .collect();
-            }
-            Err(err) => {
-                warn!("failed to load app auth state for plugin/read: {err:#}");
-                return plugin_connectors
-                    .into_iter()
-                    .map(AppSummary::from)
-                    .collect();
-            }
-        };
-
-    let accessible_ids = accessible_connectors
-        .iter()
-        .map(|connector| connector.id.as_str())
-        .collect::<HashSet<_>>();
-
     plugin_connectors
         .into_iter()
-        .map(|connector| {
-            let needs_auth = !accessible_ids.contains(connector.id.as_str());
-            AppSummary {
-                id: connector.id,
-                name: connector.name,
-                description: connector.description,
-                install_url: connector.install_url,
-                needs_auth,
-            }
-        })
+        .map(AppSummary::from)
         .collect()
 }
 
@@ -1983,7 +1926,6 @@ fn plugin_apps_needing_auth(
             name: connector.name,
             description: connector.description,
             install_url: connector.install_url,
-            needs_auth: true,
         })
         .collect()
 }
