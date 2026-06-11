@@ -25,6 +25,7 @@ use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_RESOURCE_URI;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_CREATE_EVENT_TOOL as CALENDAR_CREATE_TOOL;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_LIST_EVENTS_TOOL as CALENDAR_LIST_TOOL;
+use core_test_support::apps_test_server::LINK_ID;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_APP_ONLY_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_LIST_TOOL;
@@ -564,10 +565,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         end.mcp_app_resource_uri.as_deref(),
         Some(CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI)
     );
-    assert_eq!(
-        end.mcp_app_invoked_resource_uri.as_deref(),
-        Some(CALENDAR_CREATE_EVENT_RESOURCE_URI)
-    );
+    assert_eq!(end.link_id.as_deref(), Some(LINK_ID));
     assert_eq!(
         end.invocation,
         McpInvocation {

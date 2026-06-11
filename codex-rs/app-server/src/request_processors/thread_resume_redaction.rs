@@ -80,7 +80,7 @@ mod tests {
                 arguments: serde_json::json!({"secret":"argument"}),
                 connector_id: Some("calendar".to_string()),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
-                mcp_app_invoked_resource_uri: Some("connector://calendar/tools/lookup".to_string()),
+                link_id: Some("link_calendar".to_string()),
                 plugin_id: Some("sample@test".to_string()),
                 result: Some(Box::new(McpToolCallResult {
                     content: vec![serde_json::json!({
@@ -124,7 +124,7 @@ mod tests {
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
                 connector_id: Some("calendar".to_string()),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
-                mcp_app_invoked_resource_uri: Some("connector://calendar/tools/lookup".to_string(),),
+                link_id: Some("link_calendar".to_string(),),
                 plugin_id: Some("sample@test".to_string()),
                 result: Some(Box::new(redacted_mcp_tool_call_result())),
                 error: None,
@@ -143,7 +143,7 @@ mod tests {
             arguments: serde_json::json!({"secret":"argument"}),
             connector_id: None,
             mcp_app_resource_uri: None,
-            mcp_app_invoked_resource_uri: None,
+            link_id: None,
             plugin_id: None,
             result: None,
             error: Some(McpToolCallError {
@@ -164,7 +164,7 @@ mod tests {
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
                 connector_id: None,
                 mcp_app_resource_uri: None,
-                mcp_app_invoked_resource_uri: None,
+                link_id: None,
                 plugin_id: None,
                 result: None,
                 error: Some(McpToolCallError {

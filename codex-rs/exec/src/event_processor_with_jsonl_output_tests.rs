@@ -100,7 +100,7 @@ fn mcp_tool_call_result_preserves_meta_in_jsonl_event() {
                 arguments: json!({"search_query": [{"q": "OpenAI Codex CLI documentation"}]}),
                 connector_id: None,
                 mcp_app_resource_uri: None,
-                mcp_app_invoked_resource_uri: None,
+                link_id: None,
                 plugin_id: None,
                 result: Some(Box::new(codex_app_server_protocol::McpToolCallResult {
                     content: vec![json!({"type": "text", "text": "search result"})],

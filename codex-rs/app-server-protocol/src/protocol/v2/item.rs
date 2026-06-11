@@ -294,7 +294,7 @@ pub enum ThreadItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         mcp_app_resource_uri: Option<String>,
-        mcp_app_invoked_resource_uri: Option<String>,
+        link_id: Option<String>,
         plugin_id: Option<String>,
         result: Option<Box<McpToolCallResult>>,
         error: Option<McpToolCallError>,
@@ -881,7 +881,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     arguments: mcp.arguments,
                     connector_id: mcp.connector_id,
                     mcp_app_resource_uri: mcp.mcp_app_resource_uri,
-                    mcp_app_invoked_resource_uri: mcp.mcp_app_invoked_resource_uri,
+                    link_id: mcp.link_id,
                     plugin_id: mcp.plugin_id,
                     result: mcp.result.map(McpToolCallResult::from).map(Box::new),
                     error: mcp.error.map(McpToolCallError::from),

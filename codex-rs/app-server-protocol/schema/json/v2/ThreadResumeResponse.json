@@ -1448,7 +1448,7 @@
             "id": {
               "type": "string"
             },
-            "mcpAppInvokedResourceUri": {
+            "linkId": {
               "type": [
                 "string",
                 "null"

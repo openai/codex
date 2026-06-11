@@ -480,7 +480,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 arguments: json!({ "key": "value" }),
                 connector_id: None,
                 mcp_app_resource_uri: None,
-                mcp_app_invoked_resource_uri: None,
+                link_id: None,
                 plugin_id: None,
                 result: None,
                 error: None,
@@ -500,7 +500,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 arguments: json!({ "key": "value" }),
                 connector_id: None,
                 mcp_app_resource_uri: None,
-                mcp_app_invoked_resource_uri: None,
+                link_id: None,
                 plugin_id: None,
                 result: Some(Box::new(McpToolCallResult {
                     content: Vec::new(),
@@ -574,7 +574,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
                 arguments: json!({ "param": 42 }),
                 connector_id: None,
                 mcp_app_resource_uri: None,
-                mcp_app_invoked_resource_uri: None,
+                link_id: None,
                 plugin_id: None,
                 result: None,
                 error: Some(McpToolCallError {
@@ -625,7 +625,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                 arguments: serde_json::Value::Null,
                 connector_id: None,
                 mcp_app_resource_uri: None,
-                mcp_app_invoked_resource_uri: None,
+                link_id: None,
                 plugin_id: None,
                 result: None,
                 error: None,
@@ -645,7 +645,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                 arguments: serde_json::Value::Null,
                 connector_id: None,
                 mcp_app_resource_uri: None,
-                mcp_app_invoked_resource_uri: None,
+                link_id: None,
                 plugin_id: None,
                 result: Some(Box::new(McpToolCallResult {
                     content: vec![json!({

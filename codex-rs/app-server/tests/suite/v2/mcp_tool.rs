@@ -515,7 +515,7 @@ url = "{mcp_server_url}/mcp"
         arguments: json!({ "message": LARGE_RESPONSE_MESSAGE }),
         connector_id: None,
         mcp_app_resource_uri: None,
-        mcp_app_invoked_resource_uri: None,
+        link_id: None,
         plugin_id: None,
         result: Some(result),
         error: None,
