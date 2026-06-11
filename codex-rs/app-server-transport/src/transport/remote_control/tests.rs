@@ -305,7 +305,6 @@ fn remote_control_handle_with_current_enrollment(
         desired_state_rpc_lock: Arc::new(Semaphore::new(1)),
         desired_state_persistence_lock: Arc::new(Semaphore::new(1)),
         status_tx: Arc::new(status_tx),
-        state_db_available: true,
         state_db: None,
         remote_control_url: remote_control_url.to_string(),
         current_enrollment,
@@ -315,12 +314,14 @@ fn remote_control_handle_with_current_enrollment(
     }
 }
 
-#[test]
-fn ephemeral_enable_preserves_durable_preference() {
-    let remote_handle = remote_control_handle_with_current_enrollment(
+#[tokio::test]
+async fn ephemeral_enable_preserves_durable_preference() {
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let mut remote_handle = remote_control_handle_with_current_enrollment(
         TEST_REMOTE_CONTROL_URL,
         remote_control_auth_manager(),
     );
+    remote_handle.state_db = Some(remote_control_state_runtime(&codex_home).await);
     remote_handle
         .desired_state_tx
         .send_replace(RemoteControlDesiredState::Enabled {

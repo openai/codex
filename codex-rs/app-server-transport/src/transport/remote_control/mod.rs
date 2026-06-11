@@ -99,7 +99,6 @@ pub struct RemoteControlHandle {
     desired_state_rpc_lock: Arc<Semaphore>,
     desired_state_persistence_lock: Arc<Semaphore>,
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
-    state_db_available: bool,
     state_db: Option<Arc<StateRuntime>>,
     remote_control_url: String,
     current_enrollment: CurrentRemoteControlEnrollment,
@@ -207,7 +206,7 @@ impl RemoteControlHandle {
         &self,
         persistence_preference: Option<bool>,
     ) -> Result<RemoteControlStatusChangedNotification, RemoteControlUnavailable> {
-        if !self.state_db_available {
+        if self.state_db.is_none() {
             warn!("remote control cannot be enabled because sqlite state db is unavailable");
             return Err(RemoteControlUnavailable);
         }
@@ -1000,7 +999,6 @@ pub async fn start_remote_control(
             desired_state_rpc_lock,
             desired_state_persistence_lock,
             status_tx: Arc::new(status_tx),
-            state_db_available,
             state_db: handle_state_db,
             remote_control_url: handle_remote_control_url,
             current_enrollment,
