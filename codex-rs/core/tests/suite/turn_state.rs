@@ -16,6 +16,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
 
 const TURN_STATE_HEADER: &str = "x-codex-turn-state";
 
@@ -91,56 +92,66 @@ async fn responses_turn_state_persists_within_turn_and_resets_after() -> Result<
 async fn websocket_turn_state_persists_within_turn_and_resets_after() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let call_id = "ws-shell-turn-state";
-    // First connection delivers turn_state; second (same turn) must send it; third (new turn) must not.
-    let server = start_websocket_server_with_headers(vec![
-        WebSocketConnectionConfig {
-            requests: vec![vec![
+    let first_call_id = "ws-shell-turn-state-1";
+    let second_call_id = "ws-shell-turn-state-2";
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![
+                json!({
+                    "type": "codex.response.metadata",
+                    "headers": {(TURN_STATE_HEADER): "ts-1"},
+                }),
                 ev_response_created("resp-1"),
                 ev_reasoning_item("rsn-1", &["thinking"], &[]),
-                ev_shell_command_call(call_id, "echo websocket"),
+                ev_shell_command_call(first_call_id, "echo websocket one"),
                 ev_completed("resp-1"),
-            ]],
-            response_headers: vec![(TURN_STATE_HEADER.to_string(), "ts-1".to_string())],
-            accept_delay: None,
-            close_after_requests: true,
-        },
-        WebSocketConnectionConfig {
-            requests: vec![vec![
+            ],
+            vec![
                 ev_response_created("resp-2"),
                 ev_assistant_message("msg-1", "done"),
                 ev_completed("resp-2"),
-            ]],
-            response_headers: Vec::new(),
-            accept_delay: None,
-            close_after_requests: true,
-        },
-        WebSocketConnectionConfig {
-            requests: vec![vec![
+            ],
+            vec![
+                json!({
+                    "type": "codex.response.metadata",
+                    "headers": {(TURN_STATE_HEADER): "ts-2"},
+                }),
                 ev_response_created("resp-3"),
-                ev_assistant_message("msg-2", "done"),
+                ev_reasoning_item("rsn-2", &["thinking"], &[]),
+                ev_shell_command_call(second_call_id, "echo websocket two"),
                 ev_completed("resp-3"),
-            ]],
-            response_headers: Vec::new(),
-            accept_delay: None,
-            close_after_requests: true,
-        },
-    ])
+            ],
+            vec![
+                ev_response_created("resp-4"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-4"),
+            ],
+        ],
+        // The request-scoped metadata token must win over any connection-scoped handshake token.
+        response_headers: vec![(
+            TURN_STATE_HEADER.to_string(),
+            "stale-handshake-state".to_string(),
+        )],
+        accept_delay: None,
+        close_after_requests: false,
+    }])
     .await;
 
     let mut builder = test_codex();
     let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn("run the echo command").await?;
-    test.submit_turn("second turn").await?;
+    test.submit_turn("run another echo command").await?;
 
-    let handshakes = server.handshakes();
-    assert_eq!(handshakes.len(), 3);
-    assert_eq!(handshakes[0].header(TURN_STATE_HEADER), None);
+    assert_eq!(server.handshakes().len(), 1);
+    let requests = server.single_connection();
+    assert_eq!(requests.len(), 4);
     assert_eq!(
-        handshakes[1].header(TURN_STATE_HEADER),
-        Some("ts-1".to_string())
+        requests
+            .iter()
+            .map(|request| request.body_json()["client_metadata"][TURN_STATE_HEADER].clone())
+            .collect::<Vec<_>>(),
+        vec![json!(""), json!("ts-1"), json!(""), json!("ts-2")]
     );
-    assert_eq!(handshakes[2].header(TURN_STATE_HEADER), None);
 
     server.shutdown().await;
     Ok(())

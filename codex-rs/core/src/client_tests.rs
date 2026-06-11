@@ -5,6 +5,7 @@ use super::UnauthorizedRecoveryExecution;
 use super::X_CODEX_INSTALLATION_ID_HEADER;
 use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
+use super::X_CODEX_TURN_STATE_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
 use crate::AttestationContext;
@@ -311,8 +312,12 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
         Some(parent_thread_id),
         TestCodexResponsesRequestKind::Turn,
     );
-    let client_metadata =
-        client.build_ws_client_metadata(&responses_metadata, /*use_responses_lite*/ false);
+    let turn_state = super::ModelTurnState::new("gpt-test");
+    let client_metadata = client.build_ws_client_metadata(
+        &responses_metadata,
+        &turn_state,
+        /*use_responses_lite*/ false,
+    );
     let parent_thread_id = parent_thread_id.to_string();
     let turn_metadata: serde_json::Value = serde_json::from_str(
         client_metadata
@@ -351,6 +356,12 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             .get(X_OPENAI_SUBAGENT_HEADER)
             .map(String::as_str),
         Some("collab_spawn")
+    );
+    assert_eq!(
+        client_metadata
+            .get(X_CODEX_TURN_STATE_HEADER)
+            .map(String::as_str),
+        Some("")
     );
 }
 

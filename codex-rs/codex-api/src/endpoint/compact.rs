@@ -3,6 +3,7 @@ use crate::common::CompactionInput;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use crate::sse::responses::capture_turn_state;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::models::ResponseItem;
@@ -11,6 +12,7 @@ use http::Method;
 use serde::Deserialize;
 use serde_json::to_value;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 pub struct CompactClient<T: HttpTransport> {
@@ -40,6 +42,22 @@ impl<T: HttpTransport> CompactClient<T> {
         extra_headers: HeaderMap,
         request_timeout: Duration,
     ) -> Result<Vec<ResponseItem>, ApiError> {
+        self.compact_with_turn_state(
+            body,
+            extra_headers,
+            request_timeout,
+            /*turn_state*/ None,
+        )
+        .await
+    }
+
+    pub async fn compact_with_turn_state(
+        &self,
+        body: serde_json::Value,
+        extra_headers: HeaderMap,
+        request_timeout: Duration,
+        turn_state: Option<Arc<OnceLock<String>>>,
+    ) -> Result<Vec<ResponseItem>, ApiError> {
         let resp = self
             .session
             .execute_with(
@@ -52,6 +70,9 @@ impl<T: HttpTransport> CompactClient<T> {
                 },
             )
             .await?;
+        if let Some(turn_state) = turn_state.as_deref() {
+            capture_turn_state(&resp.headers, turn_state);
+        }
         let parsed: CompactHistoryResponse =
             serde_json::from_slice(&resp.body).map_err(|e| ApiError::Stream(e.to_string()))?;
         Ok(parsed.output)
@@ -63,9 +84,26 @@ impl<T: HttpTransport> CompactClient<T> {
         extra_headers: HeaderMap,
         request_timeout: Duration,
     ) -> Result<Vec<ResponseItem>, ApiError> {
+        self.compact_input_with_turn_state(
+            input,
+            extra_headers,
+            request_timeout,
+            /*turn_state*/ None,
+        )
+        .await
+    }
+
+    pub async fn compact_input_with_turn_state(
+        &self,
+        input: &CompactionInput<'_>,
+        extra_headers: HeaderMap,
+        request_timeout: Duration,
+        turn_state: Option<Arc<OnceLock<String>>>,
+    ) -> Result<Vec<ResponseItem>, ApiError> {
         let body = to_value(input)
             .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
-        self.compact(body, extra_headers, request_timeout).await
+        self.compact_with_turn_state(body, extra_headers, request_timeout, turn_state)
+            .await
     }
 }
 

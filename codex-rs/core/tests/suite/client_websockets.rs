@@ -65,6 +65,7 @@ const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const USER_AGENT_HEADER: &str = "user-agent";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
+const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
     "ws_request_header_x_openai_internal_codex_responses_lite";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -315,7 +316,11 @@ async fn responses_websocket_preconnect_does_not_replace_turn_trace_payload() {
     let mut client_session = harness.client.new_session();
     let responses_metadata = websocket_connection_metadata(&harness);
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &responses_metadata)
+        .preconnect_websocket(
+            &harness.session_telemetry,
+            &harness.model_info,
+            &responses_metadata,
+        )
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -352,7 +357,11 @@ async fn responses_websocket_preconnect_reuses_connection() {
     let mut client_session = harness.client.new_session();
     let responses_metadata = websocket_connection_metadata(&harness);
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &responses_metadata)
+        .preconnect_websocket(
+            &harness.session_telemetry,
+            &harness.model_info,
+            &responses_metadata,
+        )
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -696,6 +705,139 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_turn_state_is_bound_to_requested_model() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "codex.response.metadata",
+                "headers": {(X_CODEX_TURN_STATE_HEADER): "state-a"},
+            }),
+            ev_response_created("resp-a-1"),
+            ev_completed("resp-a-1"),
+        ],
+        vec![ev_response_created("resp-a-2"), ev_completed("resp-a-2")],
+        vec![
+            json!({
+                "type": "codex.response.metadata",
+                "headers": {(X_CODEX_TURN_STATE_HEADER): "state-b"},
+            }),
+            ev_response_created("resp-b-1"),
+            ev_completed("resp-b-1"),
+        ],
+        vec![ev_response_created("resp-b-2"), ev_completed("resp-b-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let model_a = harness.model_info.clone();
+    let mut model_b = harness.model_info.clone();
+    model_b.slug = "gpt-5.3-codex-other".to_string();
+    let mut session = harness.client.new_session();
+
+    for (model_info, response_id) in [
+        (&model_a, "resp-a-1"),
+        (&model_a, "resp-a-2"),
+        (&model_b, "resp-b-1"),
+        (&model_b, "resp-b-2"),
+    ] {
+        stream_until_complete_with_model_info(
+            &mut session,
+            &harness,
+            &prompt_with_input(vec![message_item(response_id)]),
+            model_info,
+            response_id,
+        )
+        .await;
+    }
+
+    let requests = server.single_connection();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| {
+                let body = request.body_json();
+                json!({
+                    "model": body["model"],
+                    "turn_state": body["client_metadata"][X_CODEX_TURN_STATE_HEADER],
+                })
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            json!({"model": model_a.slug.as_str(), "turn_state": ""}),
+            json!({"model": model_a.slug.as_str(), "turn_state": "state-a"}),
+            json!({"model": model_b.slug.as_str(), "turn_state": ""}),
+            json!({"model": model_b.slug.as_str(), "turn_state": "state-b"}),
+        ]
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_preconnect_defers_handshake_turn_state_fallback() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![
+                json!({
+                    "type": "codex.response.metadata",
+                    "headers": {(X_CODEX_TURN_STATE_HEADER): "response-state"},
+                }),
+                ev_response_created("resp-1"),
+                ev_completed("resp-1"),
+            ],
+            vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+        ],
+        response_headers: vec![(
+            X_CODEX_TURN_STATE_HEADER.to_string(),
+            "stale-handshake-state".to_string(),
+        )],
+        accept_delay: None,
+        close_after_requests: true,
+    }])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut session = harness.client.new_session();
+    let responses_metadata = websocket_connection_metadata(&harness);
+    session
+        .preconnect_websocket(
+            &harness.session_telemetry,
+            &harness.model_info,
+            &responses_metadata,
+        )
+        .await
+        .expect("websocket preconnect");
+
+    for response_id in ["resp-1", "resp-2"] {
+        stream_until_complete(
+            &mut session,
+            &harness,
+            &prompt_with_input(vec![message_item(response_id)]),
+        )
+        .await;
+    }
+
+    let requests = server.single_connection();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| {
+                request.body_json()["client_metadata"][X_CODEX_TURN_STATE_HEADER].clone()
+            })
+            .collect::<Vec<_>>(),
+        vec![json!(""), json!("response-state")]
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     skip_if_no_network!();
 
@@ -709,7 +851,11 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     let mut client_session = harness.client.new_session();
     let preconnect_metadata = websocket_connection_metadata(&harness);
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &preconnect_metadata)
+        .preconnect_websocket(
+            &harness.session_telemetry,
+            &harness.model_info,
+            &preconnect_metadata,
+        )
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -880,7 +1026,11 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
     let mut client_session = harness.client.new_session();
     let responses_metadata = websocket_connection_metadata(&harness);
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &responses_metadata)
+        .preconnect_websocket(
+            &harness.session_telemetry,
+            &harness.model_info,
+            &responses_metadata,
+        )
         .await
         .expect("websocket preconnect failed");
 
@@ -1477,9 +1627,22 @@ async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
         }
     });
 
-    let server = start_websocket_server(vec![
-        vec![vec![websocket_connection_limit_error]],
-        vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
+    let server = start_websocket_server_with_headers(vec![
+        WebSocketConnectionConfig {
+            requests: vec![vec![websocket_connection_limit_error]],
+            response_headers: vec![(
+                X_CODEX_TURN_STATE_HEADER.to_string(),
+                "handshake-state".to_string(),
+            )],
+            accept_delay: None,
+            close_after_requests: true,
+        },
+        WebSocketConnectionConfig {
+            requests: vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
+            response_headers: Vec::new(),
+            accept_delay: None,
+            close_after_requests: true,
+        },
     ])
     .await;
     let mut builder = test_codex().with_config(|config| {
@@ -1495,10 +1658,20 @@ async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
         .await
         .expect("submission should reconnect after websocket connection limit error");
 
-    let total_websocket_requests: usize = server.connections().iter().map(Vec::len).sum();
+    let connections = server.connections();
+    let total_websocket_requests: usize = connections.iter().map(Vec::len).sum();
     assert_eq!(total_websocket_requests, 2);
-    let handshake_user_agents: Vec<_> = server
-        .handshakes()
+    assert_eq!(
+        connections[0][0].body_json()["client_metadata"][X_CODEX_TURN_STATE_HEADER],
+        ""
+    );
+    assert_eq!(
+        connections[1][0].body_json()["client_metadata"][X_CODEX_TURN_STATE_HEADER],
+        "handshake-state"
+    );
+
+    let handshakes = server.handshakes();
+    let handshake_user_agents: Vec<_> = handshakes
         .iter()
         .map(|handshake| handshake.header(USER_AGENT_HEADER))
         .collect();
@@ -1508,6 +1681,11 @@ async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
             Some(codex_login::default_client::get_codex_user_agent()),
             Some(codex_login::default_client::get_codex_user_agent()),
         ]
+    );
+    assert_eq!(handshakes[0].header(X_CODEX_TURN_STATE_HEADER), None);
+    assert_eq!(
+        handshakes[1].header(X_CODEX_TURN_STATE_HEADER).as_deref(),
+        Some("handshake-state")
     );
 
     server.shutdown().await;

@@ -1,6 +1,7 @@
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
+use crate::common::ResponsesTurnState;
 use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -216,6 +217,16 @@ impl ResponsesWebsocketConnection {
         request: ResponsesWsRequest,
         connection_reused: bool,
     ) -> Result<ResponseStream, ApiError> {
+        self.stream_request_with_turn_state(request, connection_reused, /*turn_state*/ None)
+            .await
+    }
+
+    pub async fn stream_request_with_turn_state(
+        &self,
+        request: ResponsesWsRequest,
+        connection_reused: bool,
+        turn_state: Option<ResponsesTurnState>,
+    ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
         let stream = Arc::clone(&self.stream);
@@ -264,9 +275,13 @@ impl ResponsesWebsocketConnection {
                         idle_timeout,
                         telemetry,
                         connection_reused,
+                        turn_state.as_ref(),
                     )
                     .await
                 };
+                if let Some(turn_state) = turn_state.as_ref() {
+                    turn_state.finish_websocket_response_attempt();
+                }
 
                 if let Err(err) = result {
                     // A terminal stream error should reach the caller immediately. Waiting for a
@@ -338,6 +353,37 @@ impl ResponsesWebsocketClient {
         turn_state: Option<Arc<OnceLock<String>>>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
+        self.connect_with_handshake_sink(extra_headers, default_headers, turn_state, telemetry)
+            .await
+    }
+
+    #[instrument(
+        name = "responses_websocket.connect",
+        level = "info",
+        skip_all,
+        fields(transport = "responses_websocket", api.path = "responses")
+    )]
+    pub async fn connect_with_turn_state(
+        &self,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+        turn_state: Option<ResponsesTurnState>,
+        telemetry: Option<Arc<dyn WebsocketTelemetry>>,
+    ) -> Result<ResponsesWebsocketConnection, ApiError> {
+        let handshake_sink = turn_state
+            .as_ref()
+            .map(|state| Arc::clone(state.websocket_handshake_token()));
+        self.connect_with_handshake_sink(extra_headers, default_headers, handshake_sink, telemetry)
+            .await
+    }
+
+    async fn connect_with_handshake_sink(
+        &self,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+        handshake_sink: Option<Arc<OnceLock<String>>>,
+        telemetry: Option<Arc<dyn WebsocketTelemetry>>,
+    ) -> Result<ResponsesWebsocketConnection, ApiError> {
         let ws_url = self
             .provider
             .websocket_url_for_path("responses")
@@ -348,7 +394,7 @@ impl ResponsesWebsocketClient {
         self.auth.add_auth_headers(&mut headers);
 
         let (stream, _status, server_reasoning_included, models_etag, server_model) =
-            connect_websocket(ws_url, headers, turn_state.clone()).await?;
+            connect_websocket(ws_url, headers, handshake_sink).await?;
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
@@ -631,6 +677,7 @@ async fn run_websocket_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
+    turn_state: Option<&ResponsesTurnState>,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
     send_websocket_request(
@@ -682,6 +729,11 @@ async fn run_websocket_response_stream(
                         continue;
                     }
                 };
+                if let Some(response_turn_state) = event.turn_state()
+                    && let Some(turn_state) = turn_state
+                {
+                    turn_state.capture_response_token(response_turn_state);
+                }
                 let model_verifications = event.model_verifications();
                 let turn_moderation_metadata = event.turn_moderation_metadata();
                 if event.kind() == "codex.rate_limits" {
@@ -721,6 +773,11 @@ async fn run_websocket_response_stream(
                 match process_responses_event(event) {
                     Ok(Some(event)) => {
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });
+                        if is_completed && let Some(turn_state) = turn_state {
+                            // Make a handshake-only fallback visible before the consumer can
+                            // start the next request after observing response.completed.
+                            turn_state.finish_websocket_response_attempt();
+                        }
                         let _ = tx_event.send(Ok(event)).await;
                         if is_completed {
                             break;

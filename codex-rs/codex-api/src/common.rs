@@ -14,12 +14,61 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 
 pub const WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY: &str = "ws_request_header_traceparent";
 pub const WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY: &str = "ws_request_header_tracestate";
+
+/// Opaque turn-state token with a deferred WebSocket handshake fallback.
+///
+/// A handshake token is not eligible for requests until a response attempt completes without
+/// request-scoped metadata. This keeps preconnect from sending a stale connection-scoped token on
+/// the first `response.create`, while preserving compatibility with handshake-only servers.
+#[derive(Clone, Debug, Default)]
+pub struct ResponsesTurnState {
+    response_token: Arc<OnceLock<String>>,
+    websocket_handshake_token: Arc<OnceLock<String>>,
+    websocket_handshake_token_eligible: Arc<AtomicBool>,
+}
+
+impl ResponsesTurnState {
+    pub fn token_for_request(&self) -> &Arc<OnceLock<String>> {
+        if self.response_token.get().is_some()
+            || !self
+                .websocket_handshake_token_eligible
+                .load(Ordering::Acquire)
+        {
+            &self.response_token
+        } else {
+            &self.websocket_handshake_token
+        }
+    }
+
+    pub fn response_token(&self) -> &Arc<OnceLock<String>> {
+        &self.response_token
+    }
+
+    pub(crate) fn websocket_handshake_token(&self) -> &Arc<OnceLock<String>> {
+        &self.websocket_handshake_token
+    }
+
+    pub(crate) fn capture_response_token(&self, token: String) {
+        let _ = self.response_token.set(token);
+    }
+
+    pub(crate) fn finish_websocket_response_attempt(&self) {
+        if self.response_token.get().is_none() && self.websocket_handshake_token.get().is_some() {
+            self.websocket_handshake_token_eligible
+                .store(true, Ordering::Release);
+        }
+    }
+}
 
 /// Canonical input payload for the compaction endpoint.
 #[derive(Debug, Clone, Serialize)]
@@ -313,5 +362,32 @@ impl Stream for ResponseStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx_event.poll_recv(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn responses_turn_state_defers_handshake_fallback_and_prefers_response_metadata() {
+        let state = ResponsesTurnState::default();
+        let _ = state
+            .websocket_handshake_token()
+            .set("handshake".to_string());
+
+        assert_eq!(state.token_for_request().get(), None);
+
+        state.finish_websocket_response_attempt();
+        assert_eq!(
+            state.token_for_request().get().map(String::as_str),
+            Some("handshake")
+        );
+
+        state.capture_response_token("response".to_string());
+        assert_eq!(
+            state.token_for_request().get().map(String::as_str),
+            Some("response")
+        );
     }
 }

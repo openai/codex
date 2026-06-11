@@ -23,6 +23,7 @@ use tracing::debug;
 use tracing::trace;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
+const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
@@ -53,13 +54,8 @@ pub fn spawn_response_stream(
         .get(REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    if let Some(turn_state) = turn_state.as_ref()
-        && let Some(header_value) = stream_response
-            .headers
-            .get("x-codex-turn-state")
-            .and_then(|v| v.to_str().ok())
-    {
-        let _ = turn_state.set(header_value.to_string());
+    if let Some(turn_state) = turn_state.as_deref() {
+        capture_turn_state(&stream_response.headers, turn_state);
     }
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
@@ -83,6 +79,15 @@ pub fn spawn_response_stream(
     ResponseStream {
         rx_event,
         upstream_request_id,
+    }
+}
+
+pub(crate) fn capture_turn_state(headers: &http::HeaderMap, turn_state: &OnceLock<String>) {
+    if let Some(header_value) = headers
+        .get(X_CODEX_TURN_STATE_HEADER)
+        .and_then(|value| value.to_str().ok())
+    {
+        let _ = turn_state.set(header_value.to_string());
     }
 }
 
@@ -184,6 +189,16 @@ impl ResponsesStreamEvent {
         }
     }
 
+    pub(crate) fn turn_state(&self) -> Option<String> {
+        if self.kind() != "codex.response.metadata" {
+            return None;
+        }
+
+        self.headers
+            .as_ref()
+            .and_then(header_turn_state_value_from_json)
+    }
+
     pub(crate) fn model_verifications(&self) -> Option<Vec<ModelVerification>> {
         if self.kind() != "response.metadata" {
             return None;
@@ -213,6 +228,17 @@ fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
     headers.iter().find_map(|(name, value)| {
         if name.eq_ignore_ascii_case("openai-model") || name.eq_ignore_ascii_case("x-openai-model")
         {
+            json_value_as_string(value)
+        } else {
+            None
+        }
+    })
+}
+
+fn header_turn_state_value_from_json(value: &Value) -> Option<String> {
+    let headers = value.as_object()?;
+    headers.iter().find_map(|(name, value)| {
+        if name.eq_ignore_ascii_case(X_CODEX_TURN_STATE_HEADER) {
             json_value_as_string(value)
         } else {
             None

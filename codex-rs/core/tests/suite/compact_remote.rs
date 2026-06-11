@@ -131,6 +131,7 @@ fn canonical_json(value: &Value) -> Value {
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
+const TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn summary_with_prefix(summary: &str) -> String {
@@ -3339,6 +3340,108 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_pre_turn_compact_turn_state_rotates_on_model_switch() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let previous_model = "gpt-5.4";
+    let next_model = "gpt-5.3-codex";
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model(previous_model)
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m1", "BEFORE_SWITCH_REPLY"),
+                responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+            ])),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_function_call("call-after-switch", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
+            ]))
+            .insert_header(TURN_STATE_HEADER, "current-model-state"),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_SWITCH_REPLY"),
+                responses::ev_completed_with_tokens("r3", /*total_tokens*/ 80),
+            ])),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_response_once(
+        harness.server(),
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .insert_header(TURN_STATE_HEADER, "previous-model-state")
+            .set_body_json(json!({
+                "output": compacted_summary_only_output("MODEL_SWITCH_COMPACT_SUMMARY"),
+            })),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "BEFORE_SWITCH_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    core_test_support::submit_thread_settings(
+        &codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            model: Some(next_model.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "AFTER_SWITCH_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let compact_request = compact_mock.single_request();
+    assert_eq!(compact_request.body_json()["model"], previous_model);
+    assert_eq!(compact_request.header(TURN_STATE_HEADER), None);
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].body_json()["model"], previous_model);
+    assert_eq!(requests[0].header(TURN_STATE_HEADER), None);
+    assert_eq!(requests[1].body_json()["model"], next_model);
+    assert_eq!(requests[1].header(TURN_STATE_HEADER), None);
+    assert_eq!(requests[2].body_json()["model"], next_model);
+    assert_eq!(
+        requests[2].header(TURN_STATE_HEADER).as_deref(),
+        Some("current-model-state")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model_switch()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -3584,6 +3687,76 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_pre_turn_compact_turn_state_is_replayed_to_sampling() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m1", "BEFORE_COMPACT_REPLY"),
+                responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+            ])),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
+            ])),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_response_once(
+        harness.server(),
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .insert_header(TURN_STATE_HEADER, "compact-state")
+            .set_body_json(json!({
+                "output": compacted_summary_only_output("PRE_TURN_COMPACT_SUMMARY"),
+            })),
+    )
+    .await;
+
+    for text in ["BEFORE_COMPACT_USER", "AFTER_COMPACT_USER"] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: text.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
+            })
+            .await?;
+        wait_for_turn_complete(&codex).await;
+    }
+
+    assert_eq!(
+        compact_mock.single_request().header(TURN_STATE_HEADER),
+        None
+    );
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].header(TURN_STATE_HEADER), None);
+    assert_eq!(
+        requests[1].header(TURN_STATE_HEADER).as_deref(),
+        Some("compact-state")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -3597,17 +3770,18 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
     .await?;
     let codex = harness.test().codex.clone();
 
-    let responses_mock = responses::mount_sse_sequence(
+    let responses_mock = responses::mount_response_sequence(
         harness.server(),
         vec![
-            responses::sse(vec![
+            responses::sse_response(responses::sse(vec![
                 responses::ev_function_call("call-remote-mid-turn", DUMMY_FUNCTION_NAME, "{}"),
                 responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
-            ]),
-            responses::sse(vec![
+            ]))
+            .insert_header(TURN_STATE_HEADER, "sampling-state"),
+            responses::sse_response(responses::sse(vec![
                 responses::ev_assistant_message("m2", "REMOTE_MID_TURN_FINAL_REPLY"),
                 responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
-            ]),
+            ])),
         ],
     )
     .await;
@@ -3641,6 +3815,14 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
     );
 
     let compact_request = compact_mock.single_request();
+    assert_eq!(
+        compact_request.header(TURN_STATE_HEADER).as_deref(),
+        Some("sampling-state")
+    );
+    assert_eq!(
+        requests[1].header(TURN_STATE_HEADER).as_deref(),
+        Some("sampling-state")
+    );
     insta::assert_snapshot!(
         "remote_mid_turn_compaction_shapes",
         format_labeled_requests_snapshot(
