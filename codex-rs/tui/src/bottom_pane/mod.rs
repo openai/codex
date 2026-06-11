@@ -858,6 +858,10 @@ impl BottomPane {
         self.composer.input_enabled()
     }
 
+    pub(crate) fn composer_pending_pastes(&self) -> Vec<(String, String)> {
+        self.composer.pending_pastes()
+    }
+
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.composer.apply_external_edit(text);
         self.request_redraw();

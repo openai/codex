@@ -1,12 +1,13 @@
-//! Materializes oversized TUI goal objectives as app-server-host files.
+//! Materializes oversized TUI goal objectives and pastes as app-server-host files.
 
 use crate::app_server_session::AppServerSession;
+use crate::bottom_pane::ChatComposer;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-use anyhow::ensure;
 use codex_app_server_client::AppServerPath;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
+use codex_protocol::user_input::TextElement;
 use uuid::Uuid;
 
 const GOAL_ATTACHMENT_DIR: &str = "attachments";
@@ -14,38 +15,83 @@ const GOAL_FILE_PREFIX: &str = "Read the Codex goal objective file at ";
 const GOAL_FILE_SUFFIX: &str = " before continuing.";
 const GOAL_FILE_NAME: &str = "goal-objective.md";
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct GoalDraft {
+    pub(crate) objective: String,
+    pub(crate) text_elements: Vec<TextElement>,
+    pub(crate) pending_pastes: Vec<(String, String)>,
+}
+
 pub(crate) type GoalFilePath = AppServerPath;
 
-pub(crate) async fn materialize_goal_objective(
+pub(crate) async fn materialize_goal_draft(
     app_server: &mut AppServerSession,
     codex_home: Option<&GoalFilePath>,
-    objective: String,
+    draft: GoalDraft,
 ) -> Result<(String, Option<GoalFilePath>)> {
-    let objective = objective.trim().to_string();
-    ensure!(!objective.is_empty(), "Goal objective must not be empty.");
-
-    if objective.chars().count() <= MAX_THREAD_GOAL_OBJECTIVE_CHARS {
-        return Ok((objective, None));
+    let mut objective = draft.objective;
+    if objective.trim().is_empty() {
+        bail!("Goal objective must not be empty.");
+    }
+    let text_elements = draft.text_elements;
+    if !draft.pending_pastes.is_empty() {
+        let (expanded_objective, _) = ChatComposer::expand_pending_pastes(
+            &objective,
+            text_elements.clone(),
+            &draft.pending_pastes,
+        );
+        if expanded_objective.trim().is_empty() {
+            bail!("Goal objective must not be empty.");
+        }
     }
 
-    let codex_home = codex_home
-        .context("App server did not report $CODEX_HOME; cannot materialize goal files")?;
-    let output_dir = codex_home
-        .join(GOAL_ATTACHMENT_DIR)
-        .join(Uuid::new_v4().to_string());
-    let path = output_dir.join(GOAL_FILE_NAME);
-    let reference = objective_file_reference(&path)?;
-    app_server
-        .fs_create_directory_all_path(&output_dir)
-        .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
-        .with_context(|| format!("Could not create goal attachment directory {output_dir}"))?;
-    app_server
-        .fs_write_file_path(&path, objective.as_bytes().to_vec())
-        .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
-        .with_context(|| format!("Could not write goal file {path}"))?;
-    Ok((reference, Some(output_dir)))
+    let mut active_placeholders = text_elements
+        .iter()
+        .filter_map(|element| element.placeholder(&objective))
+        .filter(|placeholder| !placeholder.is_empty())
+        .collect::<Vec<_>>();
+    let mut output_dir = None;
+    let mut replacements = Vec::new();
+    for (placeholder, text) in draft.pending_pastes.iter() {
+        let Some(active_idx) = active_placeholders
+            .iter()
+            .position(|active| *active == placeholder.as_str())
+        else {
+            continue;
+        };
+        active_placeholders.swap_remove(active_idx);
+        let path = ensure_goal_output_dir(app_server, codex_home, &mut output_dir)
+            .await?
+            .join(format!("pasted-text-{}.txt", replacements.len() + 1));
+        write_goal_file(app_server, path.clone(), text.as_bytes().to_vec()).await?;
+
+        replacements.push((
+            placeholder.clone(),
+            format!("pasted text file: {path}. Read this file before continuing."),
+        ));
+    }
+
+    let (expanded_objective, _) =
+        ChatComposer::expand_pending_pastes(&objective, text_elements, &replacements);
+    objective = expanded_objective.trim().to_string();
+
+    if objective.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
+        let path = ensure_goal_output_dir(app_server, codex_home, &mut output_dir)
+            .await?
+            .join(GOAL_FILE_NAME);
+        let reference = match objective_file_reference(&path) {
+            Ok(reference) => reference,
+            Err(err) => {
+                if let Some(output_dir) = output_dir.as_ref() {
+                    let _ = app_server.fs_remove_path(output_dir).await;
+                }
+                return Err(err);
+            }
+        };
+        write_goal_file(app_server, path.clone(), objective.as_bytes().to_vec()).await?;
+        objective = reference;
+    }
+    Ok((objective, output_dir))
 }
 
 pub(crate) async fn objective_text_for_edit(
@@ -91,4 +137,38 @@ pub(crate) fn objective_file_reference(path: &GoalFilePath) -> Result<String> {
         );
     }
     Ok(reference)
+}
+
+async fn ensure_goal_output_dir(
+    app_server: &mut AppServerSession,
+    codex_home: Option<&GoalFilePath>,
+    output_dir: &mut Option<GoalFilePath>,
+) -> Result<GoalFilePath> {
+    if let Some(output_dir) = output_dir {
+        return Ok(output_dir.clone());
+    }
+    let codex_home = codex_home
+        .context("App server did not report $CODEX_HOME; cannot materialize goal files")?;
+    let path = codex_home
+        .join(GOAL_ATTACHMENT_DIR)
+        .join(Uuid::new_v4().to_string());
+    app_server
+        .fs_create_directory_all_path(&path)
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))
+        .with_context(|| format!("Could not create goal attachment directory {path}"))?;
+    *output_dir = Some(path.clone());
+    Ok(path)
+}
+
+async fn write_goal_file(
+    app_server: &mut AppServerSession,
+    path: GoalFilePath,
+    bytes: Vec<u8>,
+) -> Result<()> {
+    app_server
+        .fs_write_file_path(&path, bytes)
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))
+        .with_context(|| format!("Could not write goal file {path}"))
 }
