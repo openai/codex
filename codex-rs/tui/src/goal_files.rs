@@ -17,69 +17,22 @@ const GOAL_FILE_PREFIX: &str = "Codex goal objective file: ";
 const GOAL_FILE_INSTRUCTION: &str = "Read that Codex-created file before continuing.";
 const GOAL_FILE_NAME: &str = "goal-objective.md";
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct GoalDraft {
-    pub(crate) objective: String,
-}
-
-/// Host-side file operations needed to materialize goal inputs.
-///
-/// Implementations must operate on the same filesystem that the app server and
-/// agent will use to resolve persisted goal file references.
-pub(crate) trait GoalFileStore {
-    fn create_directory(
-        &mut self,
-        path: GoalFilePath,
-    ) -> impl std::future::Future<Output = Result<()>> + Send;
-
-    fn write_file(
-        &mut self,
-        path: GoalFilePath,
-        bytes: Vec<u8>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send;
-
-    fn read_file(
-        &mut self,
-        path: GoalFilePath,
-    ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send;
-}
-
 pub(crate) type GoalFilePath = AppServerPath;
 
-impl GoalFileStore for AppServerSession {
-    async fn create_directory(&mut self, path: GoalFilePath) -> Result<()> {
-        self.fs_create_directory_path(&path, /*recursive*/ true)
-            .await
-            .map_err(|err| anyhow::anyhow!("{err}"))
-    }
-
-    async fn write_file(&mut self, path: GoalFilePath, bytes: Vec<u8>) -> Result<()> {
-        self.fs_write_file_path(&path, bytes)
-            .await
-            .map_err(|err| anyhow::anyhow!("{err}"))
-    }
-
-    async fn read_file(&mut self, path: GoalFilePath) -> Result<Vec<u8>> {
-        self.fs_read_file_path(&path)
-            .await
-            .map_err(|err| anyhow::anyhow!("{err}"))
-    }
-}
-
-pub(crate) async fn materialize_goal_draft(
-    store: &mut impl GoalFileStore,
+pub(crate) async fn materialize_goal_objective(
+    app_server: &mut AppServerSession,
     codex_home: Option<&GoalFilePath>,
-    draft: GoalDraft,
+    objective: String,
 ) -> Result<String> {
-    let mut objective = draft.objective.trim().to_string();
+    let mut objective = objective.trim().to_string();
     if objective.is_empty() {
         bail!("Goal objective must not be empty.");
     }
 
     if objective.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
-        let output_dir = create_goal_output_dir(store, codex_home).await?;
+        let output_dir = create_goal_output_dir(app_server, codex_home).await?;
         let path = output_dir.join(GOAL_FILE_NAME);
-        write_goal_file(store, path.clone(), objective.as_bytes().to_vec()).await?;
+        write_goal_file(app_server, path.clone(), objective.as_bytes().to_vec()).await?;
         objective = objective_file_reference(&path)?;
     }
 
@@ -87,15 +40,16 @@ pub(crate) async fn materialize_goal_draft(
 }
 
 pub(crate) async fn objective_text_for_edit(
-    store: &mut impl GoalFileStore,
+    app_server: &mut AppServerSession,
     objective: &str,
 ) -> Result<String> {
     let Some(path) = objective_file_path(objective) else {
         return Ok(objective.to_string());
     };
-    let bytes = store
-        .read_file(path.clone())
+    let bytes = app_server
+        .fs_read_file_path(&path)
         .await
+        .map_err(|err| anyhow::anyhow!("{err}"))
         .with_context(|| format!("Could not read goal objective file {path}"))?;
     String::from_utf8(bytes)
         .with_context(|| format!("Goal objective file {path} is not valid UTF-8"))
@@ -144,7 +98,7 @@ fn managed_goal_file_path(raw: &str) -> Option<GoalFilePath> {
 }
 
 async fn create_goal_output_dir(
-    store: &mut impl GoalFileStore,
+    app_server: &mut AppServerSession,
     codex_home: Option<&GoalFilePath>,
 ) -> Result<GoalFilePath> {
     let codex_home = codex_home
@@ -152,20 +106,22 @@ async fn create_goal_output_dir(
     let path = codex_home
         .join(GOAL_ATTACHMENT_DIR)
         .join(Uuid::new_v4().to_string());
-    store
-        .create_directory(path.clone())
+    app_server
+        .fs_create_directory_path(&path, /*recursive*/ true)
         .await
+        .map_err(|err| anyhow::anyhow!("{err}"))
         .with_context(|| format!("Could not create goal attachment directory {path}"))?;
     Ok(path)
 }
 
 async fn write_goal_file(
-    store: &mut impl GoalFileStore,
+    app_server: &mut AppServerSession,
     path: GoalFilePath,
     bytes: Vec<u8>,
 ) -> Result<()> {
-    store
-        .write_file(path.clone(), bytes)
+    app_server
+        .fs_write_file_path(&path, bytes)
         .await
+        .map_err(|err| anyhow::anyhow!("{err}"))
         .with_context(|| format!("Could not write goal file {path}"))
 }

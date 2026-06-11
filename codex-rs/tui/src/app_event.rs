@@ -38,7 +38,6 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::UserMessage;
-use crate::goal_files::GoalDraft;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -290,10 +289,10 @@ pub(crate) enum AppEvent {
         thread_id: Option<ThreadId>,
     },
 
-    /// Materialize and set or replace the current thread goal objective.
-    SetThreadGoalDraft {
+    /// Set or replace the current thread goal objective.
+    SetThreadGoalObjective {
         thread_id: ThreadId,
-        draft: GoalDraft,
+        objective: String,
         mode: ThreadGoalSetMode,
     },
 

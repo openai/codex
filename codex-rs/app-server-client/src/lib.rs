@@ -93,10 +93,6 @@ pub mod legacy_core {
         pub use codex_core::personality_migration::*;
     }
 
-    pub mod test_support {
-        pub use codex_core::test_support::*;
-    }
-
     pub mod windows_sandbox {
         pub use codex_core::windows_sandbox::*;
     }

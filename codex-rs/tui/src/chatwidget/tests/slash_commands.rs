@@ -608,17 +608,17 @@ async fn goal_slash_command_emits_set_goal_event() {
 
     submit_composer_text(&mut chat, command);
 
-    let event = rx.try_recv().expect("expected goal draft event");
-    let AppEvent::SetThreadGoalDraft {
+    let event = rx.try_recv().expect("expected goal objective event");
+    let AppEvent::SetThreadGoalObjective {
         thread_id: actual_thread_id,
-        draft,
+        objective,
         mode,
     } = event
     else {
-        panic!("expected SetThreadGoalDraft, got {event:?}");
+        panic!("expected SetThreadGoalObjective, got {event:?}");
     };
     assert_eq!(actual_thread_id, thread_id);
-    assert_eq!(draft.objective, "--tokens 98.5K improve benchmark coverage");
+    assert_eq!(objective, "--tokens 98.5K improve benchmark coverage");
     assert_eq!(mode, crate::app_event::ThreadGoalSetMode::ConfirmIfExists);
     assert_no_submit_op(&mut op_rx);
     assert_eq!(recall_latest_after_clearing(&mut chat), command);
@@ -645,8 +645,17 @@ async fn goal_slash_command_uses_plain_text_for_mentions() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let draft = next_goal_draft(&mut rx, thread_id);
-    assert_eq!(draft.objective, "use $figma for the mockup");
+    let event = rx.try_recv().expect("expected goal objective event");
+    let AppEvent::SetThreadGoalObjective {
+        thread_id: actual_thread_id,
+        objective,
+        ..
+    } = event
+    else {
+        panic!("expected SetThreadGoalObjective, got {event:?}");
+    };
+    assert_eq!(actual_thread_id, thread_id);
+    assert_eq!(objective, "use $figma for the mockup");
     assert_no_submit_op(&mut op_rx);
 }
 
@@ -673,8 +682,17 @@ async fn goal_slash_command_drops_attached_images() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let draft = next_goal_draft(&mut rx, thread_id);
-    assert_eq!(draft.objective, "describe [Image #2]");
+    let event = rx.try_recv().expect("expected goal objective event");
+    let AppEvent::SetThreadGoalObjective {
+        thread_id: actual_thread_id,
+        objective,
+        ..
+    } = event
+    else {
+        panic!("expected SetThreadGoalObjective, got {event:?}");
+    };
+    assert_eq!(actual_thread_id, thread_id);
+    assert_eq!(objective, "describe [Image #2]");
     assert!(chat.remote_image_urls().is_empty());
     assert!(chat.bottom_pane.composer_local_image_paths().is_empty());
     assert_no_submit_op(&mut op_rx);
@@ -795,8 +813,17 @@ async fn queued_goal_slash_command_emits_set_goal_event_after_thread_starts() {
     chat.thread_id = Some(thread_id);
     chat.maybe_send_next_queued_input();
 
-    let draft = next_goal_draft(&mut rx, thread_id);
-    assert_eq!(draft.objective, "improve benchmark coverage");
+    let event = rx.try_recv().expect("expected goal objective event");
+    let AppEvent::SetThreadGoalObjective {
+        thread_id: actual_thread_id,
+        objective,
+        ..
+    } = event
+    else {
+        panic!("expected SetThreadGoalObjective, got {event:?}");
+    };
+    assert_eq!(actual_thread_id, thread_id);
+    assert_eq!(objective, "improve benchmark coverage");
     assert_no_submit_op(&mut op_rx);
 }
 
@@ -828,7 +855,14 @@ async fn queued_goal_slash_command_preserves_current_draft_metadata() {
     chat.thread_id = Some(thread_id);
     chat.maybe_send_next_queued_input();
 
-    let _ = next_goal_draft(&mut rx, thread_id);
+    let event = rx.try_recv().expect("expected goal objective event");
+    assert_matches!(
+        event,
+        AppEvent::SetThreadGoalObjective {
+            thread_id: actual_thread_id,
+            ..
+        } if actual_thread_id == thread_id
+    );
     assert_no_submit_op(&mut op_rx);
     assert_eq!(chat.bottom_pane.composer_text(), draft);
     assert_eq!(chat.remote_image_urls(), vec![remote_url]);
@@ -857,7 +891,16 @@ async fn restored_queued_goal_slash_command_emits_set_goal_event() {
     restored_chat.thread_id = Some(thread_id);
     restored_chat.maybe_send_next_queued_input();
 
-    let _ = next_goal_draft(&mut restored_rx, thread_id);
+    let event = restored_rx
+        .try_recv()
+        .expect("expected goal objective event");
+    assert_matches!(
+        event,
+        AppEvent::SetThreadGoalObjective {
+            thread_id: actual_thread_id,
+            ..
+        } if actual_thread_id == thread_id
+    );
     assert_no_submit_op(&mut restored_op_rx);
 }
 
