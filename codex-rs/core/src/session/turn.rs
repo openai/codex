@@ -480,7 +480,6 @@ async fn build_skills_and_plugins(
         .services
         .plugins_manager
         .plugins_for_config(&turn_context.config.plugins_config_input())
-        .instrument(trace_span!("build_skills_and_plugins.load_plugins"))
         .await;
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
@@ -495,7 +494,6 @@ async fn build_skills_and_plugins(
             .mcp_connection_manager
             .load_full()
             .list_all_tools()
-            .instrument(trace_span!("build_skills_and_plugins.list_all_tools"))
             .or_cancel(cancellation_token)
             .await
         {
@@ -1136,7 +1134,6 @@ pub(crate) async fn built_tools(
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
         .list_all_tools()
-        .instrument(trace_span!("built_tools.list_all_tools"))
         .or_cancel(cancellation_token)
         .await?;
     let loaded_plugins = sess

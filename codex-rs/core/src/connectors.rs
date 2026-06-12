@@ -18,8 +18,7 @@ use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
-use tracing::Instrument;
-use tracing::info_span;
+use tracing::instrument;
 use tracing::warn;
 
 use crate::config::Config;
@@ -122,9 +121,7 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
     let connector_ids = tool_suggest_connector_ids(config, loaded_plugin_app_connector_ids);
     let directory_connectors = codex_connectors::merge::merge_plugin_connectors(
-        cached_directory_connectors_for_tool_suggest_with_auth(config, auth)
-            .instrument(info_span!("discoverable_tools.load_connectors"))
-            .await,
+        cached_directory_connectors_for_tool_suggest_with_auth(config, auth).await,
         connector_ids.iter().cloned(),
     );
     let discoverable_connectors =
@@ -142,7 +139,6 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
         auth,
         loaded_plugin_app_connector_ids,
     )
-    .instrument(info_span!("discoverable_tools.load_plugins"))
     .await?
     .into_iter()
     .map(DiscoverableTool::from);
@@ -465,6 +461,7 @@ fn tool_suggest_connector_ids(
     connector_ids
 }
 
+#[instrument(level = "trace", skip_all)]
 async fn cached_directory_connectors_for_tool_suggest_with_auth(
     config: &Config,
     auth: Option<&CodexAuth>,

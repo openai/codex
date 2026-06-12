@@ -77,9 +77,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::sync::Semaphore;
-use tracing::Instrument as _;
 use tracing::instrument;
-use tracing::trace_span;
 use tracing::warn;
 
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -473,7 +471,6 @@ impl PluginsManager {
             self.restriction_product,
             config.remote_plugin_enabled,
         )
-        .instrument(trace_span!("plugins_for_config.load_from_layer_stack"))
         .await;
         log_plugin_load_errors(&outcome);
         self.cache_enabled_outcome_if_current(cache_generation, cache_key, outcome.clone());
@@ -1197,6 +1194,7 @@ impl PluginsManager {
         })
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub async fn read_plugin_detail_for_marketplace_plugin(
         &self,
         config: &PluginsConfigInput,

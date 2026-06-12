@@ -9,10 +9,8 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
-use tracing::Instrument as _;
 use tracing::info;
 use tracing::instrument;
-use tracing::trace_span;
 use tracing::warn;
 
 use crate::SkillLoadOutcome;
@@ -116,10 +114,7 @@ impl SkillsManager {
             return outcome;
         }
 
-        let outcome = self
-            .build_skill_outcome(roots, &skill_config_rules)
-            .instrument(trace_span!("skills_for_config.build_outcome"))
-            .await;
+        let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
         let mut cache = self
             .cache_by_config
             .write()
@@ -184,6 +179,7 @@ impl SkillsManager {
         outcome
     }
 
+    #[instrument(level = "trace", skip_all)]
     async fn build_skill_outcome(
         &self,
         roots: Vec<SkillRoot>,

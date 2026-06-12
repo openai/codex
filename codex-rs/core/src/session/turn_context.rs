@@ -21,7 +21,6 @@ use codex_utils_path_uri::PathUri;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tracing::instrument;
-use tracing::trace_span;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
@@ -782,7 +781,6 @@ impl Session {
             .services
             .plugins_manager
             .plugins_for_config(&per_turn_config.plugins_config_input())
-            .instrument(trace_span!("turn_context.load_plugins"))
             .await;
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
@@ -792,7 +790,6 @@ impl Session {
             self.services
                 .skills_manager
                 .skills_for_config(&skills_input, fs)
-                .instrument(trace_span!("turn_context.load_skills"))
                 .await,
         );
         let mut turn_context: TurnContext = Self::make_turn_context(

@@ -4,7 +4,6 @@ use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
-use tracing::info_span;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -1002,7 +1001,6 @@ impl ThreadRequestProcessor {
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
-            .instrument(info_span!("app_server.thread_start.load_config"))
             .await
             .map_err(|err| config_load_error(&err))?;
 
@@ -1067,7 +1065,6 @@ impl ThreadRequestProcessor {
                     typesafe_overrides,
                     /*fallback_cwd*/ None,
                 )
-                .instrument(info_span!("app_server.thread_start.load_config"))
                 .await
                 .map_err(|err| config_load_error(&err))?;
         }
@@ -2532,7 +2529,6 @@ impl ThreadRequestProcessor {
                 app_server_client_name.clone(),
                 app_server_client_version.clone(),
             )
-            .instrument(info_span!("app_server.thread_resume.try_running_thread"))
             .await
         {
             Ok(RunningThreadResumeResult::Handled) => return Ok(()),
@@ -2567,17 +2563,14 @@ impl ThreadRequestProcessor {
 
         let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
-                .instrument(info_span!("app_server.thread_resume.load_history"))
                 .await
                 .map(|thread_history| (thread_history, None))
         } else if let Some(stored_thread) = stored_thread_from_running_probe {
             self.stored_thread_to_initial_history(&stored_thread)
-                .instrument(info_span!("app_server.thread_resume.load_history"))
                 .await
                 .map(|thread_history| (thread_history, Some(*stored_thread)))
         } else {
             self.resume_thread_from_rollout(&thread_id, path.as_ref())
-                .instrument(info_span!("app_server.thread_resume.load_history"))
                 .await
                 .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
         };
@@ -2616,7 +2609,6 @@ impl ThreadRequestProcessor {
         let config = match self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
-            .instrument(info_span!("app_server.thread_resume.load_config"))
             .await
         {
             Ok(config) => config,
@@ -2637,7 +2629,6 @@ impl ThreadRequestProcessor {
                 self.auth_manager.clone(),
                 self.request_trace_context(&request_id).await,
             )
-            .instrument(info_span!("app_server.thread_resume.resume_core"))
             .await
         {
             Ok(NewThread {
@@ -2818,6 +2809,7 @@ impl ThreadRequestProcessor {
         Some(persisted_metadata)
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn resume_running_thread(
         &self,
         request_id: &ConnectionRequestId,
@@ -3004,6 +2996,7 @@ impl ThreadRequestProcessor {
         Ok(RunningThreadResumeResult::NotRunning(None))
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn resume_thread_from_history(
         &self,
         history: &[ResponseItem],
@@ -3020,6 +3013,7 @@ impl ThreadRequestProcessor {
         ))
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn resume_thread_from_rollout(
         &self,
         thread_id: &str,
@@ -3074,6 +3068,7 @@ impl ThreadRequestProcessor {
         Ok(stored_thread)
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn stored_thread_to_initial_history(
         &self,
         stored_thread: &StoredThread,
