@@ -1,8 +1,20 @@
 use crate::manifest::PluginManifest;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::future::Future;
+use thiserror::Error;
+
+/// A plugin resource paired with the environment that owns its filesystem.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PluginResourceLocator {
+    Environment {
+        /// Environment whose filesystem owns the resource.
+        environment_id: String,
+        /// Absolute resource path within that filesystem.
+        path: AbsolutePathBuf,
+    },
+}
 
 /// Authority-bound location of a resolved plugin package.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,13 +27,23 @@ pub enum ResolvedPluginLocation {
     },
 }
 
-/// A plugin package descriptor resolved from one source without activating its components.
+/// An inert plugin descriptor whose resources retain their source authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedPlugin {
     selected_root_id: String,
     location: ResolvedPluginLocation,
-    manifest_path: AbsolutePathBuf,
-    manifest: PluginManifest,
+    manifest_path: PluginResourceLocator,
+    manifest: PluginManifest<PluginResourceLocator>,
+}
+
+/// Failure to construct a resolved plugin with internally consistent resources.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ResolvedPluginError {
+    #[error("plugin resource path `{path}` is outside package root `{root}`")]
+    ResourceOutsideRoot {
+        root: AbsolutePathBuf,
+        path: AbsolutePathBuf,
+    },
 }
 
 impl ResolvedPlugin {
@@ -31,10 +53,12 @@ impl ResolvedPlugin {
         environment_id: String,
         root: AbsolutePathBuf,
         manifest_path: AbsolutePathBuf,
-        manifest: PluginManifest,
-    ) -> Self {
-        debug_assert!(manifest_path.as_path().starts_with(root.as_path()));
-        Self {
+        manifest: PluginManifest<AbsolutePathBuf>,
+    ) -> Result<Self, ResolvedPluginError> {
+        let manifest_path = environment_resource(&environment_id, &root, manifest_path)?;
+        let manifest = manifest
+            .try_map_resources(|path| environment_resource(&environment_id, &root, path))?;
+        Ok(Self {
             selected_root_id,
             location: ResolvedPluginLocation::Environment {
                 environment_id,
@@ -42,7 +66,7 @@ impl ResolvedPlugin {
             },
             manifest_path,
             manifest,
-        }
+        })
     }
 
     /// Returns the opaque ID supplied for the selected capability root.
@@ -56,14 +80,31 @@ impl ResolvedPlugin {
     }
 
     /// Returns the manifest resource used to resolve this package.
-    pub fn manifest_path(&self) -> &AbsolutePathBuf {
+    pub fn manifest_path(&self) -> &PluginResourceLocator {
         &self.manifest_path
     }
 
-    /// Returns the parsed package metadata and component locators.
-    pub fn manifest(&self) -> &PluginManifest {
+    /// Returns package metadata whose resource fields retain their source authority.
+    pub fn manifest(&self) -> &PluginManifest<PluginResourceLocator> {
         &self.manifest
     }
+}
+
+fn environment_resource(
+    environment_id: &str,
+    root: &AbsolutePathBuf,
+    path: AbsolutePathBuf,
+) -> Result<PluginResourceLocator, ResolvedPluginError> {
+    if !path.as_path().starts_with(root.as_path()) {
+        return Err(ResolvedPluginError::ResourceOutsideRoot {
+            root: root.clone(),
+            path,
+        });
+    }
+    Ok(PluginResourceLocator::Environment {
+        environment_id: environment_id.to_string(),
+        path,
+    })
 }
 
 /// Resolves source-owned package roots into inert plugin descriptors.
@@ -73,7 +114,7 @@ impl ResolvedPlugin {
 /// manifest and may be handled as another standalone capability.
 pub trait PluginProvider: Send + Sync {
     /// Source-specific resolution failure.
-    type Error: Error + Send + Sync + 'static;
+    type Error: StdError + Send + Sync + 'static;
 
     /// Resolves one selected root without activating any of its components.
     fn resolve(
@@ -81,3 +122,7 @@ pub trait PluginProvider: Send + Sync {
         root: &SelectedCapabilityRoot,
     ) -> impl Future<Output = Result<Option<ResolvedPlugin>, Self::Error>> + Send;
 }
+
+#[cfg(test)]
+#[path = "provider_tests.rs"]
+mod tests;

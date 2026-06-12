@@ -1,8 +1,4 @@
 use codex_config::HooksFile;
-pub use codex_plugin::manifest::PluginManifest;
-pub use codex_plugin::manifest::PluginManifestHooks;
-pub use codex_plugin::manifest::PluginManifestInterface;
-pub use codex_plugin::manifest::PluginManifestPaths;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
 use serde::Deserialize;
@@ -12,6 +8,11 @@ use std::path::Component;
 use std::path::Path;
 const MAX_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_DEFAULT_PROMPT_LEN: usize = 128;
+
+pub type PluginManifest = codex_plugin::manifest::PluginManifest<AbsolutePathBuf>;
+pub type PluginManifestHooks = codex_plugin::manifest::PluginManifestHooks<AbsolutePathBuf>;
+pub type PluginManifestInterface = codex_plugin::manifest::PluginManifestInterface<AbsolutePathBuf>;
+pub type PluginManifestPaths = codex_plugin::manifest::PluginManifestPaths<AbsolutePathBuf>;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -426,8 +427,10 @@ mod tests {
     use codex_exec_server::EnvironmentManager;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_plugin::PluginProvider;
+    use codex_plugin::ResolvedPlugin;
     use codex_protocol::capabilities::CapabilityRootLocation;
     use codex_protocol::capabilities::SelectedCapabilityRoot;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -639,7 +642,17 @@ mod tests {
             .await
             .expect("resolve executor plugin")
             .expect("plugin descriptor");
+        let plugin_root =
+            AbsolutePathBuf::from_absolute_path_checked(plugin_root).expect("absolute plugin root");
+        let expected_plugin = ResolvedPlugin::from_environment(
+            "selected-demo".to_string(),
+            LOCAL_ENVIRONMENT_ID.to_string(),
+            plugin_root.clone(),
+            plugin_root.join(".codex-plugin/plugin.json"),
+            host_manifest,
+        )
+        .expect("valid expected descriptor");
 
-        assert_eq!(executor_plugin.manifest(), &host_manifest);
+        assert_eq!(executor_plugin, expected_plugin);
     }
 }

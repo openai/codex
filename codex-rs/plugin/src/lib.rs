@@ -18,7 +18,9 @@ pub use plugin_id::PluginId;
 pub use plugin_id::PluginIdError;
 pub use plugin_id::validate_plugin_segment;
 pub use provider::PluginProvider;
+pub use provider::PluginResourceLocator;
 pub use provider::ResolvedPlugin;
+pub use provider::ResolvedPluginError;
 pub use provider::ResolvedPluginLocation;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

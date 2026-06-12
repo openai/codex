@@ -3562,6 +3562,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-plugins",
+ "pretty_assertions",
  "thiserror 2.0.18",
 ]
 
