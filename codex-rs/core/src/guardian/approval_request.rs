@@ -5,6 +5,7 @@ use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
@@ -73,6 +74,7 @@ pub(crate) enum GuardianApprovalRequest {
         turn_id: String,
         reason: Option<String>,
         permissions: RequestPermissionProfile,
+        requested_scope: PermissionGrantScope,
     },
 }
 
@@ -167,6 +169,7 @@ struct RequestPermissionsApprovalAction<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a String>,
     permissions: &'a RequestPermissionProfile,
+    requested_scope: PermissionGrantScope,
 }
 
 fn serialize_guardian_action(value: impl Serialize) -> serde_json::Result<Value> {
@@ -363,11 +366,13 @@ pub(crate) fn guardian_approval_request_to_json(
             turn_id,
             reason,
             permissions,
+            requested_scope,
         } => serialize_guardian_action(RequestPermissionsApprovalAction {
             tool: "request_permissions",
             turn_id,
             reason: reason.as_ref(),
             permissions,
+            requested_scope: *requested_scope,
         }),
     }
 }

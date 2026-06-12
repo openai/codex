@@ -1985,7 +1985,13 @@ async fn try_run_sampling_request(
                         Err(err) => break Err(err),
                     };
                 if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push_back(tool_future);
+                    if output_result.tool_is_execution_barrier {
+                        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+                        in_flight.push_back(tool_future);
+                        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+                    } else {
+                        in_flight.push_back(tool_future);
+                    }
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);

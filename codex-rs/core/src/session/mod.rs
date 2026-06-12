@@ -1488,6 +1488,62 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) async fn runtime_workspace_snapshot(&self) -> session::RuntimeWorkspaceSnapshot {
+        let state = self.state.lock().await;
+        session::RuntimeWorkspaceSnapshot {
+            cwd: state.session_configuration.cwd().clone(),
+            workspace_roots: state.session_configuration.workspace_roots.clone(),
+            permission_profile: state.session_configuration.permission_profile(),
+        }
+    }
+
+    pub(crate) async fn update_runtime_cwd(
+        &self,
+        turn_context: &TurnContext,
+        cwd: AbsolutePathBuf,
+    ) -> ConstraintResult<()> {
+        let environments = {
+            let state = self.state.lock().await;
+            let mut environments = state.session_configuration.environments.clone();
+            environments.legacy_fallback_cwd = cwd.clone();
+            if let Some(environment) = environments.environments.first_mut() {
+                environment.cwd = PathUri::from_abs_path(&cwd);
+            }
+            environments
+        };
+        self.update_settings(SessionSettingsUpdate {
+            environments: Some(environments),
+            ..Default::default()
+        })
+        .await?;
+
+        let runtime_workspace = self.runtime_workspace_snapshot().await;
+        let turn_context_item =
+            turn_context.to_turn_context_item_with_runtime_workspace(&runtime_workspace);
+        let reference_context_item = self.reference_context_item().await;
+        let shell = self.user_shell();
+        let exec_policy = self.services.exec_policy.current();
+        let context_items = crate::context_manager::updates::build_runtime_workspace_update_items(
+            reference_context_item.as_ref(),
+            &turn_context_item,
+            turn_context,
+            shell.as_ref(),
+            exec_policy.as_ref(),
+        );
+        self.record_context_items_and_set_reference_context_item(
+            turn_context,
+            context_items,
+            turn_context_item,
+        )
+        .await;
+        self.send_event(
+            turn_context,
+            handlers::thread_settings_applied_event(self).await,
+        )
+        .await;
+        Ok(())
+    }
+
     pub(crate) async fn preview_settings(
         &self,
         updates: &SessionSettingsUpdate,
@@ -2168,16 +2224,36 @@ impl Session {
         rx_approve
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
     pub(crate) async fn request_permissions_for_environment(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         call_id: String,
         args: RequestPermissionsArgs,
         environment: TurnEnvironmentSelection,
+        cancellation_token: CancellationToken,
+    ) -> Option<RequestPermissionsResponse> {
+        self.request_permissions_for_environment_with_scope(
+            turn_context,
+            call_id,
+            args,
+            environment,
+            /*requested_scope*/ PermissionGrantScope::Turn,
+            cancellation_token,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    async fn request_permissions_for_environment_with_scope(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        environment: TurnEnvironmentSelection,
+        requested_scope: PermissionGrantScope,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
         match turn_context.as_ref().approval_policy.value() {
@@ -2230,6 +2306,7 @@ impl Session {
                 turn_id: turn_context.sub_id.clone(),
                 reason: args.reason,
                 permissions: requested_permissions.clone(),
+                requested_scope,
             };
             let review_rx = crate::guardian::spawn_approval_request_review(
                 session,
@@ -2249,7 +2326,7 @@ impl Session {
                 ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                     RequestPermissionsResponse {
                         permissions: requested_permissions.clone(),
-                        scope: PermissionGrantScope::Turn,
+                        scope: requested_scope,
                         strict_auto_review: false,
                     }
                 }
@@ -2348,6 +2425,45 @@ impl Session {
         cwd: AbsolutePathBuf,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
+        self.request_permissions_for_cwd_with_scope(
+            turn_context,
+            call_id,
+            args,
+            cwd,
+            /*requested_scope*/ PermissionGrantScope::Turn,
+            cancellation_token,
+        )
+        .await
+    }
+
+    pub(crate) async fn request_session_permissions_for_cwd(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        cwd: AbsolutePathBuf,
+        cancellation_token: CancellationToken,
+    ) -> Option<RequestPermissionsResponse> {
+        self.request_permissions_for_cwd_with_scope(
+            turn_context,
+            call_id,
+            args,
+            cwd,
+            /*requested_scope*/ PermissionGrantScope::Session,
+            cancellation_token,
+        )
+        .await
+    }
+
+    async fn request_permissions_for_cwd_with_scope(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        cwd: AbsolutePathBuf,
+        requested_scope: PermissionGrantScope,
+        cancellation_token: CancellationToken,
+    ) -> Option<RequestPermissionsResponse> {
         let turn_environment = match args.environment_id.as_deref() {
             Some(environment_id) => turn_context
                 .environments
@@ -2365,11 +2481,12 @@ impl Session {
         };
         let mut environment = turn_environment.selection();
         environment.cwd = PathUri::from_abs_path(&cwd);
-        self.request_permissions_for_environment(
+        self.request_permissions_for_environment_with_scope(
             turn_context,
             call_id,
             args,
             environment,
+            requested_scope,
             cancellation_token,
         )
         .await
@@ -3200,6 +3317,20 @@ impl Session {
                 .await
         };
         let turn_context_item = turn_context.to_turn_context_item();
+        self.record_context_items_and_set_reference_context_item(
+            turn_context,
+            context_items,
+            turn_context_item,
+        )
+        .await;
+    }
+
+    async fn record_context_items_and_set_reference_context_item(
+        &self,
+        turn_context: &TurnContext,
+        context_items: Vec<ResponseItem>,
+        turn_context_item: TurnContextItem,
+    ) {
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;

@@ -102,6 +102,11 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         &params,
         &session,
         &turn_context,
+        turn_context
+            .environments
+            .primary()
+            .expect("primary environment")
+            .cwd(),
         session.thread_id,
         /*allow_login_shell*/ true,
     )
@@ -164,6 +169,11 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
         &params,
         &session,
         &turn_context,
+        turn_context
+            .environments
+            .primary()
+            .expect("primary environment")
+            .cwd(),
         session.thread_id,
         /*allow_login_shell*/ false,
     )

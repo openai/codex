@@ -408,6 +408,58 @@ fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> Dyn
     }
 }
 
+#[tokio::test]
+async fn dynamic_tool_only_overrides_exact_set_working_directory_name() {
+    let tool_name = "set_working_directory";
+    let dynamic_override = probe_with(
+        |_| {},
+        ToolPlanInputs {
+            dynamic_tools: vec![dynamic_tool(
+                /*namespace*/ None, tool_name, /*defer_loading*/ false,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+        dynamic_override.visible_spec(tool_name)
+    else {
+        panic!("expected dynamic function tool");
+    };
+    assert_eq!(description, "set_working_directory dynamic tool");
+    assert_eq!(dynamic_override.exposure(tool_name), ToolExposure::Direct);
+    assert_eq!(
+        dynamic_override
+            .registered_names
+            .iter()
+            .filter(|registered| registered.as_str() == tool_name)
+            .count(),
+        1
+    );
+
+    let namespaced_tool = probe_with(
+        |_| {},
+        ToolPlanInputs {
+            dynamic_tools: vec![dynamic_tool(
+                Some("external"),
+                tool_name,
+                /*defer_loading*/ false,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        namespaced_tool.exposure(tool_name),
+        ToolExposure::DirectModelOnly
+    );
+    assert_eq!(
+        namespaced_tool.namespace_function_names("external"),
+        &[tool_name.to_string()]
+    );
+}
+
 fn discoverable_plugin(id: &str, name: &str) -> DiscoverableTool {
     DiscoverablePluginInfo {
         id: id.to_string(),
@@ -623,13 +675,18 @@ async fn environment_count_controls_environment_backed_tools() {
         "exec_command",
         "apply_patch",
         "view_image",
+        "set_working_directory",
     ]);
     no_environment.assert_registered_lacks(&[
         "shell_command",
         "exec_command",
         "apply_patch",
         "view_image",
+        "set_working_directory",
     ]);
+
+    let single_environment = probe(|_| {}).await;
+    single_environment.assert_visible_contains(&["set_working_directory"]);
 
     let multiple_environments = probe(|turn| {
         duplicate_primary_environment(turn);
@@ -639,6 +696,7 @@ async fn environment_count_controls_environment_backed_tools() {
     })
     .await;
     multiple_environments.assert_visible_contains(&["exec_command", "apply_patch", "view_image"]);
+    multiple_environments.assert_visible_lacks(&["set_working_directory"]);
     assert!(has_parameter(
         multiple_environments.visible_spec("exec_command"),
         "environment_id"
@@ -1267,6 +1325,7 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
             "exec",
             "wait",
             "request_user_input",
+            "set_working_directory",
             "agents",
             // Hosted Responses tools.
             "web_search",
@@ -1353,6 +1412,7 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
             codex_code_mode::PUBLIC_TOOL_NAME,
             codex_code_mode::WAIT_TOOL_NAME,
             "request_user_input",
+            "set_working_directory",
             // Multi-agent v2 tools.
             "spawn_agent",
             "send_message",

@@ -40,11 +40,32 @@ pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 pub use codex_tools::ToolExecutor;
 pub use codex_tools::ToolExposure;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ToolExecutionPolicy {
+    #[default]
+    Parallel,
+    BarrierAndCancelSuffix,
+}
+
+impl ToolExecutionPolicy {
+    pub(crate) fn is_barrier(self) -> bool {
+        !matches!(self, Self::Parallel)
+    }
+
+    pub(crate) fn cancels_suffix_on_failure(self) -> bool {
+        matches!(self, Self::BarrierAndCancelSuffix)
+    }
+}
+
 /// Typed runtime contract for locally executed tools.
 ///
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
+    fn execution_policy(&self) -> ToolExecutionPolicy {
+        ToolExecutionPolicy::Parallel
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(
             payload,
@@ -277,6 +298,10 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
 }
 
 impl CoreToolRuntime for ExposureOverride {
+    fn execution_policy(&self) -> ToolExecutionPolicy {
+        self.handler.execution_policy()
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         self.handler.matches_kind(payload)
     }
@@ -385,6 +410,10 @@ impl ToolRegistry {
     pub(crate) fn waits_for_runtime_cancellation(&self, name: &ToolName) -> Option<bool> {
         let tool = self.tool(name)?;
         Some(tool.waits_for_runtime_cancellation())
+    }
+
+    pub(crate) fn execution_policy(&self, name: &ToolName) -> Option<ToolExecutionPolicy> {
+        self.tool(name).map(|tool| tool.execution_policy())
     }
 
     #[allow(dead_code)]

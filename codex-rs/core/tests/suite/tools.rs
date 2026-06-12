@@ -9,6 +9,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -16,6 +17,8 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -30,6 +33,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
@@ -126,6 +130,125 @@ async fn turn_environment_selection_keeps_environment_backed_tools() -> Result<(
         tools.contains(&"exec_command".to_string()),
         "environment tool should remain available with selected local environment; got {tools:?}"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_working_directory_auto_review_updates_same_batch_shell_cwd() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5-codex")
+        .with_config(|config| {
+            config.workspace_roots = vec![config.cwd.clone()];
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .features
+                .enable(Feature::GuardianApproval)
+                .expect("guardian approval should enable for test");
+        });
+    let test = builder.build(&server).await?;
+    let external_cwd = tempfile::tempdir()?;
+    let external_cwd = AbsolutePathBuf::try_from(external_cwd.path().canonicalize()?)?;
+    let set_cwd_call_id = "set-external-cwd";
+    let shell_call_id = "pwd-after-set-cwd";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    set_cwd_call_id,
+                    "set_working_directory",
+                    &serde_json::to_string(&json!({ "path": external_cwd }))?,
+                ),
+                ev_function_call(
+                    shell_call_id,
+                    "shell_command",
+                    &serde_json::to_string(&json!({
+                        "command": "pwd",
+                        "login": false,
+                        "timeout_ms": 1_000,
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian"),
+                ev_assistant_message(
+                    "msg-guardian",
+                    &json!({
+                        "risk_level": "low",
+                        "user_authorization": "high",
+                        "outcome": "allow",
+                        "rationale": "The requested session-scoped cwd change matches the user request.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+    test.submit_turn_with_approval_and_permission_profile(
+        "change to the external directory and print the working directory",
+        AskForApproval::OnRequest,
+        permission_profile,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let set_cwd_output = responses
+        .function_call_output_text(set_cwd_call_id)
+        .expect("set cwd output");
+    assert_eq!(
+        serde_json::from_str::<Value>(&set_cwd_output)?,
+        json!({
+            "cwd": external_cwd,
+        })
+    );
+    let shell_output = responses
+        .function_call_output_text(shell_call_id)
+        .expect("shell output");
+    assert!(shell_output.contains(external_cwd.as_path().to_string_lossy().as_ref()));
+    let followup_request = responses
+        .requests()
+        .into_iter()
+        .find(|request| request.function_call_output_text(shell_call_id).is_some())
+        .expect("model request after cwd change");
+    let expected_cwd = external_cwd.as_path().to_string_lossy();
+    assert!(
+        followup_request.has_message_with_input_texts("user", |texts| {
+            texts.iter().any(|text| {
+                text.contains("<environment_context>") && text.contains(expected_cwd.as_ref())
+            })
+        })
+    );
+    let guardian_request = responses
+        .requests()
+        .into_iter()
+        .find(|request| request.body_contains_text("request_permissions"))
+        .expect("guardian request");
+    assert!(guardian_request.body_contains_text("\"requested_scope\": \"session\""));
 
     Ok(())
 }

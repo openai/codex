@@ -143,11 +143,13 @@ impl ViewImageHandler {
                 "view_image is unavailable in this session".to_string(),
             ));
         };
-        let cwd = turn_environment.cwd().clone();
+        let runtime_workspace = session.runtime_workspace_snapshot().await;
+        let (cwd, sandbox_cwd) = turn.runtime_environment_cwd(&runtime_workspace, turn_environment);
         let abs_path = cwd.join(path);
-        let sandbox = turn.file_system_sandbox_context(
+        let sandbox = turn.file_system_sandbox_context_for_permission_profile(
+            &runtime_workspace.permission_profile,
             /*additional_permissions*/ None,
-            turn_environment.cwd_uri(),
+            &sandbox_cwd,
         );
         let fs = turn_environment.environment.get_filesystem();
         let path_uri = PathUri::from_abs_path(&abs_path);
@@ -265,12 +267,14 @@ impl ToolOutput for ViewImageOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::session::SessionSettingsUpdate;
     use crate::session::tests::make_session_and_context;
     use crate::session::turn_context::TurnEnvironment;
     use crate::tools::context::ToolCallSource;
     use crate::tools::context::ToolInvocation;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::protocol::TurnEnvironmentSelections;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use core_test_support::TempDirExt;
     use pretty_assertions::assert_eq;
@@ -278,19 +282,35 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    fn replace_primary_environment_cwd(turn: &mut crate::TurnContext, cwd: AbsolutePathBuf) {
+    async fn replace_runtime_workspace(
+        session: &crate::session::session::Session,
+        turn: &mut crate::TurnContext,
+        cwd: AbsolutePathBuf,
+        permission_profile: PermissionProfile,
+    ) {
         let current = turn
             .environments
             .turn_environments
             .first()
             .cloned()
             .expect("default local turn environment");
-        turn.environments.turn_environments[0] = TurnEnvironment::new(
+        let environment = TurnEnvironment::new(
             current.environment_id,
             current.environment,
-            cwd,
+            cwd.clone(),
             current.shell,
         );
+        let selection = environment.selection();
+        turn.environments.turn_environments[0] = environment;
+        turn.permission_profile = permission_profile.clone();
+        session
+            .update_settings(SessionSettingsUpdate {
+                environments: Some(TurnEnvironmentSelections::new(cwd, vec![selection])),
+                permission_profile: Some(permission_profile),
+                ..Default::default()
+            })
+            .await
+            .expect("update runtime workspace");
     }
 
     #[test]
@@ -329,10 +349,15 @@ mod tests {
         let image_dir = tempfile::tempdir().expect("create image temp dir");
         let image_cwd = image_dir.abs();
 
-        replace_primary_environment_cwd(&mut turn, image_cwd.clone());
+        replace_runtime_workspace(
+            &session,
+            &mut turn,
+            image_cwd.clone(),
+            PermissionProfile::read_only(),
+        )
+        .await;
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
-        turn.permission_profile = PermissionProfile::read_only();
 
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {
@@ -392,10 +417,15 @@ mod tests {
         let image_dir = tempfile::tempdir().expect("create image temp dir");
         let image_cwd = image_dir.abs();
 
-        replace_primary_environment_cwd(&mut turn, image_cwd.clone());
+        replace_runtime_workspace(
+            &session,
+            &mut turn,
+            image_cwd.clone(),
+            PermissionProfile::Disabled,
+        )
+        .await;
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
-        turn.permission_profile = PermissionProfile::Disabled;
 
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {

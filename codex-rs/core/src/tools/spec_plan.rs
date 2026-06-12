@@ -20,6 +20,7 @@ use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
+use crate::tools::handlers::SetWorkingDirectoryHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::TestSyncHandler;
@@ -654,6 +655,20 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 
     if features.enabled(Feature::RequestPermissionsTool) {
         planned_tools.add(RequestPermissionsHandler);
+    }
+
+    if matches!(environment_mode, ToolEnvironmentMode::Single) {
+        let handler = SetWorkingDirectoryHandler;
+        let tool_name = handler.tool_name();
+        let has_dynamic_tool_with_same_name = context.dynamic_tools.iter().any(|spec| match spec {
+            DynamicToolSpec::Function(tool) => {
+                tool.name == tool_name.name && DynamicToolHandler::new(tool).is_some()
+            }
+            DynamicToolSpec::Namespace(_) => false,
+        });
+        if !has_dynamic_tool_with_same_name {
+            planned_tools.add_with_exposure(handler, ToolExposure::DirectModelOnly);
+        }
     }
 
     if features.enabled(Feature::TokenBudget) {

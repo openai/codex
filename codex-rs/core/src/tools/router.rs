@@ -92,6 +92,15 @@ impl ToolRouter {
             .unwrap_or(false)
     }
 
+    pub(crate) fn tool_execution_policy(
+        &self,
+        call: &ToolCall,
+    ) -> crate::tools::registry::ToolExecutionPolicy {
+        self.registry
+            .execution_policy(&call.tool_name)
+            .unwrap_or_default()
+    }
+
     #[instrument(level = "trace", skip_all, err)]
     pub fn build_tool_call(item: ResponseItem) -> Result<Option<ToolCall>, FunctionCallError> {
         match item {

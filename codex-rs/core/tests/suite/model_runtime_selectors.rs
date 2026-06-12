@@ -174,6 +174,7 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
             codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
             codex_code_mode::WAIT_TOOL_NAME.to_string(),
             "request_user_input".to_string(),
+            "set_working_directory".to_string(),
             // Hosted Responses tools.
             "web_search".to_string(),
             "image_generation".to_string(),

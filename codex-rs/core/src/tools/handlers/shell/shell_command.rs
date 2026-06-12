@@ -86,14 +86,17 @@ impl ShellCommandHandler {
         params: &ShellCommandToolCallParams,
         session: &crate::session::session::Session,
         turn_context: &TurnContext,
+        cwd: &codex_utils_absolute_path::AbsolutePathBuf,
         thread_id: ThreadId,
         allow_login_shell: bool,
     ) -> Result<ExecParams, FunctionCallError> {
         let shell = session.user_shell();
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
         let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
-        #[allow(deprecated)]
-        let cwd = turn_context.resolve_path(params.workdir.clone());
+        let cwd = params
+            .workdir
+            .as_ref()
+            .map_or_else(|| cwd.clone(), |path| cwd.join(path));
 
         Ok(ExecParams {
             command,
@@ -167,11 +170,13 @@ impl ShellCommandHandler {
             )));
         };
 
-        #[allow(deprecated)]
-        let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+        let runtime_workspace = session.runtime_workspace_snapshot().await;
+        let cwd = resolve_workdir_base_path(&arguments, &runtime_workspace.cwd)?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
-        #[allow(deprecated)]
-        let workdir = turn.resolve_path(params.workdir.clone());
+        let workdir = params.workdir.as_ref().map_or_else(
+            || runtime_workspace.cwd.clone(),
+            |path| runtime_workspace.cwd.join(path),
+        );
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),
@@ -184,6 +189,7 @@ impl ShellCommandHandler {
             &params,
             session.as_ref(),
             turn.as_ref(),
+            &runtime_workspace.cwd,
             session.thread_id,
             turn.config.permissions.allow_login_shell,
         )?;

@@ -320,13 +320,14 @@ impl TurnContext {
             .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
     }
 
-    pub(crate) fn file_system_sandbox_context(
+    pub(crate) fn file_system_sandbox_context_for_permission_profile(
         &self,
+        permission_profile: &PermissionProfile,
         additional_permissions: Option<AdditionalPermissionProfile>,
         cwd: &PathUri,
     ) -> FileSystemSandboxContext {
         let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
-            self.permission_profile.to_runtime_permissions();
+            permission_profile.to_runtime_permissions();
         let file_system_sandbox_policy = effective_file_system_sandbox_policy(
             &base_file_system_sandbox_policy,
             additional_permissions.as_ref(),
@@ -336,7 +337,7 @@ impl TurnContext {
             additional_permissions.as_ref(),
         );
         let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            self.permission_profile.enforcement(),
+            permission_profile.enforcement(),
             &file_system_sandbox_policy,
             network_sandbox_policy,
         );
@@ -349,6 +350,20 @@ impl TurnContext {
                 .permissions
                 .windows_sandbox_private_desktop,
             use_legacy_landlock: self.features.use_legacy_landlock(),
+        }
+    }
+
+    pub(crate) fn runtime_environment_cwd(
+        &self,
+        runtime_workspace: &crate::session::session::RuntimeWorkspaceSnapshot,
+        environment: &TurnEnvironment,
+    ) -> (AbsolutePathBuf, PathUri) {
+        if self.environments.turn_environments.len() == 1 {
+            let cwd = runtime_workspace.cwd.clone();
+            let cwd_uri = PathUri::from_abs_path(&cwd);
+            (cwd, cwd_uri)
+        } else {
+            (environment.cwd().clone(), environment.cwd_uri().clone())
         }
     }
 
@@ -397,6 +412,33 @@ impl TurnContext {
             effort: self.reasoning_effort.clone(),
             summary: ReasoningSummaryConfig::Auto,
         }
+    }
+
+    pub(crate) fn to_turn_context_item_with_runtime_workspace(
+        &self,
+        runtime_workspace: &crate::session::session::RuntimeWorkspaceSnapshot,
+    ) -> TurnContextItem {
+        let mut item = self.to_turn_context_item();
+        item.cwd = runtime_workspace.cwd.to_path_buf();
+        item.workspace_roots = (!runtime_workspace.workspace_roots.is_empty())
+            .then_some(runtime_workspace.workspace_roots.clone());
+        item.sandbox_policy = codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+            &runtime_workspace.permission_profile,
+            runtime_workspace.cwd.as_path(),
+        );
+        item.permission_profile = Some(runtime_workspace.permission_profile.clone());
+        let legacy_file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                &item.sandbox_policy,
+                runtime_workspace.cwd.as_path(),
+            );
+        let file_system_sandbox_policy = runtime_workspace
+            .permission_profile
+            .file_system_sandbox_policy();
+        item.file_system_sandbox_policy = (file_system_sandbox_policy
+            != legacy_file_system_sandbox_policy)
+            .then_some(file_system_sandbox_policy);
+        item
     }
 
     fn turn_context_network_item(&self) -> Option<TurnContextNetworkItem> {

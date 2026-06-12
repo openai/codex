@@ -428,6 +428,13 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) app_server_client_version: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeWorkspaceSnapshot {
+    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) workspace_roots: Vec<AbsolutePathBuf>,
+    pub(crate) permission_profile: PermissionProfile,
+}
+
 pub(crate) struct AppServerClientMetadata {
     pub(crate) client_name: Option<String>,
     pub(crate) client_version: Option<String>,

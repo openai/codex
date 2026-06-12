@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -34,6 +35,7 @@ pub(crate) struct ToolCallRuntime {
     turn_context: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
     parallel_execution: Arc<RwLock<()>>,
+    failed_barrier_call_id: Arc<Mutex<Option<String>>>,
 }
 
 impl ToolCallRuntime {
@@ -49,7 +51,12 @@ impl ToolCallRuntime {
             turn_context,
             tracker,
             parallel_execution: Arc::new(RwLock::new(())),
+            failed_barrier_call_id: Arc::new(Mutex::new(/*t*/ None)),
         }
+    }
+
+    pub(crate) fn tool_is_execution_barrier(&self, call: &ToolCall) -> bool {
+        self.router.tool_execution_policy(call).is_barrier()
     }
 
     pub(crate) fn create_diff_consumer(
@@ -66,13 +73,59 @@ impl ToolCallRuntime {
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
         let error_call = call.clone();
-        let future =
-            self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token);
+        let failed_barrier_call_id = Arc::clone(&self.failed_barrier_call_id);
+        let cancels_suffix = self
+            .router
+            .tool_execution_policy(&call)
+            .cancels_suffix_on_failure();
+        let barrier_call_id = cancels_suffix.then(|| error_call.call_id.clone());
         async move {
-            match future.await {
-                Ok(response) => Ok(response.into_response()),
-                Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
-                Err(other) => Ok(Self::failure_response(error_call, other)),
+            let prior_failure = failed_barrier_call_id
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if let Some(failed_call_id) = prior_failure {
+                return Ok(Self::failure_response(
+                    error_call,
+                    FunctionCallError::RespondToModel(
+                        serde_json::json!({
+                            "code": "dependency_cancelled",
+                            "message": format!(
+                                "cancelled because set_working_directory `{failed_call_id}` failed"
+                            ),
+                            "failed_call_id": failed_call_id,
+                        })
+                        .to_string(),
+                    ),
+                ));
+            }
+            match self
+                .handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token)
+                .await
+            {
+                Ok(result) => {
+                    if !result.result.success_for_logging() {
+                        record_failed_barrier_call(
+                            failed_barrier_call_id.as_ref(),
+                            barrier_call_id.as_ref(),
+                        );
+                    }
+                    Ok(result.into_response())
+                }
+                Err(FunctionCallError::Fatal(message)) => {
+                    record_failed_barrier_call(
+                        failed_barrier_call_id.as_ref(),
+                        barrier_call_id.as_ref(),
+                    );
+                    Err(CodexErr::Fatal(message))
+                }
+                Err(other) => {
+                    record_failed_barrier_call(
+                        failed_barrier_call_id.as_ref(),
+                        barrier_call_id.as_ref(),
+                    );
+                    Ok(Self::failure_response(error_call, other))
+                }
             }
         }
         .in_current_span()
@@ -232,6 +285,14 @@ impl ToolCallRuntime {
         } else {
             format!("aborted by user after {secs:.1}s")
         }
+    }
+}
+
+fn record_failed_barrier_call(failed_call_id: &Mutex<Option<String>>, call_id: Option<&String>) {
+    if let Some(call_id) = call_id {
+        *failed_call_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(call_id.clone());
     }
 }
 

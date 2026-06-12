@@ -241,3 +241,66 @@ pub(crate) fn build_settings_update_items(
     }
     items
 }
+
+pub(crate) fn build_runtime_workspace_update_items(
+    previous: Option<&TurnContextItem>,
+    next: &TurnContextItem,
+    turn_context: &TurnContext,
+    shell: &Shell,
+    exec_policy: &Policy,
+) -> Vec<ResponseItem> {
+    let contextual_user_message = if turn_context.config.include_environment_context {
+        let next_context =
+            EnvironmentContext::from_turn_context_item(next, shell.name().to_string());
+        match previous {
+            Some(previous) => {
+                let previous_context =
+                    EnvironmentContext::from_turn_context_item(previous, shell.name().to_string());
+                (!previous_context.equals_except_shell(&next_context)).then(|| {
+                    ContextualUserFragment::into(EnvironmentContext::diff_from_turn_context_item(
+                        previous,
+                        &next_context,
+                    ))
+                })
+            }
+            None => Some(ContextualUserFragment::into(next_context)),
+        }
+    } else {
+        None
+    };
+
+    let permissions_changed = previous.is_none_or(|previous| {
+        previous.permission_profile() != next.permission_profile()
+            || previous.approval_policy != next.approval_policy
+    });
+    let developer_update_sections =
+        if turn_context.config.include_permissions_instructions && permissions_changed {
+            vec![
+                PermissionsInstructions::from_permission_profile(
+                    &next.permission_profile(),
+                    next.approval_policy,
+                    turn_context.config.approvals_reviewer,
+                    exec_policy,
+                    &next.cwd,
+                    turn_context
+                        .features
+                        .enabled(Feature::ExecPermissionApprovals),
+                    turn_context
+                        .features
+                        .enabled(Feature::RequestPermissionsTool),
+                )
+                .render(),
+            ]
+        } else {
+            Vec::new()
+        };
+
+    let mut items = Vec::with_capacity(/*capacity*/ 2);
+    if let Some(developer_message) = build_developer_update_item(developer_update_sections) {
+        items.push(developer_message);
+    }
+    if let Some(contextual_user_message) = contextual_user_message {
+        items.push(contextual_user_message);
+    }
+    items
+}
