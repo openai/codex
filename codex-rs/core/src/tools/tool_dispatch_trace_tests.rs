@@ -86,6 +86,10 @@ impl CodeModeSessionProvider for MissingCellSessionProvider {
 struct MissingCellSession;
 
 impl CodeModeSession for MissingCellSession {
+    fn is_alive(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(
         &'a self,
         _request: ExecuteRequest,
