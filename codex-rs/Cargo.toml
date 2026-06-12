@@ -322,6 +322,9 @@ keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"
 libc = "0.2.182"
+# SQLx accepts older libsqlite3-sys releases whose bundled SQLite is vulnerable
+# to the WAL-reset corruption race. Keep the engine on the first fixed release.
+libsqlite3-sys = { version = "=0.37.0", default-features = false }
 log = "0.4"
 lru = "0.16.3"
 maplit = "1.0.2"

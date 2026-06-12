@@ -628,6 +628,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn linked_sqlite_has_wal_reset_bug_fix() {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory sqlite db");
+        let sqlite_version: String = sqlx::query_scalar("SELECT sqlite_version()")
+            .fetch_one(&pool)
+            .await
+            .expect("query linked sqlite version");
+        pool.close().await;
+
+        let version = sqlite_version
+            .split('.')
+            .map(|part| part.parse::<u32>().expect("numeric sqlite version"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            version.len(),
+            3,
+            "unexpected SQLite version: {sqlite_version}"
+        );
+        let version = (version[0], version[1], version[2]);
+        let version_number = version.0 * 1_000_000 + version.1 * 1_000 + version.2;
+        assert_eq!(
+            version_number,
+            libsqlite3_sys::SQLITE_VERSION_NUMBER as u32,
+            "linked SQLite version differs from the bundled headers"
+        );
+        let includes_wal_reset_fix = version >= (3, 51, 3)
+            || (version.0 == 3 && version.1 == 50 && version.2 >= 7)
+            || (version.0 == 3 && version.1 == 44 && version.2 >= 6);
+        assert!(
+            includes_wal_reset_fix,
+            "linked SQLite {sqlite_version} is vulnerable to the WAL-reset corruption bug"
+        );
+    }
+
+    #[tokio::test]
     async fn open_state_sqlite_tolerates_newer_applied_migrations() {
         let codex_home = unique_temp_dir();
         tokio::fs::create_dir_all(&codex_home)
