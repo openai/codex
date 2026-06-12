@@ -187,10 +187,6 @@ pub struct ConversationStartParams {
     pub model: Option<String>,
     /// Selects whether the realtime session should produce text or audio output.
     pub output_modality: RealtimeOutputModality,
-    /// Whether Codex should automatically append standalone assistant output back to realtime.
-    pub auto_handoff_appends: bool,
-    /// Whether Codex should automatically forward active handoff output back to realtime.
-    pub auto_handoff_updates: bool,
     pub prompt: Option<Option<String>>,
     pub realtime_session_id: Option<String>,
     pub transport: Option<ConversationStartTransport>,

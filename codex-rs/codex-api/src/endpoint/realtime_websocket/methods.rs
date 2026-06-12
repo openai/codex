@@ -1,3 +1,4 @@
+use crate::endpoint::realtime_websocket::methods_common::conversation_context_item_create_message;
 use crate::endpoint::realtime_websocket::methods_common::conversation_function_call_output_message;
 use crate::endpoint::realtime_websocket::methods_common::conversation_item_create_message;
 use crate::endpoint::realtime_websocket::methods_common::normalized_session_mode;
@@ -289,6 +290,17 @@ impl RealtimeWebsocketWriter {
     pub async fn send_conversation_item_create(&self, text: String) -> Result<(), ApiError> {
         self.send_json(&conversation_item_create_message(self.event_parser, text))
             .await
+    }
+
+    pub async fn send_conversation_context_item_create(
+        &self,
+        text: String,
+    ) -> Result<(), ApiError> {
+        let Some(message) = conversation_context_item_create_message(self.event_parser, text)
+        else {
+            return Ok(());
+        };
+        self.send_json(&message).await
     }
 
     pub async fn send_conversation_handoff_append(

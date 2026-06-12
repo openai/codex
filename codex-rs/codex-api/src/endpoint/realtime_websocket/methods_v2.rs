@@ -37,10 +37,21 @@ const REALTIME_V2_SILENCE_TOOL_DESCRIPTION: &str = "Call this when the best resp
 const REALTIME_V2_INPUT_TRANSCRIPTION_MODEL: &str = "gpt-4o-mini-transcribe";
 
 pub(super) fn conversation_item_create_message(text: String) -> RealtimeOutboundMessage {
+    conversation_message_item_create_message(ConversationRole::User, text)
+}
+
+pub(super) fn conversation_context_item_create_message(text: String) -> RealtimeOutboundMessage {
+    conversation_message_item_create_message(ConversationRole::Developer, text)
+}
+
+fn conversation_message_item_create_message(
+    role: ConversationRole,
+    text: String,
+) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::ConversationItemCreate {
         item: ConversationItemPayload::Message(ConversationMessageItem {
             r#type: ConversationItemType::Message,
-            role: ConversationRole::User,
+            role,
             content: vec![ConversationItemContent {
                 r#type: ConversationContentType::InputText,
                 text,

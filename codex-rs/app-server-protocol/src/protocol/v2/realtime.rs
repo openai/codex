@@ -71,14 +71,6 @@ pub struct ThreadRealtimeStartParams {
     /// Selects text or audio output for the realtime session. Transport and voice stay
     /// independent so clients can choose how they connect separately from what the model emits.
     pub output_modality: RealtimeOutputModality,
-    /// Controls whether Codex automatically appends standalone assistant output to realtime.
-    /// Omit to keep the default behavior enabled.
-    #[ts(optional = nullable)]
-    pub auto_handoff_appends: Option<bool>,
-    /// Controls whether Codex automatically forwards active handoff output to realtime.
-    /// Omit to keep the default behavior enabled.
-    #[ts(optional = nullable)]
-    pub auto_handoff_updates: Option<bool>,
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",

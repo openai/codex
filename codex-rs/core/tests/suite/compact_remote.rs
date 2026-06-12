@@ -196,8 +196,6 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             model: None,
             output_modality: RealtimeOutputModality::Audio,
-            auto_handoff_appends: true,
-            auto_handoff_updates: true,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,
