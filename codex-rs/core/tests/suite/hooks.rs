@@ -10,6 +10,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -58,6 +59,7 @@ const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
 const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
+const PERMISSION_REQUEST_DENY_REASON: &str = "denied by the permission request hook";
 
 fn restrictive_workspace_write_profile() -> PermissionProfile {
     PermissionProfile::workspace_write_with(
@@ -1946,7 +1948,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
 }
 
 #[tokio::test]
-async fn permission_request_hook_allows_shell_command_without_user_approval() -> Result<()> {
+async fn permission_request_hook_allow_takes_precedence_over_auto_review() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1981,7 +1983,10 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
                 panic!("failed to write permission request hook test fixture: {error}");
             }
         })
-        .with_config(trust_discovered_hooks);
+        .with_config(|config| {
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            trust_discovered_hooks(config);
+        });
     let test = builder.build(&server).await?;
 
     fs::write(&marker, "seed").context("create permission request marker")?;
@@ -2015,6 +2020,79 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_request_hook_deny_takes_precedence_over_auto_review() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-shell-command-denied";
+    let marker_dir = TempDir::new()?;
+    let marker = marker_dir.path().join("permission-request-denied-marker");
+    let command = format!("rm -f {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "permission request hook denied it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(
+                home,
+                Some(PERMISSION_REQUEST_HOOK_MATCHER),
+                "deny",
+                PERMISSION_REQUEST_DENY_REASON,
+            ) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    fs::write(&marker, "seed").context("create permission request denial marker")?;
+
+    test.submit_turn_with_approval_and_permission_profile(
+        "run the shell command after hook denial",
+        AskForApproval::OnRequest,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].function_call_output_text(call_id).as_deref(),
+        Some(PERMISSION_REQUEST_DENY_REASON),
+    );
+    assert!(
+        marker.exists(),
+        "denied command should not remove marker file"
+    );
+
+    assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        &command,
+        /*description*/ None,
+    )?;
 
     Ok(())
 }

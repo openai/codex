@@ -168,3 +168,96 @@ printf '%s\n' "${@: -1}" >> "${payload_path}""#,
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_review_denial_blocks_escalated_command_and_returns_rationale() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let output_dir = TempDir::new()?;
+    let output_file = output_dir.path().join("auto-review-denied.txt");
+    let command = format!("printf denied > {}", output_file.display());
+    let call_id = "auto-review-denied-command";
+    let rationale = "The command writes outside the active workspace without user authorization.";
+    let tool_args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": "Write a marker outside the workspace.",
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parent-tool"),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&tool_args)?),
+                ev_completed("resp-parent-tool"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-review"),
+                ev_assistant_message(
+                    "msg-guardian-review",
+                    &json!({
+                        "risk_level": "high",
+                        "user_authorization": "low",
+                        "outcome": "deny",
+                        "rationale": rationale,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian-review"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-done"),
+                ev_assistant_message("msg-parent-done", "done"),
+                ev_completed("resp-parent-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run a command that auto-review should deny".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(AskForApproval::OnRequest),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                sandbox_policy: Some(SandboxPolicy::WorkspaceWrite {
+                    writable_roots: vec![],
+                    network_access: false,
+                    exclude_tmpdir_env_var: true,
+                    exclude_slash_tmp: true,
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    let output = requests[2]
+        .function_call_output_text(call_id)
+        .expect("parent continuation should receive the denied tool output");
+    assert!(output.contains("This action was rejected due to unacceptable risk."));
+    assert!(output.contains(rationale));
+    assert!(
+        !output_file.exists(),
+        "auto-review denial should prevent command execution"
+    );
+
+    Ok(())
+}
