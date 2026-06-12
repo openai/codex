@@ -73,6 +73,7 @@ const TOOL_ID_KEY: &str = "tool_id";
 const TOOL_SUGGEST_SUGGEST_TYPE_KEY: &str = "suggest_type";
 const TOOL_SUGGEST_REASON_KEY: &str = "suggest_reason";
 const TOOL_SUGGEST_INSTALL_URL_KEY: &str = "install_url";
+const TOOL_SUGGEST_ENTRIES_KEY: &str = "entries";
 
 #[derive(Clone, PartialEq, Default)]
 struct ComposerDraft {
@@ -378,11 +379,6 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
         return None;
     }
 
-    let tool_type = match meta.get(TOOL_TYPE_KEY).and_then(Value::as_str) {
-        Some("connector") => ToolSuggestionToolType::Connector,
-        Some("plugin") => ToolSuggestionToolType::Plugin,
-        _ => return None,
-    };
     let suggest_type = match meta
         .get(TOOL_SUGGEST_SUGGEST_TYPE_KEY)
         .and_then(Value::as_str)
@@ -391,17 +387,34 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
         Some("enable") => ToolSuggestionType::Enable,
         _ => return None,
     };
+    let entry = meta
+        .get(TOOL_SUGGEST_ENTRIES_KEY)
+        .and_then(Value::as_array)
+        .and_then(|entries| match entries.as_slice() {
+            [entry] => entry.as_object(),
+            _ => None,
+        })
+        .unwrap_or(meta);
+    let tool_type = match entry.get(TOOL_TYPE_KEY).and_then(Value::as_str) {
+        Some("connector") => ToolSuggestionToolType::Connector,
+        Some("plugin") => ToolSuggestionToolType::Plugin,
+        _ => return None,
+    };
 
     Some(ToolSuggestionRequest {
         tool_type,
         suggest_type,
         suggest_reason: meta
             .get(TOOL_SUGGEST_REASON_KEY)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        tool_id: entry.get(TOOL_ID_KEY).and_then(Value::as_str)?.to_string(),
+        tool_name: entry
+            .get(TOOL_NAME_KEY)
             .and_then(Value::as_str)?
             .to_string(),
-        tool_id: meta.get(TOOL_ID_KEY).and_then(Value::as_str)?.to_string(),
-        tool_name: meta.get(TOOL_NAME_KEY).and_then(Value::as_str)?.to_string(),
-        install_url: meta
+        install_url: entry
             .get(TOOL_SUGGEST_INSTALL_URL_KEY)
             .and_then(Value::as_str)
             .map(ToString::to_string),
@@ -2060,6 +2073,43 @@ mod tests {
                 tool_type: ToolSuggestionToolType::Connector,
                 suggest_type: ToolSuggestionType::Install,
                 suggest_reason: "Plan and reference events from your calendar".to_string(),
+                tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+                tool_name: "Google Calendar".to_string(),
+                install_url: Some("https://example.test/google-calendar".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn one_entry_tool_suggestion_meta_is_parsed_into_request_payload() {
+        let request = from_form_request(
+            ThreadId::default(),
+            form_request(
+                "Choose integrations",
+                empty_object_schema(),
+                Some(serde_json::json!({
+                    "codex_approval_kind": "tool_suggestion",
+                    "suggest_type": "install",
+                    "entries": [
+                        {
+                            "id": "connector_2128aebfecb84f64a069897515042a44",
+                            "tool_type": "connector",
+                            "tool_id": "connector_2128aebfecb84f64a069897515042a44",
+                            "tool_name": "Google Calendar",
+                            "install_url": "https://example.test/google-calendar",
+                        }
+                    ],
+                })),
+            ),
+        )
+        .expect("expected tool suggestion form");
+
+        assert_eq!(
+            request.tool_suggestion(),
+            Some(&ToolSuggestionRequest {
+                tool_type: ToolSuggestionToolType::Connector,
+                suggest_type: ToolSuggestionType::Install,
+                suggest_reason: String::new(),
                 tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
                 tool_name: "Google Calendar".to_string(),
                 install_url: Some("https://example.test/google-calendar".to_string()),

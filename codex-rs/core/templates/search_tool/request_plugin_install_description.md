@@ -17,22 +17,16 @@ Workflow:
 1. Check the current context and active `tools` list first. If current active tools aren't relevant and `tool_search` is available, only call this tool after `tool_search` has already been tried and found no relevant tool.
 2. Match the user's explicit request against the known plugin/connector list above. Only proceed for exact listed plugins/connectors.
 3. If we found both connectors and plugins to install, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not.
-4. Do not invent ids. Every single `tool_id`, flat entry `tool_id`, or categorized entry `tool_id` must be copied from the exact `id` in the known plugin/connector list above.
-5. If one plugin or connector clearly fits, call `request_plugin_install` with:
-   - `tool_type`: `connector` or `plugin`
+4. Do not invent ids or copy display metadata into this tool call. Every flat or categorized entry must contain only the exact `tool_type` and `tool_id` from the known plugin/connector list above; Codex resolves picker labels and metadata from that known list.
+5. If one or more plugins or connectors clearly fit, call `request_plugin_install` once with:
    - `action_type`: `install`
-   - `tool_id`: exact id from the known plugin/connector list above
-   - `suggest_reason`: concise one-line user-facing reason this plugin or connector can help with the current request
-6. If the user asks for multiple exact install candidates, call `request_plugin_install` once with:
+   - `entries`: a flat list of candidates, each with `tool_type` and `tool_id`
+   - use a one-item `entries` list when one plugin or connector clearly fits
+6. If multiple exact install candidates are alternatives within named categories, call `request_plugin_install` once with:
    - `action_type`: `install`
-   - `suggest_reason`: concise one-line user-facing reason these tools can help with the current request
-   - `entries`: a flat list of candidates, each with `id`, `tool_id`, `tool_name`, `tool_type`, and optional `description`
-7. If multiple exact install candidates are alternatives within named categories, call `request_plugin_install` once with:
-   - `action_type`: `install`
-   - `suggest_reason`: concise one-line user-facing reason these tools can help with the current request
-   - `categories`: a list of categories, each with `id`, `title`, optional `required`, optional `min_installed`, and `entries`
-   - each categorized entry must include `id`, `tool_id`, `tool_name`, `tool_type`, and optional `description`
-8. After the request flow completes:
+   - `categories`: a list of categories, each with `title` and `entries`
+   - each categorized entry must include only `tool_type` and `tool_id`
+7. After the request flow completes:
    - if the user finished the install flow, continue by searching again or using the newly available plugin or connector
    - if the user did not finish, continue without that plugin or connector, and don't request it again unless the user explicitly asks for it.
 
