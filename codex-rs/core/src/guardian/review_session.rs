@@ -89,6 +89,24 @@ pub(crate) struct GuardianReviewSessionManager {
     state: Arc<Mutex<GuardianReviewSessionState>>,
 }
 
+pub(crate) fn guardian_review_session_manager(
+    session: &Session,
+) -> Arc<GuardianReviewSessionManager> {
+    session
+        .services
+        .thread_extension_data
+        .get_or_init(GuardianReviewSessionManager::default)
+}
+
+pub(crate) fn existing_guardian_review_session_manager(
+    session: &Session,
+) -> Option<Arc<GuardianReviewSessionManager>> {
+    session
+        .services
+        .thread_extension_data
+        .get::<GuardianReviewSessionManager>()
+}
+
 #[derive(Default)]
 struct GuardianReviewSessionState {
     trunk: Option<Arc<GuardianReviewSession>>,

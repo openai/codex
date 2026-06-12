@@ -50,7 +50,7 @@ pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
 pub(crate) use review::routes_approval_to_guardian_with_reviewer;
 pub(crate) use review::spawn_approval_request_review;
-pub(crate) use review_session::GuardianReviewSessionManager;
+pub(crate) use review_session::existing_guardian_review_session_manager;
 pub(crate) use review_session::prompt_cache_key_override_for_review_session;
 
 pub(crate) const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
@@ -62,6 +62,12 @@ const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS: usize = 2_000;
 const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
+
+pub(crate) fn guardian_review_session_manager(
+    session: &crate::session::session::Session,
+) -> std::sync::Arc<review_session::GuardianReviewSessionManager> {
+    review_session::guardian_review_session_manager(session)
+}
 
 /// Structured output contract that the guardian reviewer must satisfy.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

@@ -597,7 +597,9 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
         .load_full()
         .shutdown()
         .await;
-    sess.guardian_review_session.shutdown().await;
+    if let Some(manager) = crate::guardian::existing_guardian_review_session_manager(sess) {
+        manager.shutdown().await;
+    }
 }
 
 async fn emit_thread_stop_lifecycle(sess: &Session) {

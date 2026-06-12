@@ -42,6 +42,7 @@ use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_target_item_id;
 use super::approval_request::guardian_request_turn_id;
 use super::approval_request::guardian_reviewed_action;
+use super::guardian_review_session_manager;
 use super::metrics::emit_guardian_review_metrics;
 use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
@@ -769,24 +770,23 @@ async fn run_guardian_review_session_before_deadline(
         }
     };
 
-    let (session_outcome, session_analytics_result) = Box::pin(
-        session
-            .guardian_review_session
-            .run_review(GuardianReviewSessionParams {
-                parent_session: Arc::clone(&session),
-                parent_turn: turn.clone(),
-                spawn_config: guardian_config,
-                request,
-                retry_reason,
-                schema,
-                model: guardian_model,
-                reasoning_effort: guardian_reasoning_effort,
-                reasoning_summary: turn.reasoning_summary,
-                personality: turn.personality,
-                external_cancel,
-                deadline,
-            }),
-    )
+    let review_session_manager = guardian_review_session_manager(&session);
+    let (session_outcome, session_analytics_result) = Box::pin(review_session_manager.run_review(
+        GuardianReviewSessionParams {
+            parent_session: Arc::clone(&session),
+            parent_turn: turn.clone(),
+            spawn_config: guardian_config,
+            request,
+            retry_reason,
+            schema,
+            model: guardian_model,
+            reasoning_effort: guardian_reasoning_effort,
+            reasoning_summary: turn.reasoning_summary,
+            personality: turn.personality,
+            external_cancel,
+            deadline,
+        },
+    ))
     .await;
 
     match session_outcome {

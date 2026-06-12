@@ -5054,7 +5054,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
-        guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         next_internal_sub_id: AtomicU64::new(0),
     };
@@ -6783,8 +6782,7 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
         session: Arc::new(child_session),
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
-    parent_session
-        .guardian_review_session
+    crate::guardian::guardian_review_session_manager(&parent_session)
         .cache_for_test(child_codex)
         .await;
 
@@ -6816,16 +6814,15 @@ async fn cached_guardian_subagent_exposes_its_rollout_path() {
         session: Arc::new(child_session),
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
-    parent_session
-        .guardian_review_session
-        .cache_for_test(child_codex)
-        .await;
+    let review_session_manager = crate::guardian::guardian_review_session_manager(&parent_session);
+    assert!(Arc::ptr_eq(
+        &review_session_manager,
+        &crate::guardian::guardian_review_session_manager(&parent_session)
+    ));
+    review_session_manager.cache_for_test(child_codex).await;
 
     assert_eq!(
-        parent_session
-            .guardian_review_session
-            .trunk_rollout_path()
-            .await,
+        review_session_manager.trunk_rollout_path().await,
         Some(child_rollout_path)
     );
 }
@@ -6872,8 +6869,7 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
         session: Arc::new(child_session),
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
-    parent_session
-        .guardian_review_session
+    crate::guardian::guardian_review_session_manager(&parent_session)
         .register_ephemeral_for_test(child_codex)
         .await;
 
@@ -7127,7 +7123,6 @@ where
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
-        guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         next_internal_sub_id: AtomicU64::new(0),
     });

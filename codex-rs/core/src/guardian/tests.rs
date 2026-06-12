@@ -1772,8 +1772,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         1,
         "later follow-up guardian requests should not append the reminder again"
     );
-    let committed_rollout_items = session
-        .guardian_review_session
+    let committed_rollout_items = guardian_review_session_manager(&session)
         .committed_fork_rollout_items_for_test()
         .await
         .expect("committed guardian fork snapshot");
@@ -1882,8 +1881,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
         Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
     ));
 
-    session
-        .guardian_review_session
+    guardian_review_session_manager(&session)
         .send_trunk_event_raw_for_test(Event {
             id: "stale-turn".to_string(),
             msg: EventMsg::TurnComplete(TurnCompleteEvent {

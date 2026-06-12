@@ -480,11 +480,9 @@ impl CodexThread {
     }
 
     pub async fn guardian_trunk_rollout_path(&self) -> Option<PathBuf> {
-        self.codex
-            .session
-            .guardian_review_session
-            .trunk_rollout_path()
-            .await
+        let manager =
+            crate::guardian::existing_guardian_review_session_manager(&self.codex.session)?;
+        manager.trunk_rollout_path().await
     }
 
     pub async fn load_history(
