@@ -1,3 +1,7 @@
+use crate::capabilities::PluginCapabilities;
+use crate::capabilities::PluginCapabilityContext;
+use crate::capabilities::resolve_plugin_capabilities;
+use crate::loader::plugin_app_declarations_from_value;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -8,6 +12,8 @@ use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::SkillInterface;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
+use codex_plugin::AppConnectorId;
+use codex_plugin::AppDeclaration;
 use codex_plugin::PluginId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use reqwest::RequestBuilder;
@@ -16,6 +22,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -1064,12 +1071,25 @@ async fn build_remote_plugin_detail(
             enabled: !disabled_skill_names.contains(&skill.name),
         })
         .collect();
-    let mut mcp_servers = plugin
+    let app_declarations = plugin
+        .release
+        .app_manifest
+        .as_ref()
+        .map(plugin_app_declarations_from_value)
+        .unwrap_or_else(|| app_declarations_from_remote_app_ids(&plugin.release.app_ids));
+    let mcp_servers = plugin
         .release
         .mcp_servers
         .iter()
-        .map(|server| server.key.clone())
-        .collect::<Vec<_>>();
+        .map(|server| (server.key.clone(), ()))
+        .collect::<HashMap<_, _>>();
+    let mut mcp_servers = resolve_plugin_capabilities(
+        PluginCapabilities::new(app_declarations, mcp_servers),
+        PluginCapabilityContext::new(Some(auth.api_auth_mode()), /*plugin_active*/ true),
+    )
+    .mcp_servers
+    .into_keys()
+    .collect::<Vec<_>>();
     mcp_servers.sort_unstable();
     mcp_servers.dedup();
 
@@ -1102,6 +1122,17 @@ async fn build_remote_plugin_detail(
             .collect(),
         mcp_servers,
     })
+}
+
+fn app_declarations_from_remote_app_ids(app_ids: &[String]) -> Vec<AppDeclaration> {
+    app_ids
+        .iter()
+        .map(|app_id| AppDeclaration {
+            name: app_id.clone(),
+            connector_id: AppConnectorId(app_id.clone()),
+            category: None,
+        })
+        .collect()
 }
 
 pub async fn install_remote_plugin(

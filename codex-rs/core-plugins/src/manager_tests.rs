@@ -2486,6 +2486,10 @@ plugins = true
         chatgpt_outcome.plugin.mcp_server_names,
         vec!["other-mcp".to_string()]
     );
+    assert_eq!(
+        chatgpt_outcome.plugin.apps,
+        vec![AppConnectorId("connector_sample".to_string())]
+    );
 
     let api_key_outcome = PluginsManager::new_with_options(
         tmp.path().to_path_buf(),
@@ -2499,6 +2503,7 @@ plugins = true
         api_key_outcome.plugin.mcp_server_names,
         vec!["other-mcp".to_string(), "sample-mcp".to_string()]
     );
+    assert!(api_key_outcome.plugin.apps.is_empty());
 }
 
 #[tokio::test]

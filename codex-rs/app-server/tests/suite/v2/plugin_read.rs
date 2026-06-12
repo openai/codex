@@ -149,6 +149,13 @@ plugins = true
     "display_name": "Example Plugin",
     "description": "Example plugin",
     "app_ids": [],
+    "app_manifest": {
+      "apps": {
+        "example-server": {
+          "id": "example-app"
+        }
+      }
+    },
     "keywords": [],
     "interface": {
       "short_description": "Example plugin",
@@ -162,6 +169,12 @@ plugins = true
         "key": "example-server",
         "metadata": {
           "command": "example-mcp"
+        }
+      },
+      {
+        "key": "other-server",
+        "metadata": {
+          "command": "other-mcp"
         }
       }
     ]
@@ -234,7 +247,7 @@ plugins = true
     );
     assert_eq!(
         response.plugin.mcp_servers,
-        vec!["example-server".to_string()]
+        vec!["other-server".to_string()]
     );
     Ok(())
 }
@@ -906,6 +919,10 @@ async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<(
             .join("demo-plugin/.codex-plugin/plugin.json"),
         r#"{"name":"demo-plugin","version":"1.2.3"}"#,
     )?;
+    std::fs::write(
+        repo_root.path().join("demo-plugin/.mcp.json"),
+        r#"{"mcpServers":{"demo":{"command":"demo-mcp"}}}"#,
+    )?;
     let plugin_path = AbsolutePathBuf::try_from(repo_root.path().join("demo-plugin"))?;
     write_plugin_share_local_path_mapping(codex_home.path(), "plugins_123", &plugin_path)?;
     Mock::given(method("GET"))
@@ -1044,6 +1061,10 @@ async fn plugin_read_keeps_remote_version_when_share_principals_are_missing() ->
             .path()
             .join("demo-plugin/.codex-plugin/plugin.json"),
         r#"{"name":"demo-plugin","version":"1.2.3"}"#,
+    )?;
+    std::fs::write(
+        repo_root.path().join("demo-plugin/.mcp.json"),
+        r#"{"mcpServers":{"demo":{"command":"demo-mcp"}}}"#,
     )?;
     let plugin_path = AbsolutePathBuf::try_from(repo_root.path().join("demo-plugin"))?;
     write_plugin_share_local_path_mapping(codex_home.path(), "plugins_123", &plugin_path)?;
@@ -1602,6 +1623,94 @@ async fn plugin_read_returns_app_metadata_category() -> Result<()> {
 }
 
 #[tokio::test]
+async fn plugin_read_hides_apps_for_api_key_auth() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "alpha".to_string(),
+        name: "Alpha".to_string(),
+        description: Some("Alpha connector".to_string()),
+        logo_url: Some("https://example.com/alpha.png".to_string()),
+        logo_url_dark: None,
+        distribution_channel: Some("featured".to_string()),
+        branding: None,
+        app_metadata: Some(AppMetadata {
+            review: None,
+            categories: Some(vec!["Productivity".to_string()]),
+            sub_categories: None,
+            seo_description: None,
+            screenshots: None,
+            developer: None,
+            version: None,
+            version_id: None,
+            version_notes: None,
+            first_party_type: None,
+            first_party_requires_install: None,
+            show_in_composer_when_unlinked: None,
+        }),
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
+    let (server_url, server_handle) = start_apps_server(connectors).await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    std::fs::write(
+        codex_home.path().join("auth.json"),
+        r#"{"OPENAI_API_KEY":"sk-test-key","tokens":null,"last_refresh":null}"#,
+    )?;
+
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &["alpha"])?;
+    std::fs::write(
+        repo_root.path().join("sample-plugin/.mcp.json"),
+        r#"{"mcpServers":{"alpha":{"command":"alpha-mcp"}}}"#,
+    )?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("CODEX_ACCESS_TOKEN", None),
+            ("CODEX_API_KEY", None),
+            ("OPENAI_API_KEY", None),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    assert!(response.plugin.apps.is_empty());
+    assert_eq!(response.plugin.mcp_servers, vec!["alpha".to_string()]);
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
@@ -1932,6 +2041,7 @@ fn write_connectors_config(codex_home: &std::path::Path, base_url: &str) -> std:
         format!(
             r#"
 chatgpt_base_url = "{base_url}"
+cli_auth_credentials_store = "file"
 mcp_oauth_credentials_store = "file"
 
 [features]

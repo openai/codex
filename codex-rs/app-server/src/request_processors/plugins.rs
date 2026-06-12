@@ -988,6 +988,8 @@ impl PluginRequestProcessor {
 
         let config = self.load_latest_config(config_cwd).await?;
         let plugins_input = config.plugins_config_input();
+        let auth = self.auth_manager.auth().await;
+        plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
 
         let plugin = match read_source {
             Ok(marketplace_path) => {
@@ -1007,7 +1009,6 @@ impl PluginRequestProcessor {
                 );
                 let share_context = match share_context {
                     Some(context) => {
-                        let auth = self.auth_manager.auth().await;
                         let remote_plugin_service_config = RemotePluginServiceConfig {
                             chatgpt_base_url: config.chatgpt_base_url.clone(),
                         };
@@ -1053,12 +1054,17 @@ impl PluginRequestProcessor {
                     }
                     None => None,
                 };
-                let app_summaries = load_plugin_app_summaries(
-                    &config,
-                    &outcome.plugin.apps,
-                    &outcome.plugin.app_category_by_id,
-                )
-                .await;
+                let app_summaries = if plugin_details_app_summaries_enabled(&config, auth.as_ref())
+                {
+                    load_plugin_app_summaries(
+                        &config,
+                        &outcome.plugin.apps,
+                        &outcome.plugin.app_category_by_id,
+                    )
+                    .await
+                } else {
+                    Vec::new()
+                };
                 let visible_skills = outcome
                     .plugin
                     .skills
@@ -1114,7 +1120,6 @@ impl PluginRequestProcessor {
                         "remote plugin read is not enabled for marketplace {remote_marketplace_name}"
                     )));
                 }
-                let auth = self.auth_manager.auth().await;
                 let remote_plugin_service_config = RemotePluginServiceConfig {
                     chatgpt_base_url: config.chatgpt_base_url.clone(),
                 };
@@ -1129,19 +1134,23 @@ impl PluginRequestProcessor {
                 .map_err(|err| {
                     remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin details")
                 })?;
-                let plugin_apps = remote_detail
-                    .app_ids
-                    .iter()
-                    .cloned()
-                    .map(codex_plugin::AppConnectorId)
-                    .collect::<Vec<_>>();
-                let app_category_by_id = remote_detail
-                    .app_manifest
-                    .as_ref()
-                    .map(plugin_app_category_by_id_from_value)
-                    .unwrap_or_default();
-                let app_summaries =
-                    load_plugin_app_summaries(&config, &plugin_apps, &app_category_by_id).await;
+                let app_summaries = if plugin_details_app_summaries_enabled(&config, auth.as_ref())
+                {
+                    let plugin_apps = remote_detail
+                        .app_ids
+                        .iter()
+                        .cloned()
+                        .map(codex_plugin::AppConnectorId)
+                        .collect::<Vec<_>>();
+                    let app_category_by_id = remote_detail
+                        .app_manifest
+                        .as_ref()
+                        .map(plugin_app_category_by_id_from_value)
+                        .unwrap_or_default();
+                    load_plugin_app_summaries(&config, &plugin_apps, &app_category_by_id).await
+                } else {
+                    Vec::new()
+                };
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
@@ -1969,6 +1978,13 @@ async fn load_plugin_app_summaries(
             }
         })
         .collect()
+}
+
+fn plugin_details_app_summaries_enabled(config: &Config, auth: Option<&CodexAuth>) -> bool {
+    // Plugin details can be requested before auth has been loaded in local/test flows.
+    // Preserve the historical details response unless a known auth mode disables apps.
+    let apps_route_available = auth.is_none_or(CodexAuth::uses_codex_backend);
+    config.features.apps_enabled_for_auth(apps_route_available)
 }
 
 fn plugin_app_category_by_id_from_value(value: &serde_json::Value) -> HashMap<String, String> {
