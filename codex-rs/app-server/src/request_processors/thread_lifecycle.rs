@@ -529,7 +529,7 @@ pub(super) async fn handle_thread_listener_command(
 pub(super) async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
-    _codex_home: &Path,
+    codex_home: &Path,
     thread_state_manager: &ThreadStateManager,
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
@@ -557,13 +557,29 @@ pub(super) async fn handle_pending_thread_resume_request(
 
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
+    let history_items = if pending.include_turns || pending.initial_turns_page.is_some() {
+        match materialize_rollout_items_for_complete_history(codex_home, &pending.history_items)
+            .await
+        {
+            Ok(items) => items,
+            Err(err) => {
+                outgoing
+                    .send_error(
+                        request_id,
+                        internal_error(format!(
+                            "failed to materialize thread {conversation_id} history: {err}"
+                        )),
+                    )
+                    .await;
+                return;
+            }
+        }
+    } else {
+        Vec::new()
+    };
     let mut thread = pending.thread_summary;
     if pending.include_turns {
-        populate_thread_turns_from_history(
-            &mut thread,
-            &pending.history_items,
-            active_turn.as_ref(),
-        );
+        populate_thread_turns_from_history(&mut thread, &history_items, active_turn.as_ref());
     }
 
     let thread_status = thread_watch_manager
@@ -578,7 +594,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     let token_usage_thread = pending.include_turns.then(|| thread.clone());
     let mut initial_turns_page = if let Some(params) = pending.initial_turns_page.as_ref() {
         match super::thread_processor::build_thread_resume_initial_turns_page(
-            &pending.history_items,
+            &history_items,
             thread.status.clone(),
             has_live_in_progress_turn,
             active_turn,
@@ -668,7 +684,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     // paying the cost of turn reconstruction for historical usage replay.
     if let Some(token_usage_thread) = token_usage_thread {
         let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-            &pending.history_items,
+            &history_items,
             token_usage_thread.turns.as_slice(),
         );
         // Rejoining a loaded thread has the same UI contract as a cold resume, but

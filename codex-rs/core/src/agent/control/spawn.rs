@@ -56,6 +56,7 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
             | ResponseItem::Other,
         ) => false,
         RolloutItem::InterAgentCommunication(_) => false,
+        RolloutItem::RolloutReference(_) => true,
         // Full-history forks preserve the cached prompt prefix and can keep diffing
         // from the parent's durable baseline. Truncated forks drop part of that prompt,
         // so they must rebuild context on their first child turn.

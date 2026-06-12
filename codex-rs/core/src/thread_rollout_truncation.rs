@@ -5,12 +5,20 @@
 
 use crate::context_manager::is_user_turn_boundary;
 use crate::event_mapping;
+use crate::rollout::RolloutRecorder;
+use crate::rollout::resolve_rollout_reference_rollout_path;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::RolloutItem;
+use std::collections::HashSet;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
+use tracing::warn;
 
 pub(crate) fn initial_history_has_prior_user_turns(conversation_history: &InitialHistory) -> bool {
     conversation_history.scan_rollout_items(rollout_item_is_user_turn_boundary)
@@ -158,6 +166,282 @@ pub(crate) fn truncate_rollout_to_last_n_fork_turns(
         return Vec::new();
     };
     items[keep_idx..].to_vec()
+}
+
+#[derive(Clone, Copy)]
+enum RolloutMaterialization {
+    ModelReplay,
+    CompleteHistory,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum RolloutReferenceIdentity {
+    Segment(codex_protocol::SegmentId),
+    Path(PathBuf),
+}
+
+pub async fn materialize_rollout_items_for_model_replay(
+    codex_home: &Path,
+    rollout_items: &[RolloutItem],
+) -> Vec<RolloutItem> {
+    match materialize_rollout_items(
+        codex_home,
+        rollout_items,
+        RolloutMaterialization::ModelReplay,
+    )
+    .await
+    {
+        Ok(items) => items,
+        Err(err) => {
+            warn!("failed to materialize rollout references for model replay: {err}");
+            Vec::new()
+        }
+    }
+}
+
+pub async fn materialize_rollout_items_for_complete_history(
+    codex_home: &Path,
+    rollout_items: &[RolloutItem],
+) -> io::Result<Vec<RolloutItem>> {
+    materialize_rollout_items(
+        codex_home,
+        rollout_items,
+        RolloutMaterialization::CompleteHistory,
+    )
+    .await
+}
+
+pub(crate) async fn materialize_initial_history_for_model_replay(
+    codex_home: &Path,
+    initial_history: InitialHistory,
+) -> InitialHistory {
+    match initial_history {
+        InitialHistory::New => InitialHistory::New,
+        InitialHistory::Cleared => InitialHistory::Cleared,
+        InitialHistory::Resumed(mut resumed) => {
+            resumed.history =
+                materialize_rollout_items_for_model_replay(codex_home, &resumed.history).await;
+            InitialHistory::Resumed(resumed)
+        }
+        InitialHistory::Forked(items) => InitialHistory::Forked(
+            materialize_rollout_items_for_model_replay(codex_home, &items).await,
+        ),
+    }
+}
+
+async fn materialize_rollout_items(
+    codex_home: &Path,
+    rollout_items: &[RolloutItem],
+    materialization: RolloutMaterialization,
+) -> io::Result<Vec<RolloutItem>> {
+    enum Work {
+        Items {
+            rollout_items: Vec<RolloutItem>,
+            remaining_segment_depth: Option<usize>,
+        },
+        Item {
+            item: Box<RolloutItem>,
+            remaining_segment_depth: Option<usize>,
+        },
+        TruncateSuffix {
+            start: usize,
+            nth_user_message: usize,
+        },
+        LeaveReference(RolloutReferenceIdentity),
+    }
+
+    let mut materialized = Vec::new();
+    let mut active_references = HashSet::new();
+    let mut work = vec![Work::Items {
+        rollout_items: rollout_items.to_vec(),
+        remaining_segment_depth: None,
+    }];
+    while let Some(next) = work.pop() {
+        match next {
+            Work::Items {
+                rollout_items,
+                remaining_segment_depth,
+            } => {
+                for item in rollout_items.into_iter().rev() {
+                    work.push(Work::Item {
+                        item: Box::new(item),
+                        remaining_segment_depth,
+                    });
+                }
+            }
+            Work::Item {
+                item,
+                remaining_segment_depth,
+            } => {
+                let reference = match *item {
+                    RolloutItem::RolloutReference(reference) => reference,
+                    item => {
+                        materialized.push(item);
+                        continue;
+                    }
+                };
+                let has_prefix_truncation = reference.nth_user_message.is_some();
+                let next_remaining_segment_depth = match materialization {
+                    RolloutMaterialization::CompleteHistory => None,
+                    RolloutMaterialization::ModelReplay if has_prefix_truncation => {
+                        remaining_segment_depth
+                    }
+                    RolloutMaterialization::ModelReplay => {
+                        let available_depth = remaining_segment_depth
+                            .map_or(reference.max_depth, |remaining| {
+                                remaining.min(reference.max_depth)
+                            });
+                        let Some(next_remaining_depth) = available_depth.checked_sub(1) else {
+                            warn!("rollout reference materialization reached max depth");
+                            continue;
+                        };
+                        Some(next_remaining_depth)
+                    }
+                };
+                let resolved_path =
+                    match resolve_rollout_reference_rollout_path(codex_home, &reference).await {
+                        Ok(path) => path,
+                        Err(err) => {
+                            if matches!(materialization, RolloutMaterialization::CompleteHistory) {
+                                return Err(io::Error::new(
+                                    err.kind(),
+                                    format!(
+                                        "failed to resolve rollout reference {}: {err}",
+                                        reference.rollout_path.display()
+                                    ),
+                                ));
+                            }
+                            warn!(
+                                "failed to resolve rollout reference {}: {err}",
+                                reference.rollout_path.display()
+                            );
+                            continue;
+                        }
+                    };
+                let identity = reference
+                    .segment_id
+                    .map(RolloutReferenceIdentity::Segment)
+                    .unwrap_or_else(|| RolloutReferenceIdentity::Path(resolved_path.clone()));
+                if !active_references.insert(identity.clone()) {
+                    if matches!(materialization, RolloutMaterialization::CompleteHistory) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "rollout reference cycle detected at {}",
+                                resolved_path.display()
+                            ),
+                        ));
+                    }
+                    warn!(
+                        "rollout reference cycle detected at {}",
+                        resolved_path.display()
+                    );
+                    continue;
+                }
+                match RolloutRecorder::load_rollout_items(&resolved_path).await {
+                    Ok((mut reference_items, _, _)) => {
+                        if let Some(filter_texts) = reference
+                            .compacted_replacement_history_filter_texts
+                            .as_deref()
+                        {
+                            apply_compacted_replacement_history_filter(
+                                &mut reference_items,
+                                filter_texts,
+                            );
+                        }
+                        work.push(Work::LeaveReference(identity));
+                        if let Some(nth_user_message) = reference.nth_user_message {
+                            work.push(Work::TruncateSuffix {
+                                start: materialized.len(),
+                                nth_user_message,
+                            });
+                        }
+                        work.push(Work::Items {
+                            rollout_items: reference_items,
+                            remaining_segment_depth: next_remaining_segment_depth,
+                        });
+                    }
+                    Err(err) => {
+                        active_references.remove(&identity);
+                        if matches!(materialization, RolloutMaterialization::CompleteHistory) {
+                            return Err(io::Error::new(
+                                err.kind(),
+                                format!(
+                                    "failed to load rollout reference {}: {err}",
+                                    resolved_path.display()
+                                ),
+                            ));
+                        }
+                        warn!(
+                            "failed to load rollout reference {}: {err}",
+                            resolved_path.display()
+                        );
+                    }
+                }
+            }
+            Work::TruncateSuffix {
+                start,
+                nth_user_message,
+            } => {
+                let suffix = truncate_rollout_before_nth_user_message_from_start(
+                    &materialized[start..],
+                    nth_user_message,
+                );
+                materialized.truncate(start);
+                materialized.extend(suffix);
+            }
+            Work::LeaveReference(identity) => {
+                active_references.remove(&identity);
+            }
+        }
+    }
+    Ok(materialized)
+}
+
+fn apply_compacted_replacement_history_filter(
+    rollout_items: &mut [RolloutItem],
+    filter_texts: &[String],
+) {
+    for item in rollout_items {
+        match item {
+            RolloutItem::Compacted(compacted) => {
+                if let Some(replacement_history) = compacted.replacement_history.as_mut() {
+                    replacement_history.retain(|response_item| {
+                        !matches_filtered_developer_message(response_item, filter_texts)
+                    });
+                }
+            }
+            RolloutItem::RolloutReference(reference) => {
+                let nested_filter_texts = reference
+                    .compacted_replacement_history_filter_texts
+                    .get_or_insert_default();
+                for filter_text in filter_texts {
+                    if !nested_filter_texts.contains(filter_text) {
+                        nested_filter_texts.push(filter_text.clone());
+                    }
+                }
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::ResponseItem(_)
+            | RolloutItem::InterAgentCommunication(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_) => {}
+        }
+    }
+}
+
+fn matches_filtered_developer_message(item: &ResponseItem, filter_texts: &[String]) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+    if role != "developer" {
+        return false;
+    }
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        return false;
+    };
+
+    filter_texts.iter().any(|filter_text| filter_text == text)
 }
 
 fn is_real_user_message_boundary(item: &ResponseItem) -> bool {

@@ -251,8 +251,7 @@ async fn rollout_reference_resolves_archived_file_by_stable_thread_and_timestamp
     let ts = "2025-01-03T13-00-00";
     let active_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
     let archived_path = home.join(format!("archived_sessions/rollout-{ts}-{uuid}.jsonl"));
-    fs::create_dir_all(archived_path.parent().expect("archived parent")).unwrap();
-    fs::write(&archived_path, "").unwrap();
+    write_legacy_session_meta(archived_path.as_path(), thread_id, ts);
 
     let resolved = crate::resolve_rollout_reference_rollout_path(
         home,
@@ -315,6 +314,36 @@ async fn rollout_reference_prefers_segment_id_over_live_path_with_same_thread_ti
 }
 
 #[tokio::test]
+async fn rollout_reference_rejects_live_path_with_mismatched_segment_id() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path();
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let referenced_segment_id = SegmentId::new();
+    let live_segment_id = SegmentId::new();
+    let ts = "2025-01-03T13-00-00";
+    let active_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+    write_session_meta(active_path.as_path(), thread_id, live_segment_id, ts);
+
+    let err = crate::resolve_rollout_reference_rollout_path(
+        home,
+        &RolloutReferenceItem {
+            rollout_path: active_path,
+            thread_id: Some(thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: Some(referenced_segment_id),
+            max_depth: 2,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        },
+    )
+    .await
+    .expect_err("a segment reference must not fall back to different live content");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+}
+
+#[tokio::test]
 async fn rollout_reference_prefers_existing_prior_segment_path_without_segment_id() {
     let temp = TempDir::new().expect("tempdir");
     let home = temp.path();
@@ -326,12 +355,7 @@ async fn rollout_reference_prefers_existing_prior_segment_path_without_segment_i
     let active_path = home.join(format!("sessions/2025/01/03/{file_name}"));
     let legacy_rotated_path = home.join("archived_sessions").join(file_name);
     write_session_meta(active_path.as_path(), thread_id, live_segment_id, ts);
-    write_session_meta(
-        legacy_rotated_path.as_path(),
-        thread_id,
-        SegmentId::new(),
-        ts,
-    );
+    write_legacy_session_meta(legacy_rotated_path.as_path(), thread_id, ts);
 
     let resolved = crate::resolve_rollout_reference_rollout_path(
         home,
@@ -349,6 +373,66 @@ async fn rollout_reference_prefers_existing_prior_segment_path_without_segment_i
     .expect("resolve rollout reference");
 
     assert_eq!(resolved, legacy_rotated_path);
+}
+
+#[tokio::test]
+async fn legacy_reference_prefers_compressed_archived_predecessor_over_new_live_segment() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path();
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let ts = "2025-01-03T13-00-00";
+    let file_name = format!("rollout-{ts}-{uuid}.jsonl");
+    let active_path = home.join(format!("sessions/2025/01/03/{file_name}"));
+    let archived_path = home.join("archived_sessions").join(file_name);
+    write_session_meta(active_path.as_path(), thread_id, SegmentId::new(), ts);
+    write_legacy_session_meta(archived_path.as_path(), thread_id, ts);
+    let compressed_archived_path = compress_rollout(archived_path.as_path());
+
+    let resolved = crate::resolve_rollout_reference_rollout_path(
+        home,
+        &RolloutReferenceItem {
+            rollout_path: active_path,
+            thread_id: Some(thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: None,
+            max_depth: 2,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        },
+    )
+    .await
+    .expect("resolve legacy rollout reference");
+
+    assert_eq!(resolved, compressed_archived_path);
+}
+
+#[tokio::test]
+async fn legacy_reference_rejects_new_live_segment_without_predecessor_snapshot() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path();
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let ts = "2025-01-03T13-00-00";
+    let active_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+    write_session_meta(active_path.as_path(), thread_id, SegmentId::new(), ts);
+
+    let err = crate::resolve_rollout_reference_rollout_path(
+        home,
+        &RolloutReferenceItem {
+            rollout_path: active_path,
+            thread_id: Some(thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: None,
+            max_depth: 2,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        },
+    )
+    .await
+    .expect_err("legacy reference must not resolve to a newer identified segment");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
 }
 
 #[tokio::test]
@@ -437,13 +521,26 @@ async fn rollout_reference_resolves_compressed_segment_file_by_segment_id() {
 }
 
 fn write_session_meta(path: &Path, thread_id: ThreadId, segment_id: SegmentId, timestamp: &str) {
+    write_session_meta_with_segment_id(path, thread_id, Some(segment_id), timestamp);
+}
+
+fn write_legacy_session_meta(path: &Path, thread_id: ThreadId, timestamp: &str) {
+    write_session_meta_with_segment_id(path, thread_id, /*segment_id*/ None, timestamp);
+}
+
+fn write_session_meta_with_segment_id(
+    path: &Path,
+    thread_id: ThreadId,
+    segment_id: Option<SegmentId>,
+    timestamp: &str,
+) {
     fs::create_dir_all(path.parent().expect("rollout parent")).expect("create rollout parent");
     let line = RolloutLine {
         timestamp: timestamp.to_string(),
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
                 id: thread_id,
-                segment_id: Some(segment_id),
+                segment_id,
                 forked_from_id: None,
                 parent_thread_id: None,
                 timestamp: timestamp.to_string(),
@@ -1310,7 +1407,7 @@ async fn test_list_threads_reads_preview_from_referenced_segment() {
 }
 
 #[tokio::test]
-async fn test_list_threads_does_not_read_preview_from_fork_reference() {
+async fn test_list_threads_prefers_child_preview_over_fork_reference() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
 
@@ -1385,6 +1482,80 @@ async fn test_list_threads_does_not_read_preview_from_fork_reference() {
     assert_eq!(
         page.items[0].first_user_message.as_deref(),
         Some("Child preview")
+    );
+}
+
+#[tokio::test]
+async fn test_list_threads_reads_inherited_preview_from_fresh_fork_reference() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let parent_uuid = Uuid::from_u128(106);
+    let child_uuid = Uuid::from_u128(107);
+    let parent_thread_id = thread_id_from_uuid(parent_uuid);
+    let child_thread_id = thread_id_from_uuid(child_uuid);
+    let parent_segment_id = SegmentId::new();
+    let child_segment_id = SegmentId::new();
+    let ts = "2025-05-04T10-30-00";
+    let parent_path = home
+        .join(crate::ROTATED_ROLLOUT_SEGMENTS_SUBDIR)
+        .join(parent_thread_id.to_string())
+        .join(parent_segment_id.to_string())
+        .join(format!("rollout-{ts}-{parent_uuid}.jsonl"));
+    let child_path = home
+        .join("sessions/2025/05/04")
+        .join(format!("rollout-{ts}-{child_uuid}.jsonl"));
+    write_session_meta(
+        parent_path.as_path(),
+        parent_thread_id,
+        parent_segment_id,
+        ts,
+    );
+    append_rollout_item(
+        parent_path.as_path(),
+        ts,
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "Inherited parent preview".to_string(),
+            ..Default::default()
+        })),
+    );
+    write_session_meta(child_path.as_path(), child_thread_id, child_segment_id, ts);
+    append_rollout_item(
+        child_path.as_path(),
+        ts,
+        RolloutItem::RolloutReference(RolloutReferenceItem {
+            rollout_path: parent_path,
+            thread_id: Some(parent_thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: Some(parent_segment_id),
+            max_depth: 2,
+            nth_user_message: Some(usize::MAX),
+            compacted_replacement_history_filter_texts: None,
+        }),
+    );
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(
+        page.items[0].preview.as_deref(),
+        Some("Inherited parent preview")
+    );
+    assert_eq!(
+        page.items[0].first_user_message.as_deref(),
+        Some("Inherited parent preview")
     );
 }
 

@@ -2,6 +2,7 @@
 
 use codex_utils_path as path_utils;
 use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io;
 use std::num::NonZero;
@@ -1095,19 +1096,26 @@ impl<'a> ProviderMatcher<'a> {
 }
 
 async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTailSummary> {
-    const MAX_SUMMARY_REFERENCE_DEPTH: usize = 8;
+    const MAX_SUMMARY_REFERENCE_FILES: usize = 128;
 
-    let (mut summary, mut reference) = read_head_summary_file(path, head_limit).await?;
-    let mut referenced_summaries = Vec::new();
-    let mut remaining_depth = MAX_SUMMARY_REFERENCE_DEPTH;
-    while remaining_depth > 0 {
+    let (summary, mut reference) = read_head_summary_file(path, head_limit).await?;
+    let mut summaries = vec![summary];
+    let mut segment_edges = Vec::new();
+    let mut visited_references = HashSet::new();
+    loop {
         let Some(next_reference) = reference.take() else {
             break;
         };
-        if next_reference.max_depth == 0 || next_reference.nth_user_message.is_some() {
+        if next_reference.nth_user_message == Some(0) {
             break;
         }
-        let reference_depth = next_reference.max_depth;
+        if visited_references.len() >= MAX_SUMMARY_REFERENCE_FILES {
+            tracing::warn!(
+                "stopped reading rollout reference metadata after {MAX_SUMMARY_REFERENCE_FILES} files"
+            );
+            break;
+        }
+        let is_segment_edge = next_reference.nth_user_message.is_none();
         let reference_path = if let Some(codex_home) = codex_home_from_rollout_path(path) {
             match Box::pin(resolve_rollout_reference_rollout_path(
                 codex_home,
@@ -1125,33 +1133,34 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
         } else {
             break;
         };
+        let reference_identity = next_reference
+            .segment_id
+            .map(|segment_id| format!("segment:{segment_id}"))
+            .unwrap_or_else(|| format!("path:{}", reference_path.display()));
+        if !visited_references.insert(reference_identity) {
+            break;
+        }
         let (referenced_summary, next_reference) =
             read_head_summary_file(reference_path.as_path(), head_limit).await?;
-        referenced_summaries.push(referenced_summary);
+        segment_edges.push(is_segment_edge);
+        summaries.push(referenced_summary);
         reference = next_reference;
-        remaining_depth = remaining_depth
-            .saturating_sub(1)
-            .min(reference_depth.saturating_sub(1));
     }
 
-    let mut referenced_preview = None;
-    let mut referenced_first_user_message = None;
-    for referenced_summary in referenced_summaries.into_iter().rev() {
-        if referenced_preview.is_none() {
-            referenced_preview = referenced_summary.preview;
+    let mut resolved = summaries.pop().unwrap_or_default();
+    while let Some(mut source) = summaries.pop() {
+        let is_segment_edge = segment_edges.pop().unwrap_or(false);
+        source.saw_compacted_user_message |= resolved.saw_compacted_user_message;
+        if is_segment_edge {
+            source.preview = resolved.preview.or(source.preview);
+            source.first_user_message = resolved.first_user_message.or(source.first_user_message);
+        } else {
+            source.preview = source.preview.or(resolved.preview);
+            source.first_user_message = source.first_user_message.or(resolved.first_user_message);
         }
-        if referenced_first_user_message.is_none() {
-            referenced_first_user_message = referenced_summary.first_user_message;
-        }
-        summary.saw_compacted_user_message |= referenced_summary.saw_compacted_user_message;
+        resolved = source;
     }
-    if let Some(preview) = referenced_preview {
-        summary.preview = Some(preview);
-    }
-    if let Some(first_user_message) = referenced_first_user_message {
-        summary.first_user_message = Some(first_user_message);
-    }
-    Ok(summary)
+    Ok(resolved)
 }
 
 pub(crate) async fn read_preview_metadata(
@@ -1779,76 +1788,118 @@ pub async fn resolve_rollout_reference_rollout_path(
     // A compacted live thread can keep the same rollout path and timestamp while moving the
     // referenced predecessor into archive storage, so segment identity must win before fallback
     // lookup by mutable live-path metadata.
-    if let (Some(thread_id), Some(segment_id)) = (reference.thread_id, reference.segment_id)
-        && let Some(path) =
-            find_rollout_path_by_segment_id(codex_home, thread_id, segment_id).await?
-    {
-        return Ok(path);
+    if let Some(segment_id) = reference.segment_id {
+        if let Some(thread_id) = reference.thread_id
+            && let Some(path) =
+                find_rollout_path_by_segment_id(codex_home, thread_id, segment_id).await?
+        {
+            return Ok(path);
+        }
+        if let Some(path) = compression::existing_rollout_path(&reference.rollout_path).await
+            && let Ok(meta) = read_session_meta_line(&path).await
+            && meta.meta.segment_id == Some(segment_id)
+            && reference
+                .thread_id
+                .is_none_or(|thread_id| meta.meta.id == thread_id)
+        {
+            return Ok(path);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("rollout segment {segment_id} could not be resolved"),
+        ));
     }
 
     let rollout_path = reference.rollout_path.as_path();
-    if tokio::fs::try_exists(rollout_path).await.unwrap_or(false) {
-        return Ok(rollout_path.to_path_buf());
+    let plain_rollout_path = compression::plain_rollout_path(rollout_path);
+    let parsed_path_identity = plain_rollout_path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .and_then(parse_timestamp_string_uuid_from_filename);
+    let identity_thread_id = reference.thread_id.or_else(|| {
+        parsed_path_identity.and_then(|(_, uuid)| ThreadId::from_string(&uuid.to_string()).ok())
+    });
+    let identity_timestamp = reference
+        .rollout_timestamp
+        .as_deref()
+        .or_else(|| parsed_path_identity.map(|(timestamp, _)| timestamp));
+
+    // Legacy references do not carry an immutable segment id. If the canonical live path has
+    // since been replaced, the flat archived path is the only candidate that can still name the
+    // referenced predecessor, so check it before the mutable live path.
+    if let (Some(thread_id), Some(rollout_timestamp)) = (identity_thread_id, identity_timestamp) {
+        let file_name = format!("rollout-{rollout_timestamp}-{thread_id}.jsonl");
+        let archived_path = codex_home.join(ARCHIVED_SESSIONS_SUBDIR).join(&file_name);
+        if let Some(path) =
+            validated_legacy_rollout_reference_path(codex_home, archived_path.as_path(), reference)
+                .await?
+        {
+            return Ok(path);
+        }
     }
 
-    if let (Some(thread_id), Some(rollout_timestamp)) =
-        (reference.thread_id, reference.rollout_timestamp.as_deref())
+    if let Some(path) =
+        validated_legacy_rollout_reference_path(codex_home, rollout_path, reference).await?
     {
+        return Ok(path);
+    }
+
+    if let (Some(thread_id), Some(rollout_timestamp)) = (identity_thread_id, identity_timestamp) {
         let file_name = format!("rollout-{rollout_timestamp}-{thread_id}.jsonl");
         if let Some(active_path) =
             rollout_path_for_timestamp_file(codex_home, rollout_timestamp, &file_name)
-            && tokio::fs::try_exists(active_path.as_path())
-                .await
-                .unwrap_or(false)
+            && let Some(path) = validated_legacy_rollout_reference_path(
+                codex_home,
+                active_path.as_path(),
+                reference,
+            )
+            .await?
         {
-            return Ok(active_path);
-        }
-        let archived_path = codex_home.join(ARCHIVED_SESSIONS_SUBDIR).join(&file_name);
-        if tokio::fs::try_exists(archived_path.as_path())
-            .await
-            .unwrap_or(false)
-        {
-            return Ok(archived_path);
+            return Ok(path);
         }
     }
 
-    let Some(file_name) = rollout_path
-        .file_name()
-        .and_then(|file_name| file_name.to_str())
-    else {
-        return Ok(rollout_path.to_path_buf());
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "legacy rollout reference {} could not be resolved without changing segment identity",
+            rollout_path.display()
+        ),
+    ))
+}
+
+async fn validated_legacy_rollout_reference_path(
+    codex_home: &Path,
+    path: &Path,
+    reference: &codex_protocol::protocol::RolloutReferenceItem,
+) -> io::Result<Option<PathBuf>> {
+    let Some(path) = compression::existing_rollout_path(path).await else {
+        return Ok(None);
     };
-    let Some((rollout_timestamp, uuid)) = parse_timestamp_string_uuid_from_filename(file_name)
-    else {
-        return Ok(rollout_path.to_path_buf());
+    let Ok(meta) = read_session_meta_line(path.as_path()).await else {
+        return Ok(None);
     };
-    let archived_path = codex_home.join(ARCHIVED_SESSIONS_SUBDIR).join(file_name);
-    if tokio::fs::try_exists(archived_path.as_path())
-        .await
-        .unwrap_or(false)
+    if (meta.meta.segment_id.is_some() && path.starts_with(codex_home.join(SESSIONS_SUBDIR)))
+        || reference
+            .thread_id
+            .is_some_and(|thread_id| meta.meta.id != thread_id)
     {
-        return Ok(archived_path);
+        return Ok(None);
     }
-    if let Some(active_path) =
-        rollout_path_for_timestamp_file(codex_home, rollout_timestamp, file_name)
-        && tokio::fs::try_exists(active_path.as_path())
-            .await
-            .unwrap_or(false)
-    {
-        return Ok(active_path);
+    if let Some(expected_timestamp) = reference.rollout_timestamp.as_deref() {
+        let plain_path = compression::plain_rollout_path(path.as_path());
+        let Some((actual_timestamp, _)) = plain_path
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .and_then(parse_timestamp_string_uuid_from_filename)
+        else {
+            return Ok(None);
+        };
+        if actual_timestamp != expected_timestamp {
+            return Ok(None);
+        }
     }
-    let id = uuid.to_string();
-    if let Some(path) =
-        find_thread_path_by_id_str(codex_home, id.as_str(), /*state_db_ctx*/ None).await?
-    {
-        return Ok(path);
-    }
-    if let Some(path) =
-        find_archived_thread_path_by_id_str(codex_home, id.as_str(), /*state_db_ctx*/ None).await?
-    {
-        return Ok(path);
-    }
-    Ok(rollout_path.to_path_buf())
+    Ok(Some(path))
 }
 
 fn rollout_path_for_timestamp_file(

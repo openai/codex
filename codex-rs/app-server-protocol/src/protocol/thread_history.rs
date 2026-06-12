@@ -75,6 +75,8 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 ///
 /// When available, this uses `TurnContext.turn_id` as the canonical turn id so
 /// resumed/rebuilt thread history preserves the original turn identifiers.
+/// File-backed callers must resolve every [`RolloutItem::RolloutReference`] before calling this
+/// function. The builder is synchronous and deliberately does not perform rollout file I/O.
 pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     let mut builder = ThreadHistoryBuilder::new();
     for item in items {

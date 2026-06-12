@@ -86,6 +86,7 @@ use codex_app_server_protocol::guardian_auto_approval_review_notification;
 use codex_app_server_protocol::item_event_to_server_notification;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_core::materialize_rollout_items_for_complete_history;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
@@ -1204,13 +1205,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let loaded_status = thread_watch_manager
                     .loaded_status_for_thread(&conversation_id.to_string())
                     .await;
+                let config = conversation.config().await;
                 let response = match thread_rollback_response_from_stored_thread(
                     stored_thread,
                     conversation.session_configured().session_id.to_string(),
                     fallback_model_provider.as_str(),
                     &fallback_cwd,
                     loaded_status,
-                ) {
+                    config.codex_home.as_path(),
+                )
+                .await
+                {
                     Ok(response) => response,
                     Err(err) => {
                         outgoing
@@ -1567,12 +1572,13 @@ async fn handle_thread_rollback_failed(
     }
 }
 
-fn thread_rollback_response_from_stored_thread(
+async fn thread_rollback_response_from_stored_thread(
     stored_thread: codex_thread_store::StoredThread,
     session_id: String,
     fallback_model_provider: &str,
     fallback_cwd: &AbsolutePathBuf,
     loaded_status: ThreadStatus,
+    codex_home: &std::path::Path,
 ) -> std::result::Result<ThreadRollbackResponse, String> {
     let thread_id = stored_thread.thread_id;
     let (mut thread, history) =
@@ -1583,7 +1589,10 @@ fn thread_rollback_response_from_stored_thread(
             "thread {thread_id} did not include persisted history after rollback"
         ));
     };
-    populate_thread_turns_from_history(&mut thread, &history.items, /*active_turn*/ None);
+    let history_items = materialize_rollout_items_for_complete_history(codex_home, &history.items)
+        .await
+        .map_err(|err| format!("failed to materialize thread {thread_id} history: {err}"))?;
+    populate_thread_turns_from_history(&mut thread, &history_items, /*active_turn*/ None);
     thread.status = loaded_status;
     Ok(ThreadRollbackResponse { thread })
 }
@@ -2182,8 +2191,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn rollback_response_rebuilds_pathless_thread_from_stored_history() -> Result<()> {
+    #[tokio::test]
+    async fn rollback_response_rebuilds_pathless_thread_from_stored_history() -> Result<()> {
         let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000789")?;
         let created_at = Utc::now();
         let history_items = vec![
@@ -2233,6 +2242,7 @@ mod tests {
             }),
         };
         let fallback_cwd = test_path_buf("/tmp").abs();
+        let codex_home = tempfile::tempdir()?;
 
         let response = thread_rollback_response_from_stored_thread(
             stored_thread,
@@ -2240,7 +2250,9 @@ mod tests {
             "fallback-provider",
             &fallback_cwd,
             ThreadStatus::NotLoaded,
+            codex_home.path(),
         )
+        .await
         .expect("rollback response should rebuild from stored history");
 
         assert_eq!(response.thread.id, thread_id.to_string());

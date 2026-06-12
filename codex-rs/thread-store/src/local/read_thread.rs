@@ -4,7 +4,9 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout::ArchivedThreadRolloutDisposition;
 use codex_rollout::RolloutRecorder;
+use codex_rollout::classify_archived_thread_rollout;
 use codex_rollout::find_archived_thread_path_by_id_str;
 use codex_rollout::find_thread_name_by_id;
 use codex_rollout::find_thread_path_by_id_str;
@@ -32,12 +34,12 @@ pub(super) async fn read_thread(
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
     if let Some(metadata) = read_sqlite_metadata(store, thread_id).await
-        && (params.include_archived
-            || (metadata.archived_at.is_none()
-                && !rollout_path_is_archived(
-                    store.config.codex_home.as_path(),
-                    metadata.rollout_path.as_path(),
-                )))
+        && sqlite_metadata_matches_requested_archive_state(
+            store,
+            &metadata,
+            params.include_archived,
+        )
+        .await
         && (!params.include_history
             || sqlite_rollout_path_can_load_history_for_thread(
                 store,
@@ -83,6 +85,35 @@ pub(super) async fn read_thread(
     }
     attach_history_if_requested(&mut thread, params.include_history).await?;
     Ok(thread)
+}
+
+async fn sqlite_metadata_matches_requested_archive_state(
+    store: &LocalThreadStore,
+    metadata: &ThreadMetadata,
+    include_archived: bool,
+) -> bool {
+    let rollout_path_is_archived = rollout_path_is_archived(
+        store.config.codex_home.as_path(),
+        metadata.rollout_path.as_path(),
+    );
+    if !include_archived {
+        return metadata.archived_at.is_none() && !rollout_path_is_archived;
+    }
+    if metadata.archived_at.is_none() {
+        return !rollout_path_is_archived;
+    }
+    if !rollout_path_is_archived {
+        return true;
+    }
+    matches!(
+        classify_archived_thread_rollout(
+            store.config.codex_home.as_path(),
+            metadata.rollout_path.as_path(),
+            store.state_db().await.as_deref(),
+        )
+        .await,
+        Ok(ArchivedThreadRolloutDisposition::CanonicalArchivedThread)
+    )
 }
 
 async fn sqlite_rollout_path_can_load_history_for_thread(
@@ -1065,6 +1096,59 @@ mod tests {
         let history = thread.history.expect("history should load");
         assert_eq!(history.thread_id, thread_id);
         assert_eq!(history.items.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn read_repair_prefers_live_rollout_over_legacy_rotated_segment_when_including_archived()
+    {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(223);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let live_rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let legacy_rotated_path =
+            write_archived_session_file(home.path(), "2025-01-03T12-00-00", uuid)
+                .expect("legacy rotated session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let mut builder = ThreadMetadataBuilder::new(
+            thread_id,
+            legacy_rotated_path,
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.archived_at = Some(Utc::now());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        metadata.first_user_message = Some("legacy rotated sqlite preview".to_string());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: true,
+            })
+            .await
+            .expect("read active thread");
+
+        assert_eq!(thread.rollout_path, Some(live_rollout_path.clone()));
+        assert_eq!(thread.archived_at, None);
+        let repaired = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("state db get thread")
+            .expect("repaired metadata");
+        assert_eq!(repaired.rollout_path, live_rollout_path);
+        assert_eq!(repaired.archived_at, None);
     }
 
     #[tokio::test]

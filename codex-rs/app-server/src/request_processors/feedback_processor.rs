@@ -158,6 +158,7 @@ impl FeedbackRequestProcessor {
             (Vec::new(), None, None)
         };
 
+        let mut extra_attachments = Vec::new();
         let mut attachment_paths = Vec::new();
         let mut seen_attachment_paths = HashSet::new();
         if include_logs {
@@ -169,6 +170,19 @@ impl FeedbackRequestProcessor {
                     continue;
                 };
                 if seen_attachment_paths.insert(rollout_path.clone()) {
+                    match materialized_rollout_feedback_attachment(
+                        self.config.codex_home.as_path(),
+                        rollout_path.as_path(),
+                    )
+                    .await
+                    {
+                        Ok(Some(attachment)) => extra_attachments.push(attachment),
+                        Ok(None) => {}
+                        Err(err) => warn!(
+                            "failed to materialize feedback rollout {}: {err}",
+                            rollout_path.display()
+                        ),
+                    }
                     attachment_paths.push(FeedbackAttachmentPath {
                         path: rollout_path,
                         attachment_filename_override: None,
@@ -206,7 +220,6 @@ impl FeedbackRequestProcessor {
             }
         }
 
-        let mut extra_attachments = Vec::new();
         if include_logs
             && let Some(doctor_report) =
                 super::feedback_doctor_report::doctor_feedback_report(&self.config).await
@@ -269,6 +282,30 @@ impl FeedbackRequestProcessor {
     }
 }
 
+async fn materialized_rollout_feedback_attachment(
+    codex_home: &Path,
+    rollout_path: &Path,
+) -> anyhow::Result<Option<FeedbackAttachment>> {
+    let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
+    if !rollout_items
+        .iter()
+        .any(|item| matches!(item, RolloutItem::RolloutReference(_)))
+    {
+        return Ok(None);
+    }
+    let rollout_items =
+        materialize_rollout_items_for_complete_history(codex_home, &rollout_items).await?;
+    let file_stem = rollout_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("rollout");
+    Ok(Some(FeedbackAttachment {
+        filename: format!("{file_stem}-complete-history.json"),
+        content_type: Some("application/json".to_string()),
+        buffer: serde_json::to_vec_pretty(&rollout_items)?,
+    }))
+}
+
 fn auto_review_rollout_filename(thread_id: ThreadId) -> String {
     format!("auto-review-rollout-{thread_id}.jsonl")
 }
@@ -289,11 +326,17 @@ fn windows_sandbox_log_attachment(_codex_home: &Path) -> Option<FeedbackAttachme
     None
 }
 
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::RolloutLine;
+    use codex_protocol::protocol::RolloutReferenceItem;
+    use codex_protocol::protocol::SessionMetaLine;
     use pretty_assertions::assert_eq;
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn windows_sandbox_log_attachment_uses_current_log() {
         let codex_home = tempfile::tempdir().expect("create tempdir");
@@ -312,6 +355,95 @@ mod tests {
                 sandbox_log_path,
                 Some(WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME.to_string())
             ))
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_attachment_contains_complete_referenced_history() {
+        let codex_home = tempfile::tempdir().expect("create codex home");
+        let predecessor_path = codex_home.path().join("predecessor.jsonl");
+        let current_path = codex_home.path().join("current.jsonl");
+        let timestamp = "2026-06-12T00:00:00Z";
+        let predecessor_meta = RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: ThreadId::new(),
+                timestamp: timestamp.to_string(),
+                ..SessionMeta::default()
+            },
+            git: None,
+        });
+        let predecessor = RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "before rotation".to_string(),
+            }],
+            phase: None,
+        });
+        let predecessor_lines = [predecessor_meta.clone(), predecessor.clone()]
+            .into_iter()
+            .map(|item| {
+                serde_json::to_string(&RolloutLine {
+                    timestamp: timestamp.to_string(),
+                    item,
+                })
+                .expect("serialize predecessor")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        tokio::fs::write(&predecessor_path, format!("{predecessor_lines}\n"))
+            .await
+            .expect("write predecessor");
+        let current = RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "after rotation".to_string(),
+            }],
+            phase: None,
+        });
+        let current_lines = [
+            RolloutItem::RolloutReference(RolloutReferenceItem {
+                rollout_path: predecessor_path,
+                thread_id: None,
+                rollout_timestamp: None,
+                segment_id: None,
+                max_depth: 1,
+                nth_user_message: None,
+                compacted_replacement_history_filter_texts: None,
+            }),
+            current.clone(),
+        ]
+        .into_iter()
+        .map(|item| {
+            serde_json::to_string(&RolloutLine {
+                timestamp: timestamp.to_string(),
+                item,
+            })
+            .expect("serialize current rollout line")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+        tokio::fs::write(&current_path, format!("{current_lines}\n"))
+            .await
+            .expect("write current rollout");
+
+        let attachment =
+            materialized_rollout_feedback_attachment(codex_home.path(), current_path.as_path())
+                .await
+                .expect("materialize attachment")
+                .expect("reference-backed rollout should produce an attachment");
+        let items: Vec<RolloutItem> =
+            serde_json::from_slice(&attachment.buffer).expect("parse attachment");
+
+        assert_eq!(
+            serde_json::to_value(items).expect("serialize attachment items"),
+            serde_json::to_value(vec![predecessor_meta, predecessor, current])
+                .expect("serialize expected items")
+        );
+        assert_eq!(
+            attachment.filename,
+            "current-complete-history.json".to_string()
         );
     }
 }

@@ -119,6 +119,8 @@ pub use thread_manager::ThreadManager;
 pub use thread_manager::ThreadShutdownReport;
 pub use thread_manager::build_models_manager;
 pub use thread_manager::thread_store_from_config;
+pub use thread_rollout_truncation::materialize_rollout_items_for_complete_history;
+pub use thread_rollout_truncation::materialize_rollout_items_for_model_replay;
 pub use web_search::web_search_action_detail;
 pub use web_search::web_search_detail;
 pub use windows_sandbox_read_grants::grant_read_root_non_elevated;

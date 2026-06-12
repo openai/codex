@@ -115,17 +115,20 @@ pub async fn extract_metadata_from_rollout(
     for item in &items {
         apply_rollout_item(&mut metadata, item, default_provider);
     }
-    let has_segment_reference = items.iter().any(|item| {
-        matches!(
-            item,
-            RolloutItem::RolloutReference(reference) if reference.nth_user_message.is_none()
-        )
-    });
-    if has_segment_reference
+    let has_rollout_reference = items
+        .iter()
+        .any(|item| matches!(item, RolloutItem::RolloutReference(_)));
+    if has_rollout_reference
         && let Ok((first_user_message, preview)) = read_preview_metadata(rollout_path).await
     {
-        if first_user_message.is_some() {
-            metadata.first_user_message = first_user_message;
+        if let Some(first_user_message) = first_user_message {
+            let current_first_user_message = metadata.first_user_message.as_deref().map(str::trim);
+            if metadata.title.trim().is_empty()
+                || current_first_user_message == Some(metadata.title.trim())
+            {
+                metadata.title = first_user_message.clone();
+            }
+            metadata.first_user_message = Some(first_user_message);
         }
         if preview.is_some() {
             metadata.preview = preview;

@@ -16,9 +16,12 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::RolloutReferenceItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -158,6 +161,65 @@ fn out_of_range_truncation_drops_only_unfinished_suffix_mid_turn() {
         serde_json::to_value(truncated.get_rollout_items()).unwrap(),
         serde_json::to_value(items[..2].to_vec()).unwrap()
     );
+}
+
+#[tokio::test]
+async fn interrupted_snapshot_detects_turn_started_in_referenced_segment() {
+    let codex_home = tempdir().expect("codex home");
+    let predecessor_path = codex_home.path().join("predecessor.jsonl");
+    let timestamp = "2026-06-12T00:00:00Z";
+    let predecessor_items = [
+        RolloutItem::ResponseItem(user_msg("turn started before rotation")),
+        RolloutItem::ResponseItem(assistant_msg("partial answer")),
+    ];
+    let predecessor_json = predecessor_items
+        .iter()
+        .cloned()
+        .map(|item| {
+            serde_json::to_string(&RolloutLine {
+                timestamp: timestamp.to_string(),
+                item,
+            })
+            .expect("serialize predecessor item")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    tokio::fs::write(&predecessor_path, format!("{predecessor_json}\n"))
+        .await
+        .expect("write predecessor");
+    let raw_history = InitialHistory::Forked(vec![
+        RolloutItem::RolloutReference(RolloutReferenceItem {
+            rollout_path: predecessor_path,
+            thread_id: None,
+            rollout_timestamp: None,
+            segment_id: None,
+            max_depth: 1,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        }),
+        RolloutItem::Compacted(CompactedItem {
+            message: "compacted during active turn".to_string(),
+            replacement_history: None,
+            window_id: None,
+        }),
+    ]);
+    let materialized =
+        crate::thread_rollout_truncation::materialize_initial_history_for_model_replay(
+            codex_home.path(),
+            raw_history,
+        )
+        .await;
+    assert!(snapshot_turn_state(&materialized).ends_mid_turn);
+    let interrupted = fork_history_from_snapshot(
+        ForkSnapshot::Interrupted,
+        materialized,
+        InterruptedTurnHistoryMarker::Disabled,
+    );
+
+    assert!(matches!(
+        interrupted.get_rollout_items().last(),
+        Some(RolloutItem::EventMsg(EventMsg::TurnAborted(_)))
+    ));
 }
 
 #[test]

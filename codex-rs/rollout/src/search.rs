@@ -17,6 +17,8 @@ use tokio::process::Command;
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use super::compression;
+use super::list::resolve_rollout_reference_rollout_path;
+use super::recorder::RolloutRecorder;
 
 const MATCH_CONTEXT_BEFORE_CHARS: usize = 48;
 const MATCH_CONTEXT_AFTER_CHARS: usize = 96;
@@ -50,14 +52,157 @@ pub async fn search_rollout_matches(
         SESSIONS_SUBDIR
     });
     let json_search_term = json_escaped_search_term(search_term)?;
-    let Some(plain_matches) =
-        ripgrep_rollout_paths(rg_command, root.as_path(), json_search_term.as_str()).await?
-    else {
-        return scan_rollout_matches(root.as_path(), json_search_term.as_str(), search_term).await;
-    };
-    let mut matches: RolloutSearchMatches =
-        plain_matches.into_iter().map(|path| (path, None)).collect();
-    matches.extend(scan_compressed_rollout_matches(root.as_path(), search_term).await?);
+    let mut matches =
+        match ripgrep_rollout_paths(rg_command, root.as_path(), json_search_term.as_str()).await? {
+            Some(plain_matches) => {
+                let mut matches: RolloutSearchMatches =
+                    plain_matches.into_iter().map(|path| (path, None)).collect();
+                matches.extend(scan_compressed_rollout_matches(root.as_path(), search_term).await?);
+                matches
+            }
+            None => {
+                scan_rollout_matches(root.as_path(), json_search_term.as_str(), search_term).await?
+            }
+        };
+    matches.extend(
+        search_reference_backed_rollouts(rg_command, codex_home, root.as_path(), search_term)
+            .await?,
+    );
+    Ok(matches)
+}
+
+async fn search_reference_backed_rollouts(
+    rg_command: &Path,
+    codex_home: &Path,
+    root: &Path,
+    search_term: &str,
+) -> io::Result<RolloutSearchMatches> {
+    let mut reference_paths = HashSet::new();
+    for reference_marker in ["\"rollout_reference\"", "\"fork_reference\""] {
+        match ripgrep_rollout_paths(rg_command, root, reference_marker).await? {
+            Some(paths) => {
+                reference_paths.extend(paths);
+                reference_paths
+                    .extend(scan_compressed_rollout_reference_paths(root, reference_marker).await?);
+            }
+            None => {
+                reference_paths.extend(scan_rollout_reference_paths(root, reference_marker).await?);
+            }
+        }
+    }
+    let mut matches = HashMap::new();
+    for path in reference_paths {
+        let Ok((items, _, _)) = RolloutRecorder::load_rollout_items(path.as_path()).await else {
+            continue;
+        };
+        if let Some(snippet) =
+            first_segment_reference_content_match_snippet(codex_home, items.as_slice(), search_term)
+                .await?
+        {
+            matches.insert(
+                compression::plain_rollout_path(path.as_path()),
+                Some(snippet),
+            );
+        }
+    }
+    Ok(matches)
+}
+
+async fn first_segment_reference_content_match_snippet(
+    codex_home: &Path,
+    items: &[RolloutItem],
+    search_term: &str,
+) -> io::Result<Option<String>> {
+    let search_term = case_insensitive_literal_regex(search_term)?;
+    let mut references = items
+        .iter()
+        .filter_map(|item| match item {
+            // Segment predecessors belong to the current thread. Prefix-truncated fork
+            // references belong to the source thread and should not duplicate that thread's
+            // search matches on every child.
+            RolloutItem::RolloutReference(reference) if reference.nth_user_message.is_none() => {
+                Some(reference.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut visited_paths = HashSet::new();
+    while let Some(reference) = references.pop() {
+        let Ok(path) = resolve_rollout_reference_rollout_path(codex_home, &reference).await else {
+            continue;
+        };
+        if !visited_paths.insert(path.clone()) {
+            continue;
+        }
+        let Ok((referenced_items, _, _)) = RolloutRecorder::load_rollout_items(&path).await else {
+            continue;
+        };
+        for item in &referenced_items {
+            if let Some(text) = conversation_text_from_item(item)
+                && let Some(snippet) = excerpt_around_match(text.as_str(), &search_term)
+            {
+                return Ok(Some(snippet));
+            }
+        }
+        references.extend(referenced_items.into_iter().filter_map(|item| match item {
+            RolloutItem::RolloutReference(reference) if reference.nth_user_message.is_none() => {
+                Some(reference)
+            }
+            _ => None,
+        }));
+    }
+    Ok(None)
+}
+
+async fn scan_rollout_reference_paths(
+    root: &Path,
+    reference_marker: &str,
+) -> io::Result<HashSet<PathBuf>> {
+    scan_rollout_reference_paths_by_compression(root, reference_marker, /*compressed*/ None).await
+}
+
+async fn scan_compressed_rollout_reference_paths(
+    root: &Path,
+    reference_marker: &str,
+) -> io::Result<HashSet<PathBuf>> {
+    scan_rollout_reference_paths_by_compression(root, reference_marker, Some(true)).await
+}
+
+async fn scan_rollout_reference_paths_by_compression(
+    root: &Path,
+    reference_marker: &str,
+    compressed: Option<bool>,
+) -> io::Result<HashSet<PathBuf>> {
+    let mut matches = HashSet::new();
+    let mut dirs = vec![root.to_path_buf()];
+    let reference_marker = case_insensitive_literal_regex(reference_marker)?;
+    while let Some(dir) = dirs.pop() {
+        let mut entries = match tokio::fs::read_dir(dir).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let file_type = entry.file_type().await?;
+            if file_type.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
+                continue;
+            };
+            if compressed.is_some_and(|compressed| compressed != rollout_file.is_compressed()) {
+                continue;
+            }
+            if rollout_contains(rollout_file.path(), &reference_marker).await? {
+                matches.insert(rollout_file.into_path());
+            }
+        }
+    }
     Ok(matches)
 }
 
@@ -346,4 +491,90 @@ fn char_end_after(text: &str, byte_index: usize, chars_after: usize) -> usize {
         .nth(chars_after)
         .map(|(offset, _)| byte_index.saturating_add(offset))
         .unwrap_or(text.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::RolloutReferenceItem;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::UserMessageEvent;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    async fn write_rollout(path: &Path, items: Vec<RolloutItem>) {
+        tokio::fs::create_dir_all(path.parent().expect("rollout parent"))
+            .await
+            .expect("create rollout parent");
+        let contents = items
+            .into_iter()
+            .map(|item| {
+                serde_json::to_string(&RolloutLine {
+                    timestamp: "2026-06-12T00:00:00Z".to_string(),
+                    item,
+                })
+                .expect("serialize rollout line")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        tokio::fs::write(path, format!("{contents}\n"))
+            .await
+            .expect("write rollout");
+    }
+
+    #[tokio::test]
+    async fn search_maps_predecessor_segment_matches_to_live_rollout() {
+        let codex_home = TempDir::new().expect("create codex home");
+        let predecessor_path = codex_home.path().join("segments/predecessor.jsonl");
+        let current_path = codex_home.path().join(
+            "sessions/2026/06/12/rollout-2026-06-12T00-00-00-00000000-0000-4000-8000-000000000001.jsonl",
+        );
+        write_rollout(
+            predecessor_path.as_path(),
+            vec![
+                RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: SessionMeta {
+                        id: ThreadId::new(),
+                        timestamp: "2026-06-12T00:00:00Z".to_string(),
+                        ..SessionMeta::default()
+                    },
+                    git: None,
+                }),
+                RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                    message: "needle in predecessor".to_string(),
+                    ..Default::default()
+                })),
+            ],
+        )
+        .await;
+        write_rollout(
+            current_path.as_path(),
+            vec![RolloutItem::RolloutReference(RolloutReferenceItem {
+                rollout_path: predecessor_path,
+                thread_id: None,
+                rollout_timestamp: None,
+                segment_id: None,
+                max_depth: 1,
+                nth_user_message: None,
+                compacted_replacement_history_filter_texts: None,
+            })],
+        )
+        .await;
+
+        let matches = search_rollout_matches(
+            Path::new("/missing/rg"),
+            codex_home.path(),
+            /*archived*/ false,
+            "needle",
+        )
+        .await
+        .expect("search rollouts");
+
+        assert_eq!(
+            matches,
+            HashMap::from([(current_path, Some("needle in predecessor".to_string()))])
+        );
+    }
 }

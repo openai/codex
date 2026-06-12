@@ -44,6 +44,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
     let session_meta = SessionMetaLine {
         meta: SessionMeta {
             id: thread_id,
+            segment_id: None,
             forked_from_id: None,
             parent_thread_id: None,
             timestamp: TEST_TIMESTAMP.to_string(),

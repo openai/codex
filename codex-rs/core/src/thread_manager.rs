@@ -673,6 +673,11 @@ impl ThreadManager {
         let inherited_multi_agent_version = fork_source
             .multi_agent_version()
             .unwrap_or(MultiAgentVersion::V1);
+        let history = truncation::materialize_initial_history_for_model_replay(
+            options.config.codex_home.as_path(),
+            history,
+        )
+        .await;
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
@@ -946,6 +951,11 @@ impl ThreadManager {
             .await;
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
+        let history = truncation::materialize_initial_history_for_model_replay(
+            config.codex_home.as_path(),
+            history,
+        )
+        .await;
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),

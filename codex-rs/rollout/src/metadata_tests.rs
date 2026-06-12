@@ -224,6 +224,10 @@ async fn extract_metadata_from_rollout_reads_referenced_preview() {
             nth_user_message: None,
             compacted_replacement_history_filter_texts: None,
         }),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "Current segment preview".to_string(),
+            ..Default::default()
+        })),
     ] {
         let line = RolloutLine {
             timestamp: "2026-01-27T12:34:56Z".to_string(),
@@ -250,6 +254,7 @@ async fn extract_metadata_from_rollout_reads_referenced_preview() {
         outcome.metadata.preview.as_deref(),
         Some("Referenced preview")
     );
+    assert_eq!(outcome.metadata.title, "Referenced preview");
 }
 
 #[test]

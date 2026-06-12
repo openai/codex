@@ -2224,7 +2224,17 @@ impl ThreadRequestProcessor {
                 let (mut thread, history) =
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
                 if include_turns && let Some(history) = history {
-                    thread.turns = build_api_turns_from_rollout_items(&history.items);
+                    let history_items = materialize_rollout_items_for_complete_history(
+                        self.config.codex_home.as_path(),
+                        &history.items,
+                    )
+                    .await
+                    .map_err(|err| {
+                        ThreadReadViewError::Internal(format!(
+                            "failed to materialize thread {thread_id} history: {err}"
+                        ))
+                    })?;
+                    thread.turns = build_api_turns_from_rollout_items(&history_items);
                 }
                 Ok(Some(thread))
             }
@@ -2290,7 +2300,17 @@ impl ThreadRequestProcessor {
                 .load_history(/*include_archived*/ true)
                 .await
                 .map_err(|err| thread_read_history_load_error(thread_id, err))?;
-            thread.turns = build_api_turns_from_rollout_items(&history.items);
+            let history_items = materialize_rollout_items_for_complete_history(
+                self.config.codex_home.as_path(),
+                &history.items,
+            )
+            .await
+            .map_err(|err| {
+                ThreadReadViewError::Internal(format!(
+                    "failed to materialize thread {thread_id} history: {err}"
+                ))
+            })?;
+            thread.turns = build_api_turns_from_rollout_items(&history_items);
         }
 
         Ok(())
@@ -2369,7 +2389,16 @@ impl ThreadRequestProcessor {
                         "thread store did not return history for thread {thread_id}"
                     ))
                 })?;
-                return Ok(history.items);
+                return materialize_rollout_items_for_complete_history(
+                    self.config.codex_home.as_path(),
+                    &history.items,
+                )
+                .await
+                .map_err(|err| {
+                    ThreadReadViewError::Internal(format!(
+                        "failed to materialize thread {thread_id} history: {err}"
+                    ))
+                });
             }
             Err(ThreadStoreError::InvalidRequest { message })
                 if message == format!("no rollout found for thread id {thread_id}") => {}
@@ -2400,11 +2429,21 @@ impl ThreadRequestProcessor {
             ));
         }
 
-        thread
+        let history_items = thread
             .load_history(/*include_archived*/ true)
             .await
             .map(|history| history.items)
-            .map_err(|err| thread_turns_list_history_load_error(thread_id, err))
+            .map_err(|err| thread_turns_list_history_load_error(thread_id, err))?;
+        materialize_rollout_items_for_complete_history(
+            self.config.codex_home.as_path(),
+            &history_items,
+        )
+        .await
+        .map_err(|err| {
+            ThreadReadViewError::Internal(format!(
+                "failed to materialize thread {thread_id} history: {err}"
+            ))
+        })
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -2620,6 +2659,20 @@ impl ThreadRequestProcessor {
         };
 
         let response_history = thread_history.clone();
+        let response_history_items = if include_turns || initial_turns_page.is_some() {
+            materialize_rollout_items_for_complete_history(
+                self.config.codex_home.as_path(),
+                &response_history.get_rollout_items(),
+            )
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to materialize thread {thread_id} history: {err}"
+                ))
+            })?
+        } else {
+            Vec::new()
+        };
 
         match self
             .thread_manager
@@ -2718,7 +2771,7 @@ impl ThreadRequestProcessor {
                 let token_usage_thread = include_turns.then(|| thread.clone());
                 let mut initial_turns_page = if let Some(params) = initial_turns_page.as_ref() {
                     match build_thread_resume_initial_turns_page(
-                        &response_history.get_rollout_items(),
+                        &response_history_items,
                         thread.status.clone(),
                         /*has_live_running_thread*/ false,
                         /*active_turn*/ None,
@@ -2762,7 +2815,7 @@ impl ThreadRequestProcessor {
                 // rebuilding history only to attribute a replayed usage update.
                 if let Some(token_usage_thread) = token_usage_thread {
                     let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                        &response_history.get_rollout_items(),
+                        &response_history_items,
                         token_usage_thread.turns.as_slice(),
                     );
                     // The client needs restored usage before it starts another turn.
@@ -2928,6 +2981,16 @@ impl ThreadRequestProcessor {
                         "thread {existing_thread_id} did not include persisted history"
                     ))
                 })?;
+            let history_items = materialize_rollout_items_for_complete_history(
+                self.config.codex_home.as_path(),
+                &history_items,
+            )
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to materialize thread {existing_thread_id} history: {err}"
+                ))
+            })?;
 
             let thread_state = self
                 .thread_state_manager
@@ -2948,11 +3011,13 @@ impl ThreadRequestProcessor {
 
             let mut summary_source_thread = source_thread;
             summary_source_thread.history = None;
-            let mut thread_summary = self.stored_thread_to_api_thread(
-                summary_source_thread,
-                config_snapshot.model_provider_id.as_str(),
-                /*include_turns*/ false,
-            );
+            let mut thread_summary = self
+                .stored_thread_to_api_thread(
+                    summary_source_thread,
+                    config_snapshot.model_provider_id.as_str(),
+                    /*include_turns*/ false,
+                )
+                .await?;
             thread_summary.session_id = existing_thread.session_configured().session_id.to_string();
             let instruction_sources = existing_thread.instruction_sources().await;
 
@@ -3086,22 +3151,33 @@ impl ThreadRequestProcessor {
         }))
     }
 
-    fn stored_thread_to_api_thread(
+    async fn stored_thread_to_api_thread(
         &self,
         stored_thread: StoredThread,
         fallback_provider: &str,
         include_turns: bool,
-    ) -> Thread {
+    ) -> Result<Thread, JSONRPCErrorError> {
         let (mut thread, history) =
             thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
         if include_turns && let Some(history) = history {
+            let history_items = materialize_rollout_items_for_complete_history(
+                self.config.codex_home.as_path(),
+                &history.items,
+            )
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to materialize thread {} history: {err}",
+                    thread.id
+                ))
+            })?;
             populate_thread_turns_from_history(
                 &mut thread,
-                &history.items,
+                &history_items,
                 /*active_turn*/ None,
             );
         }
-        thread
+        Ok(thread)
     }
 
     async fn read_stored_thread_for_new_fork(
@@ -3208,6 +3284,12 @@ impl ThreadRequestProcessor {
         thread.path = Some(rollout_path.to_path_buf());
         if include_turns {
             let history_items = thread_history.get_rollout_items();
+            let history_items = materialize_rollout_items_for_complete_history(
+                self.config.codex_home.as_path(),
+                &history_items,
+            )
+            .await
+            .map_err(|err| format!("failed to materialize thread {thread_id} history: {err}"))?;
             populate_thread_turns_from_history(
                 &mut thread,
                 &history_items,
@@ -3284,6 +3366,16 @@ impl ThreadRequestProcessor {
                     "thread {source_thread_id} did not include persisted history"
                 ))
             })?;
+        let materialized_history_items = materialize_rollout_items_for_complete_history(
+            self.config.codex_home.as_path(),
+            &history_items,
+        )
+        .await
+        .map_err(|err| {
+            internal_error(format!(
+                "failed to materialize thread {source_thread_id} history: {err}"
+            ))
+        })?;
         let history_cwd = Some(source_thread.cwd.clone());
 
         // Persist Windows sandbox mode.
@@ -3408,6 +3500,7 @@ impl ThreadRequestProcessor {
                 fallback_model_provider.as_str(),
                 include_turns,
             )
+            .await?
         } else {
             let config_snapshot = forked_thread.config_snapshot().await;
             let mut thread = build_thread_from_snapshot(
@@ -3416,12 +3509,11 @@ impl ThreadRequestProcessor {
                 &config_snapshot,
                 /*path*/ None,
             );
-            thread.preview = preview_from_rollout_items(&history_items);
             thread.forked_from_id = Some(source_thread_id.to_string());
             if include_turns {
                 populate_thread_turns_from_history(
                     &mut thread,
-                    &history_items,
+                    &materialized_history_items,
                     /*active_turn*/ None,
                 );
             }
@@ -3430,6 +3522,7 @@ impl ThreadRequestProcessor {
         if let Some(name) = source_thread_name {
             set_thread_name_from_title(&mut thread, name);
         }
+        thread.preview = preview_from_rollout_items(&materialized_history_items);
         thread.session_id = session_configured.session_id.to_string();
         thread.thread_source = forked_thread
             .config_snapshot()
@@ -3478,7 +3571,7 @@ impl ThreadRequestProcessor {
         // instead of rebuilding history only to attribute a historical update.
         if let Some(token_usage_thread) = token_usage_thread {
             let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                &history_items,
+                &materialized_history_items,
                 token_usage_thread.turns.as_slice(),
             );
             // Mirror the resume contract for forks: the new thread is usable as soon

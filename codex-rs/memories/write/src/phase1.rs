@@ -9,6 +9,7 @@ use codex_config::types::MemoriesConfig;
 use codex_core::Prompt;
 use codex_core::RolloutRecorder;
 use codex_core::config::Config;
+use codex_core::materialize_rollout_items_for_complete_history;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -287,8 +288,9 @@ mod job {
         rollout_cwd: &Path,
         stage_one_context: &StageOneRequestContext,
     ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
-        let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
-        let rollout_contents = serialize_filtered_rollout_response_items(&rollout_items)?;
+        let rollout_contents =
+            serialize_complete_rollout_for_memories(config.codex_home.as_path(), rollout_path)
+                .await?;
 
         let mut prompt = Prompt::default();
         prompt.input = vec![ResponseItem::Message {
@@ -320,6 +322,16 @@ mod job {
         output.rollout_slug = output.rollout_slug.map(redact_secrets);
 
         Ok((output, token_usage))
+    }
+
+    async fn serialize_complete_rollout_for_memories(
+        codex_home: &Path,
+        rollout_path: &Path,
+    ) -> anyhow::Result<String> {
+        let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
+        let rollout_items =
+            materialize_rollout_items_for_complete_history(codex_home, &rollout_items).await?;
+        Ok(serialize_filtered_rollout_response_items(&rollout_items)?)
     }
 
     mod result {
@@ -411,6 +423,7 @@ mod job {
                     Some(communication.to_model_input_item())
                 }
                 RolloutItem::SessionMeta(_)
+                | RolloutItem::RolloutReference(_)
                 | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::EventMsg(_) => None,
@@ -482,6 +495,12 @@ mod job {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use codex_protocol::ThreadId;
+        use codex_protocol::protocol::RolloutLine;
+        use codex_protocol::protocol::RolloutReferenceItem;
+        use codex_protocol::protocol::SessionMeta;
+        use codex_protocol::protocol::SessionMetaLine;
+        use tempfile::TempDir;
 
         #[test]
         fn classifies_memory_excluded_fragments() {
@@ -559,6 +578,100 @@ mod job {
                 vec!["raw_memory", "rollout_slug", "rollout_summary"]
             );
             assert_eq!(rollout_slug_types, vec!["null", "string"]);
+        }
+
+        #[tokio::test]
+        async fn serializes_referenced_predecessors_for_memory_extraction() {
+            let codex_home = TempDir::new().expect("create codex home");
+            let predecessor_path = codex_home.path().join("predecessor.jsonl");
+            let current_path = codex_home.path().join("current.jsonl");
+            let predecessor = RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "before rotation".to_string(),
+                }],
+                phase: None,
+            });
+            let current = RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "after rotation".to_string(),
+                }],
+                phase: None,
+            });
+            let timestamp = "2026-06-12T00:00:00Z";
+            let predecessor_json = [
+                RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: SessionMeta {
+                        id: ThreadId::new(),
+                        timestamp: timestamp.to_string(),
+                        ..SessionMeta::default()
+                    },
+                    git: None,
+                }),
+                predecessor.clone(),
+            ]
+            .into_iter()
+            .map(|item| {
+                serde_json::to_string(&RolloutLine {
+                    timestamp: timestamp.to_string(),
+                    item,
+                })
+                .expect("serialize predecessor")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+            tokio::fs::write(&predecessor_path, format!("{predecessor_json}\n"))
+                .await
+                .expect("write predecessor");
+            let current_json = [
+                RolloutItem::RolloutReference(RolloutReferenceItem {
+                    rollout_path: predecessor_path,
+                    thread_id: None,
+                    rollout_timestamp: None,
+                    segment_id: None,
+                    max_depth: 1,
+                    nth_user_message: None,
+                    compacted_replacement_history_filter_texts: None,
+                }),
+                current.clone(),
+            ]
+            .into_iter()
+            .map(|item| {
+                serde_json::to_string(&RolloutLine {
+                    timestamp: timestamp.to_string(),
+                    item,
+                })
+                .expect("serialize current rollout line")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+            tokio::fs::write(&current_path, format!("{current_json}\n"))
+                .await
+                .expect("write current rollout");
+
+            let serialized =
+                serialize_complete_rollout_for_memories(codex_home.path(), current_path.as_path())
+                    .await
+                    .expect("serialize complete rollout");
+            let response_items: Vec<ResponseItem> =
+                serde_json::from_str(&serialized).expect("parse serialized response items");
+
+            assert_eq!(
+                response_items,
+                vec![
+                    match predecessor {
+                        RolloutItem::ResponseItem(item) => item,
+                        _ => unreachable!(),
+                    },
+                    match current {
+                        RolloutItem::ResponseItem(item) => item,
+                        _ => unreachable!(),
+                    },
+                ]
+            );
         }
     }
 }

@@ -1,6 +1,9 @@
 use anyhow::Result;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::RolloutReferenceItem;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -142,6 +145,95 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
         other => panic!("unexpected initial messages after resume: {other:#?}"),
     }
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_materializes_references_before_session_configured() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let initial = builder.build(&server).await?;
+    let codex = Arc::clone(&initial.codex);
+    let home = initial.home.clone();
+    let thread_id = initial.session_configured.thread_id;
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-initial"),
+            ev_assistant_message("msg-1", "Referenced answer"),
+            ev_completed("resp-initial"),
+        ]),
+    )
+    .await;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Referenced question".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    codex.shutdown_and_wait().await?;
+
+    let predecessor_path = rollout_path.with_file_name("predecessor.jsonl");
+    let persisted = std::fs::read_to_string(&rollout_path)?;
+    let session_meta_line = persisted.lines().next().expect("session meta line");
+    std::fs::rename(&rollout_path, &predecessor_path)?;
+    let reference_line = serde_json::to_string(&RolloutLine {
+        timestamp: "2026-06-12T00:00:00Z".to_string(),
+        item: RolloutItem::RolloutReference(RolloutReferenceItem {
+            rollout_path: predecessor_path,
+            thread_id: Some(thread_id),
+            rollout_timestamp: None,
+            segment_id: None,
+            max_depth: 1,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        }),
+    })?;
+    std::fs::write(
+        &rollout_path,
+        format!("{session_meta_line}\n{reference_line}\n"),
+    )?;
+
+    let resumed = resume_until_initial_messages(
+        &mut builder,
+        &server,
+        home,
+        rollout_path,
+        |initial_messages| {
+            initial_messages.iter().any(|event| {
+                matches!(
+                    event,
+                    EventMsg::UserMessage(message) if message.message == "Referenced question"
+                )
+            })
+        },
+    )
+    .await?;
+    let initial_messages = resumed
+        .session_configured
+        .initial_messages
+        .expect("initial messages");
+
+    assert!(initial_messages.iter().any(|event| {
+        matches!(
+            event,
+            EventMsg::AgentMessage(message) if message.message == "Referenced answer"
+        )
+    }));
     Ok(())
 }
 

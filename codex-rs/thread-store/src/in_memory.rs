@@ -166,6 +166,7 @@ impl InMemoryThreadStore {
         state.calls.create_thread += 1;
         let session_meta = SessionMeta {
             id: params.thread_id,
+            segment_id: None,
             forked_from_id: params.forked_from_id,
             parent_thread_id: params.parent_thread_id,
             cwd: params.metadata.cwd.clone().unwrap_or_default(),
