@@ -22,7 +22,7 @@ fn hybrid_ik_roundtrip_authenticates_both_endpoints() {
         authorization,
     )
     .expect("start initiator handshake");
-    let mut responder_handshake =
+    let responder_handshake =
         PendingResponderHandshake::read_request(&responder, &prologue, &request)
             .expect("read responder handshake");
 
