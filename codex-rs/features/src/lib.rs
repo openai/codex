@@ -1298,6 +1298,7 @@ pub fn unstable_features_warning_event(
         return None;
     }
 
+    under_development_feature_keys.sort();
     let under_development_feature_keys = under_development_feature_keys.join(", ");
     let message = format!(
         "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {config_path}."

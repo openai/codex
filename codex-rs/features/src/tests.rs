@@ -708,7 +708,7 @@ fn unstable_warning_event_mentions_enabled_structured_under_development_feature(
     let configured_features: Table = toml::from_str(
         r#"
 multi_agent_v2 = { enabled = true, tool_namespace = "agents" }
-code_mode = { excluded_tool_namespaces = ["mcp"] }
+code_mode = true
 "#,
     )
     .expect("features table should deserialize");
@@ -725,9 +725,10 @@ code_mode = { excluded_tool_namespaces = ["mcp"] }
     )
     .expect("warning event");
 
-    let EventMsg::Warning(WarningEvent { message }) = warning.msg else {
-        panic!("expected warning event");
-    };
-    assert!(message.contains("multi_agent_v2"));
-    assert!(!message.contains("code_mode"));
+    assert_eq!(
+        EventMsg::Warning(WarningEvent {
+            message: "Under-development features enabled: code_mode, multi_agent_v2. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /tmp/config.toml.".to_string(),
+        }),
+        warning.msg
+    );
 }
