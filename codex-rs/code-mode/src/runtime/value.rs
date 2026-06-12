@@ -63,9 +63,6 @@ pub(super) fn normalize_output_image(
         if lower.starts_with("http://") || lower.starts_with("https://") {
             return Err(REMOTE_IMAGE_URL_ERROR.to_string());
         }
-        if !lower.starts_with("data:") {
-            return Err("image expects a data URL or raw MCP image block".to_string());
-        }
 
         let detail = detail_override.or(detail);
         let detail = match detail {
