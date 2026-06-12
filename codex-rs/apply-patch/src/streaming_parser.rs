@@ -29,6 +29,7 @@ pub struct StreamingPatchParser {
 struct StreamingParserState {
     mode: StreamingParserMode,
     hunks: Vec<Hunk>,
+    environment_id: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -45,11 +46,8 @@ enum StreamingParserMode {
 }
 
 impl StreamingPatchParser {
-    // The live streaming parser only needs to keep the patch preview flowing.
-    // Environment selection and validation happen on the final tool invocation,
-    // so here we just tolerate and skip the optional preamble line.
-    fn is_environment_id_preamble_line(&self, line: &str) -> bool {
-        line.starts_with(ENVIRONMENT_ID_MARKER)
+    pub fn environment_id(&self) -> Option<&str> {
+        self.state.environment_id.as_deref()
     }
 
     fn ensure_update_hunk_is_not_empty(&self, line: &str) -> Result<(), ParseError> {
@@ -170,7 +168,17 @@ impl StreamingPatchParser {
                 ))
             }
             StreamingParserMode::StartedPatch => {
-                if self.is_environment_id_preamble_line(line) {
+                if self.line_number == 2
+                    && let Some(environment_id) =
+                        line.trim_start().strip_prefix(ENVIRONMENT_ID_MARKER)
+                {
+                    let environment_id = environment_id.trim();
+                    if environment_id.is_empty() {
+                        return Err(InvalidPatchError(
+                            "apply_patch environment_id cannot be empty".to_string(),
+                        ));
+                    }
+                    self.state.environment_id = Some(environment_id.to_string());
                     return Ok(());
                 }
                 if self.handle_hunk_headers_and_end_patch(trimmed)? {
@@ -222,6 +230,22 @@ impl StreamingPatchParser {
                     move_path, chunks, ..
                 }) = self.state.hunks.last_mut()
                 {
+                    if chunks.last().is_some_and(|chunk| chunk.is_end_of_file) {
+                        if update_line.is_empty() {
+                            return Ok(());
+                        }
+                        if update_line != EMPTY_CHANGE_CONTEXT_MARKER
+                            && !update_line.starts_with(CHANGE_CONTEXT_MARKER)
+                        {
+                            return Err(InvalidHunkError {
+                                message: format!(
+                                    "Expected update hunk to start with a @@ context marker, got: '{line}'"
+                                ),
+                                line_number: self.line_number,
+                            });
+                        }
+                    }
+
                     if chunks.is_empty()
                         && move_path.is_none()
                         && let Some(move_to_path) = update_line.strip_prefix(MOVE_TO_MARKER)
@@ -367,7 +391,15 @@ impl StreamingPatchParser {
                     line_number: self.line_number,
                 })
             }
-            StreamingParserMode::EndedPatch => Ok(()),
+            StreamingParserMode::EndedPatch => {
+                if trimmed.is_empty() {
+                    Ok(())
+                } else {
+                    Err(InvalidPatchError(
+                        "The last line of the patch must be '*** End Patch'".to_string(),
+                    ))
+                }
+            }
         }
     }
 }
@@ -461,11 +493,14 @@ mod tests {
                 contents: "hello\n".to_string(),
             }])
         );
+        assert_eq!(parser.environment_id(), Some("remote"));
 
         let mut parser = StreamingPatchParser::default();
         assert_eq!(
             parser.push_delta("*** Begin Patch\n*** Environment ID:   \n"),
-            Ok(vec![])
+            Err(InvalidPatchError(
+                "apply_patch environment_id cannot be empty".to_string(),
+            ))
         );
     }
 
@@ -638,6 +673,26 @@ mod tests {
     }
 
     #[test]
+    fn test_streaming_patch_parser_ignores_empty_lines_after_end_of_file() {
+        let mut parser = StreamingPatchParser::default();
+        assert_eq!(
+            parser.push_delta(
+                "*** Begin Patch\n*** Update File: file.txt\n@@\n+quux\n*** End of File\n\n*** End Patch\n",
+            ),
+            Ok(vec![UpdateFile {
+                path: PathBuf::from("file.txt"),
+                move_path: None,
+                chunks: vec![UpdateFileChunk {
+                    change_context: None,
+                    old_lines: Vec::new(),
+                    new_lines: vec!["quux".to_string()],
+                    is_end_of_file: true,
+                }],
+            }])
+        );
+    }
+
+    #[test]
     fn test_streaming_patch_parser_matches_line_ending_behavior() {
         let mut parser = StreamingPatchParser::default();
         assert_eq!(
@@ -734,6 +789,30 @@ mod tests {
             Err(InvalidPatchError(
                 "The last line of the patch must be '*** End Patch'".to_string(),
             ))
+        );
+    }
+
+    #[test]
+    fn test_streaming_patch_parser_rejects_content_after_end_patch() {
+        let mut parser = StreamingPatchParser::default();
+        assert_eq!(
+            parser.push_delta(
+                "*** Begin Patch\n*** Add File: file.txt\n+hello\n*** End Patch\nextra\n",
+            ),
+            Err(InvalidPatchError(
+                "The last line of the patch must be '*** End Patch'".to_string(),
+            ))
+        );
+
+        let mut parser = StreamingPatchParser::default();
+        assert_eq!(
+            parser.push_delta(
+                "*** Begin Patch\n*** Add File: file.txt\n+hello\n*** End Patch\n \t\n",
+            ),
+            Ok(vec![AddFile {
+                path: PathBuf::from("file.txt"),
+                contents: "hello\n".to_string(),
+            }])
         );
     }
 
