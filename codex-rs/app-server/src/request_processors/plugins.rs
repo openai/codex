@@ -1942,9 +1942,9 @@ async fn load_plugin_app_summaries(
 }
 
 fn plugin_app_category_by_id_from_value(value: &serde_json::Value) -> HashMap<String, String> {
-    codex_core_plugins::loader::plugin_app_metadata_from_value(value)
+    codex_core_plugins::loader::plugin_app_declarations_from_value(value)
         .into_iter()
-        .filter_map(|app| app.category.map(|category| (app.id.0, category)))
+        .filter_map(|app| app.category.map(|category| (app.connector_id.0, category)))
         .collect()
 }
 
