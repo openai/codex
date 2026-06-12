@@ -257,8 +257,6 @@ pub enum NoiseChannelError {
     KeyGeneration(String),
     #[error("invalid Noise channel public key: {0}")]
     InvalidPublicKey(&'static str),
-    #[error("invalid Noise channel state: {0}")]
-    InvalidState(&'static str),
     #[error("invalid Noise channel message: {0}")]
     InvalidMessage(&'static str),
     #[error("Noise channel handshake failed: {0}")]
