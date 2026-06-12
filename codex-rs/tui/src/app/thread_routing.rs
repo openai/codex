@@ -696,22 +696,6 @@ impl App {
                     .await?;
                 Ok(true)
             }
-            AppCommand::RealtimeConversationStart { transport, voice } => {
-                app_server
-                    .thread_realtime_start(thread_id, transport.clone(), voice.clone())
-                    .await?;
-                Ok(true)
-            }
-            AppCommand::RealtimeConversationAudio(frame) => {
-                app_server
-                    .thread_realtime_audio(thread_id, frame.clone())
-                    .await?;
-                Ok(true)
-            }
-            AppCommand::RealtimeConversationClose => {
-                app_server.thread_realtime_stop(thread_id).await?;
-                Ok(true)
-            }
             AppCommand::RunUserShellCommand { command } => {
                 app_server
                     .thread_shell_command(thread_id, command.to_string())
