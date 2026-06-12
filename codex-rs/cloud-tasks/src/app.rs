@@ -354,6 +354,7 @@ pub enum AppEvent {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use codex_cloud_tasks_client::CloudBackendFuture;
     use codex_cloud_tasks_client::CloudTaskError;
 
     struct FakeBackend {
@@ -361,14 +362,13 @@ mod tests {
         by_env: std::collections::HashMap<Option<String>, Vec<&'static str>>,
     }
 
-    #[async_trait::async_trait]
-    impl codex_cloud_tasks_client::CloudBackend for FakeBackend {
+    impl FakeBackend {
         async fn list_tasks(
             &self,
             env: Option<&str>,
             limit: Option<i64>,
             cursor: Option<&str>,
-        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::TaskListPage> {
+        ) -> Result<codex_cloud_tasks_client::TaskListPage, CloudTaskError> {
             let key = env.map(str::to_string);
             let titles = self
                 .by_env
@@ -404,10 +404,7 @@ mod tests {
             })
         }
 
-        async fn get_task_summary(
-            &self,
-            id: TaskId,
-        ) -> codex_cloud_tasks_client::Result<TaskSummary> {
+        async fn get_task_summary(&self, id: TaskId) -> Result<TaskSummary, CloudTaskError> {
             self.list_tasks(/*env*/ None, /*limit*/ None, /*cursor*/ None)
                 .await?
                 .tasks
@@ -416,25 +413,10 @@ mod tests {
                 .ok_or_else(|| CloudTaskError::Msg(format!("Task {} not found", id.0)))
         }
 
-        async fn get_task_diff(
-            &self,
-            _id: TaskId,
-        ) -> codex_cloud_tasks_client::Result<Option<String>> {
-            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
-                "not used in test",
-            ))
-        }
-
-        async fn get_task_messages(
-            &self,
-            _id: TaskId,
-        ) -> codex_cloud_tasks_client::Result<Vec<String>> {
-            Ok(vec![])
-        }
         async fn get_task_text(
             &self,
             _id: TaskId,
-        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::TaskText> {
+        ) -> Result<codex_cloud_tasks_client::TaskText, CloudTaskError> {
             Ok(codex_cloud_tasks_client::TaskText {
                 prompt: Some("Example prompt".to_string()),
                 messages: Vec::new(),
@@ -444,46 +426,86 @@ mod tests {
                 attempt_status: codex_cloud_tasks_client::AttemptStatus::Completed,
             })
         }
+    }
 
-        async fn list_sibling_attempts(
+    impl codex_cloud_tasks_client::CloudBackend for FakeBackend {
+        fn list_tasks<'a>(
+            &'a self,
+            env: Option<&'a str>,
+            limit: Option<i64>,
+            cursor: Option<&'a str>,
+        ) -> CloudBackendFuture<'a, codex_cloud_tasks_client::TaskListPage> {
+            Box::pin(FakeBackend::list_tasks(self, env, limit, cursor))
+        }
+
+        fn get_task_summary(&self, id: TaskId) -> CloudBackendFuture<'_, TaskSummary> {
+            Box::pin(FakeBackend::get_task_summary(self, id))
+        }
+
+        fn get_task_diff(&self, _id: TaskId) -> CloudBackendFuture<'_, Option<String>> {
+            Box::pin(async {
+                Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                    "not used in test",
+                ))
+            })
+        }
+
+        fn get_task_messages(&self, _id: TaskId) -> CloudBackendFuture<'_, Vec<String>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+
+        fn get_task_text(
+            &self,
+            id: TaskId,
+        ) -> CloudBackendFuture<'_, codex_cloud_tasks_client::TaskText> {
+            Box::pin(FakeBackend::get_task_text(self, id))
+        }
+
+        fn list_sibling_attempts(
             &self,
             _task: TaskId,
             _turn_id: String,
-        ) -> codex_cloud_tasks_client::Result<Vec<codex_cloud_tasks_client::TurnAttempt>> {
-            Ok(Vec::new())
+        ) -> CloudBackendFuture<'_, Vec<codex_cloud_tasks_client::TurnAttempt>> {
+            Box::pin(async { Ok(Vec::new()) })
         }
 
-        async fn apply_task(
+        fn apply_task(
             &self,
             _id: TaskId,
             _diff_override: Option<String>,
-        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::ApplyOutcome> {
-            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
-                "not used in test",
-            ))
+        ) -> CloudBackendFuture<'_, codex_cloud_tasks_client::ApplyOutcome> {
+            Box::pin(async {
+                Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                    "not used in test",
+                ))
+            })
         }
 
-        async fn apply_task_preflight(
+        fn apply_task_preflight(
             &self,
             _id: TaskId,
             _diff_override: Option<String>,
-        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::ApplyOutcome> {
-            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
-                "not used in test",
-            ))
+        ) -> CloudBackendFuture<'_, codex_cloud_tasks_client::ApplyOutcome> {
+            Box::pin(async {
+                Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                    "not used in test",
+                ))
+            })
         }
 
-        async fn create_task(
-            &self,
-            _env_id: &str,
-            _prompt: &str,
-            _git_ref: &str,
+        fn create_task<'a>(
+            &'a self,
+            _env_id: &'a str,
+            _prompt: &'a str,
+            _git_ref: &'a str,
             _qa_mode: bool,
             _best_of_n: usize,
-        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::CreatedTask> {
-            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
-                "not used in test",
-            ))
+        ) -> CloudBackendFuture<'a, codex_cloud_tasks_client::CreatedTask> {
+            Box::pin(async {
+                Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                    "not used in test",
+                ))
+            })
         }
     }
 

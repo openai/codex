@@ -79,8 +79,9 @@ async fn token_budget_context_is_only_emitted_with_full_context() -> Result<()> 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
 
+    let thread_id = test.session_configured.thread_id;
     let expected = vec![format!(
-        "<token_budget>\nCurrent context window 0.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
+        "<token_budget>\nThread id {thread_id}.\nCurrent context window 0.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
     )];
     assert_eq!(
         token_budget_texts(&requests[0]),
@@ -142,8 +143,10 @@ async fn token_budget_remaining_context_emits_on_first_threshold_crossing() -> R
     let requests = responses.requests();
     assert_eq!(requests.len(), 5);
 
-    let full_context = "<token_budget>\nCurrent context window 0.\nYou have 9500 tokens left in this context window.\n</token_budget>"
-        .to_string();
+    let thread_id = test.session_configured.thread_id;
+    let full_context = format!(
+        "<token_budget>\nThread id {thread_id}.\nCurrent context window 0.\nYou have 9500 tokens left in this context window.\n</token_budget>"
+    );
     let threshold_25 =
         "<token_budget>\nYou have 7000 tokens left in this context window.\n</token_budget>"
             .to_string();
@@ -229,8 +232,10 @@ async fn get_context_remaining_returns_token_budget_remaining_fragment() -> Resu
         "get_context_remaining should be exposed when token budget is enabled"
     );
 
-    let full_context = "<token_budget>\nCurrent context window 0.\nYou have 9500 tokens left in this context window.\n</token_budget>"
-        .to_string();
+    let thread_id = test.session_configured.thread_id;
+    let full_context = format!(
+        "<token_budget>\nThread id {thread_id}.\nCurrent context window 0.\nYou have 9500 tokens left in this context window.\n</token_budget>"
+    );
     let remaining_context =
         "<token_budget>\nYou have 7000 tokens left in this context window.\n</token_budget>"
             .to_string();
@@ -356,10 +361,11 @@ async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
     let requests = responses.requests();
     assert_eq!(requests.len(), 3);
 
+    let thread_id = test.session_configured.thread_id;
     assert_eq!(
         token_budget_texts(&requests[2]),
         vec![format!(
-            "<token_budget>\nCurrent context window 1.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
+            "<token_budget>\nThread id {thread_id}.\nCurrent context window 1.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
         )],
         "post-compaction full context should report context window 1"
     );
@@ -422,10 +428,11 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
             .any(|name| name == "new_context"),
         "new_context should be exposed when token budget is enabled"
     );
+    let thread_id = test.session_configured.thread_id;
     assert_eq!(
         token_budget_texts(&requests[2]),
         vec![format!(
-            "<token_budget>\nCurrent context window 1.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
+            "<token_budget>\nThread id {thread_id}.\nCurrent context window 1.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
         )]
     );
     assert!(
@@ -436,13 +443,15 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
         requests[2].function_call_output_text(continue_call_id),
         Some("Plan updated".to_string())
     );
+    let snapshot = context_snapshot::format_labeled_requests_snapshot(
+        "New context window tool installs fresh full context before the next follow-up request.",
+        &[("Final Follow-Up Request", &requests[2])],
+        &ContextSnapshotOptions::default(),
+    );
+    let snapshot = snapshot.replace(&thread_id.to_string(), "<THREAD_ID>");
     insta::assert_snapshot!(
         "token_budget_new_context_window_tool_full_context",
-        context_snapshot::format_labeled_requests_snapshot(
-            "New context window tool installs fresh full context before the next follow-up request.",
-            &[("Final Follow-Up Request", &requests[2])],
-            &ContextSnapshotOptions::default(),
-        )
+        snapshot
     );
 
     Ok(())

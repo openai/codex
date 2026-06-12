@@ -17,10 +17,38 @@ fn detects_environment_context_fragment() {
 
 #[test]
 fn detects_agents_instructions_fragment() {
-    assert!(is_contextual_user_fragment(&ContentItem::InputText {
-        text: "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
-            .to_string(),
-    }));
+    for text in [
+        "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>",
+        "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>",
+    ] {
+        assert!(is_contextual_user_fragment(&ContentItem::InputText {
+            text: text.to_string(),
+        }));
+    }
+}
+
+#[test]
+fn renders_agents_instructions_with_legacy_directory_header() {
+    assert_eq!(
+        UserInstructions {
+            directory: Some("/tmp".to_string()),
+            text: "body".to_string(),
+        }
+        .render(),
+        "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
+    );
+}
+
+#[test]
+fn renders_agents_instructions_without_directory_header() {
+    assert_eq!(
+        UserInstructions {
+            directory: None,
+            text: "body".to_string(),
+        }
+        .render(),
+        "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
+    );
 }
 
 #[test]

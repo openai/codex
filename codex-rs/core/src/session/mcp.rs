@@ -74,6 +74,20 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 }
 
 impl Session {
+    pub(crate) async fn runtime_mcp_config(&self, config: &Config) -> McpConfig {
+        self.services
+            .mcp_manager
+            .runtime_config_for_thread(config, &self.services.mcp_thread_init)
+            .await
+    }
+
+    pub(crate) async fn runtime_mcp_servers(
+        &self,
+        config: &Config,
+    ) -> HashMap<String, McpServerConfig> {
+        codex_mcp::configured_mcp_servers(&self.runtime_mcp_config(config).await)
+    }
+
     pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> ElicitationReviewerHandle {
         Arc::new(GuardianMcpElicitationReviewer::new(self))
     }
@@ -289,11 +303,7 @@ impl Session {
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
-        let mcp_config = self
-            .services
-            .mcp_manager
-            .runtime_config(config.as_ref())
-            .await;
+        let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
         let mcp_servers =
             effective_mcp_servers_from_configured(mcp_servers, &mcp_config, auth.as_ref());
@@ -304,7 +314,7 @@ impl Session {
         let mcp_runtime_context = match turn_context.environments.primary() {
             Some(turn_environment) => McpRuntimeContext::new(
                 Arc::clone(&self.services.environment_manager),
-                turn_environment.cwd.to_path_buf(),
+                turn_environment.cwd().to_path_buf(),
             ),
             None => McpRuntimeContext::new(
                 Arc::clone(&self.services.environment_manager),

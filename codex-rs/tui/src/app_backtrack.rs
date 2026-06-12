@@ -47,6 +47,8 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 
 const NO_PREVIOUS_MESSAGE_TO_EDIT: &str = "No previous message to edit.";
+pub(crate) const SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE: &str =
+    "Editing previous prompts is unavailable in side conversations.";
 
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
@@ -191,6 +193,13 @@ impl App {
     /// The composer prefill is applied immediately as a UX convenience; it does not imply that
     /// core has accepted the rollback.
     pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) {
+        if self.chat_widget.side_conversation_active() {
+            self.reset_backtrack_state();
+            self.chat_widget
+                .add_error_message(SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE.to_string());
+            return;
+        }
+
         let user_total = user_count(&self.transcript_cells);
         if user_total == 0 {
             return;

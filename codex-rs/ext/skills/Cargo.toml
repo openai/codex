@@ -31,6 +31,5 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-async-trait = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -5626,6 +5626,15 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "EXPERIMENTAL. Params sent with a request_user_input event.",
       "properties": {
+        "autoResolutionMs": {
+          "default": null,
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "itemId": {
           "type": "string"
         },
@@ -6575,6 +6584,16 @@
       },
       "AppsDefaultConfig": {
         "properties": {
+          "approvals_reviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "destructive_enabled": {
             "default": true,
             "type": "boolean"
@@ -12527,6 +12546,12 @@
             },
             "type": "array"
           },
+          "shareUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "skills": {
             "items": {
               "$ref": "#/definitions/v2/SkillSummary"
@@ -13780,6 +13805,13 @@
         "title": "RawResponseItemCompletedNotification",
         "type": "object"
       },
+      "RealtimeConversationArchitecture": {
+        "enum": [
+          "realtimeapi",
+          "avas"
+        ],
+        "type": "string"
+      },
       "RealtimeConversationVersion": {
         "enum": [
           "v1",
@@ -14049,6 +14081,22 @@
           "errored"
         ],
         "type": "string"
+      },
+      "RemoteControlDisableParams": {
+        "properties": {
+          "ephemeral": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "RemoteControlEnableParams": {
+        "properties": {
+          "ephemeral": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
       },
       "RemoteControlStatusChangedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

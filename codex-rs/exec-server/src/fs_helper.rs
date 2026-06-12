@@ -189,10 +189,8 @@ pub(crate) async fn run_direct_request(
     let file_system = DirectFileSystem;
     match request {
         FsHelperRequest::ReadFile(params) => {
-            let path =
-                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             let data = file_system
-                .read_file(&path, /*sandbox*/ None)
+                .read_file(&params.path, /*sandbox*/ None)
                 .await
                 .map_err(map_fs_error)?;
             Ok(FsHelperPayload::ReadFile(FsReadFileResponse {
@@ -200,25 +198,21 @@ pub(crate) async fn run_direct_request(
             }))
         }
         FsHelperRequest::WriteFile(params) => {
-            let path =
-                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
                 invalid_request(format!(
                     "{FS_WRITE_FILE_METHOD} requires valid base64 dataBase64: {err}"
                 ))
             })?;
             file_system
-                .write_file(&path, bytes, /*sandbox*/ None)
+                .write_file(&params.path, bytes, /*sandbox*/ None)
                 .await
                 .map_err(map_fs_error)?;
             Ok(FsHelperPayload::WriteFile(FsWriteFileResponse {}))
         }
         FsHelperRequest::CreateDirectory(params) => {
-            let path =
-                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             file_system
                 .create_directory(
-                    &path,
+                    &params.path,
                     CreateDirectoryOptions {
                         recursive: params.recursive.unwrap_or(true),
                     },
@@ -231,37 +225,31 @@ pub(crate) async fn run_direct_request(
             ))
         }
         FsHelperRequest::GetMetadata(params) => {
-            let path =
-                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             let metadata = file_system
-                .get_metadata(&path, /*sandbox*/ None)
+                .get_metadata(&params.path, /*sandbox*/ None)
                 .await
                 .map_err(map_fs_error)?;
             Ok(FsHelperPayload::GetMetadata(FsGetMetadataResponse {
                 is_directory: metadata.is_directory,
                 is_file: metadata.is_file,
                 is_symlink: metadata.is_symlink,
+                size: metadata.size,
                 created_at_ms: metadata.created_at_ms,
                 modified_at_ms: metadata.modified_at_ms,
             }))
         }
         FsHelperRequest::Canonicalize(params) => {
-            let path =
-                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             let path = file_system
-                .canonicalize(&path, /*sandbox*/ None)
+                .canonicalize(&params.path, /*sandbox*/ None)
                 .await
                 .map_err(map_fs_error)?;
-            let path = path.to_abs_path().map_err(map_fs_error)?;
             Ok(FsHelperPayload::Canonicalize(FsCanonicalizeResponse {
                 path,
             }))
         }
         FsHelperRequest::ReadDirectory(params) => {
-            let path =
-                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             let entries = file_system
-                .read_directory(&path, /*sandbox*/ None)
+                .read_directory(&params.path, /*sandbox*/ None)
                 .await
                 .map_err(map_fs_error)?
                 .into_iter()
@@ -276,11 +264,9 @@ pub(crate) async fn run_direct_request(
             }))
         }
         FsHelperRequest::Remove(params) => {
-            let path =
-                codex_utils_path_uri::PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
             file_system
                 .remove(
-                    &path,
+                    &params.path,
                     RemoveOptions {
                         recursive: params.recursive.unwrap_or(true),
                         force: params.force.unwrap_or(true),
@@ -292,15 +278,10 @@ pub(crate) async fn run_direct_request(
             Ok(FsHelperPayload::Remove(FsRemoveResponse {}))
         }
         FsHelperRequest::Copy(params) => {
-            let source_path = codex_utils_path_uri::PathUri::from_abs_path(&params.source_path)
-                .map_err(map_fs_error)?;
-            let destination_path =
-                codex_utils_path_uri::PathUri::from_abs_path(&params.destination_path)
-                    .map_err(map_fs_error)?;
             file_system
                 .copy(
-                    &source_path,
-                    &destination_path,
+                    &params.source_path,
+                    &params.destination_path,
                     CopyOptions {
                         recursive: params.recursive,
                     },
@@ -325,27 +306,23 @@ fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
 
 #[cfg(test)]
 mod tests {
-    use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
     use super::*;
 
     #[test]
-    fn helper_protocol_keeps_native_absolute_paths() -> serde_json::Result<()> {
-        let local_path =
-            AbsolutePathBuf::from_absolute_path(std::env::current_dir().expect("cwd").join("file"))
-                .expect("absolute path");
-        #[cfg(not(windows))]
-        let paths = [local_path];
-        #[cfg(windows)]
+    fn helper_protocol_uses_path_uris() -> serde_json::Result<()> {
+        let local_path = PathUri::from_path(std::env::current_dir().expect("cwd").join("file"))
+            .expect("path URI");
         let paths = [
             local_path,
-            AbsolutePathBuf::from_absolute_path(r"\\server\share\file").expect("absolute UNC path"),
+            PathUri::parse("file://server/share/file").expect("path URI"),
         ];
 
         for path in paths {
-            let expected_path = path.to_string_lossy().into_owned();
+            let expected_path = path.to_string();
 
             let request = serde_json::to_value(FsHelperRequest::WriteFile(FsWriteFileParams {
                 path: path.clone(),
@@ -367,7 +344,7 @@ mod tests {
                 .as_str()
                 .expect("request path should be a string");
             assert_eq!(request_path, expected_path);
-            assert!(!request_path.starts_with("file:"));
+            assert!(request_path.starts_with("file:"));
 
             let response = serde_json::to_value(FsHelperResponse::Ok(
                 FsHelperPayload::Canonicalize(FsCanonicalizeResponse { path }),
@@ -388,7 +365,7 @@ mod tests {
                 .as_str()
                 .expect("canonicalize response path should be a string");
             assert_eq!(response_path, expected_path);
-            assert!(!response_path.starts_with("file:"));
+            assert!(response_path.starts_with("file:"));
         }
 
         Ok(())
