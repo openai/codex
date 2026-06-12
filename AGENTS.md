@@ -81,6 +81,10 @@ Likewise, when reviewing code, do not hesitate to push back on PRs that would un
 
 ## Code Review Rules
 
+### Crate API surface
+
+Keep crate API surfaces as small as possible. Avoid proliferating test-only helpers.
+
 ### Model visible context
 
 Codex maintains a context (history of messages) that is sent to the model in inference requests.
