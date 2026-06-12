@@ -2479,15 +2479,31 @@ dependencies = [
 name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
+ "codex-code-mode-protocol",
  "codex-protocol",
  "deno_core_icudata",
  "pretty_assertions",
- "serde",
  "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
  "v8",
+]
+
+[[package]]
+name = "codex-code-mode-host"
+version = "0.0.0"
+
+[[package]]
+name = "codex-code-mode-protocol"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
