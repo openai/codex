@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use codex_code_mode::RuntimeResponse;
+use codex_code_mode_protocol::RuntimeResponse;
 use serde::Serialize;
 use tracing::warn;
 

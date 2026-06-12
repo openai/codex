@@ -19,7 +19,7 @@ use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
-use codex_code_mode::InProcessCodeModeSessionProvider;
+use codex_code_mode_client::IpcCodeModeSessionProvider;
 use codex_code_mode_protocol::CodeModeSessionProvider;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
@@ -307,7 +307,7 @@ impl ThreadManager {
                 installation_id,
                 analytics_events_client,
                 state_db,
-                code_mode_session_provider: Arc::new(InProcessCodeModeSessionProvider),
+                code_mode_session_provider: Arc::new(IpcCodeModeSessionProvider::default()),
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -413,7 +413,7 @@ impl ThreadManager {
                 installation_id,
                 analytics_events_client: None,
                 state_db,
-                code_mode_session_provider: Arc::new(InProcessCodeModeSessionProvider),
+                code_mode_session_provider: Arc::new(IpcCodeModeSessionProvider::default()),
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
