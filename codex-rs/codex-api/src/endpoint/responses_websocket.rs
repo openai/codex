@@ -693,7 +693,7 @@ async fn run_websocket_response_stream(
                     continue;
                 }
                 let model_metadata = event.response_model_metadata();
-                if let Some(model) = model_metadata.warning_model
+                if let Some(model) = model_metadata.response_model
                     && last_server_model.as_deref() != Some(model.as_str())
                 {
                     let _ = tx_event

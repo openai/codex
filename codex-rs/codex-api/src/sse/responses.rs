@@ -179,7 +179,12 @@ pub struct ResponsesStreamEvent {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ResponseModelMetadata {
-    pub(crate) warning_model: Option<String>,
+    /// Effective model reported in the response metadata, if present.
+    ///
+    /// Selection precedence preserves the existing model-mismatch/reroute warning behavior:
+    /// 1. `response.headers` on standard Responses stream events.
+    /// 2. Top-level `headers` on WebSocket metadata events.
+    pub(crate) response_model: Option<String>,
     pub(crate) execution_identity: ResponseModelIdentity,
 }
 
@@ -188,7 +193,7 @@ impl ResponsesStreamEvent {
         &self.kind
     }
 
-    /// Parses model headers once while preserving their two selection rules.
+    /// Parses model headers once for the response-model and execution-identity selections.
     pub(crate) fn response_model_metadata(&self) -> ResponseModelMetadata {
         let response_identity = self
             .response
@@ -199,7 +204,7 @@ impl ResponsesStreamEvent {
             .headers
             .as_ref()
             .and_then(response_model_identity_from_json);
-        let warning_model = response_identity
+        let response_model = response_identity
             .as_ref()
             .and_then(|identity| identity.final_model.clone())
             .or_else(|| {
@@ -212,7 +217,7 @@ impl ResponsesStreamEvent {
         let execution_identity = response_identity.or(top_level_identity).unwrap_or_default();
 
         ResponseModelMetadata {
-            warning_model,
+            response_model,
             execution_identity,
         }
     }
@@ -500,7 +505,7 @@ pub async fn process_sse(
         let turn_moderation_metadata = event.turn_moderation_metadata();
 
         let model_metadata = event.response_model_metadata();
-        if let Some(model) = model_metadata.warning_model
+        if let Some(model) = model_metadata.response_model
             && last_server_model.as_deref() != Some(model.as_str())
         {
             if tx_event
@@ -1382,7 +1387,7 @@ mod tests {
         assert_eq!(
             ev.response_model_metadata(),
             ResponseModelMetadata {
-                warning_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
+                response_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
                 execution_identity: ResponseModelIdentity {
                     final_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
                     model_snapshot: Some(MODEL_SNAPSHOT_FOR_TESTS.to_string()),
@@ -1412,7 +1417,7 @@ mod tests {
         assert_eq!(
             ev.response_model_metadata(),
             ResponseModelMetadata {
-                warning_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
+                response_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
                 execution_identity: ResponseModelIdentity {
                     final_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
                     model_snapshot: Some(MODEL_SNAPSHOT_FOR_TESTS.to_string()),
@@ -1440,7 +1445,7 @@ mod tests {
         assert_eq!(
             ev.response_model_metadata(),
             ResponseModelMetadata {
-                warning_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
+                response_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
                 execution_identity: ResponseModelIdentity {
                     final_model: Some(CYBER_RESTRICTED_MODEL_FOR_TESTS.to_string()),
                     model_snapshot: None,
@@ -1468,7 +1473,7 @@ mod tests {
         assert_eq!(
             ev.response_model_metadata(),
             ResponseModelMetadata {
-                warning_model: Some("top-level-model".to_string()),
+                response_model: Some("top-level-model".to_string()),
                 execution_identity: ResponseModelIdentity {
                     final_model: None,
                     model_snapshot: Some(MODEL_SNAPSHOT_FOR_TESTS.to_string()),
