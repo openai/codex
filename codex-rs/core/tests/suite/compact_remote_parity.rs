@@ -757,9 +757,14 @@ fn compact_request_view(body: &Value, mode: Mode) -> Value {
             .pop()
             .expect("v2 compact input should end with trigger");
         assert_eq!(
-            trigger,
-            json!({"type": "compaction_trigger"}),
+            trigger["type"].as_str(),
+            Some("compaction_trigger"),
             "v2 compact input should append exactly one compaction_trigger"
+        );
+        assert_eq!(
+            trigger["metadata"]["turn_id"].as_str(),
+            body["client_metadata"]["turn_id"].as_str(),
+            "v2 compact input should stamp the trigger with the active turn id"
         );
     }
 
@@ -926,6 +931,7 @@ fn normalize_value(value: Value) -> Value {
         Value::Array(values) => Value::Array(values.into_iter().map(normalize_value).collect()),
         Value::Object(map) => Value::Object(
             map.into_iter()
+                .filter(|(key, _value)| key != "metadata")
                 .map(|(key, value)| (key, normalize_value(value)))
                 .collect(),
         ),

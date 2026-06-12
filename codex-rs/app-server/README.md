@@ -819,7 +819,7 @@ Invoke a plugin by including a UI mention token such as `@sample` in the text in
 
 ### Example: Inject raw history items
 
-Use `thread/inject_items` to append prebuilt Responses API items to a loaded thread’s prompt history without starting a user turn. These items are persisted to the rollout and included in subsequent model requests.
+Use `thread/inject_items` to append prebuilt Responses API items to a loaded thread’s prompt history without starting a user turn. These items are persisted to the rollout and included in subsequent model requests. When an injected item already belongs to a known turn, pass the optional Responses API item `metadata.turn_id`; Codex preserves it.
 
 ```json
 { "method": "thread/inject_items", "id": 36, "params": {
@@ -828,7 +828,8 @@ Use `thread/inject_items` to append prebuilt Responses API items to a loaded thr
         {
             "type": "message",
             "role": "assistant",
-            "content": [{ "type": "output_text", "text": "Previously computed context." }]
+            "content": [{ "type": "output_text", "text": "Previously computed context." }],
+            "metadata": { "turn_id": "turn_123" }
         }
     ]
 } }

@@ -181,6 +181,7 @@ use uuid::Uuid;
 
 use crate::client::ModelClient;
 use crate::codex_thread::ThreadConfigSnapshot;
+#[cfg(test)]
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
@@ -2683,8 +2684,13 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        let items = self.prepare_conversation_items_for_history(turn_context, items);
-        let items = items.as_ref();
+        let mut items = self
+            .prepare_conversation_items_for_history(turn_context, items)
+            .into_owned();
+        for item in &mut items {
+            item.stamp_turn_id_if_missing(&turn_context.sub_id);
+        }
+        let items = items.as_slice();
         {
             let mut state = self.state.lock().await;
             state.record_items(items.iter(), turn_context.truncation_policy);
@@ -2696,9 +2702,14 @@ impl Session {
     pub(crate) async fn record_inter_agent_communication(
         &self,
         turn_context: &TurnContext,
-        communication: InterAgentCommunication,
+        mut communication: InterAgentCommunication,
     ) {
-        let response_item = communication.to_model_input_item();
+        let mut response_item = communication.to_model_input_item();
+        response_item.stamp_turn_id_if_missing(&turn_context.sub_id);
+        let ResponseItem::AgentMessage { metadata, .. } = &response_item else {
+            unreachable!("inter-agent communication model input must be an agent message");
+        };
+        communication.metadata = metadata.clone();
         let items = self.prepare_conversation_items_for_history(
             turn_context,
             std::slice::from_ref(&response_item),
@@ -3097,6 +3108,9 @@ impl Session {
                 ])
         {
             items.push(guardian_developer_message);
+        }
+        for item in &mut items {
+            item.stamp_turn_id_if_missing(&turn_context.sub_id);
         }
         items
     }

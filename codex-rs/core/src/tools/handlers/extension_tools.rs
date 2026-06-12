@@ -324,15 +324,18 @@ mod tests {
                 text: "extension history".to_string(),
             }],
             phase: None,
+            metadata: None,
         };
         session
             .record_conversation_items(&turn, std::slice::from_ref(&history_item))
             .await;
+        let mut recorded_history_item = history_item.clone();
+        recorded_history_item.stamp_turn_id_if_missing(&turn.sub_id);
         let raw_history_event = rx.recv().await.expect("history raw response item event");
         let EventMsg::RawResponseItem(raw_history_item) = raw_history_event.msg else {
             panic!("expected raw response item event");
         };
-        assert_eq!(raw_history_item.item, history_item);
+        assert_eq!(raw_history_item.item, recorded_history_item);
         let invocation = ToolInvocation {
             session,
             turn,
@@ -371,7 +374,7 @@ mod tests {
         );
         assert_eq!(
             captured_call.conversation_history.items(),
-            std::slice::from_ref(&history_item)
+            std::slice::from_ref(&recorded_history_item)
         );
         match captured_call.payload {
             ToolPayload::Function { arguments } => {

@@ -435,6 +435,17 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
             "<token_budget>\nThread id {thread_id}.\nCurrent context window 1.\nYou have {EFFECTIVE_CONTEXT_WINDOW} tokens left in this context window.\n</token_budget>"
         )]
     );
+    let follow_up_body = requests[2].body_json();
+    let follow_up_turn_id = follow_up_body["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("follow-up request should include turn id");
+    for item in requests[2].input() {
+        assert_eq!(
+            item["metadata"]["turn_id"].as_str(),
+            Some(follow_up_turn_id),
+            "new context follow-up should stamp every request item with the active turn id: {item}"
+        );
+    }
     assert!(
         !requests[2].body_contains_text("request new context window"),
         "new_context should drop the prior window history before continuing the turn"

@@ -1086,8 +1086,13 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
         .await?
         .pop()
         .expect("child request");
+    let child_agent_messages = child_request.inputs_of_type("agent_message");
+    let child_turn_id = child_agent_messages[0]["metadata"]["turn_id"]
+        .as_str()
+        .expect("child agent message turn id");
+    assert!(!child_turn_id.is_empty());
     assert_eq!(
-        child_request.inputs_of_type("agent_message"),
+        child_agent_messages,
         vec![json!({
             "type": "agent_message",
             "author": "/root",
@@ -1096,6 +1101,9 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
                 "type": "encrypted_content",
                 "encrypted_content": encrypted_message,
             }],
+            "metadata": {
+                "turn_id": child_turn_id,
+            },
         })]
     );
 

@@ -267,8 +267,20 @@ fn format_request_body_snapshot(
     options: &ContextSnapshotOptions,
 ) -> String {
     let mut body = request.body_json();
+    strip_response_item_metadata(&mut body);
     canonicalize_json_snapshot_value(&mut body, options);
     serde_json::to_string_pretty(&body).expect("request body should serialize")
+}
+
+fn strip_response_item_metadata(body: &mut Value) {
+    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for item in input {
+        if let Some(item) = item.as_object_mut() {
+            item.remove("metadata");
+        }
+    }
 }
 
 fn canonicalize_json_snapshot_value(value: &mut Value, options: &ContextSnapshotOptions) {

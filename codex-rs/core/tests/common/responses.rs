@@ -195,6 +195,16 @@ impl ResponsesRequest {
             .clone()
     }
 
+    pub fn input_without_item_metadata(&self) -> Vec<Value> {
+        let mut input = self.input();
+        for item in &mut input {
+            if let Some(item) = item.as_object_mut() {
+                item.remove("metadata");
+            }
+        }
+        input
+    }
+
     pub fn inputs_of_type(&self, ty: &str) -> Vec<Value> {
         self.input()
             .iter()
@@ -685,6 +695,7 @@ pub fn user_message_item(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 

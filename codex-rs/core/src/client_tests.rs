@@ -225,6 +225,7 @@ fn output_message(id: &str, text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -387,6 +388,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
     let (mut stream, _) = super::map_response_events(
         /*upstream_request_id*/ None,
         api_stream,
+        /*output_item_turn_id*/ None,
         test_session_telemetry(),
         attempt,
     );
@@ -436,6 +438,7 @@ async fn response_stream_records_last_model_feedback_ids() {
     let (mut stream, _) = super::map_response_events(
         Some("req-123".to_string()),
         api_stream,
+        /*output_item_turn_id*/ None,
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
     );
@@ -477,6 +480,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
     let (stream, _) = super::map_response_events(
         /*upstream_request_id*/ None,
         api_stream,
+        /*output_item_turn_id*/ None,
         test_session_telemetry(),
         attempt,
     );

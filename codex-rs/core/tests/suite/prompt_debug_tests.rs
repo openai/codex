@@ -42,14 +42,16 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
     )
     .await?;
 
-    let expected_user_message = ResponseItem::Message {
+    let mut expected_user_message = ResponseItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: "hello from debug prompt".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
+    expected_user_message.stamp_turn_id_if_missing("auto-compact-0");
     assert_eq!(input.last(), Some(&expected_user_message));
     assert!(input.iter().any(|item| {
         let ResponseItem::Message { content, .. } = item else {

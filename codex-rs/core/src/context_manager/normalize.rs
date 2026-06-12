@@ -40,20 +40,22 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
 
     for (idx, item) in items.iter().enumerate() {
         match item {
-            ResponseItem::FunctionCall { call_id, .. }
-                if !function_output_ids.contains(call_id.as_str()) =>
-            {
+            ResponseItem::FunctionCall {
+                call_id, metadata, ..
+            } if !function_output_ids.contains(call_id.as_str()) => {
                 info!("Function call output is missing for call id: {call_id}");
                 missing_outputs_to_insert.push((
                     idx,
                     ResponseItem::FunctionCallOutput {
                         call_id: call_id.clone(),
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                        metadata: metadata.clone(),
                     },
                 ));
             }
             ResponseItem::ToolSearchCall {
                 call_id: Some(call_id),
+                metadata,
                 ..
             } if !tool_search_output_ids.contains(call_id.as_str()) => {
                 info!("Tool search output is missing for call id: {call_id}");
@@ -64,12 +66,13 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         status: "completed".to_string(),
                         execution: "client".to_string(),
                         tools: Vec::new(),
+                        metadata: metadata.clone(),
                     },
                 ));
             }
-            ResponseItem::CustomToolCall { call_id, .. }
-                if !custom_tool_output_ids.contains(call_id.as_str()) =>
-            {
+            ResponseItem::CustomToolCall {
+                call_id, metadata, ..
+            } if !custom_tool_output_ids.contains(call_id.as_str()) => {
                 error_or_panic(format!(
                     "Custom tool call output is missing for call id: {call_id}"
                 ));
@@ -79,12 +82,14 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         call_id: call_id.clone(),
                         name: None,
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                        metadata: metadata.clone(),
                     },
                 ));
             }
             // LocalShellCall is represented in upstream streams by a FunctionCallOutput
             ResponseItem::LocalShellCall {
                 call_id: Some(call_id),
+                metadata,
                 ..
             } if !function_output_ids.contains(call_id.as_str()) => {
                 error_or_panic(format!(
@@ -95,6 +100,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                     ResponseItem::FunctionCallOutput {
                         call_id: call_id.clone(),
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                        metadata: metadata.clone(),
                     },
                 ));
             }

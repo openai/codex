@@ -103,6 +103,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
@@ -189,6 +190,7 @@ fn user_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -200,7 +202,45 @@ fn assistant_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
+}
+
+fn stamp_missing_turn_ids(items: &mut [ResponseItem], turn_id: &str) {
+    for item in items {
+        item.stamp_turn_id_if_missing(turn_id);
+    }
+}
+
+async fn persisted_resumed_history(session: &Session, rollout_path: &Path) -> ResumedHistory {
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    resumed
+}
+
+fn rollout_response_items(items: &[RolloutItem]) -> Vec<ResponseItem> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(item) => Some(item.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn rollout_inter_agent_communications(items: &[RolloutItem]) -> Vec<InterAgentCommunication> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::InterAgentCommunication(communication) => Some(communication.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn test_session_telemetry_without_metadata() -> SessionTelemetry {
@@ -259,6 +299,7 @@ fn skill_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -1597,6 +1638,9 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
             text: "summary".to_string(),
         }],
         phase: None,
+        metadata: Some(ResponseItemMetadata {
+            turn_id: Some("compact-turn".to_string()),
+        }),
     };
     let replacement_history = vec![
         summary_item.clone(),
@@ -1607,6 +1651,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
                 text: "stale developer instructions".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
     ];
     let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
@@ -1641,6 +1686,117 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 }
 
 #[tokio::test]
+async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing_turn_id() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let fresh_item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "fresh".to_string(),
+        }],
+        phase: None,
+        metadata: None,
+    };
+    let existing_item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "existing".to_string(),
+        }],
+        phase: None,
+        metadata: Some(ResponseItemMetadata {
+            turn_id: Some("older-turn".to_string()),
+        }),
+    };
+
+    session
+        .record_conversation_items(&turn_context, &[fresh_item.clone(), existing_item.clone()])
+        .await;
+
+    let mut expected_fresh_item = fresh_item;
+    expected_fresh_item.stamp_turn_id_if_missing(&turn_context.sub_id);
+    let expected_items = vec![expected_fresh_item, existing_item];
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        expected_items.as_slice()
+    );
+
+    let resumed = persisted_resumed_history(&session, &rollout_path).await;
+    let persisted_items = rollout_response_items(&resumed.history);
+    assert_eq!(persisted_items, expected_items);
+
+    let (resumed_session, _resumed_turn_context) = make_session_and_context().await;
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(resumed))
+        .await;
+    assert_eq!(
+        resumed_session.clone_history().await.raw_items(),
+        expected_items.as_slice()
+    );
+}
+
+#[tokio::test]
+async fn record_inter_agent_communication_stamps_turn_id_in_rollout_and_resume() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::root().join("worker").expect("worker path"),
+        AgentPath::root(),
+        Vec::new(),
+        "child done".to_string(),
+        /*trigger_turn*/ false,
+    );
+    let mut expected_item = communication.to_model_input_item();
+    expected_item.stamp_turn_id_if_missing(&turn_context.sub_id);
+    let ResponseItem::AgentMessage { metadata, .. } = &expected_item else {
+        unreachable!("inter-agent communication model input must be an agent message");
+    };
+    let mut expected_communication = communication.clone();
+    expected_communication.metadata = metadata.clone();
+
+    session
+        .record_inter_agent_communication(&turn_context, communication)
+        .await;
+
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        std::slice::from_ref(&expected_item)
+    );
+
+    let resumed = persisted_resumed_history(&session, &rollout_path).await;
+    let persisted_communications = rollout_inter_agent_communications(&resumed.history);
+    assert_eq!(persisted_communications, vec![expected_communication]);
+
+    let (resumed_session, _resumed_turn_context) = make_session_and_context().await;
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(resumed))
+        .await;
+    assert_eq!(
+        resumed_session.clone_history().await.raw_items(),
+        std::slice::from_ref(&expected_item)
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_stamps_turn_id() {
+    let (session, turn_context) = make_session_and_context().await;
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+
+    assert!(
+        !initial_context.is_empty(),
+        "initial context should not be empty"
+    );
+    assert!(
+        initial_context
+            .iter()
+            .all(|item| item.turn_id() == Some(turn_context.sub_id.as_str())),
+        "initial context should be stamped with the current turn id"
+    );
+}
+
+#[tokio::test]
 async fn resize_all_images_prepares_failures_before_history_insertion() {
     let (session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -1668,32 +1824,36 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
             ]),
             success: Some(true),
         },
+        metadata: None,
     };
 
     session
         .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&item))
         .await;
 
+    let mut expected = vec![ResponseItem::FunctionCallOutput {
+        call_id: "call-1".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::ContentItems(vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "before".to_string(),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: "image content omitted because it could not be processed".to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "https://example.com/image.png".to_string(),
+                    detail: Some(ImageDetail::High),
+                },
+            ]),
+            success: Some(true),
+        },
+        metadata: None,
+    }];
+    stamp_missing_turn_ids(&mut expected, &turn_context.sub_id);
     assert_eq!(
         session.state.lock().await.clone_history().raw_items(),
-        &[ResponseItem::FunctionCallOutput {
-            call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload {
-                body: FunctionCallOutputBody::ContentItems(vec![
-                    FunctionCallOutputContentItem::InputText {
-                        text: "before".to_string(),
-                    },
-                    FunctionCallOutputContentItem::InputText {
-                        text: "image content omitted because it could not be processed".to_string(),
-                    },
-                    FunctionCallOutputContentItem::InputImage {
-                        image_url: "https://example.com/image.png".to_string(),
-                        detail: Some(ImageDetail::High),
-                    },
-                ]),
-                success: Some(true),
-            },
-        }]
+        expected.as_slice()
     );
 }
 
@@ -1720,6 +1880,7 @@ async fn resize_all_images_prepares_resumed_history_before_installing_it() {
             },
         ],
         phase: None,
+        metadata: None,
     };
 
     session
@@ -1744,6 +1905,7 @@ async fn resize_all_images_prepares_resumed_history_before_installing_it() {
                 },
             ],
             phase: None,
+            metadata: None,
         }]
     );
 }
@@ -1859,7 +2021,9 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
-    expected.extend(session.build_initial_context(&turn_context).await);
+    let mut initial_context = session.build_initial_context(&turn_context).await;
+    stamp_missing_turn_ids(&mut initial_context, &turn_context.sub_id);
+    expected.extend(initial_context);
     let history_after_seed = session.clone_history().await;
     assert_eq!(expected, history_after_seed.raw_items());
 
@@ -2834,9 +2998,10 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
 async fn thread_rollback_fails_without_persisted_thread_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-    let initial_context = sess.build_initial_context(tc.as_ref()).await;
+    let mut initial_context = sess.build_initial_context(tc.as_ref()).await;
     sess.record_conversation_items(tc.as_ref(), &initial_context)
         .await;
+    stamp_missing_turn_ids(&mut initial_context, &tc.sub_id);
 
     handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
 
@@ -3223,9 +3388,10 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
 async fn thread_rollback_fails_when_turn_in_progress() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-    let initial_context = sess.build_initial_context(tc.as_ref()).await;
+    let mut initial_context = sess.build_initial_context(tc.as_ref()).await;
     sess.record_conversation_items(tc.as_ref(), &initial_context)
         .await;
+    stamp_missing_turn_ids(&mut initial_context, &tc.sub_id);
 
     *sess.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
     handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
@@ -3244,9 +3410,10 @@ async fn thread_rollback_fails_when_turn_in_progress() {
 async fn thread_rollback_fails_when_num_turns_is_zero() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-    let initial_context = sess.build_initial_context(tc.as_ref()).await;
+    let mut initial_context = sess.build_initial_context(tc.as_ref()).await;
     sess.record_conversation_items(tc.as_ref(), &initial_context)
         .await;
+    stamp_missing_turn_ids(&mut initial_context, &tc.sub_id);
 
     handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 0).await;
 
@@ -7652,6 +7819,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
                 status: "completed".to_string(),
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
+                metadata: None,
             }],
             /*reference_context_item*/ None,
         )
@@ -7904,6 +8072,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
         status: "completed".to_string(),
         revised_prompt: Some("a tiny blue square".to_string()),
         result: "Zm9v".to_string(),
+        metadata: None,
     };
 
     let mut ctx = HandleOutputCtx {
@@ -7934,7 +8103,9 @@ async fn handle_output_item_done_records_image_save_history_message() {
             image_output_path.display(),
         ),
     );
-    assert_eq!(history.raw_items(), &[image_message, item]);
+    let mut expected = vec![image_message, item];
+    stamp_missing_turn_ids(&mut expected, &turn_context.sub_id);
+    assert_eq!(history.raw_items(), expected.as_slice());
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
@@ -7959,6 +8130,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         status: "completed".to_string(),
         revised_prompt: Some("broken payload".to_string()),
         result: "_-8".to_string(),
+        metadata: None,
     };
 
     let mut ctx = HandleOutputCtx {
@@ -7975,7 +8147,9 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         .expect("image generation item should still complete");
 
     let history = session.clone_history().await;
-    assert_eq!(history.raw_items(), &[item]);
+    let mut expected = vec![item];
+    stamp_missing_turn_ids(&mut expected, &turn_context.sub_id);
+    assert_eq!(history.raw_items(), expected.as_slice());
     assert!(!expected_saved_path.exists());
 }
 
@@ -7991,7 +8165,8 @@ async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
     session
         .set_previous_turn_settings(Some(previous_turn_settings))
         .await;
-    let initial_context = session.build_initial_context(&turn_context).await;
+    let mut initial_context = session.build_initial_context(&turn_context).await;
+    stamp_missing_turn_ids(&mut initial_context, &turn_context.sub_id);
     let developer_texts = developer_input_texts(&initial_context);
     assert!(
         developer_texts
@@ -8096,7 +8271,8 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
     let history = session.clone_history().await;
-    let initial_context = session.build_initial_context(&turn_context).await;
+    let mut initial_context = session.build_initial_context(&turn_context).await;
+    stamp_missing_turn_ids(&mut initial_context, &turn_context.sub_id);
     assert_eq!(history.raw_items().to_vec(), initial_context);
 
     let current_context = session.reference_context_item().await;
@@ -8118,6 +8294,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
             text: format!("{}\nsummary", crate::compact::SUMMARY_PREFIX),
         }],
         phase: None,
+        metadata: None,
     };
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&compacted_summary))
@@ -8142,7 +8319,9 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 
     let history = session.clone_history().await;
     let mut expected_history = vec![compacted_summary];
-    expected_history.extend(session.build_initial_context(&turn_context).await);
+    let mut initial_context = session.build_initial_context(&turn_context).await;
+    stamp_missing_turn_ids(&mut initial_context, &turn_context.sub_id);
+    expected_history.extend(initial_context);
     assert_eq!(history.raw_items().to_vec(), expected_history);
 }
 
@@ -8708,14 +8887,16 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         .await;
 
     let history = sess.clone_history().await;
-    let expected = ResponseItem::Message {
+    let mut expected = ResponseItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: "late pending input".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
+    expected.stamp_turn_id_if_missing(&tc.sub_id);
     assert!(
         history.raw_items().iter().any(|item| item == &expected),
         "expected pending input to be persisted into history on turn completion"
@@ -9147,6 +9328,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
             text: "late pending input".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     let turn_state = {
         let mut active = sess.active_turn.lock().await;
@@ -9405,6 +9587,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-1".to_string(),
+        metadata: None,
     };
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&sess),
@@ -9531,6 +9714,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         call_id: "call-1".to_string(),
         name: "shell_command".to_string(),
         input: "{}".to_string(),
+        metadata: None,
     };
 
     let call = ToolRouter::build_tool_call(item.clone())
@@ -9615,6 +9799,7 @@ async fn sample_rollout(
             text: "first user".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&user1),
@@ -9629,6 +9814,7 @@ async fn sample_rollout(
             text: "assistant reply one".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&assistant1),
@@ -9656,6 +9842,7 @@ async fn sample_rollout(
             text: "second user".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&user2),
@@ -9670,6 +9857,7 @@ async fn sample_rollout(
             text: "assistant reply two".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&assistant2),
@@ -9697,6 +9885,7 @@ async fn sample_rollout(
             text: "third user".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&user3),
@@ -9711,6 +9900,7 @@ async fn sample_rollout(
             text: "assistant reply three".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&assistant3),
@@ -9856,6 +10046,7 @@ while :; do sleep 1; done"#,
         })
         .to_string(),
         call_id: "shell-cleanup-call".to_string(),
+        metadata: None,
     };
     let call = ToolRouter::build_tool_call(item)?
         .expect("shell command response item should build a tool call");

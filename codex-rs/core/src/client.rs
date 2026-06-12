@@ -782,7 +782,10 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
-        let input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
+        let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
+        if !self.state.provider.info().is_openai() {
+            input.iter_mut().for_each(ResponseItem::clear_metadata);
+        }
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let include = if reasoning.is_some() {
@@ -1057,9 +1060,15 @@ impl ModelClientSession {
             trace!("incremental request failed, items didn't match");
             return None;
         };
-        let response_items =
-            last_response.map_or(&[][..], |response| response.items_added.as_slice());
-        let Some(incremental_items) = after_previous_input.strip_prefix(response_items) else {
+        let mut response_items =
+            last_response.map_or_else(Vec::new, |response| response.items_added.clone());
+        if !self.client.state.provider.info().is_openai() {
+            response_items
+                .iter_mut()
+                .for_each(ResponseItem::clear_metadata);
+        }
+        let Some(incremental_items) = after_previous_input.strip_prefix(response_items.as_slice())
+        else {
             trace!("incremental request failed, items didn't match");
             return None;
         };
@@ -1314,6 +1323,7 @@ impl ModelClientSession {
                 Ok(stream) => {
                     let (stream, _) = map_response_stream(
                         stream,
+                        responses_metadata.turn_id.clone(),
                         session_telemetry.clone(),
                         inference_trace_attempt,
                     );
@@ -1502,6 +1512,7 @@ impl ModelClientSession {
                 })?;
             let (stream, last_request_rx) = map_response_stream(
                 stream_result,
+                responses_metadata.turn_id.clone(),
                 session_telemetry.clone(),
                 inference_trace_attempt,
             );
@@ -1734,6 +1745,7 @@ const STREAM_DROPPED_REASON: &str = "response stream dropped before provider ter
 
 fn map_response_stream(
     api_stream: codex_api::ResponseStream,
+    output_item_turn_id: Option<String>,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
@@ -1748,6 +1760,7 @@ fn map_response_stream(
     map_response_events(
         upstream_request_id,
         api_stream,
+        output_item_turn_id,
         session_telemetry,
         inference_trace_attempt,
     )
@@ -1756,6 +1769,7 @@ fn map_response_stream(
 fn map_response_events<S>(
     upstream_request_id: Option<String>,
     api_stream: S,
+    output_item_turn_id: Option<String>,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
@@ -1796,7 +1810,10 @@ where
                 break;
             };
             match event {
-                Ok(ResponseEvent::OutputItemDone(item)) => {
+                Ok(ResponseEvent::OutputItemDone(mut item)) => {
+                    if let Some(turn_id) = output_item_turn_id.as_deref() {
+                        item.stamp_turn_id_if_missing(turn_id);
+                    }
                     items_added.push(item.clone());
                     if tx_event
                         .send(Ok(ResponseEvent::OutputItemDone(item)))
