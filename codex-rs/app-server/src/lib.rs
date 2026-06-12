@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -1154,12 +1155,14 @@ async fn init_sqlite_state_db_with_fresh_start_on_corruption(
             }
             Err(err) => err,
         };
-        if !codex_state::is_sqlite_corruption_error(&err) {
+        let database_path = codex_state::runtime_db_path_for_corruption_error(&err)
+            .unwrap_or_else(|| codex_state::state_db_path(config.sqlite_home.as_path()));
+        if !codex_state::is_sqlite_corruption_error(&err)
+            && !sqlite_home_is_blocking_file(database_path.as_path())
+        {
             return Err(err);
         }
 
-        let database_path = codex_state::runtime_db_path_for_corruption_error(&err)
-            .unwrap_or_else(|| codex_state::state_db_path(config.sqlite_home.as_path()));
         if !attempted_backups.insert(database_path.clone()) {
             return Err(anyhow::anyhow!(
                 "failed to initialize sqlite state runtime after moving damaged database file into a backup folder: {err}"
@@ -1194,6 +1197,13 @@ async fn init_sqlite_state_db_with_fresh_start_on_corruption(
             });
         }
     }
+}
+
+fn sqlite_home_is_blocking_file(database_path: &Path) -> bool {
+    database_path
+        .parent()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .is_some_and(|metadata| metadata.is_file())
 }
 
 fn sqlite_recovery_notice(
