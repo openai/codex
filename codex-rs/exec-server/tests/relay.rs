@@ -77,43 +77,14 @@ struct FailingNoiseConnectProvider {
 }
 
 impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
-    fn environment_id(&self) -> &str {
-        ENVIRONMENT_ID
-    }
-
-    fn connect_args(&self) -> BoxFuture<'_, Result<NoiseRendezvousConnectArgs, ExecServerError>> {
+    fn connect_bundle(
+        &self,
+        _: NoiseChannelPublicKey,
+    ) -> BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>> {
         self.attempts.fetch_add(1, Ordering::SeqCst);
         async {
             Err(ExecServerError::Protocol(
                 "test registry connect failure".to_string(),
-            ))
-        }
-        .boxed()
-    }
-}
-
-struct WrongEnvironmentNoiseConnectProvider {
-    harness_identity: NoiseChannelIdentity,
-    executor_public_key: NoiseChannelPublicKey,
-}
-
-impl NoiseRendezvousConnectProvider for WrongEnvironmentNoiseConnectProvider {
-    fn environment_id(&self) -> &str {
-        ENVIRONMENT_ID
-    }
-
-    fn connect_args(&self) -> BoxFuture<'_, Result<NoiseRendezvousConnectArgs, ExecServerError>> {
-        async move {
-            Ok(NoiseRendezvousConnectArgs::new(
-                NoiseRendezvousConnectBundle {
-                    websocket_url: "ws://127.0.0.1:1".to_string(),
-                    environment_id: "wrong-environment".to_string(),
-                    executor_registration_id: EXECUTOR_REGISTRATION_ID.to_string(),
-                    executor_public_key: self.executor_public_key.clone(),
-                    harness_key_authorization: HARNESS_KEY_AUTHORIZATION.to_string(),
-                },
-                self.harness_identity.clone(),
-                "noise-relay-test".to_string(),
             ))
         }
         .boxed()
@@ -160,42 +131,6 @@ async fn noise_environment_refreshes_bundle_for_each_connection_attempt() -> Res
     }
 
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
-    Ok(())
-}
-
-#[tokio::test]
-async fn noise_environment_rejects_provider_bundle_for_another_environment() -> Result<()> {
-    let manager = EnvironmentManager::without_environments();
-    manager.upsert_noise_environment(
-        ENVIRONMENT_ID.to_string(),
-        Arc::new(WrongEnvironmentNoiseConnectProvider {
-            harness_identity: NoiseChannelIdentity::generate()?,
-            executor_public_key: NoiseChannelIdentity::generate()?.public_key(),
-        }),
-    )?;
-    let backend = manager
-        .get_environment(ENVIRONMENT_ID)
-        .context("Noise environment should be materialized")?
-        .get_exec_backend();
-
-    let result = backend
-        .start(ExecParams {
-            process_id: ProcessId::from("proc-wrong-environment"),
-            argv: vec!["true".to_string()],
-            cwd: std::env::current_dir()?,
-            env_policy: None,
-            env: HashMap::new(),
-            tty: false,
-            pipe_stdin: false,
-            arg0: None,
-        })
-        .await;
-
-    assert!(matches!(
-        result,
-        Err(ExecServerError::Protocol(ref message))
-            if message == "Noise rendezvous provider returned a different environment id"
-    ));
     Ok(())
 }
 

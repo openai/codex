@@ -33,41 +33,6 @@ fn static_registry_auth_provider() -> SharedAuthProvider {
 }
 
 #[tokio::test]
-async fn register_environment_posts_security_profile_and_public_key() {
-    let server = MockServer::start().await;
-    let executor_public_key = NoiseChannelIdentity::generate()
-        .expect("identity")
-        .public_key();
-    Mock::given(method("POST"))
-        .and(path("/cloud/environment/environment-requested/register"))
-        .and(header("authorization", "Bearer registry-token"))
-        .and(body_partial_json(serde_json::json!({
-            "security_profile": NOISE_RELAY_SECURITY_PROFILE,
-            "executor_public_key": executor_public_key.clone(),
-        })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "environment_id": "environment-requested",
-            "url": "wss://rendezvous.test/noise",
-            "security_profile": NOISE_RELAY_SECURITY_PROFILE,
-            "executor_registration_id": "registration-1",
-        })))
-        .mount(&server)
-        .await;
-    let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
-        .expect("client");
-
-    let response = client
-        .register_environment("environment-requested", &executor_public_key)
-        .await
-        .expect("register Noise environment");
-
-    assert_eq!(response.environment_id, "environment-requested");
-    assert_eq!(response.url, "wss://rendezvous.test/noise");
-    assert_eq!(response.security_profile, NOISE_RELAY_SECURITY_PROFILE);
-    assert_eq!(response.executor_registration_id, "registration-1");
-}
-
-#[tokio::test]
 async fn validate_harness_key_requires_explicit_valid_response() {
     let server = MockServer::start().await;
     let harness_public_key = NoiseChannelIdentity::generate()
@@ -139,11 +104,13 @@ async fn validate_harness_key_does_not_expose_error_body() {
 
 #[test]
 fn noise_environment_id_validation_rejects_invalid_values() {
-    validate_environment_id("ccarenv_b64_Y2Fhcy1zdGFnaW5nLWV4ZWN1dG9yLWVudmlyb25tZW50LTE")
-        .expect("valid cloud environment id");
-    validate_environment_id("").expect_err("empty environment id must be rejected");
+    normalize_environment_id(
+        "ccarenv_b64_Y2Fhcy1zdGFnaW5nLWV4ZWN1dG9yLWVudmlyb25tZW50LTE".to_string(),
+    )
+    .expect("valid cloud environment id");
+    normalize_environment_id(String::new()).expect_err("empty environment id must be rejected");
 
-    let error = validate_environment_id("ccarenv_b64_valid/../../status")
+    let error = normalize_environment_id("ccarenv_b64_valid/../../status".to_string())
         .expect_err("path delimiter must not reach an authenticated registry request");
 
     assert!(matches!(

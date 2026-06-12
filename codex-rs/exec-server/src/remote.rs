@@ -52,6 +52,7 @@ impl EnvironmentRegistryClient {
             auth_provider,
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
+                .timeout(ENVIRONMENT_REGISTRY_REQUEST_TIMEOUT)
                 .build()?,
         })
     }
@@ -70,7 +71,6 @@ impl EnvironmentRegistryClient {
                 &format!("/cloud/environment/{environment_id}/register"),
             ))
             .headers(self.auth_provider.to_auth_headers())
-            .timeout(ENVIRONMENT_REGISTRY_REQUEST_TIMEOUT)
             .json(&EnvironmentRegistryRegistrationRequest {
                 security_profile: NOISE_RELAY_SECURITY_PROFILE,
                 executor_public_key,
@@ -107,7 +107,7 @@ struct EnvironmentRegistryRegistrationRequest<'a> {
     executor_public_key: &'a NoiseChannelPublicKey,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
 struct EnvironmentRegistryRegistrationResponse {
     environment_id: String,
     url: String,
@@ -152,7 +152,6 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
                 &format!("/cloud/environment/{environment_id}/validate"),
             ))
             .headers(self.client.auth_provider.to_auth_headers())
-            .timeout(ENVIRONMENT_REGISTRY_REQUEST_TIMEOUT)
             .json(&EnvironmentRegistryHarnessKeyValidationRequest {
                 executor_registration_id: &self.executor_registration_id,
                 harness_public_key,
@@ -236,7 +235,6 @@ pub async fn run_remote_environment(
     let client =
         EnvironmentRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
     let processor = ConnectionProcessor::new(runtime_paths);
-    validate_environment_id(&config.environment_id)?;
     let identity = NoiseChannelIdentity::generate().map_err(|error| {
         ExecServerError::Protocol(format!("failed to generate Noise relay identity: {error}"))
     })?;
@@ -330,15 +328,6 @@ fn normalize_environment_id(environment_id: String) -> Result<String, ExecServer
             "environment id is required for remote exec-server registration".to_string(),
         ));
     }
-    Ok(environment_id)
-}
-
-fn validate_environment_id(environment_id: &str) -> Result<(), ExecServerError> {
-    if environment_id.is_empty() {
-        return Err(ExecServerError::EnvironmentRegistryConfig(
-            "environment id is required for Noise registration".to_string(),
-        ));
-    }
     if environment_id.len() > MAX_REMOTE_ENVIRONMENT_ID_LEN {
         return Err(ExecServerError::EnvironmentRegistryConfig(format!(
             "environment id cannot be longer than {MAX_REMOTE_ENVIRONMENT_ID_LEN} characters"
@@ -355,7 +344,7 @@ fn validate_environment_id(environment_id: &str) -> Result<(), ExecServerError> 
             "environment id must contain only ASCII letters, numbers, '-' or '_'".to_string(),
         ));
     }
-    Ok(())
+    Ok(environment_id)
 }
 
 #[derive(Deserialize)]
@@ -439,6 +428,14 @@ mod tests {
     use codex_api::AuthProvider;
     use http::HeaderMap;
     use http::HeaderValue;
+    use pretty_assertions::assert_eq;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::body_partial_json;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     use super::*;
 
@@ -460,6 +457,85 @@ mod tests {
 
     fn static_registry_auth_provider() -> SharedAuthProvider {
         Arc::new(StaticRegistryAuthProvider)
+    }
+
+    #[tokio::test]
+    async fn register_environment_posts_with_auth_provider_headers() {
+        let server = MockServer::start().await;
+        let executor_public_key = NoiseChannelIdentity::generate()
+            .expect("identity")
+            .public_key();
+        Mock::given(method("POST"))
+            .and(path("/cloud/environment/environment-requested/register"))
+            .and(header("authorization", "Bearer registry-token"))
+            .and(header("chatgpt-account-id", "workspace-123"))
+            .and(body_partial_json(serde_json::json!({
+                "security_profile": NOISE_RELAY_SECURITY_PROFILE,
+                "executor_public_key": executor_public_key.clone(),
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "environment_id": "environment-requested",
+                "url": "wss://rendezvous.test/cloud-agent/default/ws/environment/environment-requested?role=environment&sig=abc",
+                "security_profile": NOISE_RELAY_SECURITY_PROFILE,
+                "executor_registration_id": "registration-1",
+            })))
+            .mount(&server)
+            .await;
+        let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
+            .expect("client");
+
+        let response = client
+            .register_environment("environment-requested", &executor_public_key)
+            .await
+            .expect("register environment");
+
+        assert_eq!(
+            response,
+            EnvironmentRegistryRegistrationResponse {
+                environment_id: "environment-requested".to_string(),
+                url: "wss://rendezvous.test/cloud-agent/default/ws/environment/environment-requested?role=environment&sig=abc".to_string(),
+                security_profile: NOISE_RELAY_SECURITY_PROFILE.to_string(),
+                executor_registration_id: "registration-1".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn register_environment_does_not_follow_redirects_with_auth_headers() {
+        let server = MockServer::start().await;
+        let executor_public_key = NoiseChannelIdentity::generate()
+            .expect("identity")
+            .public_key();
+        Mock::given(method("POST"))
+            .and(path("/cloud/environment/environment-requested/register"))
+            .and(header("authorization", "Bearer registry-token"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", format!("{}/redirect-target", server.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/redirect-target"))
+            .and(header("authorization", "Bearer registry-token"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
+            .expect("client");
+
+        let error = client
+            .register_environment("environment-requested", &executor_public_key)
+            .await
+            .expect_err("redirect response should not be followed");
+
+        assert!(matches!(
+            error,
+            ExecServerError::EnvironmentRegistryHttp {
+                status: StatusCode::FOUND,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -49,7 +49,7 @@ pub(crate) struct NoiseVirtualStream {
     transport: Arc<Mutex<NoiseTransport>>,
     inbound_ciphertexts: OrderedCiphertextFrames,
     inbound_decoder: JsonRpcMessageDecoder,
-    instance_id: u64,
+    pub(crate) instance_id: u64,
 }
 
 impl NoiseVirtualStream {
@@ -58,10 +58,6 @@ impl NoiseVirtualStream {
         let _ = self
             .incoming_tx
             .try_send(JsonRpcConnectionEvent::Disconnected { reason });
-    }
-
-    pub(crate) fn is_instance(&self, instance_id: u64) -> bool {
-        self.instance_id == instance_id
     }
 
     /// Reorder and decrypt one inbound record, then queue complete JSON-RPC messages.

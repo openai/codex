@@ -1,7 +1,6 @@
 use pretty_assertions::assert_eq;
 
 use super::InitiatorHandshake;
-use super::MAX_TRANSPORT_RECORDS_PER_DIRECTION;
 use super::NOISE_CHANNEL_SUITE;
 use super::NoiseChannelError;
 use super::NoiseChannelIdentity;
@@ -13,8 +12,7 @@ use super::noise_channel_prologue;
 fn hybrid_ik_roundtrip_authenticates_both_endpoints() {
     let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
     let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
-    let prologue =
-        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+    let prologue = noise_channel_prologue("env-1", "registration-1", "stream-1");
     let authorization = b"harness-key-authorization";
 
     let (initiator_handshake, request) = InitiatorHandshake::start(
@@ -69,8 +67,7 @@ fn initiator_rejects_wrong_responder_key() {
     let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
     let expected_responder = NoiseChannelIdentity::generate().expect("generate expected identity");
     let actual_responder = NoiseChannelIdentity::generate().expect("generate actual identity");
-    let prologue =
-        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+    let prologue = noise_channel_prologue("env-1", "registration-1", "stream-1");
 
     let (_initiator_handshake, request) = InitiatorHandshake::start(
         &initiator,
@@ -89,8 +86,7 @@ fn initiator_rejects_wrong_responder_key() {
 fn initiator_rejects_oversized_payload_before_calling_clatter() {
     let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
     let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
-    let prologue =
-        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+    let prologue = noise_channel_prologue("env-1", "registration-1", "stream-1");
     let oversized_payload = vec![0; clatter::constants::MAX_MESSAGE_LEN];
 
     assert!(matches!(
@@ -110,10 +106,8 @@ fn initiator_rejects_oversized_payload_before_calling_clatter() {
 fn responder_rejects_mismatched_prologue() {
     let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
     let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
-    let initiator_prologue =
-        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
-    let responder_prologue =
-        noise_channel_prologue("env-1", "registration-1", "stream-2").expect("build prologue");
+    let initiator_prologue = noise_channel_prologue("env-1", "registration-1", "stream-1");
+    let responder_prologue = noise_channel_prologue("env-1", "registration-1", "stream-2");
     let (_initiator_handshake, request) = InitiatorHandshake::start(
         &initiator,
         &responder.public_key(),
@@ -129,15 +123,14 @@ fn responder_rejects_mismatched_prologue() {
 
 #[test]
 fn prologue_encoding_is_stable_and_unambiguous() {
-    let prologue =
-        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+    let prologue = noise_channel_prologue("env-1", "registration-1", "stream-1");
 
     assert_eq!(
         prologue,
-        b"\x00\x00\x00\x20codex-exec-server-relay-noise/v1\
-          \x00\x00\x00\x05env-1\
-          \x00\x00\x00\x0eregistration-1\
-          \x00\x00\x00\x08stream-1"
+        b"\x00\x00\x00\x00\x00\x00\x00\x20codex-exec-server-relay-noise/v1\
+          \x00\x00\x00\x00\x00\x00\x00\x05env-1\
+          \x00\x00\x00\x00\x00\x00\x00\x0eregistration-1\
+          \x00\x00\x00\x00\x00\x00\x00\x08stream-1"
             .to_vec()
     );
 }
@@ -146,8 +139,7 @@ fn prologue_encoding_is_stable_and_unambiguous() {
 fn transport_rejects_tampered_ciphertext() {
     let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
     let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
-    let prologue =
-        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+    let prologue = noise_channel_prologue("env-1", "registration-1", "stream-1");
     let (initiator_handshake, request) = InitiatorHandshake::start(
         &initiator,
         &responder.public_key(),
@@ -173,48 +165,10 @@ fn transport_rejects_tampered_ciphertext() {
 }
 
 #[test]
-fn transport_rejects_exhausted_receiving_nonce_before_decryption() {
-    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
-    let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
-    let prologue =
-        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
-    let (initiator_handshake, request) = InitiatorHandshake::start(
-        &initiator,
-        &responder.public_key(),
-        &prologue,
-        b"authorization",
-    )
-    .expect("start initiator handshake");
-    let responder_handshake =
-        PendingResponderHandshake::read_request(&responder, &prologue, &request)
-            .expect("read responder handshake");
-    let (mut responder_transport, response) = responder_handshake
-        .complete()
-        .expect("complete responder handshake");
-    let mut initiator_transport = initiator_handshake
-        .finish(&response)
-        .expect("complete initiator handshake");
-    let ciphertext = initiator_transport
-        .encrypt(b"request")
-        .expect("encrypt request");
-    responder_transport
-        .transport
-        .set_receiving_nonce(MAX_TRANSPORT_RECORDS_PER_DIRECTION);
-
-    assert!(matches!(
-        responder_transport.decrypt(&ciphertext),
-        Err(NoiseChannelError::InvalidState(
-            "transport record nonce exhausted"
-        ))
-    ));
-}
-
-#[test]
 fn transport_rejects_replayed_ciphertext() {
     let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
     let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
-    let prologue =
-        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+    let prologue = noise_channel_prologue("env-1", "registration-1", "stream-1");
     let (initiator_handshake, request) = InitiatorHandshake::start(
         &initiator,
         &responder.public_key(),

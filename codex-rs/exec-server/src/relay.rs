@@ -461,7 +461,7 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
                 // Remove only the instance that sent the notification.
                 let is_current = streams
                     .get(&closed_stream.stream_id)
-                    .is_some_and(|stream| stream.is_instance(closed_stream.instance_id));
+                    .is_some_and(|stream| stream.instance_id == closed_stream.instance_id);
                 if is_current {
                     streams.remove(&closed_stream.stream_id);
                 }
@@ -618,18 +618,8 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
                     send_reset(&physical_outgoing_tx, stream_id);
                     continue;
                 }
-                let prologue = match noise_channel_prologue(
-                    &environment_id,
-                    &executor_registration_id,
-                    &stream_id,
-                ) {
-                    Ok(prologue) => prologue,
-                    Err(error) => {
-                        warn!("failed to build Noise relay prologue: {error}");
-                        send_reset(&physical_outgoing_tx, stream_id);
-                        continue;
-                    }
-                };
+                let prologue =
+                    noise_channel_prologue(&environment_id, &executor_registration_id, &stream_id);
                 let request = match frame.into_handshake_payload() {
                     Ok(request) => request,
                     Err(error) => {

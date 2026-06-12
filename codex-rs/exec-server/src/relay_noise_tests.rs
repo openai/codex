@@ -83,7 +83,7 @@ async fn pending_harness_key_validation_does_not_block_new_handshakes() -> Resul
     ));
 
     for stream_id in ["stream-1", "stream-2"] {
-        let prologue = noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id)?;
+        let prologue = noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id);
         let (_handshake, request) = InitiatorHandshake::start(
             &harness_identity,
             &environment_identity.public_key(),
@@ -136,7 +136,7 @@ async fn oversized_harness_authorization_is_rejected_before_validation() -> Resu
     ));
 
     let stream_id = "stream-1";
-    let prologue = noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id)?;
+    let prologue = noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id);
     let oversized_authorization = vec![b'a'; MAX_HARNESS_KEY_AUTHORIZATION_BYTES + 1];
     let (_handshake, request) = InitiatorHandshake::start(
         &harness_identity,
@@ -192,8 +192,7 @@ async fn repeated_malformed_handshakes_close_the_physical_relay() -> Result<()> 
 
     for attempt in 0..MAX_FAILED_NOISE_HANDSHAKES {
         let stream_id = format!("malformed-{attempt}");
-        let prologue =
-            noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, &stream_id)?;
+        let prologue = noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, &stream_id);
         let (_handshake, mut request) = InitiatorHandshake::start(
             &harness_identity,
             &environment_identity.public_key(),
