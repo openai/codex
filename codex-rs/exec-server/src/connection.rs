@@ -44,10 +44,12 @@ pub(crate) enum JsonRpcConnectionEvent {
 
 #[derive(Clone)]
 pub(crate) enum JsonRpcTransport {
-    /// No child process is owned by this connection; this does not mean the
-    /// transport bytes are plaintext.
+    /// `Plain` means this connection owns no child process. It does not mean
+    /// that the transport bytes are plaintext.
     Plain,
-    Stdio { transport: StdioTransport },
+    Stdio {
+        transport: StdioTransport,
+    },
 }
 
 impl JsonRpcTransport {
