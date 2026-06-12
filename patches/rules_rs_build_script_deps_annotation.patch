@@ -3,18 +3,19 @@
 # Scope: annotation plumbing only; generated dependency resolution is unchanged.
 
 diff --git a/rs/extensions.bzl b/rs/extensions.bzl
+index 7a09ce4..2b8f1ad 100644
 --- a/rs/extensions.bzl
 +++ b/rs/extensions.bzl
-@@ -737,7 +737,7 @@ def _generate_hub_and_spokes(
-             additive_build_file = annotation.additive_build_file,
-             additive_build_file_content = annotation.additive_build_file_content,
+@@ -318,7 +318,7 @@ crate.annotation(
+         kwargs = dict(
+             hub_name = hub_name,
              gen_build_script = annotation.gen_build_script,
 -            build_script_deps = [],
 +            build_script_deps = annotation.build_script_deps,
              build_script_deps_select = _select(feature_resolutions.build_deps),
              build_script_data = annotation.build_script_data,
              build_script_data_select = annotation.build_script_data_select,
-@@ -1417,9 +1417,9 @@ _annotation = tag_class(
+@@ -876,9 +876,9 @@ _annotation = tag_class(
          "build_script_data_select": attr.string_list_dict(
              doc = "A list of labels to add to a crate's `cargo_build_script::data` attribute. Keys should be the platform triplet. Value should be a list of labels.",
          ),
@@ -28,9 +29,10 @@ diff --git a/rs/extensions.bzl b/rs/extensions.bzl
              doc = "Additional environment variables to set on a crate's `cargo_build_script::env` attribute.",
          ),
 diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
+index eb2f82e..51a2b68 100644
 --- a/rs/private/annotations.bzl
 +++ b/rs/private/annotations.bzl
-@@ -5,6 +5,7 @@ def _crate_annotation(
+@@ -4,6 +4,7 @@ def _crate_annotation(
          gen_build_script = "auto",
          build_script_data = [],
          build_script_data_select = {},
@@ -38,7 +40,7 @@ diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
          build_script_env = {},
          build_script_env_select = {},
          build_script_tools = [],
-@@ -28,6 +29,7 @@ def _crate_annotation(
+@@ -30,6 +31,7 @@ def _crate_annotation(
          gen_build_script = gen_build_script,
          build_script_data = build_script_data,
          build_script_data_select = build_script_data_select,
@@ -47,11 +49,12 @@ diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
          build_script_env_select = build_script_env_select,
          build_script_tools = build_script_tools,
 diff --git a/rs/private/repository_utils.bzl b/rs/private/repository_utils.bzl
+index 4bf5c12..0a7a311 100644
 --- a/rs/private/repository_utils.bzl
 +++ b/rs/private/repository_utils.bzl
-@@ -216,7 +216,7 @@ common_attrs = {
-     "additive_build_file": attr.label(),
-     "additive_build_file_content": attr.string(),
+@@ -286,7 +286,7 @@ load("@{hub_name}//:defs.bzl", "RESOLVED_PLATFORMS")
+ rust_crate_attrs = {
+     "hub_name": attr.string(),
      "gen_build_script": attr.string(),
 -    "build_script_deps": attr.label_list(default = []),
 +    "build_script_deps": attr.string_list(default = []),

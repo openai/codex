@@ -4,21 +4,26 @@
 # omit the MinGW extension archive that owns the shim.
 
 diff --git a/runtimes/mingw/crt_sources.bzl b/runtimes/mingw/crt_sources.bzl
+index aa085df..f45f99d 100644
 --- a/runtimes/mingw/crt_sources.bzl
 +++ b/runtimes/mingw/crt_sources.bzl
-@@ -420,4 +420,5 @@
+@@ -417,6 +417,7 @@ MINGWEX_TEXTUAL_SRCS = [
+ ]
+
  MINGWEX_ARM64_SRCS = [
 +    "math/arm-common/powl.c",
      "math/sincos.c",
      "math/sincosf.c",
      "math/arm-common/sincosl.c",
 diff --git a/toolchain/args/windows/BUILD.bazel b/toolchain/args/windows/BUILD.bazel
+index 8d28a93..f8f6d49 100644
 --- a/toolchain/args/windows/BUILD.bazel
 +++ b/toolchain/args/windows/BUILD.bazel
-@@ -49,5 +49,6 @@ cc_args(
+@@ -47,6 +47,7 @@ cc_args(
+         "-L{mingw_crt_library_search_path}",
+
+         # Clang will respect the user's chosen CRT variant.
 +        "-lmingwex",
-         # For now, we force on ucrt.
-         # TODO(cerisier): make this either a constraint or a build setting
-         "-lucrt",
-     ],
-     data = [
+     ] + select({
+         "//constraints/windows/crt:msvcrt": [
+             # msvcrt.dll plus compatibility objects provided by mingw-w64.

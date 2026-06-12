@@ -1,7 +1,8 @@
 diff --git a/rust/private/repository_utils.bzl b/rust/private/repository_utils.bzl
+index 71bf3b3d0..cbe062ff2 100644
 --- a/rust/private/repository_utils.bzl
 +++ b/rust/private/repository_utils.bzl
-@@ -53,6 +53,7 @@ filegroup(
+@@ -52,6 +52,7 @@ filegroup(
              "lib/*{dylib_ext}*",
              "lib/rustlib/{target_triple}/codegen-backends/*{dylib_ext}",
              "lib/rustlib/{target_triple}/lib/*{dylib_ext}*",

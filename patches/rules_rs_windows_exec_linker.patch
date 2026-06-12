@@ -1,31 +1,35 @@
-# What: use a working Windows direct linker for `rules_rs` exec toolchains and
-# preserve the Windows stdlib link flags the stable wrapper was dropping.
+# What: use the bundled Windows direct linker for `rules_rs` exec toolchains
+# and preserve the Windows stdlib link flags required by Codex's direct-link path.
 # Scope: Windows-only linker metadata for the generated `rules_rs` toolchains.
+#
+# `rules_rs` 0.0.86 now exposes the bundled rust-lld target itself, so the old
+# repository-time PATH lookup and lld-link.exe symlink are no longer needed.
 
-diff --git a/rs/experimental/toolchains/declare_rustc_toolchains.bzl b/rs/experimental/toolchains/declare_rustc_toolchains.bzl
---- a/rs/experimental/toolchains/declare_rustc_toolchains.bzl
-+++ b/rs/experimental/toolchains/declare_rustc_toolchains.bzl
-@@ -58,6 +58,8 @@ def declare_rustc_toolchains(
-         rust_toolchain(
-             name = rust_toolchain_name,
-             rust_doc = "{}rustdoc".format(rustc_repo_label),
-+            linker = "{}rust-lld".format(rustc_repo_label) if exec_triple.system == "windows" else None,
-+            linker_type = "direct" if exec_triple.system == "windows" else None,
-             rust_std = select(rust_std_select),
-             rustc = "{}rustc".format(rustc_repo_label),
-             cargo = "{}cargo".format(cargo_repo_label),
-@@ -108,12 +110,18 @@ def declare_rustc_toolchains(
+diff --git a/rs/toolchains/declare_rustc_toolchains.bzl b/rs/toolchains/declare_rustc_toolchains.bzl
+index bbf383c..7a9e4cd 100644
+--- a/rs/toolchains/declare_rustc_toolchains.bzl
++++ b/rs/toolchains/declare_rustc_toolchains.bzl
+@@ -96,7 +96,7 @@ def declare_rustc_toolchains(
+             linker = select({
+                 "@platforms//cpu:wasm32": "{}rust-lld".format(rustc_repo_label),
+                 "@platforms//cpu:wasm64": "{}rust-lld".format(rustc_repo_label),
+-                "//conditions:default": None,
++                "//conditions:default": "{}rust-lld".format(rustc_repo_label) if exec_triple.system == "windows" else None,
+             }),
+             linker_type = "direct",
+             rust_objcopy = "{}rust-objcopy".format(rustc_repo_label),
+@@ -142,12 +142,18 @@ def declare_rustc_toolchains(
                  "@platforms//os:openbsd": ["-lpthread"],
                  "@platforms//os:ios": ["-lSystem", "-lobjc", "-Wl,-framework,Security", "-Wl,-framework,Foundation", "-lresolv"],
-                 "@rules_rs//rs/experimental/platforms/constraints:windows_gnu": ["-lws2_32", "-luserenv", "-lbcrypt", "-lntdll", "-lsynchronization"],
--                "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": ["-lws2_32", "-luserenv", "-lbcrypt", "-lntdll", "-lsynchronization"],
-+                "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": [
+                 "@llvm//constraints/windows/abi:gnu": ["-lws2_32", "-luserenv", "-lbcrypt", "-lntdll", "-lsynchronization"],
+-                "@llvm//constraints/windows/abi:gnullvm": ["-lws2_32", "-luserenv", "-lbcrypt", "-lntdll", "-lsynchronization"],
++                "@llvm//constraints/windows/abi:gnullvm": [
 +                    "advapi32.lib",
 +                    "ws2_32.lib",
 +                    "userenv.lib",
 +                    "Bcrypt.lib",
 +                ],
-                 "@rules_rs//rs/experimental/platforms/constraints:windows_msvc": [
+                 "@llvm//constraints/windows/abi:msvc": [
                      "advapi32.lib",
                      "ws2_32.lib",
                      "userenv.lib",
@@ -34,35 +38,3 @@ diff --git a/rs/experimental/toolchains/declare_rustc_toolchains.bzl b/rs/experi
                  ],
                  "//conditions:default": [],
              }),
-diff --git a/rs/private/rustc_repository.bzl b/rs/private/rustc_repository.bzl
---- a/rs/private/rustc_repository.bzl
-+++ b/rs/private/rustc_repository.bzl
-@@ -7,6 +7,14 @@ load(
- )
- load(":rust_repository_utils.bzl", "RUST_REPOSITORY_COMMON_ATTR", "download_and_extract")
--
-+
-+_WINDOWS_EXEC_LINKER_BUILD = """
-+filegroup(
-+    name = "rust-lld",
-+    srcs = ["bin/lld-link.exe"],
-+    visibility = ["//visibility:public"],
-+)
-+"""
-+
- def _symlink_rust_objcopy_shared_libraries(rctx, exec_triple):
-     rust_objcopy = rctx.path("lib/rustlib/{}/bin/rust-objcopy".format(exec_triple.str))
-     if not rust_objcopy.exists:
-@@ -29,6 +37,12 @@ def _rustc_repository_impl(rctx):
-     download_and_extract(rctx, "rustc", "rustc", exec_triple)
-     _symlink_rust_objcopy_shared_libraries(rctx, exec_triple)
-     build_content = [BUILD_for_compiler(exec_triple, include_objcopy = True)]
-+    if exec_triple.system == "windows":
-+        lld_link = rctx.which("lld-link.exe")
-+        if lld_link == None:
-+            fail("lld-link.exe not found on PATH")
-+        rctx.symlink(lld_link, "bin/lld-link.exe")
-+        build_content.append(_WINDOWS_EXEC_LINKER_BUILD)
-     if includes_rust_analyzer_proc_macro_srv(rctx.attr.version, rctx.attr.iso_date):
-         build_content.append(BUILD_for_rust_analyzer_proc_macro_srv(exec_triple))
-     rctx.file("BUILD.bazel", "\n".join(build_content))

@@ -9,8 +9,6 @@ exports_files([
     "llvm_windows_symlink_extract.patch",
     "rules_rust_windows_bootstrap_process_wrapper_linker.patch",
     "rules_rust_windows_build_script_runner_paths.patch",
-    "rules_rust_windows_exec_bin_target.patch",
-    "rules_rust_windows_exec_std.patch",
     "rules_rust_windows_process_wrapper_skip_temp_outputs.patch",
     "rules_rust_windows_msvc_direct_link_args.patch",
     "rules_rust_windows_gnullvm_build_script.patch",

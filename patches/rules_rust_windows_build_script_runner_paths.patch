@@ -1,9 +1,18 @@
+diff --git a/cargo/private/cargo_build_script_runner/bin.rs b/cargo/private/cargo_build_script_runner/bin.rs
+index 79c6afd1a..40370c909 100644
 --- a/cargo/private/cargo_build_script_runner/bin.rs
 +++ b/cargo/private/cargo_build_script_runner/bin.rs
-@@ -24,6 +24,85 @@
+@@ -18,12 +18,87 @@
+ use std::collections::BTreeMap;
+ use std::env;
+ use std::fs::{create_dir_all, read_dir, read_to_string, remove_file, write};
+-use std::path::Path;
++use std::path::{Path, PathBuf};
+ use std::process::Command;
+
  use cargo_build_script_runner::cargo_manifest_dir::{remove_symlink, symlink, RunfilesMaker};
  use cargo_build_script_runner::{BuildScriptOutput, CompileAndLinkFlags};
- 
+
 +#[cfg(windows)]
 +fn normalize_windows_relative_path(path: &str) -> String {
 +    path.replace('/', "\\")
@@ -21,11 +30,7 @@
 +#[cfg(windows)]
 +#[link(name = "Kernel32")]
 +unsafe extern "system" {
-+    fn GetShortPathNameW(
-+        lpszLongPath: *const u16,
-+        lpszShortPath: *mut u16,
-+        cchBuffer: u32,
-+    ) -> u32;
++    fn GetShortPathNameW(lpszLongPath: *const u16, lpszShortPath: *mut u16, cchBuffer: u32) -> u32;
 +}
 +
 +#[cfg(windows)]
@@ -86,7 +91,7 @@
  fn run_buildrs() -> Result<(), String> {
      // We use exec_root.join rather than std::fs::canonicalize, to avoid resolving symlinks, as
      // some execution strategies and remote execution environments may use symlinks in ways which
-@@ -31,10 +110,11 @@ fn run_buildrs() -> Result<(), String> {
+@@ -31,10 +106,12 @@ fn run_buildrs() -> Result<(), String> {
      // directory - resolving these may cause tools which inspect $0, or try to resolve files
      // relative to themselves, to fail.
      let exec_root = env::current_dir().expect("Failed to get current directory");
@@ -94,47 +99,52 @@
 -    let rustc_env = env::var("RUSTC").expect("RUSTC was not set");
 -    let manifest_dir = exec_root.join(manifest_dir_env);
 -    let rustc = exec_root.join(&rustc_env);
-+    let manifest_dir_env =
-+        normalize_windows_relative_path(&env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR was not set"));
++    let manifest_dir_env = normalize_windows_relative_path(
++        &env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR was not set"),
++    );
 +    let rustc_env = normalize_windows_relative_path(&env::var("RUSTC").expect("RUSTC was not set"));
 +    let manifest_dir = exec_root_join(&exec_root, &manifest_dir_env);
 +    let rustc = shorten_windows_path(&exec_root_join(&exec_root, &rustc_env));
      let Args {
          progname,
          crate_links,
-@@ -54,6 +134,6 @@ fn run_buildrs() -> Result<(), String> {
+@@ -52,7 +129,7 @@ fn run_buildrs() -> Result<(), String> {
+
      cargo_manifest_maker.create_runfiles_dir().unwrap();
- 
--    let out_dir_abs = exec_root.join(out_dir);
+
+-    let out_dir_abs = exec_root.join(&out_dir);
 +    let out_dir_abs = shorten_windows_path(&exec_root_join(&exec_root, &out_dir));
      // For some reason Google's RBE does not create the output directory, force create it.
      create_dir_all(&out_dir_abs)
          .unwrap_or_else(|_| panic!("Failed to make output directory: {:?}", out_dir_abs));
-@@ -87,11 +167,12 @@ fn run_buildrs() -> Result<(), String> {
- 
-     let working_directory = resolve_rundir(&rundir, &exec_root, &manifest_dir)?;
- 
+@@ -84,11 +161,12 @@ fn run_buildrs() -> Result<(), String> {
+     let target_env_vars =
+         get_target_env_vars(&rustc_env).expect("Error getting target env vars from rustc");
+
 -    let mut command = Command::new(exec_root.join(progname));
 +    let mut command = Command::new(exec_root_join(&exec_root, &progname));
      command
--        .current_dir(&working_directory)
-+        .current_dir(shorten_windows_path(&working_directory))
+-        .current_dir(&manifest_dir)
++        .current_dir(shorten_windows_path(&manifest_dir))
          .envs(target_env_vars)
          .env("OUT_DIR", &out_dir_abs)
 +        .env("RULES_RUST_BAZEL_BUILD_SCRIPT_RUNNER", "1")
          .env("CARGO_MANIFEST_DIR", manifest_dir)
          .env("RUSTC", rustc)
          .env("RUST_BACKTRACE", "full");
-@@ -121,7 +202,7 @@ fn run_buildrs() -> Result<(), String> {
- 
+@@ -118,7 +196,10 @@ fn run_buildrs() -> Result<(), String> {
+
      for tool_env_var in &["CC", "CXX", "LD"] {
          if let Some(tool_path) = env::var_os(tool_env_var) {
 -            command.env(tool_env_var, exec_root.join(tool_path));
-+            command.env(tool_env_var, exec_root_join(&exec_root, &tool_path.to_string_lossy()));
++            command.env(
++                tool_env_var,
++                exec_root_join(&exec_root, &tool_path.to_string_lossy()),
++            );
          }
      }
- 
-@@ -137,7 +218,7 @@ fn run_buildrs() -> Result<(), String> {
+
+@@ -134,6 +215,6 @@ fn run_buildrs() -> Result<(), String> {
              command.env_remove("AR");
              command.env_remove("ARFLAGS");
          } else {
@@ -142,29 +152,3 @@
 +            command.env("AR", exec_root_join(&exec_root, &ar_path.to_string_lossy()));
          }
      }
- 
-@@ -319,7 +400,8 @@ fn resolve_rundir(rundir: &str, exec_root: &Path, manifest_dir: &Path) -> Result
-     if rundir.is_empty() {
-         return Ok(manifest_dir.to_owned());
-     }
--    let rundir_path = Path::new(rundir);
-+    let rundir = normalize_windows_relative_path(rundir);
-+    let rundir_path = Path::new(&rundir);
-     if rundir_path.is_absolute() {
-         return Err(format!("rundir must be empty (to run in manifest path) or relative path (relative to exec root), but was {:?}", rundir));
-     }
-diff --git a/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs b/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs
---- a/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs
-+++ b/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs
-@@ -316,7 +316,7 @@
-     /// been copied into the runfiles directory.
-     fn drain_runfiles_dir_windows(&self) -> Result<(), String> {
-         for dest in self.runfiles.values() {
--            if !self
-+            if self
-                 .filename_suffixes_to_retain
-                 .iter()
-                 .any(|suffix| dest.ends_with(suffix))
-             {
-                 continue;
-             }

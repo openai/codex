@@ -1,8 +1,8 @@
 module(name = "codex")
 
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
-bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "llvm", version = "0.7.3")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "llvm", version = "0.8.3")
 # The upstream LLVM archive contains a few unix-only symlink entries and is
 # missing a couple of MinGW compatibility archives that windows-gnullvm needs
 # during extraction and linking, so patch it until upstream grows native support.
@@ -87,7 +87,7 @@ single_version_override(
     ],
 )
 bazel_dep(name = "rules_platform", version = "0.1.0")
-bazel_dep(name = "rules_rs", version = "0.0.59")
+bazel_dep(name = "rules_rs", version = "0.0.86")
 # `rules_rs` still does not model `windows-gnullvm` as a distinct Windows exec
 # platform, so patch it until upstream grows that support for both x86_64 and
 # aarch64.
@@ -99,10 +99,10 @@ single_version_override(
         "//patches:rules_rs_windows_gnullvm_exec.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
     ],
-    version = "0.0.59",
+    version = "0.0.86",
 )
 
-rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
+rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
 # Build-script probe binaries inherit CFLAGS/CXXFLAGS from Bazel's C++
 # toolchain. On `windows-gnullvm`, llvm-mingw does not ship
 # `libssp_nonshared`, so strip the forwarded stack-protector flags there.
@@ -114,8 +114,6 @@ rules_rust.patch(
         "//patches:rules_rust_windows_build_script_runner_paths.patch",
         "//patches:rules_rust_windows_msvc_direct_link_args.patch",
         "//patches:rules_rust_windows_process_wrapper_skip_temp_outputs.patch",
-        "//patches:rules_rust_windows_exec_bin_target.patch",
-        "//patches:rules_rust_windows_exec_std.patch",
         "//patches:rules_rust_windows_exec_rustc_dev_rlib.patch",
     ],
     strip = 1,
@@ -123,7 +121,7 @@ rules_rust.patch(
 use_repo(rules_rust, "rules_rust")
 
 nightly_rust = use_extension(
-    "@rules_rs//rs/experimental:rules_rust_reexported_extensions.bzl",
+    "@rules_rs//rs:rules_rust_reexported_extensions.bzl",
     "rust",
 )
 nightly_rust.toolchain(
@@ -141,12 +139,12 @@ nightly_rust.repository_set(
     exec_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
-        "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
+        "@llvm//constraints/windows/abi:msvc",
     ],
     target_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
-        "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
+        "@llvm//constraints/windows/abi:msvc",
     ],
     target_triple = "x86_64-pc-windows-msvc",
     versions = ["nightly/2025-09-18"],
@@ -156,13 +154,14 @@ nightly_rust.repository_set(
     target_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
-        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
+        "@llvm//constraints/windows/abi:gnullvm",
+        "@llvm//constraints/windows/crt:msvcrt",
     ],
     target_triple = "x86_64-pc-windows-gnullvm",
 )
 use_repo(nightly_rust, "rust_toolchains")
 
-toolchains = use_extension("@rules_rs//rs/experimental/toolchains:module_extension.bzl", "toolchains")
+toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
 toolchains.toolchain(
     edition = "2024",
     version = "1.95.0",
@@ -191,7 +190,6 @@ crate.from_cargo(
         "x86_64-pc-windows-msvc",
         "x86_64-pc-windows-gnullvm",
     ],
-    use_experimental_platforms = True,
 )
 crate.from_cargo(
     name = "argument_comment_lint_crates",
@@ -209,7 +207,6 @@ crate.from_cargo(
         "x86_64-pc-windows-msvc",
         "x86_64-pc-windows-gnullvm",
     ],
-    use_experimental_platforms = True,
 )
 
 bazel_dep(name = "zstd", version = "1.5.7")
