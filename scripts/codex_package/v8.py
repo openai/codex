@@ -16,6 +16,7 @@ from .targets import TargetSpec
 
 
 DOWNLOAD_TIMEOUT_SECS = 120
+ARTIFACT_PROFILE = "ptrcomp_sandbox_release"
 
 
 @dataclass(frozen=True)
@@ -70,9 +71,9 @@ def fetch_codex_v8_artifacts(
     )
     target = spec.target
     cache_dir = (cache_root or default_cache_root()) / f"rusty-v8-{version}-{target}"
-    archive = cache_dir / f"librusty_v8_release_{target}.a.gz"
-    binding = cache_dir / f"src_binding_release_{target}.rs"
-    checksums = cache_dir / f"rusty_v8_release_{target}.sha256"
+    archive = cache_dir / f"librusty_v8_{ARTIFACT_PROFILE}_{target}.a.gz"
+    binding = cache_dir / f"src_binding_{ARTIFACT_PROFILE}_{target}.rs"
+    checksums = cache_dir / f"rusty_v8_{ARTIFACT_PROFILE}_{target}.sha256"
 
     download_file(f"{release_url}/{checksums.name}", checksums)
     expected_checksums = load_checksums(checksums, {archive.name, binding.name})

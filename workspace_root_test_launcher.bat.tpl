@@ -7,10 +7,10 @@ if errorlevel 1 exit /b 1
 for %%I in ("%workspace_root_marker%") do set "workspace_root_marker_dir=%%~dpI"
 for %%I in ("%workspace_root_marker_dir%..\..") do set "workspace_root=%%~fI"
 
+__RUNFILE_ENV_EXPORTS__
+
 call :resolve_runfile test_bin "__TEST_BIN__"
 if errorlevel 1 exit /b 1
-
-__RUNFILE_ENV_EXPORTS__
 
 __WORKSPACE_ROOT_SETUP__
 
