@@ -1495,7 +1495,7 @@ text(formatter.format(new Date("2025-01-02T03:04:05Z")));
                 source: r#"
 const returnsUndefined = [
   text("first"),
-  image("https://example.com/image.jpg"),
+  image("data:image/png;base64,AAA"),
   notify("ping"),
 ].map((value) => value === undefined);
 text(JSON.stringify(returnsUndefined));
@@ -1516,7 +1516,7 @@ text(JSON.stringify(returnsUndefined));
                         text: "first".to_string(),
                     },
                     FunctionCallOutputContentItem::InputImage {
-                        image_url: "https://example.com/image.jpg".to_string(),
+                        image_url: "data:image/png;base64,AAA".to_string(),
                         detail: Some(crate::DEFAULT_IMAGE_DETAIL),
                     },
                     FunctionCallOutputContentItem::InputText {
@@ -1611,7 +1611,7 @@ generatedImage({
                 source: r#"
 image(
   {
-    image_url: "https://example.com/image.jpg",
+    image_url: "data:image/png;base64,AAA",
     detail: "high",
   },
   "original",
@@ -1629,7 +1629,7 @@ image(
             RuntimeResponse::Result {
                 cell_id: cell_id("1"),
                 content_items: vec![FunctionCallOutputContentItem::InputImage {
-                    image_url: "https://example.com/image.jpg".to_string(),
+                    image_url: "data:image/png;base64,AAA".to_string(),
                     detail: Some(crate::ImageDetail::Original),
                 }],
                 error_text: None,
@@ -1684,7 +1684,7 @@ image(
             ExecuteRequest {
                 source: r#"
 image({
-  image_url: "https://example.com/image.jpg",
+  image_url: "data:image/png;base64,AAA",
   detail: "low",
 });
 "#
@@ -1700,12 +1700,43 @@ image({
             RuntimeResponse::Result {
                 cell_id: cell_id("1"),
                 content_items: vec![FunctionCallOutputContentItem::InputImage {
-                    image_url: "https://example.com/image.jpg".to_string(),
+                    image_url: "data:image/png;base64,AAA".to_string(),
                     detail: Some(crate::ImageDetail::Low),
                 }],
                 error_text: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn image_helper_rejects_remote_urls() {
+        for image_url in [
+            "http://example.com/image.jpg",
+            "https://example.com/image.jpg",
+        ] {
+            let service = CodeModeService::new();
+
+            let response = execute(
+                &service,
+                ExecuteRequest {
+                    source: format!("image({image_url:?});"),
+                    yield_time_ms: None,
+                    ..execute_request("")
+                },
+            )
+            .await;
+
+            assert_eq!(
+                response,
+                RuntimeResponse::Result {
+                    cell_id: cell_id("1"),
+                    content_items: Vec::new(),
+                    error_text: Some(
+                        "Tool call failed: remote image URLs are not supported in tool outputs. Pass a base64 data URI or an image returned by an approved image tool instead.".to_string(),
+                    ),
+                }
+            );
+        }
     }
 
     #[tokio::test]
@@ -1717,7 +1748,7 @@ image({
             ExecuteRequest {
                 source: r#"
 image({
-  image_url: "https://example.com/image.jpg",
+  image_url: "data:image/png;base64,AAA",
   detail: "medium",
 });
 "#
