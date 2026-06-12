@@ -12,12 +12,13 @@ use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
+use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
 use crate::client_api::NoiseRendezvousConnectArgs;
 use crate::client_api::NoiseRendezvousConnectBundle;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
-use crate::client_api::redacted_websocket_url;
 use crate::connection::JsonRpcConnection;
 use crate::noise_relay::NoiseHarnessConnectionArgs;
 use crate::noise_relay::noise_harness_connection_from_websocket;
@@ -53,11 +54,14 @@ impl ExecServerClient {
                 identity,
             } => {
                 let bundle = provider.connect_bundle(identity.public_key()).await?;
-                Self::connect_noise_rendezvous(NoiseRendezvousConnectArgs::new(
+                Self::connect_noise_rendezvous(NoiseRendezvousConnectArgs {
                     bundle,
-                    identity,
-                    ENVIRONMENT_CLIENT_NAME.to_string(),
-                ))
+                    harness_identity: identity,
+                    client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
+                    connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+                    initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
+                    resume_session_id: None,
+                })
                 .await
             }
             crate::client_api::ExecServerTransportParams::StdioCommand {
@@ -125,7 +129,14 @@ impl ExecServerClient {
             executor_public_key,
             harness_key_authorization,
         } = bundle;
-        let diagnostic_url = redacted_websocket_url(&websocket_url);
+        let diagnostic_url = url::Url::parse(&websocket_url).map_or_else(
+            |_| "<redacted websocket url>".to_string(),
+            |mut url| {
+                url.set_query(None);
+                url.set_fragment(None);
+                url.to_string()
+            },
+        );
         let (stream, _) = timeout(
             connect_timeout,
             connect_async_with_config(

@@ -27,10 +27,10 @@ fn hybrid_ik_roundtrip_authenticates_both_endpoints() {
             .expect("read responder handshake");
 
     assert_eq!(
-        responder_handshake.initiator_public_key(),
+        &responder_handshake.initiator_public_key,
         &initiator.public_key()
     );
-    assert_eq!(responder_handshake.take_payload(), authorization);
+    assert_eq!(responder_handshake.payload.as_slice(), authorization);
 
     let (mut responder_transport, response) = responder_handshake
         .complete()

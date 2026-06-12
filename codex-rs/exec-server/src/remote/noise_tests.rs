@@ -101,20 +101,3 @@ async fn validate_harness_key_does_not_expose_error_body() {
             if message == "environment registry harness key validation failed"
     ));
 }
-
-#[test]
-fn noise_environment_id_validation_rejects_invalid_values() {
-    normalize_environment_id(
-        "ccarenv_b64_Y2Fhcy1zdGFnaW5nLWV4ZWN1dG9yLWVudmlyb25tZW50LTE".to_string(),
-    )
-    .expect("valid cloud environment id");
-    normalize_environment_id(String::new()).expect_err("empty environment id must be rejected");
-
-    let error = normalize_environment_id("ccarenv_b64_valid/../../status".to_string())
-        .expect_err("path delimiter must not reach an authenticated registry request");
-
-    assert!(matches!(
-        error,
-        ExecServerError::EnvironmentRegistryConfig(message) if message.contains("ASCII letters")
-    ));
-}

@@ -178,8 +178,8 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
     let environment_websocket = accept_websocket(&listener, "environment").await?;
     let executor_public_key = registered_executor_public_key(&registry).await?;
     let harness_identity = NoiseChannelIdentity::generate()?;
-    let client_args = NoiseRendezvousConnectArgs::new(
-        NoiseRendezvousConnectBundle {
+    let client_args = NoiseRendezvousConnectArgs {
+        bundle: NoiseRendezvousConnectBundle {
             websocket_url: format!("{rendezvous_url}/relay?role=harness"),
             environment_id: ENVIRONMENT_ID.to_string(),
             executor_registration_id: EXECUTOR_REGISTRATION_ID.to_string(),
@@ -187,8 +187,11 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
             harness_key_authorization: HARNESS_KEY_AUTHORIZATION.to_string(),
         },
         harness_identity,
-        "noise-relay-test".to_string(),
-    );
+        client_name: "noise-relay-test".to_string(),
+        connect_timeout: TEST_TIMEOUT,
+        initialize_timeout: TEST_TIMEOUT,
+        resume_session_id: None,
+    };
     let client_task =
         tokio::spawn(async move { ExecServerClient::connect_noise_rendezvous(client_args).await });
     let harness_websocket = accept_websocket(&listener, "harness").await?;

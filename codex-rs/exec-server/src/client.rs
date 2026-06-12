@@ -23,8 +23,6 @@ use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::ExecServerTransportParams;
 use crate::client_api::HttpClient;
-use crate::client_api::NoiseRendezvousConnectArgs;
-use crate::client_api::NoiseRendezvousConnectBundle;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
@@ -131,26 +129,6 @@ impl RemoteExecServerConnectArgs {
     pub fn new(websocket_url: String, client_name: String) -> Self {
         Self {
             websocket_url,
-            client_name,
-            connect_timeout: CONNECT_TIMEOUT,
-            initialize_timeout: INITIALIZE_TIMEOUT,
-            resume_session_id: None,
-        }
-    }
-}
-
-impl NoiseRendezvousConnectArgs {
-    /// Builds one secure connection attempt with the standard client timeouts.
-    ///
-    /// `bundle` must be freshly issued for this physical connection attempt.
-    pub fn new(
-        bundle: NoiseRendezvousConnectBundle,
-        harness_identity: crate::NoiseChannelIdentity,
-        client_name: String,
-    ) -> Self {
-        Self {
-            bundle,
-            harness_identity,
             client_name,
             connect_timeout: CONNECT_TIMEOUT,
             initialize_timeout: INITIALIZE_TIMEOUT,

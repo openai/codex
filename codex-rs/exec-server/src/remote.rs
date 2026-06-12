@@ -5,7 +5,6 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::time::sleep;
-use tokio::time::timeout;
 use tokio_tungstenite::connect_async_with_config;
 use tracing::debug;
 use tracing::info;
@@ -23,10 +22,7 @@ use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
-const ENVIRONMENT_REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_REMOTE_ENVIRONMENT_ID_LEN: usize = 256;
 const NOISE_RELAY_SECURITY_PROFILE: &str = "noise_hybrid_ik_v1";
-const REMOTE_RENDEZVOUS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 struct EnvironmentRegistryClient {
@@ -52,7 +48,6 @@ impl EnvironmentRegistryClient {
             auth_provider,
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
-                .timeout(ENVIRONMENT_REGISTRY_REQUEST_TIMEOUT)
                 .build()?,
         })
     }
@@ -267,17 +262,14 @@ pub async fn run_remote_environment(
             "Noise executor registration details"
         );
 
-        match timeout(
-            REMOTE_RENDEZVOUS_CONNECT_TIMEOUT,
-            connect_async_with_config(
-                response.url.as_str(),
-                Some(noise_relay_websocket_config()),
-                /*disable_nagle*/ false,
-            ),
+        match connect_async_with_config(
+            response.url.as_str(),
+            Some(noise_relay_websocket_config()),
+            /*disable_nagle*/ false,
         )
         .await
         {
-            Ok(Ok((websocket, _))) => {
+            Ok((websocket, _)) => {
                 backoff = Duration::from_secs(1);
                 let executor_registration_id = response.executor_registration_id;
                 info!(
@@ -299,7 +291,7 @@ pub async fn run_remote_environment(
                 )
                 .await;
             }
-            Ok(Err(error)) => {
+            Err(error) => {
                 warn!(
                     noise_event = "rendezvous_connection",
                     noise_outcome = "error",
@@ -308,12 +300,6 @@ pub async fn run_remote_environment(
                 );
                 debug!(error = %error, "Noise executor rendezvous connection error");
             }
-            Err(_) => warn!(
-                noise_event = "rendezvous_connection",
-                noise_outcome = "error",
-                noise_reason = "timeout",
-                "Noise executor rendezvous connection timed out"
-            ),
         }
 
         sleep(backoff).await;
@@ -326,22 +312,6 @@ fn normalize_environment_id(environment_id: String) -> Result<String, ExecServer
     if environment_id.is_empty() {
         return Err(ExecServerError::EnvironmentRegistryConfig(
             "environment id is required for remote exec-server registration".to_string(),
-        ));
-    }
-    if environment_id.len() > MAX_REMOTE_ENVIRONMENT_ID_LEN {
-        return Err(ExecServerError::EnvironmentRegistryConfig(format!(
-            "environment id cannot be longer than {MAX_REMOTE_ENVIRONMENT_ID_LEN} characters"
-        )));
-    }
-    // The ID is interpolated into authenticated registry request paths below.
-    // Keep it to one URL path component so a caller cannot use a delimiter to
-    // redirect the exec-server's registration credential to another endpoint.
-    if !environment_id
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
-        return Err(ExecServerError::EnvironmentRegistryConfig(
-            "environment id must contain only ASCII letters, numbers, '-' or '_'".to_string(),
         ));
     }
     Ok(environment_id)

@@ -32,7 +32,6 @@ use serde::Serialize;
 /// Identifies the handshake pattern and algorithms used by this channel.
 pub const NOISE_CHANNEL_SUITE: &str = "Noise_hybridIK_X25519+MLKEM768_AESGCM_SHA256";
 
-const X25519_PUBLIC_KEY_LEN: usize = 32;
 const PROLOGUE_DOMAIN: &[u8] = b"codex-exec-server-relay-noise/v1";
 
 type Handshake = HybridHandshake<X25519, MlKem768, MlKem768, AesGcm, Sha256>;
@@ -63,14 +62,6 @@ impl std::fmt::Debug for NoiseChannelPublicKey {
 }
 
 impl NoiseChannelPublicKey {
-    fn from_keypairs(dh: &DhKeyPair, kem: &KemKeyPair) -> Self {
-        Self {
-            suite: NOISE_CHANNEL_SUITE.to_string(),
-            x25519_public_key: STANDARD.encode(dh.public),
-            mlkem768_public_key: STANDARD.encode(kem.public.as_slice()),
-        }
-    }
-
     /// Decode registry-provided key material before passing it to Clatter.
     fn decode(&self) -> Result<(<X25519 as Dh>::PubKey, MlKem768PublicKey), NoiseChannelError> {
         if self.suite != NOISE_CHANNEL_SUITE {
@@ -81,7 +72,7 @@ impl NoiseChannelPublicKey {
         let dh = STANDARD
             .decode(&self.x25519_public_key)
             .map_err(|_| NoiseChannelError::InvalidPublicKey("invalid X25519 public key"))?;
-        let dh: [u8; X25519_PUBLIC_KEY_LEN] = dh
+        let dh: <X25519 as Dh>::PubKey = dh
             .try_into()
             .map_err(|_| NoiseChannelError::InvalidPublicKey("invalid X25519 public key length"))?;
         let kem = STANDARD
@@ -122,7 +113,11 @@ impl NoiseChannelIdentity {
     }
 
     pub fn public_key(&self) -> NoiseChannelPublicKey {
-        NoiseChannelPublicKey::from_keypairs(&self.dh, &self.kem)
+        NoiseChannelPublicKey {
+            suite: NOISE_CHANNEL_SUITE.to_string(),
+            x25519_public_key: STANDARD.encode(self.dh.public),
+            mlkem768_public_key: STANDARD.encode(self.kem.public.as_slice()),
+        }
     }
 }
 
@@ -188,8 +183,8 @@ impl InitiatorHandshake {
 /// harness key.
 pub(crate) struct PendingResponderHandshake {
     handshake: Handshake,
-    initiator_public_key: NoiseChannelPublicKey,
-    payload: Vec<u8>,
+    pub(crate) initiator_public_key: NoiseChannelPublicKey,
+    pub(crate) payload: Vec<u8>,
 }
 
 impl PendingResponderHandshake {
@@ -224,15 +219,6 @@ impl PendingResponderHandshake {
             initiator_public_key,
             payload: payload[..payload_len].to_vec(),
         })
-    }
-
-    pub(crate) fn initiator_public_key(&self) -> &NoiseChannelPublicKey {
-        &self.initiator_public_key
-    }
-
-    /// Take the registry authorization carried in the first handshake message.
-    pub(crate) fn take_payload(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.payload)
     }
 
     /// Finish the handshake after the registry authorizes the harness key.

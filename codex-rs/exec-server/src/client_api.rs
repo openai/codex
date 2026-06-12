@@ -47,21 +47,6 @@ pub struct NoiseRendezvousConnectBundle {
     pub harness_key_authorization: String,
 }
 
-impl std::fmt::Debug for NoiseRendezvousConnectBundle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NoiseRendezvousConnectBundle")
-            .field(
-                "websocket_url",
-                &redacted_websocket_url(&self.websocket_url),
-            )
-            .field("environment_id", &self.environment_id)
-            .field("executor_registration_id", &self.executor_registration_id)
-            .field("executor_public_key", &self.executor_public_key)
-            .field("harness_key_authorization", &"<redacted>")
-            .finish()
-    }
-}
-
 /// Connection arguments for an authenticated Noise rendezvous exec-server.
 ///
 /// `harness_identity` identifies the logical harness endpoint and may be reused
@@ -74,19 +59,6 @@ pub struct NoiseRendezvousConnectArgs {
     pub connect_timeout: Duration,
     pub initialize_timeout: Duration,
     pub resume_session_id: Option<String>,
-}
-
-impl std::fmt::Debug for NoiseRendezvousConnectArgs {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NoiseRendezvousConnectArgs")
-            .field("bundle", &self.bundle)
-            .field("harness_identity", &"<redacted>")
-            .field("client_name", &self.client_name)
-            .field("connect_timeout", &self.connect_timeout)
-            .field("initialize_timeout", &self.initialize_timeout)
-            .field("resume_session_id", &self.resume_session_id)
-            .finish()
-    }
 }
 
 /// Supplies fresh registry-authorized material for Noise rendezvous connections.
@@ -170,18 +142,6 @@ impl ExecServerTransportParams {
             connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
             initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
         }
-    }
-}
-
-/// Removes URL query and fragment data before a rendezvous URL reaches logs or errors.
-pub(crate) fn redacted_websocket_url(websocket_url: &str) -> String {
-    match url::Url::parse(websocket_url) {
-        Ok(mut url) => {
-            url.set_query(None);
-            url.set_fragment(None);
-            url.to_string()
-        }
-        Err(_) => "<redacted websocket url>".to_string(),
     }
 }
 
