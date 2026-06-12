@@ -14,6 +14,12 @@ pub struct ThreadId {
     pub(crate) uuid: Uuid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TS, Hash)]
+#[ts(type = "string")]
+pub struct SegmentId {
+    uuid: Uuid,
+}
+
 impl ThreadId {
     pub fn new() -> Self {
         Self {
@@ -50,13 +56,61 @@ impl From<ThreadId> for String {
     }
 }
 
+impl SegmentId {
+    pub fn new() -> Self {
+        Self {
+            uuid: Uuid::now_v7(),
+        }
+    }
+
+    pub fn from_string(s: &str) -> Result<Self, uuid::Error> {
+        Ok(Self {
+            uuid: Uuid::parse_str(s)?,
+        })
+    }
+}
+
+impl TryFrom<&str> for SegmentId {
+    type Error = uuid::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::from_string(value)
+    }
+}
+
+impl TryFrom<String> for SegmentId {
+    type Error = uuid::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::from_string(value.as_str())
+    }
+}
+
+impl From<SegmentId> for String {
+    fn from(value: SegmentId) -> Self {
+        value.to_string()
+    }
+}
+
 impl Default for ThreadId {
     fn default() -> Self {
         Self::new()
     }
 }
 
+impl Default for SegmentId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Display for ThreadId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.uuid, f)
+    }
+}
+
+impl Display for SegmentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Display::fmt(&self.uuid, f)
     }
@@ -71,7 +125,27 @@ impl Serialize for ThreadId {
     }
 }
 
+impl Serialize for SegmentId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&self.uuid)
+    }
+}
+
 impl<'de> Deserialize<'de> for ThreadId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let uuid = Uuid::parse_str(&value).map_err(serde::de::Error::custom)?;
+        Ok(Self { uuid })
+    }
+}
+
+impl<'de> Deserialize<'de> for SegmentId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -92,12 +166,28 @@ impl JsonSchema for ThreadId {
     }
 }
 
+impl JsonSchema for SegmentId {
+    fn schema_name() -> String {
+        "SegmentId".to_string()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        <String>::json_schema(generator)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn test_thread_id_default_is_not_zeroes() {
         let id = ThreadId::default();
+        assert_ne!(id.uuid, Uuid::nil());
+    }
+
+    #[test]
+    fn test_segment_id_default_is_not_zeroes() {
+        let id = SegmentId::default();
         assert_ne!(id.uuid, Uuid::nil());
     }
 }
