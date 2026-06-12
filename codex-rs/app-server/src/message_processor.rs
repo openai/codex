@@ -94,6 +94,17 @@ use tracing::Instrument;
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
 
+fn deserialize_client_request(
+    request: &JSONRPCRequest,
+) -> Result<ClientRequest, JSONRPCErrorError> {
+    serde_json::to_value(request)
+        .map_err(|err| invalid_request(format!("Invalid request: {err}")))
+        .and_then(|request_json| {
+            serde_json::from_value(request_json)
+                .map_err(|err| invalid_request(format!("Invalid request: {err}")))
+        })
+}
+
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
     outgoing: Arc<OutgoingMessageSender>,
@@ -582,12 +593,13 @@ impl MessageProcessor {
             Arc::clone(&self.outgoing),
             request_context.clone(),
             async {
-                let codex_request = serde_json::to_value(&request)
-                    .map_err(|err| invalid_request(format!("Invalid request: {err}")))
-                    .and_then(|request_json| {
-                        serde_json::from_value::<ClientRequest>(request_json)
-                            .map_err(|err| invalid_request(format!("Invalid request: {err}")))
-                    });
+                let codex_request = if request_method.starts_with("remoteControl/") {
+                    self.remote_control_processor
+                        .ensure_remote_control_allowed_before_deserialization()
+                        .and_then(|()| deserialize_client_request(&request))
+                } else {
+                    deserialize_client_request(&request)
+                };
                 let result = match codex_request {
                     Ok(codex_request) => {
                         // Websocket callers finalize outbound readiness in lib.rs after mirroring

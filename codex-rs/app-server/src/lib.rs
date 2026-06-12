@@ -32,6 +32,7 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
+use crate::transport::RemoteControlPolicy;
 use crate::transport::RemoteControlStartConfig;
 use crate::transport::TransportEvent;
 use crate::transport::acquire_app_server_startup_lock;
@@ -719,12 +720,29 @@ pub async fn run_main_with_transport_options(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
+    let remote_control_policy = if config
+        .config_layer_stack
+        .requirements()
+        .allow_remote_control
+        .as_ref()
+        .is_some_and(|requirement| !requirement.value)
+    {
+        RemoteControlPolicy::DisabledByRequirements
+    } else {
+        RemoteControlPolicy::Allowed
+    };
     let remote_control_startup_mode = runtime_options.remote_control_startup_mode;
     let remote_control_explicitly_requested =
         remote_control_startup_mode == RemoteControlStartupMode::EnabledEphemeral;
-    let remote_control_enabled = remote_control_explicitly_requested && state_db.is_some();
-    if remote_control_explicitly_requested && state_db.is_none() {
-        error!("remote control disabled because sqlite state db is unavailable");
+    let remote_control_enabled = remote_control_policy == RemoteControlPolicy::Allowed
+        && remote_control_explicitly_requested
+        && state_db.is_some();
+    if remote_control_explicitly_requested {
+        if remote_control_policy == RemoteControlPolicy::DisabledByRequirements {
+            error!("remote control disabled by managed requirements");
+        } else if state_db.is_none() {
+            error!("remote control disabled because sqlite state db is unavailable");
+        }
     }
     let no_local_transport = transport_accept_handles.is_empty();
     if no_local_transport
@@ -733,7 +751,9 @@ pub async fn run_main_with_transport_options(
     {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            if remote_control_explicitly_requested && state_db.is_none() {
+            if remote_control_policy == RemoteControlPolicy::DisabledByRequirements {
+                "no transport configured; remote control disabled by managed requirements"
+            } else if remote_control_explicitly_requested && state_db.is_none() {
                 "no transport configured; remote control disabled because sqlite state db is unavailable"
             } else {
                 "no transport configured; use --listen or enable remote control"
@@ -745,6 +765,7 @@ pub async fn run_main_with_transport_options(
         RemoteControlStartConfig {
             remote_control_url: config.chatgpt_base_url.clone(),
             installation_id: installation_id.clone(),
+            policy: remote_control_policy,
         },
         state_db.clone(),
         auth_manager.clone(),
@@ -772,7 +793,11 @@ pub async fn run_main_with_transport_options(
             let _ = remote_control_accept_handle.await;
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
-                "no transport configured; use --listen or enable remote control",
+                if remote_control_policy == RemoteControlPolicy::DisabledByRequirements {
+                    "no transport configured; remote control disabled by managed requirements"
+                } else {
+                    "no transport configured; use --listen or enable remote control"
+                },
             ));
         }
     }

@@ -1,5 +1,6 @@
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
+use crate::transport::RemoteControlEnableError;
 use crate::transport::RemoteControlHandle;
 use crate::transport::RemoteControlUnavailable;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -28,6 +29,17 @@ impl RemoteControlRequestProcessor {
         }
     }
 
+    pub(crate) fn ensure_remote_control_allowed_before_deserialization(
+        &self,
+    ) -> Result<(), JSONRPCErrorError> {
+        let Some(handle) = self.remote_control_handle.as_ref() else {
+            return Ok(());
+        };
+        handle
+            .ensure_remote_control_allowed()
+            .map_err(|err| invalid_request(err.to_string()))
+    }
+
     pub(crate) async fn enable(
         &self,
         ephemeral: bool,
@@ -35,7 +47,7 @@ impl RemoteControlRequestProcessor {
     ) -> Result<RemoteControlEnableResponse, JSONRPCErrorError> {
         let handle = self.handle()?;
         let status = if ephemeral {
-            handle.enable_ephemeral().map_err(map_unavailable)?
+            handle.enable_ephemeral().map_err(map_enable_error)?
         } else {
             handle
                 .enable(app_server_client_name)
@@ -87,8 +99,9 @@ impl RemoteControlRequestProcessor {
         &self,
         params: RemoteControlPairingStatusParams,
     ) -> Result<RemoteControlPairingStatusResponse, JSONRPCErrorError> {
+        let handle = self.handle()?;
         validate_pairing_status_params(&params)?;
-        self.handle()?
+        handle
             .pairing_status(params)
             .await
             .map_err(map_pairing_start_error)
@@ -115,9 +128,21 @@ impl RemoteControlRequestProcessor {
     }
 
     fn handle(&self) -> Result<&RemoteControlHandle, JSONRPCErrorError> {
-        self.remote_control_handle
+        let handle = self
+            .remote_control_handle
             .as_ref()
-            .ok_or_else(|| internal_error("remote control is unavailable for this app-server"))
+            .ok_or_else(|| internal_error("remote control is unavailable for this app-server"))?;
+        handle
+            .ensure_remote_control_allowed()
+            .map_err(|err| invalid_request(err.to_string()))?;
+        Ok(handle)
+    }
+}
+
+fn map_enable_error(err: RemoteControlEnableError) -> JSONRPCErrorError {
+    match err {
+        RemoteControlEnableError::Unavailable(err) => map_unavailable(err),
+        RemoteControlEnableError::DisabledByRequirements(err) => invalid_request(err.to_string()),
     }
 }
 
@@ -126,7 +151,10 @@ fn map_unavailable(err: RemoteControlUnavailable) -> JSONRPCErrorError {
 }
 
 fn map_update_error(err: io::Error) -> JSONRPCErrorError {
-    if err.kind() == io::ErrorKind::NotFound {
+    if matches!(
+        err.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+    ) {
         invalid_request(err.to_string())
     } else {
         internal_error(err.to_string())
