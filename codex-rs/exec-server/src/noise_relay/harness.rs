@@ -379,7 +379,7 @@ where
         incoming_rx,
         disconnected_rx,
         task_handles: vec![websocket_task],
-        transport: JsonRpcTransport::External,
+        transport: JsonRpcTransport::Plain,
     }
 }
 

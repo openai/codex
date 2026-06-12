@@ -357,7 +357,7 @@ where
         incoming_rx,
         disconnected_rx,
         task_handles: vec![websocket_task],
-        transport: JsonRpcTransport::External,
+        transport: JsonRpcTransport::Plain,
     }
 }
 
@@ -541,7 +541,7 @@ fn spawn_virtual_stream(
         incoming_rx,
         disconnected_rx,
         task_handles: vec![writer_task],
-        transport: JsonRpcTransport::External,
+        transport: JsonRpcTransport::Plain,
     };
     tokio::spawn(async move {
         processor.run_connection(connection).await;
