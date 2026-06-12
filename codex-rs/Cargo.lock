@@ -2366,6 +2366,7 @@ dependencies = [
  "url",
  "which 8.0.0",
  "windows-sys 0.52.0",
+ "wiremock",
 ]
 
 [[package]]
@@ -2479,15 +2480,31 @@ dependencies = [
 name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
+ "codex-code-mode-protocol",
  "codex-protocol",
  "deno_core_icudata",
  "pretty_assertions",
- "serde",
  "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
  "v8",
+]
+
+[[package]]
+name = "codex-code-mode-host"
+version = "0.0.0"
+
+[[package]]
+name = "codex-code-mode-protocol"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -2723,11 +2740,13 @@ dependencies = [
  "codex-git-utils",
  "codex-hooks",
  "codex-login",
+ "codex-mcp",
  "codex-model-provider",
  "codex-otel",
  "codex-plugin",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-path-uri",
  "codex-utils-plugins",
  "dirs",
  "flate2",
@@ -3002,7 +3021,6 @@ name = "codex-file-system"
 version = "0.0.0"
 dependencies = [
  "codex-protocol",
- "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "serde",
 ]
@@ -3542,8 +3560,10 @@ name = "codex-plugin"
 version = "0.0.0"
 dependencies = [
  "codex-config",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-plugins",
+ "pretty_assertions",
  "thiserror 2.0.18",
 ]
 
@@ -3735,6 +3755,7 @@ dependencies = [
  "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-path-uri",
  "dunce",
  "libc",
  "pretty_assertions",

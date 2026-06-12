@@ -416,10 +416,10 @@ async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, Pat
     for turn_environment in &turn_context.environments.turn_environments {
         let root = get_git_repo_root_with_fs(
             turn_environment.environment.get_filesystem().as_ref(),
-            &turn_environment.cwd,
+            turn_environment.cwd(),
         )
         .await
-        .unwrap_or_else(|| turn_environment.cwd.clone())
+        .unwrap_or_else(|| turn_environment.cwd().clone())
         .into_path_buf();
         display_roots.push((turn_environment.environment_id.clone(), root));
     }
@@ -630,7 +630,7 @@ async fn build_extension_turn_input_items(
         .enumerate()
         .map(|(index, environment)| TurnInputEnvironment {
             environment_id: environment.environment_id.clone(),
-            cwd: environment.cwd.as_path().to_path_buf(),
+            cwd: environment.cwd().as_path().to_path_buf(),
             is_primary: index == 0,
         })
         .collect::<Vec<_>>();

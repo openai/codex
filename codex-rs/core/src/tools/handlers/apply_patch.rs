@@ -52,6 +52,7 @@ use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
 /// Handles freeform `apply_patch` requests and routes verified patches to the
@@ -358,9 +359,12 @@ impl ApplyPatchHandler {
                 "apply_patch is unavailable in this session".to_string(),
             ));
         };
-        let cwd = turn_environment.cwd.clone();
+        let cwd = turn_environment.cwd().clone();
         let fs = turn_environment.environment.get_filesystem();
-        let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, &cwd);
+        let sandbox = turn.file_system_sandbox_context(
+            /*additional_permissions*/ None,
+            turn_environment.cwd_uri(),
+        );
         match codex_apply_patch::verify_apply_patch_args(args, &cwd, fs.as_ref(), Some(&sandbox))
             .await
         {
@@ -522,7 +526,14 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, cwd);
+    let sandbox_cwd = PathUri::from_abs_path(cwd).map_err(|_| {
+        FunctionCallError::RespondToModel(
+            "unable to prepare filesystem sandbox: working directory cannot be represented as a file URI"
+                .to_string(),
+        )
+    })?;
+    let sandbox =
+        turn.file_system_sandbox_context(/*additional_permissions*/ None, &sandbox_cwd);
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
         .await
     {

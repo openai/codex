@@ -694,6 +694,7 @@ pub(super) fn handle_view_image_tool_call(
 pub(super) fn handle_image_generation_end(
     chat: &mut ChatWidget,
     call_id: impl Into<String>,
+    status: impl Into<String>,
     revised_prompt: Option<String>,
     saved_path: Option<AbsolutePathBuf>,
 ) {
@@ -704,7 +705,7 @@ pub(super) fn handle_image_generation_end(
             completed_at_ms: 0,
             item: AppServerThreadItem::ImageGeneration {
                 id: call_id.into(),
-                status: "completed".to_string(),
+                status: status.into(),
                 revised_prompt,
                 result: String::new(),
                 saved_path,
@@ -1207,7 +1208,7 @@ pub(super) fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     String::new()
 }
 
-pub(super) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
+pub(crate) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
@@ -1421,6 +1422,7 @@ pub(super) fn plugins_test_detail(
         marketplace_name: "ChatGPT Marketplace".to_string(),
         marketplace_path: Some(plugins_test_absolute_path("marketplaces/chatgpt")),
         summary,
+        share_url: None,
         description: description.map(str::to_string),
         skills: skills
             .iter()

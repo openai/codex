@@ -4,14 +4,17 @@ use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
 use codex_config::ProfileV2Name;
 use codex_config::RequirementSource;
+use codex_config::Sourced;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ExperimentalRequestUserInput;
 use codex_config::config_toml::ProjectConfig;
+use codex_config::config_toml::RealtimeArchitecture;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::RealtimeToml;
 use codex_config::config_toml::RealtimeTransport;
@@ -10488,8 +10491,8 @@ experimental_thread_config_endpoint = "http://127.0.0.1:8061"
 #[tokio::test]
 async fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
-        r#"
-experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
+        r#"experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
+experimental_realtime_webrtc_call_base_url = "http://127.0.0.1:8082/v1"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -10498,7 +10501,10 @@ experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
         cfg.experimental_realtime_ws_base_url.as_deref(),
         Some("http://127.0.0.1:8011")
     );
-
+    assert_eq!(
+        cfg.experimental_realtime_webrtc_call_base_url.as_deref(),
+        Some("http://127.0.0.1:8082/v1")
+    );
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
         cfg,
@@ -10510,6 +10516,10 @@ experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
     assert_eq!(
         config.experimental_realtime_ws_base_url.as_deref(),
         Some("http://127.0.0.1:8011")
+    );
+    assert_eq!(
+        config.experimental_realtime_webrtc_call_base_url.as_deref(),
+        Some("http://127.0.0.1:8082/v1")
     );
     Ok(())
 }
@@ -10634,6 +10644,7 @@ async fn realtime_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [realtime]
+architecture = "avas"
 version = "v2"
 type = "transcription"
 transport = "webrtc"
@@ -10645,6 +10656,7 @@ voice = "cedar"
     assert_eq!(
         cfg.realtime,
         Some(RealtimeToml {
+            architecture: Some(RealtimeArchitecture::Avas),
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
@@ -10663,6 +10675,7 @@ voice = "cedar"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
+            architecture: RealtimeArchitecture::Avas,
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,

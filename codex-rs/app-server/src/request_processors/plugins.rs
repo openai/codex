@@ -1070,6 +1070,7 @@ impl PluginRequestProcessor {
                         interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
                         keywords: outcome.plugin.keywords,
                     },
+                    share_url: None,
                     description: outcome.plugin.description,
                     skills: plugin_skills_to_info(
                         &visible_skills,
@@ -2081,6 +2082,7 @@ fn remote_plugin_detail_to_info(
         marketplace_name: detail.marketplace_name,
         marketplace_path: None,
         summary: remote_plugin_summary_to_info(detail.summary),
+        share_url: detail.share_url,
         description: detail.description,
         skills: detail
             .skills

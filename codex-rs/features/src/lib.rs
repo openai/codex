@@ -81,6 +81,8 @@ pub enum Feature {
     ShellTool,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
     CodexHooks,
+    /// Store CLI auth in the encrypted local secrets backend when keyring storage is selected.
+    SecretAuthStorage,
 
     // Experimental
     /// Enable JavaScript code mode backed by the in-process V8 runtime.
@@ -747,6 +749,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "shell_tool",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SecretAuthStorage,
+        key: "secret_auth_storage",
+        stage: Stage::Stable,
+        default_enabled: cfg!(windows),
     },
     FeatureSpec {
         id: Feature::UnifiedExec,

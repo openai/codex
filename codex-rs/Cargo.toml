@@ -21,6 +21,8 @@ members = [
     "install-context",
     "codex-backend-openapi-models",
     "code-mode",
+    "code-mode-host",
+    "code-mode-protocol",
     "codex-home",
     "cloud-config",
     "cloud-tasks",
@@ -158,6 +160,7 @@ codex-cloud-config = { path = "cloud-config" }
 codex-cloud-tasks-client = { path = "cloud-tasks-client" }
 codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
+codex-code-mode-protocol = { path = "code-mode-protocol" }
 codex-home = { path = "codex-home" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
@@ -513,8 +516,8 @@ split-debuginfo = "off"
 # sidecar symbols and stripped the binaries.
 strip = false
 
-# See https://github.com/openai/codex/issues/1411 for details.
-codegen-units = 1
+# Balance parallel release code generation against binary size.
+codegen-units = 4
 
 [profile.profiling]
 inherits = "release"

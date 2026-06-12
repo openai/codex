@@ -138,6 +138,7 @@ mod frames;
 mod get_git_diff;
 mod git_action_directives;
 mod goal_display;
+mod goal_files;
 mod history_cell;
 mod hooks_rpc;
 mod ide_context;
@@ -206,6 +207,8 @@ mod update_prompt;
 #[cfg(any(not(debug_assertions), test))]
 mod update_versions;
 mod updates;
+#[cfg(any(not(debug_assertions), test))]
+mod updates_cache;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;

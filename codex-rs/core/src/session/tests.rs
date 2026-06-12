@@ -55,7 +55,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -4036,12 +4035,15 @@ fn turn_environments_for_tests(
     cwd: &codex_utils_absolute_path::AbsolutePathBuf,
 ) -> crate::environment_selection::ResolvedTurnEnvironments {
     crate::environment_selection::ResolvedTurnEnvironments {
-        turn_environments: vec![TurnEnvironment {
-            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            environment: Arc::clone(environment),
-            cwd: cwd.clone(),
-            shell: None,
-        }],
+        turn_environments: vec![
+            TurnEnvironment::new(
+                codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                Arc::clone(environment),
+                cwd.clone(),
+                /*shell*/ None,
+            )
+            .expect("turn environment"),
+        ],
     }
 }
 
@@ -4979,6 +4981,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             agent_control.session_id().to_string(),
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
+        mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
@@ -5656,8 +5659,14 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
             mcp_elicitations: true,
         }))
         .expect("test setup should allow updating approval policy");
-    turn_context_mut.environments.turn_environments[0].environment_id = "remote".to_string();
-    turn_context_mut.environments.turn_environments[0].cwd = environment_cwd.clone();
+    let current_environment = turn_context_mut.environments.turn_environments[0].clone();
+    turn_context_mut.environments.turn_environments[0] = TurnEnvironment::new(
+        "remote".to_string(),
+        current_environment.environment,
+        environment_cwd.clone(),
+        current_environment.shell,
+    )
+    .expect("environment cwd URI");
 
     let call_id = "call-1".to_string();
     let handler = RequestPermissionsHandler;
@@ -6246,15 +6255,15 @@ async fn primary_environment_uses_first_turn_environment() {
     let first_environment = turn_context.environments.turn_environments[0].clone();
     #[allow(deprecated)]
     let second_cwd = turn_context.cwd.join("second");
-    turn_context
-        .environments
-        .turn_environments
-        .push(TurnEnvironment {
-            environment_id: "second".to_string(),
-            environment: Arc::clone(&first_environment.environment),
-            cwd: second_cwd.clone(),
-            shell: None,
-        });
+    turn_context.environments.turn_environments.push(
+        TurnEnvironment::new(
+            "second".to_string(),
+            Arc::clone(&first_environment.environment),
+            second_cwd.clone(),
+            /*shell*/ None,
+        )
+        .expect("turn environment"),
+    );
 
     assert_eq!(
         turn_context
@@ -6271,13 +6280,13 @@ async fn primary_environment_uses_first_turn_environment() {
             .iter()
             .find(|environment| environment.environment_id == "second")
             .expect("second environment")
-            .cwd,
-        second_cwd
+            .cwd(),
+        &second_cwd
     );
     assert_eq!(turn_context.environments.turn_environments.len(), 2);
     assert_eq!(
-        turn_context.environments.turn_environments[1].cwd,
-        second_cwd
+        turn_context.environments.turn_environments[1].cwd(),
+        &second_cwd
     );
 }
 
@@ -6305,82 +6314,6 @@ async fn empty_turn_environments_clear_primary_environment() {
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd, session.get_config().await.cwd);
     assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
-}
-
-#[tokio::test]
-async fn unknown_turn_environment_returns_error() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-    let original_configuration = {
-        let state = session.state.lock().await;
-        state.session_configuration.clone()
-    };
-
-    let err = session
-        .new_turn_with_sub_id(
-            "sub-1".to_string(),
-            SessionSettingsUpdate {
-                environments: Some(TurnEnvironmentSelections::new(
-                    original_configuration.cwd().clone(),
-                    vec![TurnEnvironmentSelection {
-                        environment_id: "missing".to_string(),
-                        cwd: original_configuration.cwd().clone(),
-                    }],
-                )),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect_err("unknown environment should fail");
-
-    let current_configuration = {
-        let state = session.state.lock().await;
-        state.session_configuration.clone()
-    };
-    assert!(matches!(err, CodexErr::InvalidRequest(_)));
-    assert!(err.to_string().contains("missing"));
-    assert_eq!(current_configuration.cwd(), original_configuration.cwd());
-    assert_eq!(
-        current_configuration.environment_selections(),
-        original_configuration.environment_selections()
-    );
-}
-
-#[tokio::test]
-async fn duplicate_turn_environment_returns_error_without_mutating_session() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-    let original_configuration = {
-        let state = session.state.lock().await;
-        state.session_configuration.clone()
-    };
-
-    let err = session
-        .new_turn_with_sub_id(
-            "sub-1".to_string(),
-            SessionSettingsUpdate {
-                environments: Some(TurnEnvironmentSelections::new(
-                    original_configuration.cwd().clone(),
-                    vec![
-                        local(original_configuration.cwd().clone()),
-                        local(original_configuration.cwd().join("second")),
-                    ],
-                )),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect_err("duplicate environment should fail");
-
-    let current_configuration = {
-        let state = session.state.lock().await;
-        state.session_configuration.clone()
-    };
-    assert!(matches!(err, CodexErr::InvalidRequest(_)));
-    assert!(err.to_string().contains("duplicate"));
-    assert_eq!(current_configuration.cwd(), original_configuration.cwd());
-    assert_eq!(
-        current_configuration.environment_selections(),
-        original_configuration.environment_selections()
-    );
 }
 
 #[tokio::test]
@@ -7054,6 +6987,7 @@ where
             agent_control.session_id().to_string(),
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
+        mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
@@ -7323,7 +7257,11 @@ async fn environment_context_uses_session_shell_when_environment_shell_is_absent
         .turn_environments
         .first_mut()
         .expect("primary environment");
-    primary_environment.shell = Some("cmd".to_string());
+    primary_environment.shell = Some(crate::shell::Shell {
+        shell_type: crate::shell::ShellType::Cmd,
+        shell_path: PathBuf::from("cmd"),
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    });
 
     let environment_context = crate::context::EnvironmentContext::from_turn_context(
         &turn_context,

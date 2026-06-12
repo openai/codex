@@ -11,10 +11,12 @@ use crate::app_backtrack::user_count;
 
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::create_initial_user_message;
+use crate::chatwidget::tests::helpers::render_bottom_popup;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::chatwidget::tests::set_chatgpt_auth;
 use crate::chatwidget::tests::set_fast_mode_test_catalog;
 use crate::file_search::FileSearchManager;
+use crate::goal_files;
 use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
@@ -31,6 +33,7 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
+use codex_app_server_client::AppServerPath;
 use codex_app_server_protocol::AdditionalFileSystemPermissions;
 use codex_app_server_protocol::AdditionalNetworkPermissions;
 use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -90,6 +93,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -4150,6 +4154,97 @@ async fn make_test_app_with_channels() -> (
     )
 }
 
+#[tokio::test]
+async fn set_thread_goal_objective_materializes_long_objective_before_goal_set() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await?;
+    let thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
+
+    app.set_thread_goal_objective(
+        &mut app_server,
+        thread_id,
+        objective.clone(),
+        crate::app_event::ThreadGoalSetMode::ConfirmIfExists,
+    )
+    .await;
+
+    let response = app_server.thread_goal_get(thread_id).await?;
+    let goal = response.goal.expect("goal should be set");
+    let saved_objective = goal.objective.clone();
+    let codex_home = app_server
+        .codex_home_path(&app.chat_widget.config_ref().codex_home)
+        .expect("codex home");
+    assert!(goal_files::objective_file_path(&goal.objective, Some(&codex_home)).is_some());
+    assert_eq!(
+        goal_files::objective_text_for_edit(&mut app_server, Some(&codex_home), &goal.objective)
+            .await
+            .expect("managed goal file should be readable"),
+        objective
+    );
+    let is_managed = |home: &AppServerPath, path: &str| {
+        let reference = goal_files::objective_file_reference(&AppServerPath::from_app_server(path))
+            .expect("goal objective reference");
+        goal_files::objective_file_path(&reference, Some(home)).is_some()
+    };
+    let suffix = "attachments/00000000-0000-4000-8000-000000000000/goal-objective.md";
+    for path in [
+        format!("/tmp/{suffix}"),
+        format!("{codex_home}/../other/{suffix}"),
+        format!("{codex_home}/other/{suffix}"),
+    ] {
+        assert!(!is_managed(&codex_home, &path));
+    }
+    assert!(!is_managed(
+        &AppServerPath::from_app_server("/tmp/codex\\home"),
+        &format!("/tmp/codex/home/{suffix}")
+    ));
+    let unix_path = AppServerPath::from_app_server("/tmp/codex\\").join("a");
+    assert_eq!(unix_path.as_str(), "/tmp/codex\\/a");
+    let attachments_dir = app.chat_widget.config_ref().codex_home.join("attachments");
+    let attachment_count = std::fs::read_dir(&attachments_dir)?.count();
+
+    app.set_thread_goal_objective(
+        &mut app_server,
+        thread_id,
+        "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1),
+        crate::app_event::ThreadGoalSetMode::ConfirmIfExists,
+    )
+    .await;
+
+    assert_eq!(
+        std::fs::read_dir(&attachments_dir)?.count(),
+        attachment_count
+    );
+    assert_eq!(
+        app_server
+            .thread_goal_get(thread_id)
+            .await?
+            .goal
+            .expect("goal should still be set")
+            .objective,
+        saved_objective
+    );
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn replace_goal_confirmation_snapshot() {
+    let mut app = make_test_app().await;
+    app.show_replace_thread_goal_confirmation(ThreadId::new(), "New goal".to_string());
+    assert_app_snapshot!(
+        "replace_goal_confirmation",
+        render_bottom_popup(&app.chat_widget, /*width*/ 80)
+    );
+}
+
 fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
     ThreadSessionState {
         thread_id,
@@ -4491,6 +4586,7 @@ fn request_user_input_request(thread_id: ThreadId, turn_id: &str, item_id: &str)
             turn_id: turn_id.to_string(),
             item_id: item_id.to_string(),
             questions: Vec::new(),
+            auto_resolution_ms: None,
         },
     }
 }

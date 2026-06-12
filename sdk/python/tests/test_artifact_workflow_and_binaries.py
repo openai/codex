@@ -145,9 +145,8 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "--frozen",
         "--project",
         "sdk/python",
-        "--no-sync",
-        "--with",
-        "ruff",
+        "--only-group",
+        "format",
     )
     scripts_uv_run_args = (
         "uv",
@@ -155,9 +154,6 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "--frozen",
         "--project",
         "scripts",
-        "--no-sync",
-        "--with",
-        "ruff",
     )
     assert all(
         command.args[: len(sdk_uv_run_args)] == sdk_uv_run_args
@@ -366,8 +362,8 @@ def test_source_sdk_template_pins_published_runtime() -> None:
     }
 
 
-def test_source_sdk_package_declares_beta_documentation_and_release_files() -> None:
-    """Public package metadata should link beta docs and ship package metadata."""
+def test_source_sdk_package_declares_beta_documentation() -> None:
+    """Public package metadata should link beta docs."""
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     readme = (ROOT / "README.md").read_text()
 
@@ -376,7 +372,6 @@ def test_source_sdk_package_declares_beta_documentation_and_release_files() -> N
         "is_beta": "Development Status :: 4 - Beta" in pyproject["project"]["classifiers"],
         "license": pyproject["project"]["license"],
         "documentation": pyproject["project"]["urls"]["Documentation"],
-        "sdist_include": pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]["include"],
         "readme_is_beta": "# OpenAI Codex Python SDK (Beta)" in readme,
         "local_license_file": (ROOT / "LICENSE").exists(),
     } == {
@@ -384,11 +379,6 @@ def test_source_sdk_package_declares_beta_documentation_and_release_files() -> N
         "is_beta": True,
         "license": "Apache-2.0",
         "documentation": "https://github.com/openai/codex/tree/main/sdk/python/docs",
-        "sdist_include": [
-            "src/openai_codex/**",
-            "README.md",
-            "pyproject.toml",
-        ],
         "readme_is_beta": True,
         "local_license_file": False,
     }

@@ -590,15 +590,17 @@ pub async fn logout_with_revoke(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
-    AuthManager::new(
-        codex_home.to_path_buf(),
-        /*enable_codex_api_key_env*/ false,
-        auth_credentials_store_mode,
-        /*chatgpt_base_url*/ None,
-    )
-    .await
-    .logout_with_revoke()
-    .await
+    let auth_dot_json = match load_auth_dot_json(codex_home, auth_credentials_store_mode) {
+        Ok(auth_dot_json) => auth_dot_json,
+        Err(err) => {
+            tracing::warn!("failed to load stored auth during logout: {err}");
+            None
+        }
+    };
+    if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
+        tracing::warn!("failed to revoke auth tokens during logout: {err}");
+    }
+    logout_all_stores(codex_home, auth_credentials_store_mode)
 }
 
 /// Writes an `auth.json` that contains only the API key.

@@ -346,7 +346,7 @@ impl TurnRequestProcessor {
         if let Some(environment_selections) = environment_selections.as_ref() {
             self.thread_manager
                 .validate_environment_selections(environment_selections)
-                .map_err(|err| invalid_request(environment_selection_error_message(err)))?;
+                .map_err(environment_selection_error)?;
         }
         Ok(environment_selections)
     }
@@ -934,6 +934,7 @@ impl TurnRequestProcessor {
             request_id,
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
+                architecture: params.architecture,
                 model: params.model,
                 output_modality: params.output_modality,
                 prompt: params.prompt,
