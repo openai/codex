@@ -11,10 +11,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 
 use super::common;
-use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
+use crate::engine::dispatcher::CommandHookExecutor;
 use crate::engine::output_parser;
 use crate::schema::PreToolUseCommandInput;
 use crate::schema::SubagentCommandInputFields;
@@ -56,21 +56,19 @@ pub(crate) fn preview(
     request: &PreToolUseRequest,
 ) -> Vec<HookRunSummary> {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
-    dispatcher::select_handlers_for_matcher_inputs(
+    dispatcher::preview_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PreToolUse,
         &matcher_inputs,
     )
     .into_iter()
-    .map(|handler| {
-        common::hook_run_for_tool_use(dispatcher::running_summary(&handler), &request.tool_use_id)
-    })
+    .map(|run| common::hook_run_for_tool_use(run, &request.tool_use_id))
     .collect()
 }
 
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
+    executor: &CommandHookExecutor,
     request: PreToolUseRequest,
 ) -> PreToolUseOutcome {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
@@ -102,15 +100,16 @@ pub(crate) async fn run(
         }
     };
 
-    let results = dispatcher::execute_handlers(
-        shell,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id.clone()),
-        parse_completed,
-    )
-    .await;
+    let results = executor
+        .execute(
+            matched,
+            input_json,
+            request.cwd.as_path(),
+            Some(request.turn_id.clone()),
+            request.session_id,
+            parse_completed,
+        )
+        .await;
 
     let should_block = results.iter().any(|result| result.data.should_block);
     let block_reason = results
@@ -749,6 +748,7 @@ mod tests {
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             env: std::collections::HashMap::new(),
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         }
     }
 

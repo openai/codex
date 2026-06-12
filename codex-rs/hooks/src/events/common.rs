@@ -1,5 +1,6 @@
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
@@ -60,6 +61,7 @@ pub(crate) fn serialization_failure_hook_events(
 ) -> Vec<HookCompletedEvent> {
     handlers
         .into_iter()
+        .filter(|handler| handler.execution_mode == HookExecutionMode::Sync)
         .map(|handler| {
             let mut run = dispatcher::running_summary(&handler);
             run.status = HookRunStatus::Failed;

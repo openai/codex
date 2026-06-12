@@ -5,6 +5,7 @@ use std::time::Duration;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
+use codex_hooks::Hooks;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
@@ -34,6 +35,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::WarningEvent;
 use codex_thread_store::ReadThreadParams;
 use serde_json::Value;
 use tracing::instrument;
@@ -47,9 +49,9 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
-pub(crate) struct HookRuntimeOutcome {
-    pub should_stop: bool,
-    pub additional_contexts: Vec<String>,
+struct HookRuntimeOutcome {
+    should_stop: bool,
+    additional_contexts: Vec<String>,
 }
 
 pub(crate) enum PreToolUseHookResult {
@@ -496,7 +498,65 @@ pub(crate) async fn run_legacy_after_agent_hook(
     true
 }
 
-pub(crate) async fn inspect_pending_input(
+/// Runs prompt hooks, records accepted input, and delivers previously-ready
+/// async hook output to the resulting model request.
+#[instrument(level = "trace", skip_all)]
+pub(crate) async fn run_user_prompt_submit_hooks_and_record_inputs(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: &[TurnInput],
+) -> bool {
+    let hooks = sess.hooks();
+    let pending_async_output = hooks.pending_async_delivery();
+    let mut blocked_input = false;
+    let mut accepted_user_input = false;
+    for input_item in input {
+        let can_accept_user_input =
+            matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty());
+        if run_user_prompt_submit_hook_and_record_input(&hooks, sess, turn_context, input_item)
+            .await
+        {
+            blocked_input = true;
+        } else if can_accept_user_input {
+            accepted_user_input = true;
+        }
+    }
+    if accepted_user_input {
+        let delivery = pending_async_output.accept_input();
+        record_additional_contexts(sess, turn_context, delivery.additional_contexts).await;
+        for message in delivery.system_messages {
+            sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                .await;
+        }
+    }
+    blocked_input && !accepted_user_input
+}
+
+/// Runs the prompt hook and records one input, returning whether it was blocked.
+pub(crate) async fn run_user_prompt_submit_hook_and_record_input(
+    hooks: &Hooks,
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: &TurnInput,
+) -> bool {
+    let hook_outcome = inspect_pending_input(hooks, sess, turn_context, input).await;
+    if hook_outcome.should_stop {
+        record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
+        true
+    } else {
+        record_pending_input(
+            sess,
+            turn_context,
+            input.clone(),
+            hook_outcome.additional_contexts,
+        )
+        .await;
+        false
+    }
+}
+
+async fn inspect_pending_input(
+    hooks: &Hooks,
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     pending_input_item: &TurnInput,
@@ -514,7 +574,6 @@ pub(crate) async fn inspect_pending_input(
                 permission_mode: hook_permission_mode(turn_context),
                 prompt: UserMessageItem::new(content).message(),
             };
-            let hooks = sess.hooks();
             let preview_runs = hooks.preview_user_prompt_submit(&request);
             run_context_injecting_hook(
                 sess,
@@ -535,7 +594,7 @@ pub(crate) async fn inspect_pending_input(
     }
 }
 
-pub(crate) async fn record_pending_input(
+async fn record_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     pending_input: TurnInput,

@@ -10,10 +10,10 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
-use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
+use crate::engine::dispatcher::CommandHookExecutor;
 use crate::engine::output_parser;
 use crate::schema::PostCompactCommandInput;
 use crate::schema::PreCompactCommandInput;
@@ -59,19 +59,16 @@ pub(crate) fn preview_pre(
     handlers: &[ConfiguredHandler],
     request: &PreCompactRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    dispatcher::preview_handlers(
         handlers,
         HookEventName::PreCompact,
         Some(request.trigger.as_str()),
     )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
 }
 
 pub(crate) async fn run_pre(
     handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
+    executor: &CommandHookExecutor,
     request: PreCompactRequest,
 ) -> PreCompactOutcome {
     let matched = dispatcher::select_handlers(
@@ -102,15 +99,16 @@ pub(crate) async fn run_pre(
         }
     };
 
-    let results = dispatcher::execute_handlers(
-        shell,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
-        parse_pre_completed,
-    )
-    .await;
+    let results = executor
+        .execute(
+            matched,
+            input_json,
+            request.cwd.as_path(),
+            Some(request.turn_id),
+            request.session_id,
+            parse_pre_completed,
+        )
+        .await;
     let should_stop = results.iter().any(|result| result.data.should_stop);
     let stop_reason = results
         .iter()
@@ -141,19 +139,16 @@ pub(crate) fn preview_post(
     handlers: &[ConfiguredHandler],
     request: &PostCompactRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    dispatcher::preview_handlers(
         handlers,
         HookEventName::PostCompact,
         Some(request.trigger.as_str()),
     )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
 }
 
 pub(crate) async fn run_post(
     handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
+    executor: &CommandHookExecutor,
     request: PostCompactRequest,
 ) -> StatelessHookOutcome {
     let matched = dispatcher::select_handlers(
@@ -184,15 +179,16 @@ pub(crate) async fn run_post(
         }
     };
 
-    let results = dispatcher::execute_handlers(
-        shell,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
-        parse_post_completed,
-    )
-    .await;
+    let results = executor
+        .execute(
+            matched,
+            input_json,
+            request.cwd.as_path(),
+            Some(request.turn_id),
+            request.session_id,
+            parse_post_completed,
+        )
+        .await;
     let should_stop = results.iter().any(|result| result.data.should_stop);
     let stop_reason = results
         .iter()
@@ -604,6 +600,7 @@ mod tests {
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             env: std::collections::HashMap::new(),
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         }
     }
 
