@@ -647,10 +647,12 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
                 TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                     cwd: test.config.cwd.clone(),
+                    workspace_roots: Vec::new(),
                 },
                 TurnEnvironmentSelection {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: local_root.path().to_path_buf().try_into()?,
+                    workspace_roots: Vec::new(),
                 },
             ],
             thread_extension_init: Default::default(),

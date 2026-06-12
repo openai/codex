@@ -265,6 +265,7 @@ fn resolved_local_environments<const N: usize>(
                         .expect("local environment"),
                 ),
                 cwd,
+                workspace_roots: Vec::new(),
                 shell: None,
             })
             .collect(),
