@@ -118,8 +118,15 @@ fn print_login_server_start(actual_port: u16, auth_url: &str) {
 async fn clear_existing_auth_before_login(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
+    auth_keyring_backend_kind: AuthKeyringBackendKind,
 ) {
-    if let Err(err) = logout_with_revoke(codex_home, auth_credentials_store_mode).await {
+    if let Err(err) = logout_with_revoke(
+        codex_home,
+        auth_credentials_store_mode,
+        auth_keyring_backend_kind,
+    )
+    .await
+    {
         tracing::warn!("failed to clear existing auth before login: {err}");
     }
 }
@@ -130,7 +137,12 @@ pub async fn login_with_chatgpt(
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     auth_keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<()> {
-    clear_existing_auth_before_login(&codex_home, cli_auth_credentials_store_mode).await;
+    clear_existing_auth_before_login(
+        &codex_home,
+        cli_auth_credentials_store_mode,
+        auth_keyring_backend_kind,
+    )
+    .await;
 
     let opts = ServerOptions::new(
         codex_home,
@@ -492,6 +504,7 @@ fn safe_format_key(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use codex_config::types::AuthCredentialsStoreMode;
+    use codex_login::AuthKeyringBackendKind;
     use codex_login::load_auth_dot_json;
     use codex_login::login_with_api_key;
     use pretty_assertions::assert_eq;
@@ -507,13 +520,23 @@ mod tests {
             codex_home.path(),
             "sk-existing",
             AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
         )
         .expect("save existing auth");
 
-        clear_existing_auth_before_login(codex_home.path(), AuthCredentialsStoreMode::File).await;
+        clear_existing_auth_before_login(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .await;
 
-        let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
-            .expect("load auth after cleanup");
+        let auth = load_auth_dot_json(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("load auth after cleanup");
         assert_eq!(auth, None);
     }
 

@@ -1840,6 +1840,7 @@ async fn persisted_enable_does_not_follow_auth_to_an_account_without_a_preferenc
         codex_home.path(),
         &remote_control_auth_dot_json(Some("account_a")),
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )
     .expect("account A auth should save");
     let state_db = remote_control_state_runtime(&codex_home).await;
@@ -1848,6 +1849,7 @@ async fn persisted_enable_does_not_follow_auth_to_an_account_without_a_preferenc
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await;
     let remote_control_target =
@@ -1911,6 +1913,7 @@ async fn persisted_enable_does_not_follow_auth_to_an_account_without_a_preferenc
         codex_home.path(),
         &remote_control_auth_dot_json(Some("account_b")),
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )
     .expect("account B auth should save");
     auth_manager.reload().await;
