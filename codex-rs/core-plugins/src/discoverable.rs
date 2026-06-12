@@ -6,6 +6,8 @@ use codex_plugin::PluginCapabilitySummary;
 use std::collections::HashSet;
 use std::path::Component;
 use std::path::Path;
+use tracing::Instrument;
+use tracing::info_span;
 use tracing::warn;
 
 use crate::OPENAI_BUNDLED_MARKETPLACE_NAME;
@@ -86,14 +88,17 @@ impl PluginsManager {
             return Ok(Vec::new());
         }
 
-        let marketplaces = self
-            .list_marketplaces_for_config(
+        let marketplaces = async {
+            self.list_marketplaces_for_config(
                 &input.plugins,
                 &[],
                 /*include_openai_curated*/ !input.plugins.remote_plugin_enabled,
             )
-            .context("failed to list plugin marketplaces for tool suggestions")?
-            .marketplaces;
+        }
+        .instrument(info_span!("discoverable_plugins.list_marketplaces"))
+        .await
+        .context("failed to list plugin marketplaces for tool suggestions")?
+        .marketplaces;
         let mut installed_app_connector_ids = self
             .plugins_for_config(&input.plugins)
             .await
@@ -112,6 +117,7 @@ impl PluginsManager {
         };
 
         let mut discoverable_plugins = Vec::<ToolSuggestDiscoverablePlugin>::new();
+        let local_details_span = info_span!("discoverable_plugins.load_local_details");
         for marketplace in marketplaces {
             let marketplace_name = marketplace.name;
             let use_legacy_local_curated_filter = should_use_legacy_local_curated_discovery_filter(
@@ -148,6 +154,7 @@ impl PluginsManager {
                         &marketplace_name,
                         plugin,
                     )
+                    .instrument(local_details_span.clone())
                     .await
                 {
                     Ok(plugin) => {
@@ -180,6 +187,7 @@ impl PluginsManager {
                 }
             }
         }
+        drop(local_details_span);
         if let Some(remote_installed_marketplaces) = remote_installed_marketplaces.as_ref() {
             let installed_remote_plugin_ids = remote_installed_marketplaces
                 .iter()
