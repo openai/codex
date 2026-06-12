@@ -1464,7 +1464,6 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let temp_cwd = TempDir::new()?;
     let mut config = (*turn.config).clone();
     config.cwd = temp_cwd.abs();
-    turn.environments.turn_environments[0].cwd = config.cwd.clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
     let models_manager = test_support::models_manager_with_provider(

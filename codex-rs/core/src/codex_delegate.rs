@@ -67,7 +67,7 @@ use crate::session::completed_session_loop_termination;
 /// The returned `ops_tx` allows the caller to submit additional `Op`s to the sub-agent.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_codex_thread_interactive(
-    mut config: Config,
+    config: Config,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
     parent_session: Arc<Session>,
@@ -84,9 +84,6 @@ pub(crate) async fn run_codex_thread_interactive(
         instructions: parent_session.user_instructions().await,
         warnings: Vec::new(),
     };
-    if let Some(primary_environment) = parent_ctx.environments.primary() {
-        config.cwd = primary_environment.cwd.clone();
-    }
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
         user_instructions,
