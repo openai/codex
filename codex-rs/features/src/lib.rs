@@ -193,6 +193,8 @@ pub enum Feature {
     DefaultModeRequestUserInput,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
+    /// Fall back to manual approval prompts when automatic approval review times out.
+    GuardianManualApprovalFallback,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
@@ -1127,6 +1129,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "guardian_approval",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::GuardianManualApprovalFallback,
+        key: "guardian_manual_approval_fallback",
+        stage: Stage::Stable,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Goals,

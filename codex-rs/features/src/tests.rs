@@ -133,6 +133,17 @@ fn guardian_approval_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn guardian_manual_approval_fallback_is_stable_and_disabled_by_default() {
+    let spec = Feature::GuardianManualApprovalFallback.info();
+
+    assert_eq!(spec.stage, Stage::Stable);
+    assert_eq!(
+        Feature::GuardianManualApprovalFallback.default_enabled(),
+        false
+    );
+}
+
+#[test]
 fn request_permissions_is_under_development() {
     assert_eq!(
         Feature::ExecPermissionApprovals.stage(),

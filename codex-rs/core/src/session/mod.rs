@@ -618,8 +618,10 @@ impl Codex {
             metrics_service_name,
             app_server_client_name: None,
             app_server_client_version: None,
-            manual_approval_fallback_enabled:
-                crate::guardian::can_fallback_to_manual_after_guardian_timeout(
+            manual_approval_fallback_enabled: config
+                .features
+                .enabled(Feature::GuardianManualApprovalFallback)
+                && crate::guardian::can_fallback_to_manual_after_guardian_timeout(
                     &client_session_source,
                 ),
             session_source,

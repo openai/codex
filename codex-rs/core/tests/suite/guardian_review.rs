@@ -3,6 +3,7 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -71,6 +72,9 @@ async fn guardian_timeout_falls_back_to_manual_approval_end_to_end() -> Result<(
     let mut builder = test_codex()
         .with_session_source(SessionSource::Cli)
         .with_config(move |config| {
+            let _ = config
+                .features
+                .enable(Feature::GuardianManualApprovalFallback);
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config
                 .set_legacy_sandbox_policy(sandbox_policy_for_config)
@@ -172,6 +176,99 @@ async fn guardian_timeout_falls_back_to_manual_approval_end_to_end() -> Result<(
     Ok(())
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn guardian_timeout_does_not_fallback_by_default() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex()
+        .with_session_source(SessionSource::Cli)
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+                .expect("set sandbox policy");
+        });
+
+    let output_dir = TempDir::new()?;
+    let output_file = output_dir.path().join("guardian-timeout-no-fallback.txt");
+    let command = format!("printf guardian-manual > {}", output_file.display());
+    let tool_args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": "Exercise disabled Guardian timeout fallback.",
+    });
+    let (_guardian_gate_tx, guardian_gate_rx) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: parent_tool_response("exec-call", &tool_args),
+        }],
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![ev_response_created("resp-guardian-timeout")]),
+            },
+            StreamingSseChunk {
+                gate: Some(guardian_gate_rx),
+                body: sse(vec![ev_completed("resp-guardian-timeout")]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: parent_done_response(),
+        }],
+    ])
+    .await;
+    let test = builder.build_with_streaming_server(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run a command that requires Guardian review".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                sandbox_policy: Some(sandbox_policy),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    server.wait_for_request_count(/*count*/ 2).await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(91)).await;
+    tokio::time::resume();
+
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::ExecApprovalRequest(approval) => {
+                panic!("manual approval should be disabled: {approval:?}")
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    assert!(!output_file.exists());
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_capacity_exhaustion_falls_back_to_manual_approval_end_to_end() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -189,6 +286,9 @@ async fn guardian_capacity_exhaustion_falls_back_to_manual_approval_end_to_end()
     let mut builder = test_codex()
         .with_session_source(SessionSource::Cli)
         .with_config(move |config| {
+            let _ = config
+                .features
+                .enable(Feature::GuardianManualApprovalFallback);
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config
                 .set_legacy_sandbox_policy(sandbox_policy_for_config)
