@@ -570,17 +570,16 @@ impl CoreShellActionProvider {
                             }
                         },
                         ReviewDecision::Denied => {
-                            let message = if let Some(message) =
-                                prompt_decision.rejection_message.clone()
-                            {
-                                message
-                            } else if let Some(review_id) =
-                                prompt_decision.guardian_review_id.as_deref()
-                            {
-                                guardian_rejection_message(self.session.as_ref(), review_id).await
-                            } else {
-                                "User denied execution".to_string()
-                            };
+                            let message =
+                                if let Some(message) = prompt_decision.rejection_message.clone() {
+                                    message
+                                } else if let Some(review_id) =
+                                    prompt_decision.guardian_review_id.as_deref()
+                                {
+                                    guardian_rejection_message(self.turn.as_ref(), review_id).await
+                                } else {
+                                    "User denied execution".to_string()
+                                };
                             EscalationDecision::deny(Some(message))
                         }
                         ReviewDecision::TimedOut => {

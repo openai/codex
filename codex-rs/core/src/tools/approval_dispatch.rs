@@ -103,7 +103,7 @@ impl ApprovalReviewRunner for CoreApprovalReviewRunner<'_> {
             };
             let denial_message = match decision {
                 ReviewDecision::Denied | ReviewDecision::Abort => {
-                    Some(guardian_rejection_message(self.session, self.review_id).await)
+                    Some(guardian_rejection_message(self.turn, self.review_id).await)
                 }
                 ReviewDecision::TimedOut => Some(guardian_timeout_message()),
                 _ => None,

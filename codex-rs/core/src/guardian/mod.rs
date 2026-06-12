@@ -19,7 +19,6 @@ mod review_session;
 
 use std::time::Duration;
 
-use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
 use serde::Deserialize;
 use serde::Serialize;
@@ -35,8 +34,10 @@ pub(crate) use codex_extension_api::ApprovalReviewMcpAnnotations as GuardianMcpA
 pub(crate) use codex_extension_api::ApprovalReviewNetworkAccessTrigger as GuardianNetworkAccessTrigger;
 pub(crate) use codex_extension_api::ApprovalReviewRequest as GuardianApprovalRequest;
 pub(crate) use codex_guardian::AUTO_REVIEW_DENIAL_WINDOW_SIZE;
+pub(crate) use codex_guardian::GuardianRejection;
 pub(crate) use codex_guardian::GuardianRejectionCircuitBreaker;
 pub(crate) use codex_guardian::GuardianRejectionCircuitBreakerAction;
+pub(crate) use codex_guardian::GuardianRejectionStore;
 pub(crate) use review::guardian_rejection_message;
 pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
@@ -69,12 +70,6 @@ pub(crate) struct GuardianAssessment {
     pub(crate) user_authorization: codex_protocol::protocol::GuardianUserAuthorization,
     pub(crate) outcome: GuardianAssessmentOutcome,
     pub(crate) rationale: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GuardianRejection {
-    pub(crate) rationale: String,
-    pub(crate) source: GuardianAssessmentDecisionSource,
 }
 
 #[cfg(test)]

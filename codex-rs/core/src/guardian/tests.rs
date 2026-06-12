@@ -73,6 +73,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 fn fixed_guardian_parent_session_id() -> ThreadId {
@@ -2031,12 +2032,16 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         "denial rationale should not fall back to the generic missing payload error"
     );
     {
-        let rationales = session.services.guardian_rejections.lock().await;
-        assert!(rationales.contains_key("review-shell-guardian-error"));
-        assert!(!rationales.contains_key("shell-guardian-error"));
+        let rationales = turn
+            .extension_data
+            .get::<Mutex<GuardianRejectionStore>>()
+            .expect("guardian rejection store should exist");
+        let rationales = rationales.lock().await;
+        assert!(rationales.contains("review-shell-guardian-error"));
+        assert!(!rationales.contains("shell-guardian-error"));
     }
     let rejection_message =
-        guardian_rejection_message(session.as_ref(), "review-shell-guardian-error").await;
+        guardian_rejection_message(turn.as_ref(), "review-shell-guardian-error").await;
     assert!(
         rejection_message.contains("Reason: Automatic approval review failed:")
             && rejection_message.contains(error_message),

@@ -15,6 +15,7 @@ use codex_protocol::protocol::AskForApproval;
 
 mod approval_request;
 mod circuit_breaker;
+mod rejection_store;
 mod truncation;
 
 pub use approval_request::FormattedGuardianAction;
@@ -29,6 +30,8 @@ pub use circuit_breaker::GuardianRejectionCircuitBreaker;
 pub use circuit_breaker::GuardianRejectionCircuitBreakerAction;
 pub use circuit_breaker::MAX_CONSECUTIVE_GUARDIAN_DENIALS_PER_TURN;
 pub use circuit_breaker::MAX_RECENT_AUTO_REVIEW_DENIALS_PER_TURN;
+pub use rejection_store::GuardianRejection;
+pub use rejection_store::GuardianRejectionStore;
 pub use truncation::guardian_truncate_text;
 
 /// Guardian extension dependencies supplied by the host at construction time.

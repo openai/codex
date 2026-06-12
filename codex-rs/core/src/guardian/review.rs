@@ -69,10 +69,13 @@ pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &str) -> String {
-    let rejection = session
-        .services
-        .guardian_rejections
+fn guardian_rejection_store(turn: &TurnContext) -> Arc<Mutex<super::GuardianRejectionStore>> {
+    turn.extension_data
+        .get_or_init(|| Mutex::new(super::GuardianRejectionStore::default()))
+}
+
+pub(crate) async fn guardian_rejection_message(turn: &TurnContext, review_id: &str) -> String {
+    let rejection = guardian_rejection_store(turn)
         .lock()
         .await
         .remove(review_id)
@@ -551,7 +554,8 @@ async fn run_guardian_review(
         GuardianAssessmentStatus::Denied
     };
     {
-        let mut rationales = session.services.guardian_rejections.lock().await;
+        let rejection_store = guardian_rejection_store(&turn);
+        let mut rationales = rejection_store.lock().await;
         if approved {
             rationales.remove(&review_id);
         } else {
