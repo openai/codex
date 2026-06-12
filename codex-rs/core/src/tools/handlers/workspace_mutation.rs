@@ -28,6 +28,7 @@ use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
 use std::io;
@@ -596,8 +597,10 @@ async fn resolve_workspace_directory(
     requested: &AbsolutePathBuf,
     sandbox: &FileSystemSandboxContext,
 ) -> io::Result<AbsolutePathBuf> {
-    let canonical = fs.canonicalize(requested, Some(sandbox)).await?;
+    let requested = PathUri::from_abs_path(requested)?;
+    let canonical = fs.canonicalize(&requested, Some(sandbox)).await?;
     let metadata = fs.get_metadata(&canonical, Some(sandbox)).await?;
+    let canonical = canonical.to_abs_path()?;
     if metadata.is_directory {
         Ok(canonical)
     } else {

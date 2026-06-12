@@ -112,6 +112,7 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
     let conversation_history =
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
+    let permission_profile = invocation.turn.permission_profile();
     let mut environments = Vec::with_capacity(invocation.turn.environments.turn_environments.len());
     for environment in &invocation.turn.environments.turn_environments {
         let additional_permissions = apply_granted_turn_permissions(
@@ -129,7 +130,11 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
             file_system: environment.environment.get_filesystem(),
             file_system_sandbox_context: invocation
                 .turn
-                .file_system_sandbox_context(additional_permissions, &environment.cwd),
+                .file_system_sandbox_context_for_permission_profile(
+                    &permission_profile,
+                    additional_permissions,
+                    &environment.cwd,
+                ),
         });
     }
     ExtensionToolCall {
