@@ -43,16 +43,28 @@ def windows_source_required(
     )
 
 
-def git_output(*args: str) -> bytes:
-    return subprocess.check_output(["git", *args], cwd=ROOT)
+def git_output(*args: str, root: Path = ROOT) -> bytes:
+    return subprocess.check_output(["git", *args], cwd=root)
 
 
-def v8_version_at_revision(revision: str) -> str:
-    return resolved_v8_version(git_output("show", f"{revision}:codex-rs/Cargo.lock"))
+def v8_version_at_revision(revision: str, *, root: Path = ROOT) -> str:
+    return resolved_v8_version(
+        git_output("show", f"{revision}:codex-rs/Cargo.lock", root=root)
+    )
 
 
-def changed_files(base: str, head: str) -> set[str]:
-    output = git_output("diff", "--name-only", "--no-renames", base, head)
+def merge_base(base: str, head: str, *, root: Path = ROOT) -> str:
+    return git_output("merge-base", base, head, root=root).decode().strip()
+
+
+def changed_files(base: str, head: str, *, root: Path = ROOT) -> set[str]:
+    output = git_output(
+        "diff",
+        "--name-only",
+        "--no-renames",
+        f"{base}...{head}",
+        root=root,
+    )
     return set(output.decode().splitlines())
 
 
@@ -73,7 +85,7 @@ def main() -> None:
         raise SystemExit("--base and --head are required unless --force is set")
     else:
         files = changed_files(args.base, args.head)
-        base_version = v8_version_at_revision(args.base)
+        base_version = v8_version_at_revision(merge_base(args.base, args.head))
         head_version = v8_version_at_revision(args.head)
         required = windows_source_required(files, base_version, head_version)
         if base_version != head_version:
