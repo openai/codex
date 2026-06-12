@@ -12,6 +12,7 @@ expression: "render_lines(&view, 112)"
   Matcher   Bash                                                                                                
   Source    User config - /tmp/hooks.json                                                                       
   Command   ~/bin/untrusted.sh                                                                                  
+  Mode      Async                                                                                               
   Timeout   30s                                                                                                 
   Trust     New hook - review required                                                                          
                                                                                                                 

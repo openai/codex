@@ -522,6 +522,7 @@ fn append_matcher_groups(
                         is_managed: source.is_managed,
                         current_hash,
                         trust_status,
+                        execution_mode,
                     });
                     if enabled
                         && (source.bypass_hook_trust

@@ -291,6 +291,7 @@ mod tests {
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
     use codex_app_server_protocol::HookEventName;
+    use codex_app_server_protocol::HookExecutionMode;
     use codex_app_server_protocol::HookHandlerType;
     use codex_app_server_protocol::HookMetadata;
     use codex_app_server_protocol::HookSource;
@@ -306,6 +307,7 @@ mod tests {
             key: key.to_string(),
             event_name: HookEventName::PreToolUse,
             handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
             is_managed: false,
             matcher: Some("Bash".to_string()),
             command: Some("/tmp/hook.sh".to_string()),

@@ -13,6 +13,7 @@ expression: "render_lines(&view, 112)"
   Matcher   Bash                                                                                                
   Source    Admin config                                                                                        
   Command   /enterprise/hooks/pre-tool-use-2.sh                                                                 
+  Mode      Sync                                                                                                
   Timeout   30s                                                                                                 
   Trust     Managed                                                                                             
                                                                                                                 
