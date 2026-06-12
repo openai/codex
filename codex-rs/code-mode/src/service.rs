@@ -1736,7 +1736,7 @@ image({
                         cell_id: cell_id("1"),
                         content_items: Vec::new(),
                         error_text: Some(
-                            "Tool call failed: remote image URLs are not supported in tool outputs. Pass a base64 data URI or an image returned by an approved image tool instead.".to_string(),
+                            "Tool call failed: remote image URLs are not supported in tool outputs. Pass a base64 data URI instead".to_string(),
                         ),
                     }
                 );

@@ -5,7 +5,7 @@ use crate::response::FunctionCallOutputContentItem;
 use crate::response::ImageDetail;
 
 const IMAGE_HELPER_EXPECTS_MESSAGE: &str = "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block";
-const REMOTE_IMAGE_URL_ERROR: &str = "Tool call failed: remote image URLs are not supported in tool outputs. Pass a base64 data URI or an image returned by an approved image tool instead.";
+const REMOTE_IMAGE_URL_ERROR: &str = "Tool call failed: remote image URLs are not supported in tool outputs. Pass a base64 data URI instead";
 const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
 
 pub(super) fn serialize_output_text(

@@ -2701,7 +2701,7 @@ async fn code_mode_image_helper_rejects_remote_url() -> Result<()> {
         concat!(
             "Script error:\n",
             "Tool call failed: remote image URLs are not supported in tool outputs. ",
-            "Pass a base64 data URI or an image returned by an approved image tool instead."
+            "Pass a base64 data URI instead"
         )
     );
 
