@@ -1,6 +1,12 @@
 use super::*;
+use crate::PluginLoadOutcome;
 use crate::manifest::load_plugin_manifest;
+use crate::startup_sync::curated_plugins_repo_path;
+use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
+use crate::test_support::TEST_CURATED_PLUGIN_SHA;
+use crate::test_support::write_curated_plugin_sha_with;
 use crate::test_support::write_file;
+use crate::test_support::write_openai_curated_marketplace;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigRequirements;
@@ -224,6 +230,131 @@ fn curated_plugin_cache_version_preserves_non_git_sha_versions() {
         "export-backup"
     );
     assert_eq!(curated_plugin_cache_version("0123456"), "0123456");
+}
+
+fn curated_plugin_config_layer(temp_dir: &TempDir, plugin_name: &str) -> ConfigLayerStack {
+    ConfigLayerStack::new(
+        vec![user_layer(
+            user_config_path(temp_dir, "config.toml"),
+            &format!(
+                r#"[plugins."{plugin_name}@openai-curated"]
+enabled = true
+"#,
+            ),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid curated plugin config")
+}
+
+fn write_curated_cached_plugin_with_developer(
+    codex_home: &Path,
+    plugin_name: &str,
+    version: &str,
+    developer_name: &str,
+) {
+    let plugin_root = codex_home
+        .join("plugins/cache/openai-curated")
+        .join(plugin_name)
+        .join(version);
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        &format!(
+            r#"{{"name":"{plugin_name}","interface":{{"developerName":"{developer_name}"}}}}"#,
+        ),
+    );
+    write_file(&plugin_root.join("skills/SKILL.md"), "skill");
+}
+
+async fn load_curated_plugin(temp_dir: &TempDir, plugin_name: &str) -> PluginLoadOutcome {
+    PluginLoadOutcome::from_plugins(
+        load_plugins_from_layer_stack(
+            &curated_plugin_config_layer(temp_dir, plugin_name),
+            HashMap::new(),
+            &PluginStore::new(temp_dir.path().to_path_buf()),
+            Some(Product::Codex),
+            /*prefer_remote_curated_conflicts*/ false,
+        )
+        .await,
+    )
+}
+
+#[tokio::test]
+async fn load_curated_plugin_prefers_synced_sha_root_over_stale_local_cache() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let curated_root = curated_plugins_repo_path(temp_dir.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_curated_plugin_sha_with(temp_dir.path(), TEST_CURATED_PLUGIN_SHA);
+    write_curated_cached_plugin_with_developer(temp_dir.path(), "slack", "local", "Third Party");
+    write_curated_cached_plugin_with_developer(
+        temp_dir.path(),
+        "slack",
+        TEST_CURATED_PLUGIN_CACHE_VERSION,
+        "OpenAI",
+    );
+
+    let outcome = load_curated_plugin(&temp_dir, "slack").await;
+    let plugin = outcome.plugins().first().expect("configured plugin");
+    let synced_root = AbsolutePathBuf::try_from(temp_dir.path().join(format!(
+        "plugins/cache/openai-curated/slack/{TEST_CURATED_PLUGIN_CACHE_VERSION}"
+    )))
+    .expect("synced plugin root");
+
+    assert_eq!(plugin.root, synced_root);
+    assert!(plugin.is_first_party);
+    assert_eq!(
+        outcome.effective_first_party_plugin_roots(),
+        vec![codex_plugin::FirstPartyPluginRoot {
+            plugin_id: "slack@openai-curated".to_string(),
+            plugin_root: synced_root,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn load_curated_plugin_with_openai_metadata_without_synced_cache_is_not_first_party() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let curated_root = curated_plugins_repo_path(temp_dir.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_curated_plugin_sha_with(temp_dir.path(), TEST_CURATED_PLUGIN_SHA);
+    write_curated_cached_plugin_with_developer(temp_dir.path(), "slack", "local", "OpenAI");
+
+    let outcome = load_curated_plugin(&temp_dir, "slack").await;
+
+    assert!(
+        !outcome
+            .plugins()
+            .first()
+            .expect("configured plugin")
+            .is_first_party
+    );
+    assert_eq!(outcome.effective_first_party_plugin_roots(), Vec::new());
+}
+
+#[tokio::test]
+async fn load_curated_plugin_missing_from_synced_marketplace_is_not_first_party() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let curated_root = curated_plugins_repo_path(temp_dir.path());
+    write_openai_curated_marketplace(&curated_root, &["github"]);
+    write_curated_plugin_sha_with(temp_dir.path(), TEST_CURATED_PLUGIN_SHA);
+    write_curated_cached_plugin_with_developer(
+        temp_dir.path(),
+        "slack",
+        TEST_CURATED_PLUGIN_CACHE_VERSION,
+        "OpenAI",
+    );
+
+    let outcome = load_curated_plugin(&temp_dir, "slack").await;
+
+    assert!(
+        !outcome
+            .plugins()
+            .first()
+            .expect("configured plugin")
+            .is_first_party
+    );
+    assert_eq!(outcome.effective_first_party_plugin_roots(), Vec::new());
 }
 
 fn plugin_id() -> PluginId {
