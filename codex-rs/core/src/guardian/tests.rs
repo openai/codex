@@ -2236,17 +2236,8 @@ async fn run_eager_compaction_review(
     }
 }
 
-#[derive(Clone, Copy)]
-enum EagerCompactionRecoveryCase {
-    Failure,
-    Timeout,
-}
-
-async fn run_eager_compaction_recovery_case(
-    recovery_case: EagerCompactionRecoveryCase,
-) -> anyhow::Result<()> {
-    const FAILURE_WAIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 3_600);
-    const TIMEOUT_WAIT_TIMEOUT: Duration = Duration::from_millis(/*millis*/ 50);
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_recovers_from_eager_compaction_failure() -> anyhow::Result<()> {
     const FIRST_REVIEW_TOTAL_TOKENS: i64 = 500_000;
     let (compaction_tx, compaction_rx) = tokio::sync::oneshot::channel();
     let failed_compaction_sse = |id: &str| {
@@ -2255,38 +2246,23 @@ async fn run_eager_compaction_recovery_case(
             ev_assistant_message(&format!("msg-eager-compact-{id}"), "partial summary"),
         ])
     };
-    let compaction_body = match recovery_case {
-        EagerCompactionRecoveryCase::Failure => failed_compaction_sse("failed"),
-        EagerCompactionRecoveryCase::Timeout => {
-            sse(vec![ev_response_created("resp-eager-compact-timeout")])
-        }
-    };
-    let mut responses = vec![
+    let responses = vec![
         guardian_review_sse_with_body_tokens(
             "1",
             FIRST_REVIEW_TOTAL_TOKENS - EAGER_COMPACTION_GUARDIAN_PREFILL_TOKENS,
         ),
         vec![StreamingSseChunk {
             gate: Some(compaction_rx),
-            body: compaction_body,
+            body: failed_compaction_sse("failed"),
         }],
-    ];
-    if matches!(recovery_case, EagerCompactionRecoveryCase::Failure) {
-        responses.push(vec![StreamingSseChunk {
+        vec![StreamingSseChunk {
             gate: None,
             body: failed_compaction_sse("retry-failed"),
-        }]);
-    }
-    responses.push(guardian_review_sse("2", ev_completed));
+        }],
+        guardian_review_sse("2", ev_completed),
+    ];
     let (server, _) = start_streaming_sse_server(responses).await;
-    let (mut session, mut turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
-    let eager_compaction_wait_timeout = match recovery_case {
-        EagerCompactionRecoveryCase::Failure => FAILURE_WAIT_TIMEOUT,
-        EagerCompactionRecoveryCase::Timeout => TIMEOUT_WAIT_TIMEOUT,
-    };
-    Arc::get_mut(&mut session)
-        .expect("guardian parent session should be uniquely owned")
-        .guardian_review_session = GuardianReviewSessionManager::new(eager_compaction_wait_timeout);
+    let (session, mut turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
     configure_guardian_eager_compaction_test(&mut turn);
     seed_guardian_parent_history(&session, &turn).await;
 
@@ -2296,33 +2272,20 @@ async fn run_eager_compaction_recovery_case(
         server.wait_for_request_count(/*count*/ 2),
     )
     .await?;
-    let mut compaction_tx = Some(compaction_tx);
-    if matches!(recovery_case, EagerCompactionRecoveryCase::Failure) {
-        let compaction_tx = compaction_tx.take().expect("compaction response gate");
-        compaction_tx
-            .send(())
-            .expect("failed compaction response gate should still be open");
-    }
+    compaction_tx
+        .send(())
+        .expect("failed compaction response gate should still be open");
     let metadata = run_eager_compaction_review(
         &session,
         &turn,
         Some("Retry after eager compaction maintenance."),
     )
     .await?;
-    if let Some(compaction_tx) = compaction_tx {
-        let _ = compaction_tx.send(());
-    }
     assert!(matches!(
         metadata.guardian_session_kind,
         Some(GuardianReviewSessionKind::EphemeralForked)
     ));
     Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_recovers_from_eager_compaction_failure_and_timeout() -> anyhow::Result<()> {
-    run_eager_compaction_recovery_case(EagerCompactionRecoveryCase::Failure).await?;
-    run_eager_compaction_recovery_case(EagerCompactionRecoveryCase::Timeout).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

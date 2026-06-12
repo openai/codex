@@ -62,7 +62,6 @@ mod eager_compaction;
 use eager_compaction::GuardianEagerCompaction;
 use eager_compaction::GuardianEagerCompactionOutcome;
 
-const GUARDIAN_EAGER_COMPACTION_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug)]
 pub(crate) enum GuardianReviewSessionOutcome {
@@ -95,9 +94,9 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) deadline: tokio::time::Instant,
 }
 
+#[derive(Default)]
 pub(crate) struct GuardianReviewSessionManager {
     state: Arc<Mutex<GuardianReviewSessionState>>,
-    eager_compaction_wait_timeout: Duration,
 }
 
 #[derive(Default)]
@@ -297,20 +296,7 @@ impl Drop for EphemeralReviewCleanup {
     }
 }
 
-impl Default for GuardianReviewSessionManager {
-    fn default() -> Self {
-        Self::new(GUARDIAN_EAGER_COMPACTION_WAIT_TIMEOUT)
-    }
-}
-
 impl GuardianReviewSessionManager {
-    pub(crate) fn new(eager_compaction_wait_timeout: Duration) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(GuardianReviewSessionState::default())),
-            eager_compaction_wait_timeout,
-        }
-    }
-
     pub(crate) async fn trunk_rollout_path(&self) -> Option<PathBuf> {
         let trunk = self.state.lock().await.trunk.clone()?;
         trunk.codex.session.ensure_rollout_materialized().await;
@@ -433,36 +419,29 @@ impl GuardianReviewSessionManager {
         let eager_compaction_guard = match run_before_review_deadline(
             deadline,
             params.external_cancel.as_ref(),
-            tokio::time::timeout(
-                self.eager_compaction_wait_timeout,
-                trunk.wait_for_eager_compaction(),
-            ),
+            trunk.wait_for_eager_compaction(),
         )
         .await
         {
-            Ok(Ok(guard)) => Some(guard),
-            Ok(Err(_)) => None,
+            Ok(guard) => guard,
             Err(outcome) => {
                 return (outcome, GuardianReviewAnalyticsResult::without_session());
             }
         };
-        let eager_compaction_guard = match eager_compaction_guard {
-            Some(guard) if *guard == GuardianEagerCompactionOutcome::Reusable => guard,
-            guard => {
-                let review_session = self.remove_trunk_if_current(&trunk).await;
-                drop(guard);
-                if let Some(review_session) = review_session {
-                    review_session.shutdown_in_background();
-                }
-                return Box::pin(self.run_ephemeral_review(
-                    params,
-                    next_reuse_key,
-                    deadline,
-                    /*fork_snapshot*/ None,
-                ))
-                .await;
+        if *eager_compaction_guard == GuardianEagerCompactionOutcome::DiscardSession {
+            let review_session = self.remove_trunk_if_current(&trunk).await;
+            drop(eager_compaction_guard);
+            if let Some(review_session) = review_session {
+                review_session.shutdown_in_background();
             }
-        };
+            return Box::pin(self.run_ephemeral_review(
+                params,
+                next_reuse_key,
+                deadline,
+                /*fork_snapshot*/ None,
+            ))
+            .await;
+        }
         // Hold the maintenance latch until review ownership is decided.
         let state = self.state.lock().await;
         let trunk_pointer_is_current = state
