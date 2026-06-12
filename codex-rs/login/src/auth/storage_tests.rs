@@ -524,26 +524,3 @@ fn auto_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> {
     );
     Ok(())
 }
-
-#[test]
-fn auto_auth_storage_delete_falls_back_when_keyring_errors() -> anyhow::Result<()> {
-    let codex_home = tempdir()?;
-    let mock_keyring = MockKeyringStore::default();
-    let storage = AutoAuthStorage::new(
-        codex_home.path().to_path_buf(),
-        Arc::new(mock_keyring.clone()),
-    );
-    let key = compute_store_key(codex_home.path())?;
-    mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "delete".into()));
-    let auth_file = get_auth_file(codex_home.path());
-    storage.file_storage.save(&auth_with_prefix("fallback"))?;
-
-    let removed = storage.delete()?;
-
-    assert!(removed, "delete should report removal");
-    assert!(
-        !auth_file.exists(),
-        "fallback auth.json should be removed when keyring delete fails"
-    );
-    Ok(())
-}

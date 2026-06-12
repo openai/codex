@@ -117,9 +117,10 @@ fn print_login_server_start(actual_port: u16, auth_url: &str) {
 async fn clear_existing_auth_before_login(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-) -> std::io::Result<()> {
-    logout_with_revoke(codex_home, auth_credentials_store_mode).await?;
-    Ok(())
+) {
+    if let Err(err) = logout_with_revoke(codex_home, auth_credentials_store_mode).await {
+        tracing::warn!("failed to clear existing auth before login: {err}");
+    }
 }
 
 pub async fn login_with_chatgpt(
@@ -127,7 +128,7 @@ pub async fn login_with_chatgpt(
     forced_chatgpt_workspace_id: Option<Vec<String>>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
-    clear_existing_auth_before_login(&codex_home, cli_auth_credentials_store_mode).await?;
+    clear_existing_auth_before_login(&codex_home, cli_auth_credentials_store_mode).await;
 
     let opts = ServerOptions::new(
         codex_home,
@@ -288,13 +289,8 @@ pub async fn run_login_with_device_code(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
-    if let Err(e) =
-        clear_existing_auth_before_login(&config.codex_home, config.cli_auth_credentials_store_mode)
-            .await
-    {
-        eprintln!("Error preparing for login: {e}");
-        std::process::exit(1);
-    }
+    clear_existing_auth_before_login(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .await;
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
         config.codex_home.to_path_buf(),
@@ -333,13 +329,8 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
-    if let Err(e) =
-        clear_existing_auth_before_login(&config.codex_home, config.cli_auth_credentials_store_mode)
-            .await
-    {
-        eprintln!("Error preparing for login: {e}");
-        std::process::exit(1);
-    }
+    clear_existing_auth_before_login(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .await;
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
@@ -504,9 +495,7 @@ mod tests {
         )
         .expect("save existing auth");
 
-        clear_existing_auth_before_login(codex_home.path(), AuthCredentialsStoreMode::File)
-            .await
-            .expect("clear existing auth");
+        clear_existing_auth_before_login(codex_home.path(), AuthCredentialsStoreMode::File).await;
 
         let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
             .expect("load auth after cleanup");
