@@ -18,5 +18,8 @@ if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
   manual_rust_test_targets="$(printf '%s\n' "${manual_rust_test_targets}" | grep -v -- '-windows-cross-bin$' || true)"
 fi
 
-printf '%s\n' "//codex-rs/..."
+# The lint configuration does not register the transitioned Windows toolchain.
+printf '%s\n' \
+  "//codex-rs/..." \
+  "-//codex-rs/exec-server/tests/foreign-os:smoke-test"
 printf '%s\n' "${manual_rust_test_targets}"

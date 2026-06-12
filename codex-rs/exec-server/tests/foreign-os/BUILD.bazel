@@ -1,0 +1,35 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//bazel/rules/testing:wine.bzl", "wine_rust_test")
+
+rust_binary(
+    name = "windows-exec-server",
+    testonly = True,
+    srcs = ["windows_exec_server.rs"],
+    crate_name = "windows_exec_server",
+    crate_root = "windows_exec_server.rs",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:windows"],
+    deps = [
+        "//codex-rs/exec-server",
+        "@crates//:tokio",
+    ],
+)
+
+wine_rust_test(
+    name = "smoke-test",
+    timeout = "short",
+    srcs = ["wine_windows_exec_server_test.rs"],
+    crate_name = "wine_windows_exec_server_test",
+    crate_root = "wine_windows_exec_server_test.rs",
+    windows_binaries = {
+        "wine-windows-exec-server": ":windows-exec-server",
+    },
+    deps = [
+        "//bazel/rules/testing/wine:wine_test_support",
+        "//codex-rs/exec-server",
+        "//codex-rs/utils/cargo-bin",
+        "@crates//:anyhow",
+        "@crates//:pretty_assertions",
+        "@crates//:tokio",
+    ],
+)
