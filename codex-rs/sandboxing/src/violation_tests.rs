@@ -37,8 +37,25 @@ fn classifies_legacy_denial_keywords() {
         let output = make_exec_output(/*exit_code*/ 1, "", keyword, "");
 
         assert!(
-            classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &output).is_some(),
+            classify_filesystem_sandbox_violation(SandboxType::LinuxBubblewrap, &output).is_some(),
             "{keyword}"
+        );
+    }
+}
+
+#[test]
+fn normalizes_backend_keywords_as_policy_denied() {
+    for keyword in ["seccomp", "sandbox", "landlock"] {
+        let output = make_exec_output(/*exit_code*/ 1, "", keyword, "");
+
+        assert_eq!(
+            classify_filesystem_sandbox_violation(SandboxType::LinuxBubblewrap, &output),
+            Some(FileSystemSandboxViolation {
+                backend: SandboxViolationBackend::Bubblewrap,
+                reason: FileSystemSandboxViolationReason::PolicyDenied,
+                path: None,
+                output_snippet: keyword.to_string(),
+            })
         );
     }
 }
@@ -56,21 +73,24 @@ fn preserves_legacy_denial_ordering() {
 
     assert!(
         classify_filesystem_sandbox_violation(
-            SandboxType::LinuxSeccomp,
+            SandboxType::LinuxBubblewrap,
             &quick_reject_without_keyword
         )
         .is_none()
     );
     assert!(
         classify_filesystem_sandbox_violation(
-            SandboxType::LinuxSeccomp,
+            SandboxType::LinuxBubblewrap,
             &quick_reject_with_keyword
         )
         .is_some()
     );
     assert!(
-        classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &zero_exit_with_keyword)
-            .is_none()
+        classify_filesystem_sandbox_violation(
+            SandboxType::LinuxBubblewrap,
+            &zero_exit_with_keyword
+        )
+        .is_none()
     );
     assert!(
         classify_filesystem_sandbox_violation(SandboxType::None, &non_sandbox_with_keyword)
@@ -90,7 +110,7 @@ fn classifies_filesystem_violation_with_path() {
     assert_eq!(
         classify_filesystem_sandbox_violation(SandboxType::MacosSeatbelt, &output),
         Some(FileSystemSandboxViolation {
-            sandbox_type: SandboxType::MacosSeatbelt,
+            backend: SandboxViolationBackend::Seatbelt,
             reason: FileSystemSandboxViolationReason::OperationNotPermitted,
             path: Some("/private/tmp/denied".to_string()),
             output_snippet: "bash: /private/tmp/denied: Operation not permitted".to_string(),
@@ -110,7 +130,7 @@ fn classifies_filesystem_violation_with_unicode_before_marker() {
     assert_eq!(
         classify_filesystem_sandbox_violation(SandboxType::MacosSeatbelt, &output),
         Some(FileSystemSandboxViolation {
-            sandbox_type: SandboxType::MacosSeatbelt,
+            backend: SandboxViolationBackend::Seatbelt,
             reason: FileSystemSandboxViolationReason::OperationNotPermitted,
             path: Some("/private/tmp/\u{130}-denied".to_string()),
             output_snippet: "bash: /private/tmp/\u{130}-denied: Operation not permitted"
@@ -131,7 +151,7 @@ fn classifies_filesystem_violation_from_aggregated_output() {
     assert_eq!(
         classify_filesystem_sandbox_violation(SandboxType::MacosSeatbelt, &output),
         Some(FileSystemSandboxViolation {
-            sandbox_type: SandboxType::MacosSeatbelt,
+            backend: SandboxViolationBackend::Seatbelt,
             reason: FileSystemSandboxViolationReason::ReadOnlyFileSystem,
             path: None,
             output_snippet: "cargo failed: Read-only file system when writing target".to_string(),
@@ -149,15 +169,26 @@ fn classifies_linux_sigsys_exit() {
         "",
     );
 
-    assert_eq!(
-        classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &output),
-        Some(FileSystemSandboxViolation {
-            sandbox_type: SandboxType::LinuxSeccomp,
-            reason: FileSystemSandboxViolationReason::SignalSyscall,
-            path: None,
-            output_snippet: String::new(),
-        })
-    );
+    for (sandbox_type, backend) in [
+        (
+            SandboxType::LinuxBubblewrap,
+            SandboxViolationBackend::Bubblewrap,
+        ),
+        (
+            SandboxType::LinuxLegacyLandlock,
+            SandboxViolationBackend::LegacyLandlock,
+        ),
+    ] {
+        assert_eq!(
+            classify_filesystem_sandbox_violation(sandbox_type, &output),
+            Some(FileSystemSandboxViolation {
+                backend,
+                reason: FileSystemSandboxViolationReason::SignalSyscall,
+                path: None,
+                output_snippet: String::new(),
+            })
+        );
+    }
 }
 
 #[test]
@@ -184,6 +215,7 @@ fn converts_blocked_request_to_network_violation() {
     assert_eq!(
         NetworkSandboxViolation::from_blocked_request(&blocked),
         NetworkSandboxViolation {
+            backend: SandboxViolationBackend::ManagedNetworkProxy,
             host: "example.com".to_string(),
             reason: "not_allowed".to_string(),
             client: Some("curl".to_string()),

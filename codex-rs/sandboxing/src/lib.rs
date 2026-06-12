@@ -29,6 +29,7 @@ pub use manager::with_managed_mitm_ca_readable_root;
 pub use violation::FileSystemSandboxViolation;
 pub use violation::FileSystemSandboxViolationReason;
 pub use violation::NetworkSandboxViolation;
+pub use violation::SandboxViolationBackend;
 pub use violation::SandboxViolationEvent;
 pub use violation::record_filesystem_sandbox_violation;
 pub use violation::record_network_sandbox_violation;
