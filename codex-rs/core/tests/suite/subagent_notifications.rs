@@ -1119,14 +1119,15 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()>
         ]),
     )
     .await;
-    let child_request = mount_sse_once_match(
+    let child_request = mount_response_once_match(
         &server,
         |req: &wiremock::Request| body_contains(req, "\"type\":\"agent_message\""),
-        sse(vec![
+        sse_response(sse(vec![
             ev_response_created("resp-child-1"),
             ev_assistant_message("msg-child-1", "child done"),
             ev_completed("resp-child-1"),
-        ]),
+        ]))
+        .set_delay(Duration::from_secs(1)),
     )
     .await;
     mount_sse_once_match(
