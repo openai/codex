@@ -34,7 +34,6 @@ pub struct AppToolPolicyInput<'a> {
 ///
 /// Callers should construct one evaluator and reuse it for every tool in the
 /// same exposure build so config layers are merged and decoded only once.
-#[derive(Default)]
 pub struct AppToolPolicyEvaluator<'a> {
     apps_config: Option<AppsConfigToml>,
     requirements_apps_config: Option<&'a AppsRequirementsToml>,
@@ -45,21 +44,6 @@ impl<'a> AppToolPolicyEvaluator<'a> {
         let apps_config = apps_config_from_layer_stack(config_layer_stack);
         let requirements_apps_config = config_layer_stack.requirements_toml().apps.as_ref();
         Self::from_parts(apps_config, requirements_apps_config)
-    }
-
-    pub fn from_apps_config(apps_config: AppsConfigToml) -> Self {
-        Self::from_parts(Some(apps_config), /*requirements_apps_config*/ None)
-    }
-
-    pub fn from_apps_config_and_requirements(
-        apps_config: AppsConfigToml,
-        requirements: &'a AppsRequirementsToml,
-    ) -> Self {
-        Self::from_parts(Some(apps_config), Some(requirements))
-    }
-
-    pub fn from_requirements(requirements: &'a AppsRequirementsToml) -> Self {
-        Self::from_parts(/*apps_config*/ None, Some(requirements))
     }
 
     pub fn policy(&self, input: AppToolPolicyInput<'_>) -> AppToolPolicy {

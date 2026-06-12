@@ -78,15 +78,45 @@ fn app_tool_policy_from_apps_config(
             approval,
         )
     });
-    let evaluator = match (apps_config.cloned(), requirements.as_ref()) {
-        (Some(apps_config), Some(requirements)) => {
-            AppToolPolicyEvaluator::from_apps_config_and_requirements(apps_config, requirements)
-        }
-        (Some(apps_config), None) => AppToolPolicyEvaluator::from_apps_config(apps_config),
-        (None, Some(requirements)) => AppToolPolicyEvaluator::from_requirements(requirements),
-        (None, None) => AppToolPolicyEvaluator::default(),
+    app_tool_policy_from_config_parts(
+        apps_config,
+        requirements.as_ref(),
+        connector_id,
+        tool_name,
+        tool_title,
+        annotations,
+    )
+}
+
+fn app_tool_policy_from_config_parts(
+    apps_config: Option<&AppsConfigToml>,
+    requirements_apps_config: Option<&AppsRequirementsToml>,
+    connector_id: Option<&str>,
+    tool_name: &str,
+    tool_title: Option<&str>,
+    annotations: Option<&ToolAnnotations>,
+) -> AppToolPolicy {
+    let requirements = ConfigRequirementsToml {
+        apps: requirements_apps_config.cloned(),
+        ..Default::default()
     };
-    evaluator.policy(app_tool_policy_input(
+    let config_layer_stack =
+        ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
+            .expect("config layer stack");
+    let config_layer_stack = if let Some(apps_config) = apps_config {
+        let mut user_config = toml::map::Map::new();
+        user_config.insert(
+            "apps".to_string(),
+            toml::Value::try_from(apps_config).expect("serialize apps config"),
+        );
+        let config_toml_path =
+            AbsolutePathBuf::try_from(std::env::temp_dir().join(CONFIG_TOML_FILE))
+                .expect("absolute config path");
+        config_layer_stack.with_user_config(&config_toml_path, toml::Value::Table(user_config))
+    } else {
+        config_layer_stack
+    };
+    AppToolPolicyEvaluator::new(&config_layer_stack).policy(app_tool_policy_input(
         connector_id,
         tool_name,
         tool_title,
@@ -613,16 +643,14 @@ fn requirements_disabled_connector_overrides_enabled_connector() {
     };
 
     assert_eq!(
-        AppToolPolicyEvaluator::from_apps_config_and_requirements(
-            effective_apps,
-            &requirements_apps,
-        )
-        .policy(app_tool_policy_input(
+        app_tool_policy_from_config_parts(
+            Some(&effective_apps),
+            Some(&requirements_apps),
             Some("connector_123123"),
             "events/list",
             /*tool_title*/ None,
             /*annotations*/ None,
-        )),
+        ),
         AppToolPolicy {
             enabled: false,
             approval: AppToolApproval::Auto,
@@ -653,16 +681,14 @@ fn requirements_enabled_does_not_override_disabled_connector() {
     };
 
     assert_eq!(
-        AppToolPolicyEvaluator::from_apps_config_and_requirements(
-            effective_apps,
-            &requirements_apps,
-        )
-        .policy(app_tool_policy_input(
+        app_tool_policy_from_config_parts(
+            Some(&effective_apps),
+            Some(&requirements_apps),
             Some("connector_123123"),
             "events/list",
             /*tool_title*/ None,
             /*annotations*/ None,
-        )),
+        ),
         AppToolPolicy {
             enabled: false,
             approval: AppToolApproval::Auto,
@@ -966,22 +992,24 @@ fn managed_app_tool_approval_uses_raw_tool_name() {
         AppToolApproval::Approve,
     );
 
-    let evaluator = AppToolPolicyEvaluator::from_requirements(&requirements_apps);
-
     assert_eq!(
         [
-            evaluator.policy(app_tool_policy_input(
+            app_tool_policy_from_config_parts(
+                /*apps_config*/ None,
+                Some(&requirements_apps),
                 Some("connector_123123"),
                 "calendar/list_events",
                 /*tool_title*/ None,
                 /*annotations*/ None,
-            )),
-            evaluator.policy(app_tool_policy_input(
+            ),
+            app_tool_policy_from_config_parts(
+                /*apps_config*/ None,
+                Some(&requirements_apps),
                 Some("connector_123123"),
                 "calendar/create_event",
                 /*tool_title*/ None,
                 /*annotations*/ None,
-            )),
+            ),
         ],
         [
             AppToolPolicy {

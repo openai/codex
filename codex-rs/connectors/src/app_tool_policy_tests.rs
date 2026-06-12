@@ -52,8 +52,7 @@ fn evaluator_reuses_one_snapshot_across_tools() {
             },
         )]),
     };
-    let evaluator =
-        AppToolPolicyEvaluator::from_apps_config_and_requirements(apps_config, &requirements);
+    let evaluator = AppToolPolicyEvaluator::from_parts(Some(apps_config), Some(&requirements));
 
     assert_eq!(
         [
