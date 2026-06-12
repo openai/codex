@@ -33,6 +33,7 @@ use codex_tools::default_namespace_description;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
@@ -324,9 +325,15 @@ async fn image_url(
     path: &AbsolutePathBuf,
     environment: &ToolEnvironment,
 ) -> Result<ImageUrl, FunctionCallError> {
+    let path_uri = PathUri::from_abs_path(path).map_err(|error| {
+        FunctionCallError::RespondToModel(format!(
+            "unable to read referenced image at `{}`: {error}",
+            path.display()
+        ))
+    })?;
     let bytes = environment
         .file_system
-        .read_file(path, Some(&environment.file_system_sandbox_context))
+        .read_file(&path_uri, Some(&environment.file_system_sandbox_context))
         .await
         .map_err(|error| {
             FunctionCallError::RespondToModel(format!(

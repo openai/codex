@@ -6,6 +6,13 @@
 use super::*;
 
 impl ChatWidget {
+    /// Drop transient live hook status without flushing it into history.
+    pub(super) fn clear_active_hook_cell(&mut self) {
+        if self.active_hook_cell.take().is_some() {
+            self.bump_active_cell_revision();
+        }
+    }
+
     pub(super) fn on_hook_started(&mut self, run: codex_app_server_protocol::HookRunSummary) {
         self.record_visible_turn_activity();
         self.flush_answer_stream_with_separator();
