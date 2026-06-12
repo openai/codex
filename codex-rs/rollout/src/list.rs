@@ -1,6 +1,5 @@
 #![allow(warnings, clippy::all)]
 
-use async_trait::async_trait;
 use codex_utils_path as path_utils;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
@@ -195,15 +194,14 @@ impl AnchorState {
 ///
 /// We need to apply different logic if we're ultimately going to be returning
 /// threads ordered by created_at or updated_at.
-#[async_trait]
 trait RolloutFileVisitor {
-    async fn visit(
+    fn visit(
         &mut self,
         ts: OffsetDateTime,
         id: Uuid,
         path: PathBuf,
         scanned: usize,
-    ) -> ControlFlow<()>;
+    ) -> impl std::future::Future<Output = ControlFlow<()>> + Send;
 }
 
 /// Collects thread items during directory traversal in created_at order,
@@ -218,7 +216,6 @@ struct FilesByCreatedAtVisitor<'a> {
     cwd_filters: Option<&'a [PathBuf]>,
 }
 
-#[async_trait]
 impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
     async fn visit(
         &mut self,
@@ -263,7 +260,6 @@ struct FilesByUpdatedAtVisitor<'a> {
     candidates: &'a mut Vec<ThreadCandidate>,
 }
 
-#[async_trait]
 impl<'a> RolloutFileVisitor for FilesByUpdatedAtVisitor<'a> {
     async fn visit(
         &mut self,

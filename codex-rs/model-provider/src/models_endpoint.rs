@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -17,6 +16,7 @@ use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::ModelsEndpointClient;
+use codex_models_manager::manager::ModelsEndpointFuture;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CoreResult;
@@ -56,21 +56,6 @@ impl OpenAiModelsEndpoint {
         }
     }
 
-    fn auth_env(&self) -> AuthEnvTelemetry {
-        let codex_api_key_env_enabled = self
-            .auth_manager
-            .as_ref()
-            .is_some_and(|auth_manager| auth_manager.codex_api_key_env_enabled());
-        collect_auth_env_telemetry(&self.provider_info, codex_api_key_env_enabled)
-    }
-}
-
-#[async_trait]
-impl ModelsEndpointClient for OpenAiModelsEndpoint {
-    fn has_command_auth(&self) -> bool {
-        self.provider_info.has_command_auth()
-    }
-
     async fn uses_codex_backend(&self) -> bool {
         self.auth()
             .await
@@ -106,6 +91,31 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
         .await
         .map_err(|_| CodexErr::Timeout)?
         .map_err(map_api_error)
+    }
+
+    fn auth_env(&self) -> AuthEnvTelemetry {
+        let codex_api_key_env_enabled = self
+            .auth_manager
+            .as_ref()
+            .is_some_and(|auth_manager| auth_manager.codex_api_key_env_enabled());
+        collect_auth_env_telemetry(&self.provider_info, codex_api_key_env_enabled)
+    }
+}
+
+impl ModelsEndpointClient for OpenAiModelsEndpoint {
+    fn has_command_auth(&self) -> bool {
+        self.provider_info.has_command_auth()
+    }
+
+    fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
+        Box::pin(OpenAiModelsEndpoint::uses_codex_backend(self))
+    }
+
+    fn list_models<'a>(
+        &'a self,
+        client_version: &'a str,
+    ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>> {
+        Box::pin(OpenAiModelsEndpoint::list_models(self, client_version))
     }
 }
 

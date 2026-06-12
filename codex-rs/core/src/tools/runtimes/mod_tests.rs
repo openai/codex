@@ -10,6 +10,7 @@ use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::ConfigReloader;
+use codex_network_proxy::ConfigReloaderFuture;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyConfig;
@@ -35,18 +36,17 @@ use tokio::sync::watch;
 
 struct StaticReloader;
 
-#[async_trait::async_trait]
 impl ConfigReloader for StaticReloader {
     fn source_label(&self) -> String {
         "test config state".to_string()
     }
 
-    async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
-        Ok(None)
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(async { Ok(None) })
     }
 
-    async fn reload_now(&self) -> anyhow::Result<ConfigState> {
-        Err(anyhow::anyhow!("force reload is not supported in tests"))
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async { Err(anyhow::anyhow!("force reload is not supported in tests")) })
     }
 }
 

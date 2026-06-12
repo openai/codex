@@ -13,7 +13,6 @@ doctest = false
 workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
 codex-protocol = { workspace = true }
 codex-state = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

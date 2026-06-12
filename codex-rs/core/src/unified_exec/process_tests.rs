@@ -1,8 +1,8 @@
 use super::process::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecError;
-use async_trait::async_trait;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
+use codex_exec_server::ExecProcessFuture;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ProcessSignal;
@@ -26,26 +26,8 @@ struct MockExecProcess {
     wake_tx: watch::Sender<u64>,
 }
 
-#[async_trait]
-impl ExecProcess for MockExecProcess {
-    fn process_id(&self) -> &ProcessId {
-        &self.process_id
-    }
-
-    fn subscribe_wake(&self) -> watch::Receiver<u64> {
-        self.wake_tx.subscribe()
-    }
-
-    fn subscribe_events(&self) -> ExecProcessEventReceiver {
-        ExecProcessEventReceiver::empty()
-    }
-
-    async fn read(
-        &self,
-        _after_seq: Option<u64>,
-        _max_bytes: Option<usize>,
-        _wait_ms: Option<u64>,
-    ) -> Result<ReadResponse, ExecServerError> {
+impl MockExecProcess {
+    async fn read(&self) -> Result<ReadResponse, ExecServerError> {
         Ok(self
             .read_responses
             .lock()
@@ -61,19 +43,46 @@ impl ExecProcess for MockExecProcess {
             }))
     }
 
-    async fn write(&self, _chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
-        Ok(self.write_response.clone())
-    }
-
-    async fn signal(&self, _signal: ProcessSignal) -> Result<(), ExecServerError> {
-        Ok(())
-    }
-
     async fn terminate(&self) -> Result<(), ExecServerError> {
         if let Some(message) = &self.terminate_error {
             return Err(ExecServerError::Protocol(message.clone()));
         }
         Ok(())
+    }
+}
+
+impl ExecProcess for MockExecProcess {
+    fn process_id(&self) -> &ProcessId {
+        &self.process_id
+    }
+
+    fn subscribe_wake(&self) -> watch::Receiver<u64> {
+        self.wake_tx.subscribe()
+    }
+
+    fn subscribe_events(&self) -> ExecProcessEventReceiver {
+        ExecProcessEventReceiver::empty()
+    }
+
+    fn read(
+        &self,
+        _after_seq: Option<u64>,
+        _max_bytes: Option<usize>,
+        _wait_ms: Option<u64>,
+    ) -> ExecProcessFuture<'_, ReadResponse> {
+        Box::pin(MockExecProcess::read(self))
+    }
+
+    fn write(&self, _chunk: Vec<u8>) -> ExecProcessFuture<'_, WriteResponse> {
+        Box::pin(async { Ok(self.write_response.clone()) })
+    }
+
+    fn signal(&self, _signal: ProcessSignal) -> ExecProcessFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn terminate(&self) -> ExecProcessFuture<'_, ()> {
+        Box::pin(MockExecProcess::terminate(self))
     }
 }
 

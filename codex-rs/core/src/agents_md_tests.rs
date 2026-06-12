@@ -1,12 +1,12 @@
 use super::*;
 use crate::config::ConfigBuilder;
-use async_trait::async_trait;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_FS;
@@ -39,8 +39,7 @@ struct FailingFileSystem {
     failure: InjectedFailure,
 }
 
-#[async_trait]
-impl ExecutorFileSystem for FailingFileSystem {
+impl FailingFileSystem {
     async fn canonicalize(
         &self,
         _path: &PathUri,
@@ -118,6 +117,85 @@ impl ExecutorFileSystem for FailingFileSystem {
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<()> {
         unreachable!("copy should not be called")
+    }
+}
+
+impl ExecutorFileSystem for FailingFileSystem {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        Box::pin(FailingFileSystem::canonicalize(self, path, sandbox))
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
+        Box::pin(FailingFileSystem::read_file(self, path, sandbox))
+    }
+
+    fn write_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(FailingFileSystem::write_file(self, path, contents, sandbox))
+    }
+
+    fn create_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(FailingFileSystem::create_directory(
+            self, path, options, sandbox,
+        ))
+    }
+
+    fn get_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(FailingFileSystem::get_metadata(self, path, sandbox))
+    }
+
+    fn read_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        Box::pin(FailingFileSystem::read_directory(self, path, sandbox))
+    }
+
+    fn remove<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: RemoveOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(FailingFileSystem::remove(self, path, options, sandbox))
+    }
+
+    fn copy<'a>(
+        &'a self,
+        source_path: &'a PathUri,
+        destination_path: &'a PathUri,
+        options: CopyOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(FailingFileSystem::copy(
+            self,
+            source_path,
+            destination_path,
+            options,
+            sandbox,
+        ))
     }
 }
 

@@ -56,12 +56,14 @@ use codex_shell_escalation::EscalationDecision;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::EscalationPolicy;
+use codex_shell_escalation::EscalationPolicyFuture;
 use codex_shell_escalation::EscalationSession;
 use codex_shell_escalation::ExecParams;
 use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::PreparedExec;
 use codex_shell_escalation::ResolvedPermissionProfile;
 use codex_shell_escalation::ShellCommandExecutor;
+use codex_shell_escalation::ShellCommandExecutorFuture;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
@@ -597,8 +599,7 @@ impl CoreShellActionProvider {
 // execve interception.
 const ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING: bool = false;
 
-#[async_trait::async_trait]
-impl EscalationPolicy for CoreShellActionProvider {
+impl CoreShellActionProvider {
     async fn determine_action(
         &self,
         program: &AbsolutePathBuf,
@@ -662,6 +663,19 @@ impl EscalationPolicy for CoreShellActionProvider {
             decision_source,
         )
         .await
+    }
+}
+
+impl EscalationPolicy for CoreShellActionProvider {
+    fn determine_action<'a>(
+        &'a self,
+        program: &'a AbsolutePathBuf,
+        argv: &'a [String],
+        workdir: &'a AbsolutePathBuf,
+    ) -> EscalationPolicyFuture<'a> {
+        Box::pin(CoreShellActionProvider::determine_action(
+            self, program, argv, workdir,
+        ))
     }
 }
 
@@ -787,12 +801,40 @@ struct PrepareSandboxedExecParams<'a> {
     additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
-#[async_trait::async_trait]
 impl ShellCommandExecutor for CoreShellCommandExecutor {
-    async fn run(
+    fn run(
         &self,
         _command: Vec<String>,
         _cwd: PathBuf,
+        env_overlay: HashMap<String, String>,
+        cancel_rx: CancellationToken,
+        after_spawn: Option<Box<dyn FnOnce() + Send>>,
+    ) -> ShellCommandExecutorFuture<'_, ExecResult> {
+        Box::pin(CoreShellCommandExecutor::run(
+            self,
+            env_overlay,
+            cancel_rx,
+            after_spawn,
+        ))
+    }
+
+    fn prepare_escalated_exec<'a>(
+        &'a self,
+        program: &'a AbsolutePathBuf,
+        argv: &'a [String],
+        workdir: &'a AbsolutePathBuf,
+        env: HashMap<String, String>,
+        execution: EscalationExecution,
+    ) -> ShellCommandExecutorFuture<'a, PreparedExec> {
+        Box::pin(CoreShellCommandExecutor::prepare_escalated_exec(
+            self, program, argv, workdir, env, execution,
+        ))
+    }
+}
+
+impl CoreShellCommandExecutor {
+    async fn run(
+        &self,
         env_overlay: HashMap<String, String>,
         cancel_rx: CancellationToken,
         after_spawn: Option<Box<dyn FnOnce() + Send>>,
@@ -900,9 +942,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
 
         Ok(prepared)
     }
-}
 
-impl CoreShellCommandExecutor {
     #[allow(clippy::too_many_arguments)]
     fn prepare_sandboxed_exec(
         &self,

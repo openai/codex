@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_utils_path_uri::PathUri;
@@ -9,6 +8,7 @@ use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerError;
 use crate::ExecutorFileSystem;
+use crate::ExecutorFileSystemFuture;
 use crate::FileMetadata;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
@@ -36,10 +36,7 @@ impl RemoteFileSystem {
         trace!("remote fs new");
         Self { client }
     }
-}
 
-#[async_trait]
-impl ExecutorFileSystem for RemoteFileSystem {
     async fn canonicalize(
         &self,
         path: &PathUri,
@@ -204,6 +201,85 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .await
             .map_err(map_remote_error)?;
         Ok(())
+    }
+}
+
+impl ExecutorFileSystem for RemoteFileSystem {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        Box::pin(RemoteFileSystem::canonicalize(self, path, sandbox))
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
+        Box::pin(RemoteFileSystem::read_file(self, path, sandbox))
+    }
+
+    fn write_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(RemoteFileSystem::write_file(self, path, contents, sandbox))
+    }
+
+    fn create_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(RemoteFileSystem::create_directory(
+            self, path, options, sandbox,
+        ))
+    }
+
+    fn get_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(RemoteFileSystem::get_metadata(self, path, sandbox))
+    }
+
+    fn read_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        Box::pin(RemoteFileSystem::read_directory(self, path, sandbox))
+    }
+
+    fn remove<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: RemoveOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(RemoteFileSystem::remove(self, path, options, sandbox))
+    }
+
+    fn copy<'a>(
+        &'a self,
+        source_path: &'a PathUri,
+        destination_path: &'a PathUri,
+        options: CopyOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(RemoteFileSystem::copy(
+            self,
+            source_path,
+            destination_path,
+            options,
+            sandbox,
+        ))
     }
 }
 

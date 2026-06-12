@@ -10,10 +10,9 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
-use async_trait::async_trait;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
-use codex_exec_server::ExecServerError;
+use codex_exec_server::ExecProcessFuture;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
@@ -218,7 +217,31 @@ struct BlockingTerminateExecProcess {
     wake_tx: watch::Sender<u64>,
 }
 
-#[async_trait]
+impl BlockingTerminateExecProcess {
+    async fn read(&self) -> Result<ReadResponse, codex_exec_server::ExecServerError> {
+        Ok(ReadResponse {
+            chunks: Vec::new(),
+            next_seq: 1,
+            exited: false,
+            exit_code: None,
+            closed: false,
+            failure: None,
+        })
+    }
+
+    async fn write(&self) -> Result<WriteResponse, codex_exec_server::ExecServerError> {
+        Ok(WriteResponse {
+            status: WriteStatus::Accepted,
+        })
+    }
+
+    async fn terminate(&self) -> Result<(), codex_exec_server::ExecServerError> {
+        let _ = self.terminate_started.send(true);
+        self.allow_terminate.notified().await;
+        Ok(())
+    }
+}
+
 impl ExecProcess for BlockingTerminateExecProcess {
     fn process_id(&self) -> &ProcessId {
         &self.process_id
@@ -232,36 +255,25 @@ impl ExecProcess for BlockingTerminateExecProcess {
         ExecProcessEventReceiver::empty()
     }
 
-    async fn read(
+    fn read(
         &self,
         _after_seq: Option<u64>,
         _max_bytes: Option<usize>,
         _wait_ms: Option<u64>,
-    ) -> Result<ReadResponse, ExecServerError> {
-        Ok(ReadResponse {
-            chunks: Vec::new(),
-            next_seq: 1,
-            exited: false,
-            exit_code: None,
-            closed: false,
-            failure: None,
-        })
+    ) -> ExecProcessFuture<'_, ReadResponse> {
+        Box::pin(BlockingTerminateExecProcess::read(self))
     }
 
-    async fn write(&self, _chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
-        Ok(WriteResponse {
-            status: WriteStatus::Accepted,
-        })
+    fn write(&self, _chunk: Vec<u8>) -> ExecProcessFuture<'_, WriteResponse> {
+        Box::pin(BlockingTerminateExecProcess::write(self))
     }
 
-    async fn signal(&self, _signal: ProcessSignal) -> Result<(), ExecServerError> {
-        Ok(())
+    fn signal(&self, _signal: ProcessSignal) -> ExecProcessFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
     }
 
-    async fn terminate(&self) -> Result<(), ExecServerError> {
-        let _ = self.terminate_started.send(true);
-        self.allow_terminate.notified().await;
-        Ok(())
+    fn terminate(&self) -> ExecProcessFuture<'_, ()> {
+        Box::pin(BlockingTerminateExecProcess::terminate(self))
     }
 }
 

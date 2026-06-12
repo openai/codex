@@ -5,7 +5,6 @@ name = "codex-client"
 version.workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
 bytes = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }

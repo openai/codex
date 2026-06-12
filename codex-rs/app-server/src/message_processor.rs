@@ -46,7 +46,6 @@ use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
 use crate::transport::RemoteControlHandle;
-use async_trait::async_trait;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::AuthMode as LoginAuthMode;
@@ -106,13 +105,6 @@ impl ExternalAuthRefreshBridge {
             ExternalAuthRefreshReason::Unauthorized => ChatgptAuthTokensRefreshReason::Unauthorized,
         }
     }
-}
-
-#[async_trait]
-impl ExternalAuth for ExternalAuthRefreshBridge {
-    fn auth_mode(&self) -> LoginAuthMode {
-        LoginAuthMode::Chatgpt
-    }
 
     async fn refresh(
         &self,
@@ -160,6 +152,19 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
             response.chatgpt_account_id,
             response.chatgpt_plan_type,
         ))
+    }
+}
+
+impl ExternalAuth for ExternalAuthRefreshBridge {
+    fn auth_mode(&self) -> LoginAuthMode {
+        LoginAuthMode::Chatgpt
+    }
+
+    fn refresh(
+        &self,
+        context: ExternalAuthRefreshContext,
+    ) -> codex_login::ExternalAuthFuture<'_, ExternalAuthTokens> {
+        Box::pin(ExternalAuthRefreshBridge::refresh(self, context))
     }
 }
 

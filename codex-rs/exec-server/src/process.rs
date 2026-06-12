@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
-use async_trait::async_trait;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 
@@ -162,7 +163,6 @@ impl ExecProcessEventReceiver {
 /// `read` is the request/response API for callers that want to page through
 /// buffered output, while `subscribe_events` is the streaming API for callers
 /// that want output and lifecycle changes delivered as they happen.
-#[async_trait]
 pub trait ExecProcess: Send + Sync {
     fn process_id(&self) -> &ProcessId;
 
@@ -170,24 +170,29 @@ pub trait ExecProcess: Send + Sync {
 
     fn subscribe_events(&self) -> ExecProcessEventReceiver;
 
-    async fn read(
+    fn read(
         &self,
         after_seq: Option<u64>,
         max_bytes: Option<usize>,
         wait_ms: Option<u64>,
-    ) -> Result<ReadResponse, ExecServerError>;
+    ) -> ExecProcessFuture<'_, ReadResponse>;
 
-    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError>;
+    fn write(&self, chunk: Vec<u8>) -> ExecProcessFuture<'_, WriteResponse>;
 
-    async fn signal(&self, signal: ProcessSignal) -> Result<(), ExecServerError>;
+    fn signal(&self, signal: ProcessSignal) -> ExecProcessFuture<'_, ()>;
 
-    async fn terminate(&self) -> Result<(), ExecServerError>;
+    fn terminate(&self) -> ExecProcessFuture<'_, ()>;
 }
 
-#[async_trait]
+pub type ExecProcessFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, ExecServerError>> + Send + 'a>>;
+
 pub trait ExecBackend: Send + Sync {
-    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError>;
+    fn start(&self, params: ExecParams) -> ExecBackendFuture<'_>;
 }
+
+pub type ExecBackendFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<StartedExecProcess, ExecServerError>> + Send + 'a>>;
 
 #[cfg(test)]
 mod tests {

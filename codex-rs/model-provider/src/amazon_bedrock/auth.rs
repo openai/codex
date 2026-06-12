@@ -133,11 +133,6 @@ impl BedrockMantleSigV4AuthProvider {
     fn new(context: AwsAuthContext) -> Self {
         Self { context }
     }
-}
-
-#[async_trait::async_trait]
-impl AuthProvider for BedrockMantleSigV4AuthProvider {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 
     async fn apply_auth(&self, request: Request) -> std::result::Result<Request, AuthError> {
         let mut request = request;
@@ -159,6 +154,14 @@ impl AuthProvider for BedrockMantleSigV4AuthProvider {
         request.body = prepared.body.map(RequestBody::Raw);
         request.compression = RequestCompression::None;
         Ok(request)
+    }
+}
+
+impl AuthProvider for BedrockMantleSigV4AuthProvider {
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+
+    fn apply_auth(&self, request: Request) -> codex_api::AuthProviderFuture<'_> {
+        Box::pin(BedrockMantleSigV4AuthProvider::apply_auth(self, request))
     }
 }
 

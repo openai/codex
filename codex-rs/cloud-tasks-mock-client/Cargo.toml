@@ -15,7 +15,6 @@ doctest = false
 workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
 chrono = { workspace = true }
 codex-cloud-tasks-client = { workspace = true }
 diffy = { workspace = true }

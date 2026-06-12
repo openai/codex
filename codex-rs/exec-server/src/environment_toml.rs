@@ -4,13 +4,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use serde::Deserialize;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::DefaultEnvironmentProvider;
 use crate::Environment;
 use crate::EnvironmentProvider;
+use crate::EnvironmentProviderFuture;
 use crate::ExecServerError;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
@@ -92,10 +92,7 @@ impl TomlEnvironmentProvider {
             environments: parsed_environments,
         })
     }
-}
 
-#[async_trait]
-impl EnvironmentProvider for TomlEnvironmentProvider {
     async fn snapshot(&self) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
         let mut environments = Vec::with_capacity(self.environments.len());
         for (id, transport_params) in &self.environments {
@@ -113,6 +110,12 @@ impl EnvironmentProvider for TomlEnvironmentProvider {
             default: self.default.clone(),
             include_local: self.include_local,
         })
+    }
+}
+
+impl EnvironmentProvider for TomlEnvironmentProvider {
+    fn snapshot(&self) -> EnvironmentProviderFuture<'_> {
+        Box::pin(TomlEnvironmentProvider::snapshot(self))
     }
 }
 

@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use bytes::Bytes;
 use codex_api::AuthProvider;
 use codex_api::Compression;
@@ -32,7 +31,6 @@ impl FixtureSseTransport {
     }
 }
 
-#[async_trait]
 impl HttpTransport for FixtureSseTransport {
     async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
         Err(TransportError::Build("execute should not run".to_string()))

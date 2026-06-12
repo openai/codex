@@ -1,5 +1,7 @@
 use std::fmt;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_api::Provider;
@@ -94,7 +96,6 @@ pub const DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL: &str = "gpt-5.4";
 /// Implementations own provider-specific behavior for a model backend. The
 /// `ModelProviderInfo` returned by `info` is the serialized/configured provider
 /// metadata used by the default OpenAI-compatible implementation.
-#[async_trait::async_trait]
 pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
@@ -139,27 +140,35 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn auth_manager(&self) -> Option<Arc<AuthManager>>;
 
     /// Returns the current provider-scoped auth value, if one is configured.
-    async fn auth(&self) -> Option<CodexAuth>;
+    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>>;
 
     /// Returns the current app-visible account state for this provider.
     fn account_state(&self) -> ProviderAccountResult;
 
     /// Returns provider configuration adapted for the API client.
-    async fn api_provider(&self) -> codex_protocol::error::Result<Provider> {
-        let auth = self.auth().await;
-        self.info()
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
+    fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
+        Box::pin(async move {
+            let auth = self.auth().await;
+            self.info()
+                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
+        })
     }
 
     /// Returns the provider base URL that will be used at request time.
-    async fn runtime_base_url(&self) -> codex_protocol::error::Result<Option<String>> {
-        Ok(self.info().base_url.clone())
+    fn runtime_base_url(
+        &self,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<Option<String>>> {
+        Box::pin(async { Ok(self.info().base_url.clone()) })
     }
 
     /// Returns the auth provider used to attach request credentials.
-    async fn api_auth(&self) -> codex_protocol::error::Result<SharedAuthProvider> {
-        let auth = self.auth().await;
-        resolve_provider_auth(auth.as_ref(), self.info())
+    fn api_auth(
+        &self,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<SharedAuthProvider>> {
+        Box::pin(async move {
+            let auth = self.auth().await;
+            resolve_provider_auth(auth.as_ref(), self.info())
+        })
     }
 
     /// Creates the model manager implementation appropriate for this provider.
@@ -169,6 +178,8 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager;
 }
+
+pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Shared runtime model provider handle.
 pub type SharedModelProvider = Arc<dyn ModelProvider>;
@@ -202,7 +213,6 @@ impl ConfiguredModelProvider {
     }
 }
 
-#[async_trait::async_trait]
 impl ModelProvider for ConfiguredModelProvider {
     fn info(&self) -> &ModelProviderInfo {
         &self.info
@@ -219,11 +229,13 @@ impl ModelProvider for ConfiguredModelProvider {
             .is_some_and(|auth| auth.is_chatgpt_auth())
     }
 
-    async fn auth(&self) -> Option<CodexAuth> {
-        match self.auth_manager.as_ref() {
-            Some(auth_manager) => auth_manager.auth().await,
-            None => None,
-        }
+    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
+        Box::pin(async move {
+            match self.auth_manager.as_ref() {
+                Some(auth_manager) => auth_manager.auth().await,
+                None => None,
+            }
+        })
     }
 
     fn account_state(&self) -> ProviderAccountResult {

@@ -4,7 +4,6 @@ use crate::error::TransportError;
 use crate::request::Request;
 use crate::request::RequestBody;
 use crate::request::Response;
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -23,10 +22,15 @@ pub struct StreamResponse {
     pub bytes: ByteStream,
 }
 
-#[async_trait]
 pub trait HttpTransport: Send + Sync {
-    async fn execute(&self, req: Request) -> Result<Response, TransportError>;
-    async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError>;
+    fn execute(
+        &self,
+        req: Request,
+    ) -> impl std::future::Future<Output = Result<Response, TransportError>> + Send;
+    fn stream(
+        &self,
+        req: Request,
+    ) -> impl std::future::Future<Output = Result<StreamResponse, TransportError>> + Send;
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +90,6 @@ fn request_body_for_trace(req: &Request) -> String {
     }
 }
 
-#[async_trait]
 impl HttpTransport for ReqwestTransport {
     async fn execute(&self, req: Request) -> Result<Response, TransportError> {
         if enabled!(Level::TRACE) {

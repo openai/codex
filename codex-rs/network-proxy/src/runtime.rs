@@ -20,7 +20,6 @@ use crate::state::build_config_state;
 use crate::state::validate_policy_against_constraints;
 use anyhow::Context;
 use anyhow::Result;
-use async_trait::async_trait;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobSet;
 use serde::Serialize;
@@ -30,6 +29,7 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
@@ -168,38 +168,38 @@ pub struct ConfigState {
     pub blocked_total: u64,
 }
 
-#[async_trait]
 pub trait ConfigReloader: Send + Sync {
     /// Human-readable description of where config is loaded from, for logs.
     fn source_label(&self) -> String;
 
     /// Return a freshly loaded state if a reload is needed; otherwise, return `None`.
-    async fn maybe_reload(&self) -> Result<Option<ConfigState>>;
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>>;
 
     /// Force a reload, regardless of whether a change was detected.
-    async fn reload_now(&self) -> Result<ConfigState>;
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState>;
 }
 
-#[async_trait]
+pub type ConfigReloaderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+
 pub trait BlockedRequestObserver: Send + Sync + 'static {
-    async fn on_blocked_request(&self, request: BlockedRequest);
+    fn on_blocked_request(&self, request: BlockedRequest) -> BlockedRequestObserverFuture<'_>;
 }
 
-#[async_trait]
+pub type BlockedRequestObserverFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+
 impl<O: BlockedRequestObserver + ?Sized> BlockedRequestObserver for Arc<O> {
-    async fn on_blocked_request(&self, request: BlockedRequest) {
-        (**self).on_blocked_request(request).await
+    fn on_blocked_request(&self, request: BlockedRequest) -> BlockedRequestObserverFuture<'_> {
+        Box::pin(async move { (**self).on_blocked_request(request).await })
     }
 }
 
-#[async_trait]
 impl<F, Fut> BlockedRequestObserver for F
 where
     F: Fn(BlockedRequest) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ()> + Send,
+    Fut: Future<Output = ()> + Send + 'static,
 {
-    async fn on_blocked_request(&self, request: BlockedRequest) {
-        (self)(request).await
+    fn on_blocked_request(&self, request: BlockedRequest) -> BlockedRequestObserverFuture<'_> {
+        Box::pin((self)(request))
     }
 }
 
@@ -891,18 +891,17 @@ pub(crate) fn network_proxy_state_for_policy(
 struct NoopReloader;
 
 #[cfg(test)]
-#[async_trait]
 impl ConfigReloader for NoopReloader {
     fn source_label(&self) -> String {
         "test config state".to_string()
     }
 
-    async fn maybe_reload(&self) -> Result<Option<ConfigState>> {
-        Ok(None)
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(async { Ok(None) })
     }
 
-    async fn reload_now(&self) -> Result<ConfigState> {
-        Err(anyhow::anyhow!("force reload is not supported in tests"))
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async { Err(anyhow::anyhow!("force reload is not supported in tests")) })
     }
 }
 

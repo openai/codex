@@ -8,7 +8,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-agent-identity = { workspace = true }

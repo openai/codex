@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 
-use async_trait::async_trait;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -86,7 +87,6 @@ impl ThreadConfigLoadError {
 /// return typed payloads without applying precedence or merge rules. Callers
 /// are responsible for resolving the returned sources into the effective
 /// runtime config.
-#[async_trait]
 pub trait ThreadConfigLoader: Send + Sync {
     /// Load source-specific typed config.
     ///
@@ -94,23 +94,28 @@ pub trait ThreadConfigLoader: Send + Sync {
     /// their owned sources. Most callers should use [`Self::load_config_layers`]
     /// so precedence and merging continue through the ordinary config layer
     /// stack.
-    async fn load(
+    fn load(
         &self,
         context: ThreadConfigContext,
-    ) -> Result<Vec<ThreadConfigSource>, ThreadConfigLoadError>;
+    ) -> ThreadConfigLoaderFuture<'_, Vec<ThreadConfigSource>>;
 
-    async fn load_config_layers(
+    fn load_config_layers(
         &self,
         context: ThreadConfigContext,
-    ) -> Result<Vec<ConfigLayerEntry>, ThreadConfigLoadError> {
-        let sources = self.load(context).await?;
-        sources
-            .into_iter()
-            .map(thread_config_source_to_layer)
-            .collect::<Result<Vec<_>, _>>()
-            .map(|layers| layers.into_iter().flatten().collect())
+    ) -> ThreadConfigLoaderFuture<'_, Vec<ConfigLayerEntry>> {
+        Box::pin(async move {
+            let sources = self.load(context).await?;
+            sources
+                .into_iter()
+                .map(thread_config_source_to_layer)
+                .collect::<Result<Vec<_>, _>>()
+                .map(|layers| layers.into_iter().flatten().collect())
+        })
     }
 }
+
+pub type ThreadConfigLoaderFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, ThreadConfigLoadError>> + Send + 'a>>;
 
 /// Loader backed by a static set of typed thread config sources.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -124,13 +129,12 @@ impl StaticThreadConfigLoader {
     }
 }
 
-#[async_trait]
 impl ThreadConfigLoader for StaticThreadConfigLoader {
-    async fn load(
+    fn load(
         &self,
         _context: ThreadConfigContext,
-    ) -> Result<Vec<ThreadConfigSource>, ThreadConfigLoadError> {
-        Ok(self.sources.clone())
+    ) -> ThreadConfigLoaderFuture<'_, Vec<ThreadConfigSource>> {
+        Box::pin(async { Ok(self.sources.clone()) })
     }
 }
 
@@ -138,13 +142,12 @@ impl ThreadConfigLoader for StaticThreadConfigLoader {
 #[derive(Clone, Debug, Default)]
 pub struct NoopThreadConfigLoader;
 
-#[async_trait]
 impl ThreadConfigLoader for NoopThreadConfigLoader {
-    async fn load(
+    fn load(
         &self,
         _context: ThreadConfigContext,
-    ) -> Result<Vec<ThreadConfigSource>, ThreadConfigLoadError> {
-        Ok(Vec::new())
+    ) -> ThreadConfigLoaderFuture<'_, Vec<ThreadConfigSource>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 }
 

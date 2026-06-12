@@ -3,7 +3,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use bytes::Bytes;
 use codex_api::ApiError;
 use codex_api::AuthError;
@@ -71,7 +70,6 @@ impl RecordingTransport {
     }
 }
 
-#[async_trait]
 impl HttpTransport for RecordingTransport {
     async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
         Err(TransportError::Build("execute should not run".to_string()))
@@ -195,11 +193,6 @@ impl FailsOnceAuth {
             .lock()
             .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
     }
-}
-
-#[async_trait]
-impl AuthProvider for FailsOnceAuth {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 
     async fn apply_auth(&self, request: Request) -> Result<Request, AuthError> {
         let mut attempts = self
@@ -219,7 +212,14 @@ impl AuthProvider for FailsOnceAuth {
     }
 }
 
-#[async_trait]
+impl AuthProvider for FailsOnceAuth {
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+
+    fn apply_auth(&self, request: Request) -> codex_api::AuthProviderFuture<'_> {
+        Box::pin(FailsOnceAuth::apply_auth(self, request))
+    }
+}
+
 impl HttpTransport for FlakyTransport {
     async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
         Err(TransportError::Build("execute should not run".to_string()))

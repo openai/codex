@@ -4,7 +4,6 @@ use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -18,9 +17,11 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use crate::ExecBackend;
+use crate::ExecBackendFuture;
 use crate::ExecProcess;
 use crate::ExecProcessEvent;
 use crate::ExecProcessEventReceiver;
+use crate::ExecProcessFuture;
 use crate::ExecServerError;
 use crate::ProcessId;
 use crate::StartedExecProcess;
@@ -460,8 +461,7 @@ fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvironmentPolic
     }
 }
 
-#[async_trait]
-impl ExecBackend for LocalProcess {
+impl LocalProcess {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
         let (response, wake_tx, events) = self
             .start_process(params)
@@ -478,20 +478,13 @@ impl ExecBackend for LocalProcess {
     }
 }
 
-#[async_trait]
-impl ExecProcess for LocalExecProcess {
-    fn process_id(&self) -> &ProcessId {
-        &self.process_id
+impl ExecBackend for LocalProcess {
+    fn start(&self, params: ExecParams) -> ExecBackendFuture<'_> {
+        Box::pin(LocalProcess::start(self, params))
     }
+}
 
-    fn subscribe_wake(&self) -> watch::Receiver<u64> {
-        self.wake_tx.subscribe()
-    }
-
-    fn subscribe_events(&self) -> ExecProcessEventReceiver {
-        self.events.subscribe()
-    }
-
+impl LocalExecProcess {
     async fn read(
         &self,
         after_seq: Option<u64>,
@@ -513,6 +506,41 @@ impl ExecProcess for LocalExecProcess {
 
     async fn terminate(&self) -> Result<(), ExecServerError> {
         self.backend.terminate(&self.process_id).await
+    }
+}
+
+impl ExecProcess for LocalExecProcess {
+    fn process_id(&self) -> &ProcessId {
+        &self.process_id
+    }
+
+    fn subscribe_wake(&self) -> watch::Receiver<u64> {
+        self.wake_tx.subscribe()
+    }
+
+    fn subscribe_events(&self) -> ExecProcessEventReceiver {
+        self.events.subscribe()
+    }
+
+    fn read(
+        &self,
+        after_seq: Option<u64>,
+        max_bytes: Option<usize>,
+        wait_ms: Option<u64>,
+    ) -> ExecProcessFuture<'_, ReadResponse> {
+        Box::pin(LocalExecProcess::read(self, after_seq, max_bytes, wait_ms))
+    }
+
+    fn write(&self, chunk: Vec<u8>) -> ExecProcessFuture<'_, WriteResponse> {
+        Box::pin(LocalExecProcess::write(self, chunk))
+    }
+
+    fn signal(&self, signal: ProcessSignal) -> ExecProcessFuture<'_, ()> {
+        Box::pin(LocalExecProcess::signal(self, signal))
+    }
+
+    fn terminate(&self) -> ExecProcessFuture<'_, ()> {
+        Box::pin(LocalExecProcess::terminate(self))
     }
 }
 
