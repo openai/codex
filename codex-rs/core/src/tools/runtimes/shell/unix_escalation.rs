@@ -66,6 +66,7 @@ use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::ShellCommandExecutorFuture;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -143,7 +144,7 @@ pub(super) async fn try_run_zsh_fork(
             options,
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions),
         )
-        .map_err(|err| ToolError::Codex(err.into()))?;
+        .map_err(ToolError::Codex)?;
     let crate::sandboxing::ExecRequest {
         command,
         cwd: sandbox_cwd,
@@ -968,10 +969,19 @@ impl CoreShellCommandExecutor {
             self.windows_sandbox_level,
             self.network.is_some(),
         );
+        let cwd = PathUri::from_abs_path(workdir).map_err(|_| {
+            CodexErr::InvalidRequest("command cwd cannot be represented as a file URI".to_string())
+        })?;
+        let sandbox_policy_cwd =
+            PathUri::from_abs_path(&self.sandbox_policy_cwd).map_err(|_| {
+                CodexErr::InvalidRequest(
+                    "sandbox policy cwd cannot be represented as a file URI".to_string(),
+                )
+            })?;
         let command = SandboxCommand {
             program: program.clone().into(),
             args: args.to_vec(),
-            cwd: workdir.clone(),
+            cwd,
             env,
             additional_permissions,
         };
@@ -985,7 +995,7 @@ impl CoreShellCommandExecutor {
             sandbox,
             enforce_managed_network: self.network.is_some(),
             network: self.network.as_ref(),
-            sandbox_policy_cwd: &self.sandbox_policy_cwd,
+            sandbox_policy_cwd: &sandbox_policy_cwd,
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock: self.use_legacy_landlock,
             windows_sandbox_level: self.windows_sandbox_level,
@@ -994,7 +1004,6 @@ impl CoreShellCommandExecutor {
         let mut exec_request = crate::sandboxing::ExecRequest::from_sandbox_exec_request(
             exec_request,
             options,
-            self.sandbox_policy_cwd.clone(),
             self.windows_sandbox_workspace_roots.clone(),
         );
         if let Some(network) = exec_request.network.as_ref() {

@@ -7,7 +7,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::future::Future;
 use std::io;
@@ -51,7 +50,7 @@ pub struct ReadDirectoryEntry {
 pub struct FileSystemSandboxContext {
     pub permissions: PermissionProfile,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<AbsolutePathBuf>,
+    pub cwd: Option<PathUri>,
     pub windows_sandbox_level: WindowsSandboxLevel,
     #[serde(default)]
     pub windows_sandbox_private_desktop: bool,
@@ -60,32 +59,35 @@ pub struct FileSystemSandboxContext {
 }
 
 impl FileSystemSandboxContext {
-    pub fn from_legacy_sandbox_policy(sandbox_policy: SandboxPolicy, cwd: AbsolutePathBuf) -> Self {
+    pub fn from_legacy_sandbox_policy(
+        sandbox_policy: SandboxPolicy,
+        cwd: PathUri,
+    ) -> io::Result<Self> {
+        // Legacy policy projection materializes native roots, so convert at the receiving-host
+        // boundary while retaining the URI in the resulting sandbox context.
+        let native_cwd = cwd.to_abs_path()?;
         let file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, &cwd);
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                &sandbox_policy,
+                &native_cwd,
+            );
         let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
             SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
             &file_system_sandbox_policy,
             NetworkSandboxPolicy::from(&sandbox_policy),
         );
-        Self::from_permission_profile_with_cwd(permissions, cwd)
+        Ok(Self::from_permission_profile_with_cwd(permissions, cwd))
     }
 
     pub fn from_permission_profile(permissions: PermissionProfile) -> Self {
         Self::from_permissions_and_cwd(permissions, /*cwd*/ None)
     }
 
-    pub fn from_permission_profile_with_cwd(
-        permissions: PermissionProfile,
-        cwd: AbsolutePathBuf,
-    ) -> Self {
+    pub fn from_permission_profile_with_cwd(permissions: PermissionProfile, cwd: PathUri) -> Self {
         Self::from_permissions_and_cwd(permissions, Some(cwd))
     }
 
-    fn from_permissions_and_cwd(
-        permissions: PermissionProfile,
-        cwd: Option<AbsolutePathBuf>,
-    ) -> Self {
+    fn from_permissions_and_cwd(permissions: PermissionProfile, cwd: Option<PathUri>) -> Self {
         Self {
             permissions,
             cwd,
