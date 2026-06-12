@@ -2771,6 +2771,28 @@ mod tests {
             serde_json::to_value(&chatgpt)?,
         );
 
+        let codex_managed_bedrock = v2::Account::AmazonBedrock {
+            credential_source: v2::AmazonBedrockCredentialSource::CodexManaged,
+        };
+        assert_eq!(
+            json!({
+                "type": "amazonBedrock",
+                "credentialSource": "codexManaged",
+            }),
+            serde_json::to_value(&codex_managed_bedrock)?,
+        );
+
+        let aws_managed_bedrock = v2::Account::AmazonBedrock {
+            credential_source: v2::AmazonBedrockCredentialSource::AwsManaged,
+        };
+        assert_eq!(
+            json!({
+                "type": "amazonBedrock",
+                "credentialSource": "awsManaged",
+            }),
+            serde_json::to_value(&aws_managed_bedrock)?,
+        );
+
         Ok(())
     }
 

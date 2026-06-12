@@ -1,5 +1,6 @@
 use crate::protocol::common::AuthMode;
 use codex_experimental_api_macros::ExperimentalApi;
+pub use codex_protocol::account::AmazonBedrockCredentialSource;
 use codex_protocol::account::PlanType;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
@@ -28,7 +29,9 @@ pub enum Account {
 
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
-    AmazonBedrock {},
+    AmazonBedrock {
+        credential_source: AmazonBedrockCredentialSource,
+    },
 }
 
 impl From<ProviderAccount> for Account {
@@ -36,7 +39,9 @@ impl From<ProviderAccount> for Account {
         match account {
             ProviderAccount::ApiKey => Self::ApiKey {},
             ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt { email, plan_type },
-            ProviderAccount::AmazonBedrock => Self::AmazonBedrock {},
+            ProviderAccount::AmazonBedrock { credential_source } => {
+                Self::AmazonBedrock { credential_source }
+            }
         }
     }
 }
