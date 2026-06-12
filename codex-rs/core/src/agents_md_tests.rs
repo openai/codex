@@ -638,7 +638,12 @@ async fn primary_environment_cwd_must_match_config_cwd() {
     let mut config = make_config(&primary, /*limit*/ 4096, /*instructions*/ None).await;
     let environments = resolved_local_environments([("primary", mismatched.abs())]);
 
-    let _ = load_project_instructions(&mut config.config, None, &environments).await;
+    let _ = load_project_instructions(
+        &mut config.config,
+        /*user_instructions*/ None,
+        &environments,
+    )
+    .await;
 }
 
 #[tokio::test]
