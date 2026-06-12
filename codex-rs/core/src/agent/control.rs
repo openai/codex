@@ -538,7 +538,7 @@ impl AgentControl {
             .services
             .shell_snapshot
             .load_full()?;
-        snapshot.is_ready().then_some(snapshot)
+        (!snapshot.is_failed()).then_some(snapshot)
     }
 
     async fn inherited_exec_policy_for_source(

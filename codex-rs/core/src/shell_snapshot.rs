@@ -27,7 +27,7 @@ use tracing::info_span;
 
 pub(crate) struct ShellSnapshot {
     cwd: AbsolutePathBuf,
-    location_rx: watch::Receiver<Option<ShellSnapshotFile>>,
+    state_rx: watch::Receiver<Option<std::result::Result<ShellSnapshotFile, &'static str>>>,
 }
 
 struct ShellSnapshotFile {
@@ -48,17 +48,17 @@ impl ShellSnapshot {
         session_telemetry: SessionTelemetry,
         state_db: Option<StateDbHandle>,
     ) -> Arc<Self> {
-        let (location_tx, location_rx) = watch::channel(None);
+        let (state_tx, state_rx) = watch::channel(None);
         let snapshot = Arc::new(Self {
             cwd: session_cwd.clone(),
-            location_rx,
+            state_rx,
         });
         Self::spawn_snapshot_task(
             codex_home,
             session_id,
             session_cwd,
             shell.clone(),
-            location_tx,
+            state_tx,
             session_telemetry,
             state_db,
         );
@@ -70,14 +70,15 @@ impl ShellSnapshot {
             return None;
         }
 
-        self.location_rx
+        self.state_rx
             .borrow()
             .as_ref()
+            .and_then(|snapshot| snapshot.as_ref().ok())
             .map(|snapshot| snapshot.path.clone())
     }
 
-    pub(crate) fn is_ready(&self) -> bool {
-        self.location_rx.borrow().is_some()
+    pub(crate) fn is_failed(&self) -> bool {
+        matches!(&*self.state_rx.borrow(), Some(Err(_)))
     }
 
     fn spawn_snapshot_task(
@@ -85,7 +86,7 @@ impl ShellSnapshot {
         session_id: ThreadId,
         session_cwd: AbsolutePathBuf,
         snapshot_shell: Shell,
-        location_tx: watch::Sender<Option<ShellSnapshotFile>>,
+        state_tx: watch::Sender<Option<std::result::Result<ShellSnapshotFile, &'static str>>>,
         session_telemetry: SessionTelemetry,
         state_db: Option<StateDbHandle>,
     ) {
@@ -109,9 +110,7 @@ impl ShellSnapshot {
                     counter_tags.push(("failure_reason", *failure_reason));
                 }
                 session_telemetry.counter("codex.shell_snapshot", /*inc*/ 1, &counter_tags);
-                if let Ok(snapshot) = snapshot {
-                    let _ = location_tx.send(Some(snapshot));
-                }
+                let _ = state_tx.send(Some(snapshot));
             }
             .instrument(snapshot_span),
         );

@@ -222,18 +222,31 @@ fn location_matches_cwd_and_channel_drop_deletes_file() -> Result<()> {
     std::fs::write(&path, "# snapshot")?;
     let cwd = dir.path().join("worktree-a").abs();
     let other_cwd = dir.path().join("worktree-b").abs();
-    let (location_tx, location_rx) = watch::channel(Some(ShellSnapshotFile { path: path.clone() }));
+    let (state_tx, state_rx) = watch::channel(Some(Ok(ShellSnapshotFile { path: path.clone() })));
     let snapshot = ShellSnapshot {
         cwd: cwd.clone(),
-        location_rx,
+        state_rx,
     };
 
     assert_eq!(snapshot.location(&cwd), Some(path.clone()));
     assert_eq!(snapshot.location(&other_cwd), None);
 
-    drop(location_tx);
+    drop(state_tx);
     drop(snapshot);
     assert!(!path.exists());
+
+    Ok(())
+}
+
+#[test]
+fn snapshot_state_distinguishes_building_from_failed() -> Result<()> {
+    let cwd = tempdir()?.path().abs();
+    let (state_tx, state_rx) = watch::channel(None);
+    let snapshot = ShellSnapshot { cwd, state_rx };
+
+    assert!(!snapshot.is_failed());
+    state_tx.send(Some(Err("failed")))?;
+    assert!(snapshot.is_failed());
 
     Ok(())
 }
