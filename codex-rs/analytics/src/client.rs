@@ -9,6 +9,7 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
@@ -244,6 +245,12 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(
             Box::new(event),
         )));
+    }
+
+    pub fn track_goal_event(&self, event: CodexGoalEvent) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Goal(Box::new(
+            event,
+        ))));
     }
 
     pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {

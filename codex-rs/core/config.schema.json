@@ -210,6 +210,14 @@
       "additionalProperties": false,
       "description": "Default settings that apply to all apps.",
       "properties": {
+        "approvals_reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            }
+          ],
+          "description": "Reviewer for approval prompts unless overridden by per-app settings."
+        },
         "destructive_enabled": {
           "description": "Whether tools with `destructive_hint = true` are allowed by default.",
           "type": "boolean"
@@ -222,18 +230,6 @@
         "open_world_enabled": {
           "description": "Whether tools with `open_world_hint = true` are allowed by default.",
           "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "AppsMcpPathOverrideConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "path": {
-          "type": "string"
         }
       },
       "type": "object"
@@ -408,7 +404,23 @@
               "type": "boolean"
             },
             "apps_mcp_path_override": {
-              "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              ]
             },
             "auth_elicitation": {
               "type": "boolean"
@@ -572,6 +584,9 @@
             "request_rule": {
               "type": "boolean"
             },
+            "resize_all_images": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -615,6 +630,9 @@
               "type": "boolean"
             },
             "terminal_visualization_instructions": {
+              "type": "boolean"
+            },
+            "token_budget": {
               "type": "boolean"
             },
             "tool_call_mcp_elicitation": {
@@ -835,16 +853,6 @@
         }
       },
       "type": "object"
-    },
-    "FeatureToml_for_AppsMcpPathOverrideConfigToml": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/definitions/AppsMcpPathOverrideConfigToml"
-        }
-      ]
     },
     "FeatureToml_for_CodeModeConfigToml": {
       "anyOf": [
@@ -4534,7 +4542,23 @@
           "type": "boolean"
         },
         "apps_mcp_path_override": {
-          "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          ]
         },
         "auth_elicitation": {
           "type": "boolean"
@@ -4698,6 +4722,9 @@
         "request_rule": {
           "type": "boolean"
         },
+        "resize_all_images": {
+          "type": "boolean"
+        },
         "responses_websockets": {
           "type": "boolean"
         },
@@ -4741,6 +4768,9 @@
           "type": "boolean"
         },
         "terminal_visualization_instructions": {
+          "type": "boolean"
+        },
+        "token_budget": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {

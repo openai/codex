@@ -331,6 +331,30 @@
             },
             "method": {
               "enum": [
+                "thread/delete"
+              ],
+              "title": "Thread/deleteRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadDeleteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/deleteRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unsubscribe"
               ],
               "title": "Thread/unsubscribeRequestMethod",
@@ -4065,6 +4089,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/deleted"
+              ],
+              "title": "Thread/deletedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadDeletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/deletedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/unarchived"
               ],
               "title": "Thread/unarchivedNotificationMethod",
@@ -5582,6 +5626,15 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "EXPERIMENTAL. Params sent with a request_user_input event.",
       "properties": {
+        "autoResolutionMs": {
+          "default": null,
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "itemId": {
           "type": "string"
         },
@@ -6372,6 +6425,12 @@
       "AppSummary": {
         "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
         "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": [
               "string",
@@ -6389,21 +6448,23 @@
           },
           "name": {
             "type": "string"
-          },
-          "needsAuth": {
-            "type": "boolean"
           }
         },
         "required": [
           "id",
-          "name",
-          "needsAuth"
+          "name"
         ],
         "type": "object"
       },
       "AppTemplateSummary": {
         "properties": {
           "canonicalConnectorId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
             "type": [
               "string",
               "null"
@@ -6523,6 +6584,16 @@
       },
       "AppsDefaultConfig": {
         "properties": {
+          "approvals_reviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "destructive_enabled": {
             "default": true,
             "type": "boolean"
@@ -6684,6 +6755,13 @@
               "personalAccessToken"
             ],
             "type": "string"
+          },
+          {
+            "description": "Amazon Bedrock bearer token managed by Codex.",
+            "enum": [
+              "bedrockApiKey"
+            ],
+            "type": "string"
           }
         ]
       },
@@ -6764,6 +6842,36 @@
           "notFound"
         ],
         "type": "string"
+      },
+      "CapabilityRootLocation": {
+        "description": "Location used to resolve a selected capability root.",
+        "oneOf": [
+          {
+            "description": "A path owned by an execution environment.",
+            "properties": {
+              "environmentId": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "environment"
+                ],
+                "title": "EnvironmentCapabilityRootLocationType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "environmentId",
+              "path",
+              "type"
+            ],
+            "title": "EnvironmentCapabilityRootLocation",
+            "type": "object"
+          }
+        ]
       },
       "CodexErrorInfo": {
         "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
@@ -13961,6 +14069,22 @@
         ],
         "type": "string"
       },
+      "RemoteControlDisableParams": {
+        "properties": {
+          "ephemeral": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "RemoteControlEnableParams": {
+        "properties": {
+          "ephemeral": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "RemoteControlStatusChangedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Current remote-control connection status and remote identity exposed to clients.",
@@ -15061,6 +15185,28 @@
         },
         "type": "object"
       },
+      "SelectedCapabilityRoot": {
+        "description": "A user-selected root that can expose one or more runtime capabilities.",
+        "properties": {
+          "id": {
+            "description": "Stable identifier supplied by the capability selection platform.",
+            "type": "string"
+          },
+          "location": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/CapabilityRootLocation"
+              }
+            ],
+            "description": "Where the selected root can be resolved."
+          }
+        },
+        "required": [
+          "id",
+          "location"
+        ],
+        "type": "object"
+      },
       "SendAddCreditsNudgeEmailParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -15580,6 +15726,14 @@
         ],
         "type": "object"
       },
+      "SubAgentActivityKind": {
+        "enum": [
+          "started",
+          "interacted",
+          "interrupted"
+        ],
+        "type": "string"
+      },
       "SubAgentSource": {
         "oneOf": [
           {
@@ -15991,6 +16145,37 @@
       "ThreadCompactStartResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadCompactStartResponse",
+        "type": "object"
+      },
+      "ThreadDeleteParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadDeleteParams",
+        "type": "object"
+      },
+      "ThreadDeleteResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadDeleteResponse",
+        "type": "object"
+      },
+      "ThreadDeletedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadDeletedNotification",
         "type": "object"
       },
       "ThreadForkParams": {
@@ -16890,6 +17075,38 @@
               "type"
             ],
             "title": "CollabAgentToolCallThreadItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "agentPath": {
+                "type": "string"
+              },
+              "agentThreadId": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/definitions/v2/SubAgentActivityKind"
+              },
+              "type": {
+                "enum": [
+                  "subAgentActivity"
+                ],
+                "title": "SubAgentActivityThreadItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "agentPath",
+              "agentThreadId",
+              "id",
+              "kind",
+              "type"
+            ],
+            "title": "SubAgentActivityThreadItem",
             "type": "object"
           },
           {
@@ -18017,11 +18234,6 @@
         "type": "string"
       },
       "ThreadSource": {
-        "enum": [
-          "user",
-          "subagent",
-          "memory_consolidation"
-        ],
         "type": "string"
       },
       "ThreadSourceKind": {

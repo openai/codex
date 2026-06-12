@@ -6,8 +6,10 @@ use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use crate::marketplace::MarketplacePluginInstallPolicy;
+use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use crate::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
+use crate::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
-use crate::remote::RemotePluginScope;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
@@ -15,6 +17,7 @@ use crate::test_support::load_plugins_config as load_plugins_config_input;
 use crate::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::test_support::write_file;
 use crate::test_support::write_openai_curated_marketplace;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::AppToolApproval;
 use codex_config::CONFIG_TOML_FILE;
@@ -44,6 +47,21 @@ use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
+
+#[test]
+fn plugins_manager_tracks_auth_mode() {
+    let tmp = TempDir::new().unwrap();
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+
+    assert_eq!(manager.auth_mode(), None);
+    assert!(manager.set_auth_mode(Some(AuthMode::ApiKey)));
+    assert_eq!(manager.auth_mode(), Some(AuthMode::ApiKey));
+    assert!(!manager.set_auth_mode(Some(AuthMode::ApiKey)));
+    assert!(manager.set_auth_mode(Some(AuthMode::ChatgptAuthTokens)));
+    assert_eq!(manager.auth_mode(), Some(AuthMode::ChatgptAuthTokens));
+    assert!(manager.set_auth_mode(/*auth_mode*/ None));
+    assert_eq!(manager.auth_mode(), None);
+}
 
 fn write_plugin_with_version(
     root: &Path,
@@ -137,8 +155,15 @@ fn remote_installed_linear_plugin() -> RemoteInstalledPlugin {
 }
 
 fn remote_installed_plugin(name: &str) -> RemoteInstalledPlugin {
+    remote_installed_plugin_in_marketplace(name, REMOTE_GLOBAL_MARKETPLACE_NAME)
+}
+
+fn remote_installed_plugin_in_marketplace(
+    name: &str,
+    marketplace_name: &str,
+) -> RemoteInstalledPlugin {
     RemoteInstalledPlugin {
-        marketplace_name: "openai-curated-remote".to_string(),
+        marketplace_name: marketplace_name.to_string(),
         id: format!("plugins~Plugin_{name}"),
         name: name.to_string(),
         enabled: true,
@@ -484,7 +509,7 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
     manager.write_remote_installed_plugins_cache(vec![plugin]);
 
     let marketplaces = manager
-        .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Global])
+        .build_remote_installed_plugin_marketplaces_from_cache(&[REMOTE_GLOBAL_MARKETPLACE_NAME])
         .expect("remote installed cache should be present");
     assert_eq!(marketplaces.len(), 1);
     assert_eq!(marketplaces[0].name, "openai-curated-remote");
@@ -521,9 +546,42 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
     );
     assert_eq!(
         manager
-            .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Workspace])
+            .build_remote_installed_plugin_marketplaces_from_cache(&[
+                REMOTE_WORKSPACE_MARKETPLACE_NAME
+            ])
             .expect("remote installed cache should be present"),
         Vec::new()
+    );
+}
+
+#[tokio::test]
+async fn build_remote_installed_plugin_marketplaces_from_cache_filters_by_marketplace_name() {
+    let codex_home = TempDir::new().unwrap();
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![
+        remote_installed_plugin_in_marketplace(
+            "workspace-linear",
+            REMOTE_WORKSPACE_MARKETPLACE_NAME,
+        ),
+        remote_installed_plugin_in_marketplace(
+            "shared-linear",
+            REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+        ),
+    ]);
+
+    let marketplaces = manager
+        .build_remote_installed_plugin_marketplaces_from_cache(&[REMOTE_WORKSPACE_MARKETPLACE_NAME])
+        .expect("remote installed cache should be present");
+
+    assert_eq!(marketplaces.len(), 1);
+    assert_eq!(marketplaces[0].name, REMOTE_WORKSPACE_MARKETPLACE_NAME);
+    assert_eq!(
+        marketplaces[0]
+            .plugins
+            .iter()
+            .map(|plugin| plugin.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["workspace-linear@workspace-directory"]
     );
 }
 
@@ -1773,7 +1831,11 @@ enabled = false
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            /*include_openai_curated*/ true,
+        )
         .unwrap()
         .marketplaces;
 
@@ -1875,7 +1937,11 @@ enabled = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            /*include_openai_curated*/ true,
+        )
         .unwrap()
         .marketplaces;
 
@@ -1923,7 +1989,11 @@ plugins = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            /*include_openai_curated*/ true,
+        )
         .unwrap()
         .marketplaces;
 
@@ -2360,7 +2430,11 @@ enabled = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            /*include_openai_curated*/ true,
+        )
         .unwrap()
         .marketplaces;
 
@@ -2454,7 +2528,7 @@ plugins = true
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -2489,6 +2563,37 @@ plugins = true
                 enabled: false,
             }],
         }
+    );
+}
+
+#[tokio::test]
+async fn list_marketplaces_can_skip_openai_curated_before_loading() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    write_file(
+        &curated_root.join(".agents/plugins/marketplace.json"),
+        "{not valid json",
+    );
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let outcome = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ false)
+        .unwrap();
+
+    assert_eq!(outcome.errors, Vec::new());
+    assert_eq!(
+        outcome
+            .marketplaces
+            .iter()
+            .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME),
+        false
     );
 }
 
@@ -2534,7 +2639,7 @@ source = "/tmp/debug"
     .unwrap();
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -2610,7 +2715,7 @@ source = "/tmp/debug"
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -2665,7 +2770,7 @@ plugins = true
     .unwrap();
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -2750,6 +2855,7 @@ enabled = false
                 AbsolutePathBuf::try_from(repo_a_root).unwrap(),
                 AbsolutePathBuf::try_from(repo_b_root).unwrap(),
             ],
+            /*include_openai_curated*/ true,
         )
         .unwrap()
         .marketplaces;
@@ -2860,7 +2966,11 @@ enabled = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            /*include_openai_curated*/ true,
+        )
         .unwrap()
         .marketplaces;
 

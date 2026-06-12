@@ -116,7 +116,11 @@ impl LiveThread {
             {
                 Ok(history) => params.history = Some(history.items),
                 Err(err) => {
-                    let _ = thread_store.discard_thread(thread_id).await;
+                    if let Err(discard_err) = thread_store.discard_thread(thread_id).await {
+                        warn!(
+                            "failed to discard thread persistence after resume history load failed: {discard_err}"
+                        );
+                    }
                     return Err(err);
                 }
             }
@@ -131,15 +135,18 @@ impl LiveThread {
 
     pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
         let canonical_items = persisted_rollout_items(items);
-        if canonical_items.is_empty() {
+        if items.is_empty() {
             return Ok(());
         }
         self.thread_store
             .append_items(AppendThreadItemsParams {
                 thread_id: self.thread_id,
-                items: canonical_items.clone(),
+                items: items.to_vec(),
             })
             .await?;
+        if canonical_items.is_empty() {
+            return Ok(());
+        }
         let update = self
             .metadata_sync
             .lock()

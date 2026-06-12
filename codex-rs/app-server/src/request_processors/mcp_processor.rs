@@ -120,12 +120,16 @@ impl McpRequestProcessor {
             timeout_secs,
         } = params;
 
-        let configured_servers = self
+        let auth = self.auth_manager.auth().await;
+        let effective_servers = self
             .thread_manager
             .mcp_manager()
-            .configured_servers(&config)
+            .effective_servers(&config, auth.as_ref())
             .await;
-        let Some(server) = configured_servers.get(&name) else {
+        let Some(server) = effective_servers
+            .get(&name)
+            .and_then(codex_mcp::EffectiveMcpServer::configured_config)
+        else {
             return Err(invalid_request(format!(
                 "No MCP server named '{name}' found."
             )));
@@ -199,20 +203,28 @@ impl McpRequestProcessor {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
-        let config = match params.thread_id.as_deref() {
+        let (config, thread) = match params.thread_id.as_deref() {
             Some(thread_id) => {
                 let (_, thread) = self.load_thread(thread_id).await?;
                 let thread_config = thread.config().await;
-                self.config_manager
+                let config = self
+                    .config_manager
                     .load_latest_config_for_thread(thread_config.as_ref())
                     .await
-                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+                (config, Some(thread))
             }
-            None => self.load_latest_config(/*fallback_cwd*/ None).await?,
+            None => (self.load_latest_config(/*fallback_cwd*/ None).await?, None),
         };
-        let mcp_config = config
-            .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
-            .await;
+        let mcp_config = match thread {
+            Some(thread) => thread.runtime_mcp_config(&config).await,
+            None => {
+                self.thread_manager
+                    .mcp_manager()
+                    .runtime_config(&config)
+                    .await
+            }
+        };
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
         // This status path has no turn-selected environment. Use config cwd
@@ -361,8 +373,10 @@ impl McpRequestProcessor {
         }
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        let mcp_config = config
-            .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
+        let mcp_config = self
+            .thread_manager
+            .mcp_manager()
+            .runtime_config(&config)
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();

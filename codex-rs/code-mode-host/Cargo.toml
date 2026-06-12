@@ -1,0 +1,12 @@
+[package]
+name = "codex-code-mode-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "codex-code-mode-host"
+path = "src/main.rs"
+
+[lints]
+workspace = true
