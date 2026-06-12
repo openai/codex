@@ -31,7 +31,6 @@ use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::io;
-use std::sync::Arc;
 use toml::Value as TomlValue;
 use tracing::error;
 
@@ -60,24 +59,26 @@ pub(crate) async fn load_project_instructions(
         // than the legacy wrapper, which would falsely attribute them to the primary cwd.
         let is_primary =
             primary_environment.is_some_and(|primary| std::ptr::eq(primary, turn_environment));
-        let project_environment = ProjectEnvironment {
-            filesystem: turn_environment.environment.get_filesystem(),
-            source: ProjectEnvironmentSource {
-                environment_id: turn_environment.environment_id.clone(),
-                cwd: if is_primary {
-                    config.cwd.clone()
-                } else {
-                    turn_environment.cwd.clone()
-                },
-                is_primary,
-            },
+        let filesystem = turn_environment.environment.get_filesystem();
+        let cwd = if is_primary {
+            config.cwd.clone()
+        } else {
+            turn_environment.cwd.clone()
         };
-        match read_agents_md(config, &project_environment).await {
+        match read_agents_md(
+            config,
+            filesystem.as_ref(),
+            &turn_environment.environment_id,
+            &cwd,
+            is_primary,
+        )
+        .await
+        {
             Ok(Some(docs)) => loaded.entries.extend(docs.entries),
             Ok(None) => {}
             Err(e) => {
                 error!(
-                    environment_id = project_environment.source.environment_id,
+                    environment_id = turn_environment.environment_id,
                     "error trying to find AGENTS.md docs: {e:#}"
                 );
             }
@@ -102,17 +103,18 @@ pub(crate) async fn load_project_instructions(
 /// decide how to handle them.
 async fn read_agents_md(
     config: &mut Config,
-    environment: &ProjectEnvironment,
+    fs: &dyn ExecutorFileSystem,
+    environment_id: &str,
+    cwd: &AbsolutePathBuf,
+    is_primary: bool,
 ) -> io::Result<Option<LoadedAgentsMd>> {
-    let fs = environment.filesystem.as_ref();
-    let environment = &environment.source;
     let max_total = config.project_doc_max_bytes;
 
     if max_total == 0 {
         return Ok(None);
     }
 
-    let paths = agents_md_paths(config, &environment.cwd, fs).await?;
+    let paths = agents_md_paths(config, cwd, fs).await?;
     if paths.is_empty() {
         return Ok(None);
     }
@@ -159,7 +161,9 @@ async fn read_agents_md(
                 contents: text,
                 provenance: InstructionProvenance::Project {
                     source_path: p,
-                    environment: environment.clone(),
+                    environment_id: environment_id.to_string(),
+                    cwd: cwd.clone(),
+                    is_primary,
                 },
             });
             remaining = remaining.saturating_sub(data.len() as u64);
@@ -385,25 +389,31 @@ impl LoadedAgentsMd {
     fn environment_labeled_text(&self) -> String {
         let mut output = String::new();
         let mut has_previous = false;
-        let mut previous_environment: Option<&ProjectEnvironmentSource> = None;
+        let mut previous_environment: Option<(&str, &AbsolutePathBuf, bool)> = None;
         if let Some(instructions) = &self.user_instructions {
             output.push_str(&instructions.text);
             has_previous = true;
         }
         for entry in &self.entries {
             match &entry.provenance {
-                InstructionProvenance::Project { environment, .. } => {
+                InstructionProvenance::Project {
+                    environment_id,
+                    cwd,
+                    is_primary,
+                    ..
+                } => {
                     if has_previous {
                         output.push_str("\n\n");
                     }
                     // One environment can contribute several hierarchical AGENTS.md files from
                     // its project root through its cwd. Label that environment once for the
                     // complete group rather than repeating the label before every file.
+                    let environment = (environment_id.as_str(), cwd, *is_primary);
                     if previous_environment != Some(environment) {
                         output.push_str(&format!(
                             "for `{}` with root {}\n\n",
-                            environment.environment_id,
-                            environment.cwd.display()
+                            environment_id,
+                            cwd.display()
                         ));
                     }
                     output.push_str(&entry.contents);
@@ -458,22 +468,13 @@ impl LoadedAgentsMd {
         self.entries.iter().any(|entry| {
             matches!(
                 &entry.provenance,
-                InstructionProvenance::Project { environment, .. } if !environment.is_primary
+                InstructionProvenance::Project {
+                    is_primary: false,
+                    ..
+                }
             )
         })
     }
-}
-
-struct ProjectEnvironment {
-    filesystem: Arc<dyn ExecutorFileSystem>,
-    source: ProjectEnvironmentSource,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ProjectEnvironmentSource {
-    environment_id: String,
-    cwd: AbsolutePathBuf,
-    is_primary: bool,
 }
 
 /// One model-visible instruction and its provenance.
@@ -492,7 +493,9 @@ enum InstructionProvenance {
     Project {
         /// Exact AGENTS.md file, distinct from the environment's selected cwd.
         source_path: AbsolutePathBuf,
-        environment: ProjectEnvironmentSource,
+        environment_id: String,
+        cwd: AbsolutePathBuf,
+        is_primary: bool,
     },
 
     /// Instructions without a file source, including internally defined guidance.

@@ -271,24 +271,15 @@ fn resolved_local_environments<const N: usize>(
     }
 }
 
-fn primary_project_environment_source(
-    environment_id: &str,
-    cwd: AbsolutePathBuf,
-) -> ProjectEnvironmentSource {
-    ProjectEnvironmentSource {
-        environment_id: environment_id.to_string(),
-        cwd,
-        is_primary: true,
-    }
-}
-
 fn primary_project_provenance(
     path: AbsolutePathBuf,
     cwd: AbsolutePathBuf,
 ) -> InstructionProvenance {
     InstructionProvenance::Project {
         source_path: path,
-        environment: primary_project_environment_source("local", cwd),
+        environment_id: "local".to_string(),
+        cwd,
+        is_primary: true,
     }
 }
 
@@ -544,13 +535,16 @@ async fn read_agents_md_propagates_metadata_errors() {
         failure: InjectedFailure::Metadata(io::ErrorKind::PermissionDenied),
     };
 
-    let environment = ProjectEnvironment {
-        filesystem: Arc::new(fs),
-        source: primary_project_environment_source("local", config.cwd.clone()),
-    };
-    let err = read_agents_md(&mut config.config, &environment)
-        .await
-        .expect_err("metadata error");
+    let cwd = config.cwd.clone();
+    let err = read_agents_md(
+        &mut config.config,
+        &fs,
+        "local",
+        &cwd,
+        /*is_primary*/ true,
+    )
+    .await
+    .expect_err("metadata error");
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -565,13 +559,16 @@ async fn read_agents_md_propagates_read_errors() {
         failure: InjectedFailure::Read(io::ErrorKind::PermissionDenied),
     };
 
-    let environment = ProjectEnvironment {
-        filesystem: Arc::new(fs),
-        source: primary_project_environment_source("local", config.cwd.clone()),
-    };
-    let err = read_agents_md(&mut config.config, &environment)
-        .await
-        .expect_err("read error");
+    let cwd = config.cwd.clone();
+    let err = read_agents_md(
+        &mut config.config,
+        &fs,
+        "local",
+        &cwd,
+        /*is_primary*/ true,
+    )
+    .await
+    .expect_err("read error");
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -586,13 +583,16 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
         failure: InjectedFailure::Read(io::ErrorKind::NotFound),
     };
 
-    let environment = ProjectEnvironment {
-        filesystem: Arc::new(fs),
-        source: primary_project_environment_source("local", config.cwd.clone()),
-    };
-    let loaded = read_agents_md(&mut config.config, &environment)
-        .await
-        .expect("removed file is recoverable");
+    let cwd = config.cwd.clone();
+    let loaded = read_agents_md(
+        &mut config.config,
+        &fs,
+        "local",
+        &cwd,
+        /*is_primary*/ true,
+    )
+    .await
+    .expect("removed file is recoverable");
 
     assert_eq!(loaded, None);
 }
