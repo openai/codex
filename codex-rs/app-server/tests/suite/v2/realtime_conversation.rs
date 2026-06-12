@@ -15,6 +15,8 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
+use codex_app_server_protocol::ThreadRealtimeAppendHandoffParams;
+use codex_app_server_protocol::ThreadRealtimeAppendHandoffResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
@@ -308,6 +310,17 @@ impl RealtimeE2eHarness {
     }
 
     async fn start_webrtc_realtime(&mut self, offer_sdp: &str) -> Result<StartedWebrtcRealtime> {
+        self.start_webrtc_realtime_with_auto_handoff_appends(
+            offer_sdp, /*auto_handoff_appends*/ None,
+        )
+        .await
+    }
+
+    async fn start_webrtc_realtime_with_auto_handoff_appends(
+        &mut self,
+        offer_sdp: &str,
+        auto_handoff_appends: Option<bool>,
+    ) -> Result<StartedWebrtcRealtime> {
         // Starts realtime through the public JSON-RPC method, then waits for the same client-visible
         // notifications a desktop app needs: started first, SDP answer second.
         let start_request_id = self
@@ -316,6 +329,7 @@ impl RealtimeE2eHarness {
                 thread_id: self.thread_id.clone(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                auto_handoff_appends,
                 prompt: Some(Some("backend prompt".to_string())),
                 realtime_session_id: None,
                 transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -401,6 +415,24 @@ impl RealtimeE2eHarness {
         )
         .await??;
         let _: ThreadRealtimeAppendTextResponse = to_response(response)?;
+        Ok(())
+    }
+
+    async fn append_handoff(&mut self, thread_id: String, output_text: &str) -> Result<()> {
+        let request_id = self
+            .mcp
+            .send_thread_realtime_append_handoff_request(ThreadRealtimeAppendHandoffParams {
+                thread_id,
+                output_text: output_text.to_string(),
+            })
+            .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            self.mcp
+                .read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        let _: ThreadRealtimeAppendHandoffResponse = to_response(response)?;
         Ok(())
     }
 
@@ -563,6 +595,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             model: Some("realtime-treatment-model".to_string()),
             output_modality: RealtimeOutputModality::Audio,
+            auto_handoff_appends: None,
             prompt: None,
             realtime_session_id: None,
             transport: None,
@@ -818,6 +851,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Text,
+            auto_handoff_appends: None,
             prompt: None,
             realtime_session_id: None,
             transport: None,
@@ -994,6 +1028,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
+            auto_handoff_appends: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,
@@ -1093,6 +1128,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             thread_id: thread_id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
+            auto_handoff_appends: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -1338,6 +1374,70 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
             "type": "conversation.handoff.append",
             "handoff_id": "handoff_v1",
             "output_text": "\"Agent Final Message\":\n\ndelegated from v1",
+        })
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_start_can_disable_auto_handoff_appends_and_append_manually() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V1,
+        main_loop_responses(vec![create_final_assistant_message_sse_response(
+            "automatic output",
+        )?]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![session_updated("sess_manual_handoff")],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness
+        .start_webrtc_realtime_with_auto_handoff_appends(
+            "v=offer\r\n",
+            /*auto_handoff_appends*/ Some(false),
+        )
+        .await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V1);
+    assert_v1_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
+
+    let turn_request_id = harness
+        .mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: harness.thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "do something quietly".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        harness
+            .mcp
+            .read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response(turn_response)?;
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    harness
+        .append_handoff(harness.thread_id.clone(), "manual voice update")
+        .await?;
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 1).await,
+        json!({
+            "type": "conversation.handoff.append",
+            "handoff_id": "codex",
+            "output_text": "manual voice update",
         })
     );
 
@@ -2140,6 +2240,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
             thread_id: thread_start.thread.id,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
+            auto_handoff_appends: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -2201,6 +2302,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
+            auto_handoff_appends: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,

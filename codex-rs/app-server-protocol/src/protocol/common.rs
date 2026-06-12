@@ -814,6 +814,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadRealtimeAppendTextResponse,
     },
+    #[experimental("thread/realtime/appendHandoff")]
+    ThreadRealtimeAppendHandoff => "thread/realtime/appendHandoff" {
+        params: v2::ThreadRealtimeAppendHandoffParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadRealtimeAppendHandoffResponse,
+    },
     #[experimental("thread/realtime/stop")]
     ThreadRealtimeStop => "thread/realtime/stop" {
         params: v2::ThreadRealtimeStopParams,
@@ -3010,6 +3016,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 model: Some("realtime-treatment-model".to_string()),
                 output_modality: RealtimeOutputModality::Audio,
+                auto_handoff_appends: Some(false),
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: Some("sess_456".to_string()),
                 transport: None,
@@ -3025,6 +3032,7 @@ mod tests {
                     "threadId": "thr_123",
                     "model": "realtime-treatment-model",
                     "outputModality": "audio",
+                    "autoHandoffAppends": false,
                     "prompt": "You are on a call",
                     "realtimeSessionId": "sess_456",
                     "transport": null,
@@ -3045,6 +3053,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                auto_handoff_appends: None,
                 prompt: None,
                 realtime_session_id: None,
                 transport: None,
@@ -3060,6 +3069,7 @@ mod tests {
                     "threadId": "thr_123",
                     "model": null,
                     "outputModality": "audio",
+                    "autoHandoffAppends": null,
                     "realtimeSessionId": null,
                     "transport": null,
                     "version": null,
@@ -3075,6 +3085,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                auto_handoff_appends: None,
                 prompt: Some(None),
                 realtime_session_id: None,
                 transport: None,
@@ -3090,6 +3101,7 @@ mod tests {
                     "threadId": "thr_123",
                     "model": null,
                     "outputModality": "audio",
+                    "autoHandoffAppends": null,
                     "prompt": null,
                     "realtimeSessionId": null,
                     "transport": null,
@@ -3133,6 +3145,29 @@ mod tests {
             null_prompt_request,
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_realtime_append_handoff() -> Result<()> {
+        let request = ClientRequest::ThreadRealtimeAppendHandoff {
+            request_id: RequestId::Integer(10),
+            params: v2::ThreadRealtimeAppendHandoffParams {
+                thread_id: "thr_123".to_string(),
+                output_text: "Short voice update".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/appendHandoff",
+                "id": 10,
+                "params": {
+                    "threadId": "thr_123",
+                    "outputText": "Short voice update"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
         Ok(())
     }
 
@@ -3248,6 +3283,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                auto_handoff_appends: None,
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: None,
                 transport: None,

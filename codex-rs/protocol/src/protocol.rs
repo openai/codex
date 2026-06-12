@@ -187,6 +187,8 @@ pub struct ConversationStartParams {
     pub model: Option<String>,
     /// Selects whether the realtime session should produce text or audio output.
     pub output_modality: RealtimeOutputModality,
+    /// Whether Codex should automatically append standalone assistant output back to realtime.
+    pub auto_handoff_appends: bool,
     pub prompt: Option<Option<String>>,
     pub realtime_session_id: Option<String>,
     pub transport: Option<ConversationStartTransport>,
@@ -398,6 +400,11 @@ pub struct ConversationTextParams {
     pub text: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationHandoffParams {
+    pub output_text: String,
+}
+
 /// Persistent thread-settings overrides that can be applied before user input or
 /// on their own.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -493,6 +500,9 @@ pub enum Op {
 
     /// Send text input to the running realtime conversation stream.
     RealtimeConversationText(ConversationTextParams),
+
+    /// Append assistant output to the running realtime conversation stream.
+    RealtimeConversationHandoff(ConversationHandoffParams),
 
     /// Close the running realtime conversation stream.
     RealtimeConversationClose,
@@ -744,6 +754,7 @@ impl Op {
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
+            Self::RealtimeConversationHandoff(_) => "realtime_conversation_handoff",
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",

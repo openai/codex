@@ -128,7 +128,7 @@ fn wraps_realtime_delegation_input_with_xml_escaping_without_transcript() {
 #[tokio::test]
 async fn clears_active_handoff_explicitly() {
     let (tx, _rx) = bounded(1);
-    let state = RealtimeHandoffState::new(tx, RealtimeSessionKind::V1);
+    let state = RealtimeHandoffState::new(tx, RealtimeSessionKind::V1, true);
 
     *state.active_handoff.lock().await = Some("handoff_1".to_string());
     assert_eq!(

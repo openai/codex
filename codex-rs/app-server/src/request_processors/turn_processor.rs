@@ -181,6 +181,16 @@ impl TurnRequestProcessor {
             .map(|response| response.map(Into::into))
     }
 
+    pub(crate) async fn thread_realtime_append_handoff(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRealtimeAppendHandoffParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_realtime_append_handoff_inner(request_id, params)
+            .await
+            .map(|response| response.map(Into::into))
+    }
+
     pub(crate) async fn thread_realtime_stop(
         &self,
         request_id: &ConnectionRequestId,
@@ -936,6 +946,7 @@ impl TurnRequestProcessor {
             Op::RealtimeConversationStart(ConversationStartParams {
                 model: params.model,
                 output_modality: params.output_modality,
+                auto_handoff_appends: params.auto_handoff_appends.unwrap_or(true),
                 prompt: params.prompt,
                 realtime_session_id: params.realtime_session_id,
                 transport: params.transport.map(|transport| match transport {
@@ -1005,6 +1016,33 @@ impl TurnRequestProcessor {
             ))
         })?;
         Ok(Some(ThreadRealtimeAppendTextResponse::default()))
+    }
+
+    async fn thread_realtime_append_handoff_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRealtimeAppendHandoffParams,
+    ) -> Result<Option<ThreadRealtimeAppendHandoffResponse>, JSONRPCErrorError> {
+        let Some((_, thread)) = self
+            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::RealtimeConversationHandoff(ConversationHandoffParams {
+                output_text: params.output_text,
+            }),
+        )
+        .await
+        .map_err(|err| {
+            internal_error(format!(
+                "failed to append realtime conversation handoff output: {err}"
+            ))
+        })?;
+        Ok(Some(ThreadRealtimeAppendHandoffResponse::default()))
     }
 
     async fn thread_realtime_stop_inner(

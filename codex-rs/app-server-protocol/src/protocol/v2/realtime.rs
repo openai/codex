@@ -71,6 +71,10 @@ pub struct ThreadRealtimeStartParams {
     /// Selects text or audio output for the realtime session. Transport and voice stay
     /// independent so clients can choose how they connect separately from what the model emits.
     pub output_modality: RealtimeOutputModality,
+    /// Controls whether Codex automatically appends standalone assistant output to realtime.
+    /// Omit to keep the default behavior enabled.
+    #[ts(optional = nullable)]
+    pub auto_handoff_appends: Option<bool>,
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
@@ -138,6 +142,21 @@ pub struct ThreadRealtimeAppendTextParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeAppendTextResponse {}
+
+/// EXPERIMENTAL - append assistant output to thread realtime.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeAppendHandoffParams {
+    pub thread_id: String,
+    pub output_text: String,
+}
+
+/// EXPERIMENTAL - response for appending realtime assistant output.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeAppendHandoffResponse {}
 
 /// EXPERIMENTAL - stop thread realtime.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
