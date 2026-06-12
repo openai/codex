@@ -302,6 +302,44 @@ pub(crate) async fn run_turn_stop_hooks(
     stop_hook_active: bool,
     last_assistant_message: Option<String>,
 ) -> StopOutcome {
+    let Some(request) =
+        build_turn_stop_request(sess, turn_context, stop_hook_active, last_assistant_message).await
+    else {
+        return StopOutcome::default();
+    };
+    let hooks = sess.hooks();
+    emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
+
+    let mut outcome = hooks.run_stop(request).await;
+    emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
+    outcome
+}
+
+/// Runs only forced app-bundled internal Stop/SubagentStop cleanup at the task's terminal boundary.
+/// Ordinary hooks must not gain new error-path semantics, and internal hook output cannot alter the
+/// already-decided turn outcome.
+#[instrument(level = "trace", skip_all)]
+pub(crate) async fn run_app_bundled_internal_turn_stop_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    last_assistant_message: Option<String>,
+) {
+    let Some(request) =
+        build_turn_stop_request(sess, turn_context, false, last_assistant_message).await
+    else {
+        return;
+    };
+    let hooks = sess.hooks();
+    let completed_events = hooks.run_app_bundled_internal_stop(request).await;
+    emit_hook_completed_events(sess, turn_context, completed_events).await;
+}
+
+async fn build_turn_stop_request(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    stop_hook_active: bool,
+    last_assistant_message: Option<String>,
+) -> Option<codex_hooks::StopRequest> {
     // Resolve the stop hook kind from the session source before building the
     // request. Root turns run Stop; thread-spawned child turns run SubagentStop.
     let (target, transcript_path) = match &turn_context.session_source {
@@ -343,10 +381,10 @@ pub(crate) async fn run_turn_stop_hooks(
         }
         // Internal/synthetic subagents do not expose user-configured lifecycle
         // hooks, so there is no Stop or SubagentStop request to dispatch.
-        SessionSource::SubAgent(_) => return StopOutcome::default(),
+        SessionSource::SubAgent(_) => return None,
         _ => (StopHookTarget::Stop, sess.hook_transcript_path().await),
     };
-    let request = codex_hooks::StopRequest {
+    Some(codex_hooks::StopRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
         #[allow(deprecated)]
@@ -357,13 +395,7 @@ pub(crate) async fn run_turn_stop_hooks(
         stop_hook_active,
         last_assistant_message,
         target,
-    };
-    let hooks = sess.hooks();
-    emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
-
-    let mut outcome = hooks.run_stop(request).await;
-    emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
-    outcome
+    })
 }
 
 pub(crate) async fn run_pre_compact_hooks(

@@ -203,6 +203,13 @@ impl Hooks {
     pub async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         self.engine.run_stop(request).await
     }
+
+    pub async fn run_app_bundled_internal_stop(
+        &self,
+        request: StopRequest,
+    ) -> Vec<codex_protocol::protocol::HookCompletedEvent> {
+        self.engine.run_app_bundled_internal_stop(request).await
+    }
 }
 
 pub fn list_hooks(config: HooksConfig) -> HookListOutcome {

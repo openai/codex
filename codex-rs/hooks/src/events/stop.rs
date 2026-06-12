@@ -98,23 +98,96 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: StopRequest,
 ) -> StopOutcome {
-    let matched = dispatcher::select_handlers(
+    let ordinary_handlers = dispatcher::select_handlers(
         handlers,
         request.target.event_name(),
         request.target.matcher_input(),
-    );
-    if matched.is_empty() {
-        return StopOutcome {
-            hook_events: Vec::new(),
-            should_stop: false,
-            stop_reason: None,
-            should_block: false,
-            block_reason: None,
-            continuation_fragments: Vec::new(),
-        };
+    )
+    .into_iter()
+    .filter(|handler| handler.source != HookSource::AppBundledInternal)
+    .collect::<Vec<_>>();
+    if ordinary_handlers.is_empty() {
+        return StopOutcome::default();
     }
 
-    let input_json = match request.target {
+    let input_json = match stop_input_json(&request) {
+        Ok(input_json) => input_json,
+        Err(message) => {
+            return serialization_failure_outcome(common::serialization_failure_hook_events(
+                ordinary_handlers,
+                Some(request.turn_id),
+                message,
+            ));
+        }
+    };
+    let ordinary_results = dispatcher::execute_handlers(
+        shell,
+        ordinary_handlers,
+        input_json,
+        request.cwd.as_path(),
+        Some(request.turn_id),
+        parse_completed,
+    )
+    .await;
+
+    let aggregate = aggregate_results(ordinary_results.iter().map(|result| &result.data));
+    let hook_events = ordinary_results
+        .into_iter()
+        .map(|result| result.completed)
+        .collect::<Vec<_>>();
+
+    StopOutcome {
+        hook_events,
+        should_stop: aggregate.should_stop,
+        stop_reason: aggregate.stop_reason,
+        should_block: aggregate.should_block,
+        block_reason: aggregate.block_reason,
+        continuation_fragments: aggregate.continuation_fragments,
+    }
+}
+
+pub(crate) async fn run_app_bundled_internal(
+    handlers: &[ConfiguredHandler],
+    shell: &CommandShell,
+    request: StopRequest,
+) -> Vec<HookCompletedEvent> {
+    let internal_handlers = dispatcher::select_handlers(
+        handlers,
+        request.target.event_name(),
+        request.target.matcher_input(),
+    )
+    .into_iter()
+    .filter(|handler| handler.source == HookSource::AppBundledInternal)
+    .collect::<Vec<_>>();
+    if internal_handlers.is_empty() {
+        return Vec::new();
+    }
+    let input_json = match stop_input_json(&request) {
+        Ok(input_json) => input_json,
+        Err(message) => {
+            return common::serialization_failure_hook_events(
+                internal_handlers,
+                Some(request.turn_id),
+                message,
+            );
+        }
+    };
+    dispatcher::execute_handlers(
+        shell,
+        internal_handlers,
+        input_json,
+        request.cwd.as_path(),
+        Some(request.turn_id),
+        parse_completed,
+    )
+    .await
+    .into_iter()
+    .map(|result| result.completed)
+    .collect()
+}
+
+fn stop_input_json(request: &StopRequest) -> Result<String, String> {
+    match &request.target {
         StopHookTarget::Stop => {
             let input = StopCommandInput {
                 session_id: request.session_id.to_string(),
@@ -129,18 +202,8 @@ pub(crate) async fn run(
                     request.last_assistant_message.clone(),
                 ),
             };
-            match serde_json::to_string(&input) {
-                Ok(input_json) => input_json,
-                Err(error) => {
-                    return serialization_failure_outcome(
-                        common::serialization_failure_hook_events(
-                            matched,
-                            Some(request.turn_id),
-                            format!("failed to serialize stop hook input: {error}"),
-                        ),
-                    );
-                }
-            }
+            serde_json::to_string(&input)
+                .map_err(|error| format!("failed to serialize stop hook input: {error}"))
         }
         StopHookTarget::SubagentStop {
             agent_id,
@@ -151,75 +214,21 @@ pub(crate) async fn run(
                 session_id: request.session_id.to_string(),
                 turn_id: request.turn_id.clone(),
                 transcript_path: NullableString::from_path(request.transcript_path.clone()),
-                agent_transcript_path: NullableString::from_path(agent_transcript_path),
+                agent_transcript_path: NullableString::from_path(agent_transcript_path.clone()),
                 cwd: request.cwd.display().to_string(),
                 hook_event_name: "SubagentStop".to_string(),
                 model: request.model.clone(),
                 permission_mode: request.permission_mode.clone(),
                 stop_hook_active: request.stop_hook_active,
-                agent_id,
-                agent_type,
+                agent_id: agent_id.clone(),
+                agent_type: agent_type.clone(),
                 last_assistant_message: NullableString::from_string(
                     request.last_assistant_message.clone(),
                 ),
             };
-            match serde_json::to_string(&input) {
-                Ok(input_json) => input_json,
-                Err(error) => {
-                    return serialization_failure_outcome(
-                        common::serialization_failure_hook_events(
-                            matched,
-                            Some(request.turn_id),
-                            format!("failed to serialize subagent stop hook input: {error}"),
-                        ),
-                    );
-                }
-            }
+            serde_json::to_string(&input)
+                .map_err(|error| format!("failed to serialize subagent stop hook input: {error}"))
         }
-    };
-
-    let (ordinary_handlers, app_bundled_internal_handlers) = matched
-        .into_iter()
-        .partition(|handler| handler.source != HookSource::AppBundledInternal);
-    let ordinary_results = dispatcher::execute_handlers(
-        shell,
-        ordinary_handlers,
-        input_json.clone(),
-        request.cwd.as_path(),
-        Some(request.turn_id.clone()),
-        parse_completed,
-    )
-    .await;
-
-    let aggregate = aggregate_results(ordinary_results.iter().map(|result| &result.data));
-    let mut hook_events = ordinary_results
-        .into_iter()
-        .map(|result| result.completed)
-        .collect::<Vec<_>>();
-
-    // App-bundled internal Stop/SubagentStop hooks are terminal side effects.
-    // Run them only after ordinary hooks have declined continuation, and never
-    // include their output in the continuation decision.
-    if !aggregate.should_block {
-        let internal_results = dispatcher::execute_handlers(
-            shell,
-            app_bundled_internal_handlers,
-            input_json,
-            request.cwd.as_path(),
-            Some(request.turn_id),
-            parse_completed,
-        )
-        .await;
-        hook_events.extend(internal_results.into_iter().map(|result| result.completed));
-    }
-
-    StopOutcome {
-        hook_events,
-        should_stop: aggregate.should_stop,
-        stop_reason: aggregate.stop_reason,
-        should_block: aggregate.should_block,
-        block_reason: aggregate.block_reason,
-        continuation_fragments: aggregate.continuation_fragments,
     }
 }
 
@@ -722,7 +731,7 @@ mod tests {
             agent_type: "worker".to_string(),
             agent_transcript_path: None,
         };
-        let outcome = run(&handlers, &test_shell(), request).await;
+        let outcome = run(&handlers, &test_shell(), request.clone()).await;
 
         assert_eq!(
             outcome
@@ -730,10 +739,7 @@ mod tests {
                 .iter()
                 .map(|event| (event.run.source, event.run.status))
                 .collect::<Vec<_>>(),
-            vec![
-                (HookSource::User, HookRunStatus::Completed),
-                (HookSource::AppBundledInternal, HookRunStatus::Blocked),
-            ]
+            vec![(HookSource::User, HookRunStatus::Completed)]
         );
         assert_eq!(
             (
@@ -744,6 +750,20 @@ mod tests {
                 outcome.continuation_fragments,
             ),
             (false, None, false, None, Vec::new())
+        );
+        assert_eq!(
+            std::fs::read_to_string(&log_path).expect("read ordinary hook log"),
+            "ordinary\n"
+        );
+
+        let internal_events =
+            super::run_app_bundled_internal(&handlers, &test_shell(), request).await;
+        assert_eq!(
+            internal_events
+                .iter()
+                .map(|event| (event.run.source, event.run.status))
+                .collect::<Vec<_>>(),
+            vec![(HookSource::AppBundledInternal, HookRunStatus::Blocked)]
         );
         assert_eq!(
             std::fs::read_to_string(log_path).expect("read hook log"),
