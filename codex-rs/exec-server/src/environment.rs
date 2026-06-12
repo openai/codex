@@ -222,12 +222,13 @@ impl EnvironmentManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut environment_ids = Vec::with_capacity(environments.len());
         environment_ids.push(default_environment_id.clone());
-        environment_ids.extend(
-            environments
-                .keys()
-                .filter(|environment_id| *environment_id != default_environment_id)
-                .cloned(),
-        );
+        let mut remaining_environment_ids = environments
+            .keys()
+            .filter(|environment_id| *environment_id != default_environment_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        remaining_environment_ids.sort_unstable();
+        environment_ids.extend(remaining_environment_ids);
         environment_ids
     }
 
@@ -661,11 +662,23 @@ mod tests {
     #[tokio::test]
     async fn environment_manager_uses_explicit_provider_default() {
         let snapshot = EnvironmentProviderSnapshot {
-            environments: vec![(
-                "devbox".to_string(),
-                Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
-                    .expect("remote environment"),
-            )],
+            environments: vec![
+                (
+                    "devbox".to_string(),
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                        .expect("remote environment"),
+                ),
+                (
+                    "zebra".to_string(),
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8766".to_string()))
+                        .expect("remote environment"),
+                ),
+                (
+                    "alpha".to_string(),
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8767".to_string()))
+                        .expect("remote environment"),
+                ),
+            ],
             default: EnvironmentDefault::EnvironmentId("devbox".to_string()),
             include_local: true,
         };
@@ -675,7 +688,12 @@ mod tests {
         assert_eq!(manager.default_environment_id(), Some("devbox"));
         assert_eq!(
             manager.default_environment_ids(),
-            vec!["devbox".to_string(), LOCAL_ENVIRONMENT_ID.to_string()]
+            vec![
+                "devbox".to_string(),
+                "alpha".to_string(),
+                LOCAL_ENVIRONMENT_ID.to_string(),
+                "zebra".to_string(),
+            ]
         );
         assert!(manager.default_environment().expect("default").is_remote());
     }
