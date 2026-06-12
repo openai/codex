@@ -17,6 +17,7 @@ mod local;
 mod sanitizer;
 
 pub use local::LocalSecretsBackend;
+pub use local::LocalSecretsNamespace;
 pub use sanitizer::redact_secrets;
 
 const KEYRING_SERVICE: &str = "codex";
@@ -122,6 +123,22 @@ impl SecretsManager {
         Self { backend }
     }
 
+    pub fn new_with_keyring_store_and_namespace(
+        codex_home: PathBuf,
+        backend_kind: SecretsBackendKind,
+        keyring_store: Arc<dyn KeyringStore>,
+        namespace: LocalSecretsNamespace,
+    ) -> Self {
+        let backend: Arc<dyn SecretsBackend> = match backend_kind {
+            SecretsBackendKind::Local => Arc::new(LocalSecretsBackend::new_with_namespace(
+                codex_home,
+                keyring_store,
+                namespace,
+            )),
+        };
+        Self { backend }
+    }
+
     pub fn set(&self, scope: &SecretScope, name: &SecretName, value: &str) -> Result<()> {
         self.backend.set(scope, name, value)
     }
@@ -162,7 +179,8 @@ pub fn environment_id_from_cwd(cwd: &Path) -> String {
     format!("cwd-{short}")
 }
 
-pub(crate) fn compute_keyring_account(codex_home: &Path) -> String {
+/// Computes the OS keyring account name used to store the local secrets passphrase.
+pub fn compute_keyring_account(codex_home: &Path) -> String {
     let canonical = codex_home
         .canonicalize()
         .unwrap_or_else(|_| codex_home.to_path_buf())

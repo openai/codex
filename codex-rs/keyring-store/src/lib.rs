@@ -45,7 +45,7 @@ pub trait KeyringStore: Debug + Send + Sync {
     fn delete(&self, service: &str, account: &str) -> Result<bool, CredentialStoreError>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct DefaultKeyringStore;
 
 impl KeyringStore for DefaultKeyringStore {
