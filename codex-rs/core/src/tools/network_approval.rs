@@ -1,5 +1,6 @@
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianNetworkAccessTrigger;
+use crate::guardian::GuardianReviewMode;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
@@ -514,6 +515,7 @@ impl NetworkApprovalService {
                     port: key.port,
                     trigger: owner_call.as_ref().map(|call| call.trigger.clone()),
                 },
+                GuardianReviewMode::Agent,
                 Some(policy_denial_message.clone()),
             )
             .await

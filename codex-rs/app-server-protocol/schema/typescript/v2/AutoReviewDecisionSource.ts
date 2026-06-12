@@ -5,4 +5,4 @@
 /**
  * [UNSTABLE] Source that produced a terminal approval auto-review decision.
  */
-export type AutoReviewDecisionSource = "agent";
+export type AutoReviewDecisionSource = "agent" | "deterministic";

@@ -1905,6 +1905,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                     risk_level: None,
                     user_authorization: None,
                     outcome: None,
+                    decision_source: None,
                     guardian_thread_id: None,
                     guardian_session_kind: None,
                     guardian_model: None,

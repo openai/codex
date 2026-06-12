@@ -122,6 +122,7 @@ pub enum GuardianAssessmentStatus {
 #[serde(rename_all = "snake_case")]
 pub enum GuardianAssessmentDecisionSource {
     Agent,
+    Deterministic,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

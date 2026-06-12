@@ -28,6 +28,7 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::SandboxPermissions;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
 use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::GuardianRiskLevel;
@@ -265,6 +266,7 @@ pub struct GuardianReviewEventParams {
     pub risk_level: Option<GuardianRiskLevel>,
     pub user_authorization: Option<GuardianUserAuthorization>,
     pub outcome: Option<GuardianAssessmentOutcome>,
+    pub decision_source: Option<GuardianAssessmentDecisionSource>,
     pub guardian_thread_id: Option<String>,
     pub guardian_session_kind: Option<GuardianReviewSessionKind>,
     pub guardian_model: Option<String>,
@@ -337,6 +339,7 @@ impl GuardianReviewTrackContext {
             risk_level: result.risk_level,
             user_authorization: result.user_authorization,
             outcome: result.outcome,
+            decision_source: result.decision_source,
             guardian_thread_id: result.guardian_thread_id,
             guardian_session_kind: result.guardian_session_kind,
             guardian_model: result.guardian_model,
@@ -372,6 +375,7 @@ pub struct GuardianReviewAnalyticsResult {
     pub risk_level: Option<GuardianRiskLevel>,
     pub user_authorization: Option<GuardianUserAuthorization>,
     pub outcome: Option<GuardianAssessmentOutcome>,
+    pub decision_source: Option<GuardianAssessmentDecisionSource>,
     pub guardian_thread_id: Option<String>,
     pub guardian_session_kind: Option<GuardianReviewSessionKind>,
     pub guardian_model: Option<String>,
@@ -391,6 +395,7 @@ impl GuardianReviewAnalyticsResult {
             risk_level: None,
             user_authorization: None,
             outcome: None,
+            decision_source: None,
             guardian_thread_id: None,
             guardian_session_kind: None,
             guardian_model: None,

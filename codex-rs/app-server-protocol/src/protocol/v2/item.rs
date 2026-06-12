@@ -415,12 +415,14 @@ pub enum GuardianApprovalReviewStatus {
 /// [UNSTABLE] Source that produced a terminal approval auto-review decision.
 pub enum AutoReviewDecisionSource {
     Agent,
+    Deterministic,
 }
 
 impl From<CoreGuardianAssessmentDecisionSource> for AutoReviewDecisionSource {
     fn from(value: CoreGuardianAssessmentDecisionSource) -> Self {
         match value {
             CoreGuardianAssessmentDecisionSource::Agent => Self::Agent,
+            CoreGuardianAssessmentDecisionSource::Deterministic => Self::Deterministic,
         }
     }
 }

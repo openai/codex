@@ -13,6 +13,7 @@ use codex_otel::GUARDIAN_REVIEW_TOKEN_USAGE_METRIC;
 use codex_otel::GUARDIAN_REVIEW_TTFT_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
 use codex_otel::sanitize_metric_tag_value;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
@@ -115,6 +116,10 @@ fn guardian_review_metric_tags(
             user_authorization_tag(result.user_authorization).to_string(),
         ),
         ("outcome", outcome_tag(result.outcome).to_string()),
+        (
+            "decision_source",
+            decision_source_tag(result.decision_source).to_string(),
+        ),
         (
             "guardian_model",
             result
@@ -231,6 +236,14 @@ fn outcome_tag(outcome: Option<GuardianAssessmentOutcome>) -> &'static str {
     }
 }
 
+fn decision_source_tag(decision_source: Option<GuardianAssessmentDecisionSource>) -> &'static str {
+    match decision_source {
+        Some(GuardianAssessmentDecisionSource::Agent) => "agent",
+        Some(GuardianAssessmentDecisionSource::Deterministic) => "deterministic",
+        None => "none",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +353,7 @@ mod tests {
             risk_level: Some(GuardianRiskLevel::Low),
             user_authorization: Some(GuardianUserAuthorization::High),
             outcome: Some(GuardianAssessmentOutcome::Allow),
+            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
             guardian_session_kind: Some(GuardianReviewSessionKind::TrunkReused),
             guardian_model: Some("gpt-5.4 guardian".to_string()),
             guardian_reasoning_effort: Some("low".to_string()),
@@ -382,6 +396,7 @@ mod tests {
                     "delegated_subagent".to_string()
                 ),
                 ("decision".to_string(), "approved".to_string()),
+                ("decision_source".to_string(), "agent".to_string()),
                 ("failure_reason".to_string(), "none".to_string()),
                 ("guardian_model".to_string(), "gpt-5.4_guardian".to_string()),
                 ("guardian_reasoning_effort".to_string(), "low".to_string()),

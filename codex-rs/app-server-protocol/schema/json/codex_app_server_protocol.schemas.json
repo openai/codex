@@ -6516,7 +6516,8 @@
       "AutoReviewDecisionSource": {
         "description": "[UNSTABLE] Source that produced a terminal approval auto-review decision.",
         "enum": [
-          "agent"
+          "agent",
+          "deterministic"
         ],
         "type": "string"
       },
