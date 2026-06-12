@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use super::DIRECT_SIGNING_PROFILE_OID;
+use super::DIRECT_SIGNING_ROOT_CERT_SHA256;
 use super::collect_verified_or_first_error;
 use super::first_available_or_first_error;
 use super::first_verified_containing_path;
@@ -102,5 +104,24 @@ fn current_process_scan_retains_containing_package_failure() {
     assert_eq!(
         result,
         Err("containing package failed integrity validation")
+    );
+}
+
+#[test]
+fn direct_signing_identity_is_not_derived_from_the_publisher_subject() {
+    // New-DevCert.ps1 deliberately creates a locally trusted certificate with the production
+    // publisher subject. The runtime identity check must instead remain pinned to the Artifact
+    // Signing profile and Microsoft identity-verification root.
+    assert_eq!(
+        DIRECT_SIGNING_PROFILE_OID,
+        "1.3.6.1.4.1.311.97.34411380.685553541.718322805.135574919"
+    );
+    assert_eq!(
+        DIRECT_SIGNING_ROOT_CERT_SHA256,
+        [
+            0x53, 0x67, 0xf2, 0x0c, 0x7a, 0xde, 0x0e, 0x2b, 0xca, 0x79, 0x09, 0x15, 0x05, 0x6d,
+            0x08, 0x6b, 0x72, 0x0c, 0x33, 0xc1, 0xfa, 0x2a, 0x26, 0x61, 0xac, 0xf7, 0x87, 0xe3,
+            0x29, 0x2e, 0x12, 0x70,
+        ]
     );
 }

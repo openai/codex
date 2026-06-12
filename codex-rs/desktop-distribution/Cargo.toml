@@ -23,6 +23,7 @@ tempfile = { workspace = true }
 security-framework = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
+sha2 = { workspace = true }
 windows = { version = "0.58", features = [
     "ApplicationModel",
     "Foundation",
@@ -30,6 +31,8 @@ windows = { version = "0.58", features = [
     "Management_Deployment",
     "Storage",
     "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
     "Win32_Storage_Packaging_Appx",
     "Win32_System_WinRT",
 ] }
