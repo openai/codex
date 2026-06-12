@@ -32,27 +32,24 @@ pub struct SandboxState {
 /// Runtime context used when resolving per-server MCP environments.
 ///
 /// `McpConfig` describes what servers exist. This value carries the canonical
-/// environment registry plus the local stdio fallback cwd used when a local
-/// stdio server omits its own working directory.
+/// environment registry plus the stdio fallback cwd used when a server omits
+/// its own working directory.
 #[derive(Clone)]
 pub struct McpRuntimeContext {
     environment_manager: Arc<EnvironmentManager>,
-    local_stdio_fallback_cwd: PathBuf,
+    stdio_fallback_cwd: PathBuf,
 }
 
 impl McpRuntimeContext {
-    pub fn new(
-        environment_manager: Arc<EnvironmentManager>,
-        local_stdio_fallback_cwd: PathBuf,
-    ) -> Self {
+    pub fn new(environment_manager: Arc<EnvironmentManager>, stdio_fallback_cwd: PathBuf) -> Self {
         Self {
             environment_manager,
-            local_stdio_fallback_cwd,
+            stdio_fallback_cwd,
         }
     }
 
-    pub(crate) fn local_stdio_fallback_cwd(&self) -> PathBuf {
-        self.local_stdio_fallback_cwd.clone()
+    pub(crate) fn stdio_fallback_cwd(&self) -> PathBuf {
+        self.stdio_fallback_cwd.clone()
     }
 
     pub(crate) fn resolve_server_environment(
@@ -97,9 +94,7 @@ fn ensure_remote_stdio_cwd(
         return Ok(());
     };
     let Some(cwd) = cwd else {
-        return Err(format!(
-            "remote stdio MCP server `{server_name}` requires an absolute cwd"
-        ));
+        return Ok(());
     };
     if cwd.is_absolute() {
         return Ok(());
@@ -267,7 +262,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_stdio_requires_absolute_cwd() {
+    async fn remote_stdio_rejects_relative_cwd() {
         let runtime_context = McpRuntimeContext::new(
             Arc::new(
                 EnvironmentManager::create_for_tests(

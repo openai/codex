@@ -438,12 +438,16 @@ impl Drop for StdioServerProcessHandleInner {
 #[derive(Clone)]
 pub struct ExecutorStdioServerLauncher {
     exec_backend: Arc<dyn ExecBackend>,
+    fallback_cwd: PathBuf,
 }
 
 impl ExecutorStdioServerLauncher {
     /// Creates a stdio server launcher backed by the executor process API.
-    pub fn new(exec_backend: Arc<dyn ExecBackend>) -> Self {
-        Self { exec_backend }
+    pub fn new(exec_backend: Arc<dyn ExecBackend>, fallback_cwd: PathBuf) -> Self {
+        Self {
+            exec_backend,
+            fallback_cwd,
+        }
     }
 }
 
@@ -453,7 +457,8 @@ impl StdioServerLauncher for ExecutorStdioServerLauncher {
         command: StdioServerCommand,
     ) -> BoxFuture<'static, io::Result<StdioServerTransport>> {
         let exec_backend = Arc::clone(&self.exec_backend);
-        async move { Self::launch_server(command, exec_backend).await }.boxed()
+        let fallback_cwd = self.fallback_cwd.clone();
+        async move { Self::launch_server(command, exec_backend, fallback_cwd).await }.boxed()
     }
 }
 
@@ -465,6 +470,7 @@ impl ExecutorStdioServerLauncher {
     async fn launch_server(
         command: StdioServerCommand,
         exec_backend: Arc<dyn ExecBackend>,
+        fallback_cwd: PathBuf,
     ) -> io::Result<StdioServerTransport> {
         let StdioServerCommand {
             program,
@@ -473,11 +479,7 @@ impl ExecutorStdioServerLauncher {
             env_vars,
             cwd,
         } = command;
-        let Some(cwd) = cwd else {
-            return Err(io::Error::other(
-                "executor stdio server requires an explicit cwd",
-            ));
-        };
+        let cwd = cwd.unwrap_or(fallback_cwd);
         let program_name = program.to_string_lossy().into_owned();
         let envs = create_env_overlay_for_remote_mcp_server(env, &env_vars);
         let remote_env_vars = remote_mcp_env_var_names(&env_vars);

@@ -406,9 +406,7 @@ fn validate_remote_stdio_cwd(
         return Ok(());
     };
     let Some(cwd) = cwd else {
-        return Err(format!(
-            "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`"
-        ));
+        return Ok(());
     };
     if cwd.is_absolute() {
         return Ok(());

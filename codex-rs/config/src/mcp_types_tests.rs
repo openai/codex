@@ -52,21 +52,29 @@ fn deserialize_stdio_command_server_config_with_args() {
 }
 
 #[test]
-fn deserialize_remote_stdio_server_requires_absolute_cwd() {
-    let missing_cwd = toml::from_str::<McpServerConfig>(
+fn deserialize_remote_stdio_server_accepts_omitted_cwd() {
+    let cfg = toml::from_str::<McpServerConfig>(
         r#"
             command = "echo"
             environment_id = "remote"
         "#,
     )
-    .expect_err("remote stdio MCP should require cwd");
-    assert!(
-        missing_cwd
-            .to_string()
-            .contains("remote stdio MCP servers require an absolute cwd"),
-        "unexpected error: {missing_cwd}"
-    );
+    .expect("remote stdio MCP should accept an omitted cwd");
 
+    assert_eq!(
+        cfg.transport,
+        McpServerTransportConfig::Stdio {
+            command: "echo".to_string(),
+            args: vec![],
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        }
+    );
+}
+
+#[test]
+fn deserialize_remote_stdio_server_rejects_relative_cwd() {
     let relative_cwd = toml::from_str::<McpServerConfig>(
         r#"
             command = "echo"
