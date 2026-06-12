@@ -16,6 +16,7 @@ pub(crate) enum TurnInput {
         client_id: Option<String>,
     },
     ResponseItem(ResponseItem),
+    InterAgentCommunication(InterAgentCommunication),
 }
 
 /// Turn-local pending input storage owned by the input queue flow.
@@ -70,12 +71,12 @@ impl InputQueue {
             .any(|mail| mail.trigger_turn)
     }
 
-    pub(crate) async fn drain_mailbox_input_items(&self) -> Vec<ResponseItem> {
+    pub(crate) async fn drain_mailbox_input_items(&self) -> Vec<TurnInput> {
         self.mailbox_pending_mails
             .lock()
             .await
             .drain(..)
-            .map(|mail| ResponseItem::from(mail.to_response_input_item()))
+            .map(TurnInput::InterAgentCommunication)
             .collect()
     }
 
@@ -189,11 +190,7 @@ impl InputQueue {
         if !accepts_mailbox_delivery {
             return pending_input;
         }
-        let mailbox_items = self
-            .drain_mailbox_input_items()
-            .await
-            .into_iter()
-            .map(TurnInput::ResponseItem);
+        let mailbox_items = self.drain_mailbox_input_items().await.into_iter();
         if pending_input.is_empty() {
             mailbox_items.collect()
         } else {
@@ -290,7 +287,7 @@ mod tests {
             AgentPath::try_from("/root/worker").expect("agent path"),
             AgentPath::root(),
             "two",
-            /*trigger_turn*/ false,
+            /*trigger_turn*/ true,
         );
 
         input_queue
@@ -303,8 +300,8 @@ mod tests {
         assert_eq!(
             input_queue.drain_mailbox_input_items().await,
             vec![
-                ResponseItem::from(mail_one.to_response_input_item()),
-                ResponseItem::from(mail_two.to_response_input_item())
+                TurnInput::InterAgentCommunication(mail_one),
+                TurnInput::InterAgentCommunication(mail_two)
             ]
         );
         assert!(!input_queue.has_pending_mailbox_items().await);

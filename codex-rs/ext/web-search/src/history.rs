@@ -1,6 +1,7 @@
 use codex_api::SearchInput;
 use codex_core::parse_turn_item;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_tools::retain_tail_from_last_n_user_messages;
@@ -29,6 +30,28 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
     match item {
         ResponseItem::Message { role, .. } if role == ASSISTANT_ROLE => {
             messages.push(item.clone());
+        }
+        ResponseItem::AgentMessage {
+            author, content, ..
+        } => {
+            let text = content
+                .iter()
+                .filter_map(|content| match content {
+                    AgentMessageInputContent::InputText { text } => Some(text.as_str()),
+                    AgentMessageInputContent::EncryptedContent { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !text.trim().is_empty() {
+                messages.push(ResponseItem::Message {
+                    id: None,
+                    role: ASSISTANT_ROLE.to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: format!("Agent message from {author}:\n{text}"),
+                    }],
+                    phase: None,
+                });
+            }
         }
         ResponseItem::Message {
             id,
