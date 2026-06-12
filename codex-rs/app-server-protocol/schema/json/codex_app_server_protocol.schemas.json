@@ -10284,6 +10284,14 @@
           "eventName": {
             "$ref": "#/definitions/v2/HookEventName"
           },
+          "executionMode": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/HookExecutionMode"
+              }
+            ],
+            "default": "sync"
+          },
           "handlerType": {
             "$ref": "#/definitions/v2/HookHandlerType"
           },

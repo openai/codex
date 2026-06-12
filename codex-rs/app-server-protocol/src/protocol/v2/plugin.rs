@@ -1,5 +1,6 @@
 use super::AppSummary;
 use super::HookEventName;
+use super::HookExecutionMode;
 use super::HookHandlerType;
 use super::HookSource;
 use super::HookTrustStatus;
@@ -509,6 +510,8 @@ pub struct HookMetadata {
     pub key: String,
     pub event_name: HookEventName,
     pub handler_type: HookHandlerType,
+    #[serde(default)]
+    pub execution_mode: HookExecutionMode,
     pub matcher: Option<String>,
     pub command: Option<String>,
     pub timeout_sec: u64,

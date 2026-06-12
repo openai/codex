@@ -6708,6 +6708,14 @@
         "eventName": {
           "$ref": "#/definitions/HookEventName"
         },
+        "executionMode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookExecutionMode"
+            }
+          ],
+          "default": "sync"
+        },
         "handlerType": {
           "$ref": "#/definitions/HookHandlerType"
         },

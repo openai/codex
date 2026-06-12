@@ -98,6 +98,7 @@ pub struct HookListEntry {
     pub is_managed: bool,
     pub current_hash: String,
     pub trust_status: HookTrustStatus,
+    pub execution_mode: codex_protocol::protocol::HookExecutionMode,
 }
 
 #[derive(Clone)]

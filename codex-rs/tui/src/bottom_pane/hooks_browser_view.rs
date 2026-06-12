@@ -1,4 +1,5 @@
 use codex_app_server_protocol::HookEventName;
+use codex_app_server_protocol::HookExecutionMode;
 use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
 use codex_app_server_protocol::HookTrustStatus;
@@ -491,6 +492,11 @@ impl HooksBrowserView {
             width,
             Some(MAX_COMMAND_DETAIL_LINES),
         ));
+        let execution_mode = match hook.execution_mode {
+            HookExecutionMode::Sync => "Sync",
+            HookExecutionMode::Async => "Async",
+        };
+        lines.push(detail_line("Mode", execution_mode));
         lines.push(detail_line("Timeout", &format!("{}s", hook.timeout_sec)));
         lines.push(detail_line("Trust", hook_trust_label(hook.trust_status)));
         lines
@@ -865,6 +871,7 @@ mod tests {
     use crate::test_support::test_path_display;
     use codex_app_server_protocol::HookErrorInfo;
     use codex_app_server_protocol::HookEventName;
+    use codex_app_server_protocol::HookExecutionMode;
     use codex_app_server_protocol::HookHandlerType;
     use codex_app_server_protocol::HookMetadata;
     use codex_app_server_protocol::HookSource;
@@ -929,6 +936,7 @@ mod tests {
             key: key.to_string(),
             event_name,
             handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
             is_managed,
             matcher: Some("Bash".to_string()),
             command: Some(command.to_string()),
@@ -1092,6 +1100,7 @@ mod tests {
             /*display_order*/ 0,
         );
         untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        untrusted_hook.execution_mode = HookExecutionMode::Async;
         let mut view = HooksBrowserView::new(
             vec![untrusted_hook],
             Vec::new(),
