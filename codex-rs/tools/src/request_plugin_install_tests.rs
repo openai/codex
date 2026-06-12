@@ -52,7 +52,7 @@ fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
                     suggest_type: DiscoverableToolAction::Install,
                     suggest_reason: "Plan and reference events from your calendar",
                     title: None,
-                    entries: vec![RequestPluginInstallEntryMeta {
+                    entries: Some(vec![RequestPluginInstallEntryMeta {
                         id: "connector_2128aebfecb84f64a069897515042a44",
                         tool_id: "connector_2128aebfecb84f64a069897515042a44",
                         tool_name: "Google Calendar",
@@ -63,7 +63,8 @@ fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
                         ),
                         remote_plugin_id: None,
                         app_connector_ids: None,
-                    }],
+                    }]),
+                    categories: None,
                 })),
                 message: "Plan and reference events from your calendar".to_string(),
                 requested_schema: McpElicitationSchema {
@@ -117,7 +118,7 @@ fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
                     suggest_type: DiscoverableToolAction::Install,
                     suggest_reason: "Use the sample plugin's skills and MCP server",
                     title: None,
-                    entries: vec![RequestPluginInstallEntryMeta {
+                    entries: Some(vec![RequestPluginInstallEntryMeta {
                         id: "sample@openai-curated-remote",
                         tool_id: "sample@openai-curated-remote",
                         tool_name: "Sample Plugin",
@@ -126,7 +127,8 @@ fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
                         install_url: None,
                         remote_plugin_id: Some("plugins~Plugin_sample"),
                         app_connector_ids: Some(&["connector_calendar".to_string()]),
-                    }],
+                    }]),
+                    categories: None,
                 })),
                 message: "Use the sample plugin's skills and MCP server".to_string(),
                 requested_schema: McpElicitationSchema {
@@ -146,13 +148,14 @@ fn build_request_plugin_install_picker_elicitation_request_uses_flat_entries_sha
         action_type: DiscoverableToolAction::Install,
         suggest_reason: "Connect tools for better results".to_string(),
         title: Some("Connect tools".to_string()),
-        entries: vec![RequestPluginInstallPickerEntry {
+        entries: Some(vec![RequestPluginInstallPickerEntry {
             id: "calendar".to_string(),
             tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
             tool_name: "Calendar".to_string(),
             tool_type: DiscoverableToolType::Connector,
             description: None,
-        }],
+        }]),
+        categories: None,
     };
     let connector = DiscoverableTool::Connector(Box::new(AppInfo {
         id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
@@ -173,6 +176,7 @@ fn build_request_plugin_install_picker_elicitation_request_uses_flat_entries_sha
         plugin_display_names: Vec::new(),
     }));
     let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
+        category_id: None,
         entry_id: "calendar",
         tool: &connector,
     }];
@@ -196,11 +200,11 @@ fn build_request_plugin_install_picker_elicitation_request_uses_flat_entries_sha
             request: McpServerElicitationRequest::Form {
                 meta: Some(json!(RequestPluginInstallMeta {
                     codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
-                    persist: None,
+                    persist: Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE),
                     suggest_type: DiscoverableToolAction::Install,
                     suggest_reason: "Connect tools for better results",
                     title: Some("Connect tools"),
-                    entries: vec![RequestPluginInstallEntryMeta {
+                    entries: Some(vec![RequestPluginInstallEntryMeta {
                         id: "calendar",
                         tool_id: "connector_2128aebfecb84f64a069897515042a44",
                         tool_name: "Google Calendar",
@@ -211,7 +215,108 @@ fn build_request_plugin_install_picker_elicitation_request_uses_flat_entries_sha
                         ),
                         remote_plugin_id: None,
                         app_connector_ids: None,
-                    }],
+                    }]),
+                    categories: None,
+                })),
+                message: "Connect tools for better results".to_string(),
+                requested_schema: McpElicitationSchema {
+                    schema_uri: None,
+                    type_: McpElicitationObjectType::Object,
+                    properties: BTreeMap::new(),
+                    required: None,
+                },
+            },
+        },
+    );
+}
+
+#[test]
+fn build_request_plugin_install_picker_elicitation_request_uses_categories_shape() {
+    let args = RequestPluginInstallPickerArgs {
+        action_type: DiscoverableToolAction::Install,
+        suggest_reason: "Connect tools for better results".to_string(),
+        title: Some("Connect tools".to_string()),
+        entries: None,
+        categories: Some(vec![RequestPluginInstallPickerCategory {
+            id: "calendar".to_string(),
+            title: "Calendar".to_string(),
+            required: Some(true),
+            min_installed: Some(1),
+            entries: vec![RequestPluginInstallPickerEntry {
+                id: "calendar".to_string(),
+                tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+                tool_name: "Calendar".to_string(),
+                tool_type: DiscoverableToolType::Connector,
+                description: None,
+            }],
+        }]),
+    };
+    let connector = DiscoverableTool::Connector(Box::new(AppInfo {
+        id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+        name: "Google Calendar".to_string(),
+        description: Some("Plan events and schedules.".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some(
+            "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
+                .to_string(),
+        ),
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }));
+    let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
+        category_id: Some("calendar"),
+        entry_id: "calendar",
+        tool: &connector,
+    }];
+
+    let request = build_request_plugin_install_picker_elicitation_request(
+        "codex-apps",
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+        &args,
+        "Connect tools for better results",
+        &resolved_entries,
+    )
+    .expect("picker request");
+
+    assert_eq!(
+        request,
+        McpServerElicitationRequestParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            server_name: "codex-apps".to_string(),
+            request: McpServerElicitationRequest::Form {
+                meta: Some(json!(RequestPluginInstallMeta {
+                    codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+                    persist: Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE),
+                    suggest_type: DiscoverableToolAction::Install,
+                    suggest_reason: "Connect tools for better results",
+                    title: Some("Connect tools"),
+                    entries: None,
+                    categories: Some(vec![RequestPluginInstallCategoryMeta {
+                        id: "calendar",
+                        title: "Calendar",
+                        required: Some(true),
+                        min_installed: Some(1),
+                        entries: vec![RequestPluginInstallEntryMeta {
+                            id: "calendar",
+                            tool_id: "connector_2128aebfecb84f64a069897515042a44",
+                            tool_name: "Google Calendar",
+                            tool_type: DiscoverableToolType::Connector,
+                            description: Some("Plan events and schedules."),
+                            install_url: Some(
+                                "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
+                            ),
+                            remote_plugin_id: None,
+                            app_connector_ids: None,
+                        }],
+                    }]),
                 })),
                 message: "Connect tools for better results".to_string(),
                 requested_schema: McpElicitationSchema {
@@ -258,7 +363,7 @@ fn build_request_plugin_install_meta_uses_expected_shape() {
             suggest_type: DiscoverableToolAction::Install,
             suggest_reason: "Find and reference emails from your inbox",
             title: None,
-            entries: vec![RequestPluginInstallEntryMeta {
+            entries: Some(vec![RequestPluginInstallEntryMeta {
                 id: "connector_68df038e0ba48191908c8434991bbac2",
                 tool_id: "connector_68df038e0ba48191908c8434991bbac2",
                 tool_name: "Gmail",
@@ -269,7 +374,8 @@ fn build_request_plugin_install_meta_uses_expected_shape() {
                 ),
                 remote_plugin_id: None,
                 app_connector_ids: None,
-            }],
+            }]),
+            categories: None,
         },
     );
 }

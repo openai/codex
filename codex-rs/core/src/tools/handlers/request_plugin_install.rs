@@ -18,6 +18,7 @@ use codex_tools::RequestPluginInstallArgs;
 use codex_tools::RequestPluginInstallEntryResult;
 use codex_tools::RequestPluginInstallInstalledEntry;
 use codex_tools::RequestPluginInstallPickerArgs;
+use codex_tools::RequestPluginInstallPickerCategory;
 use codex_tools::RequestPluginInstallPickerEntry;
 use codex_tools::RequestPluginInstallPickerResult;
 use codex_tools::RequestPluginInstallResolvedPickerEntry;
@@ -297,6 +298,10 @@ impl RequestPluginInstallHandler {
             .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
             .await;
         let response = elicitation.response;
+        if let Some(response) = response.as_ref() {
+            maybe_persist_disabled_install_requests(&session, &turn, &requested_entries, response)
+                .await;
+        }
         let user_confirmed = response
             .as_ref()
             .is_some_and(|response| response.action == ElicitationAction::Accept);
@@ -323,6 +328,7 @@ impl RequestPluginInstallHandler {
             .iter()
             .filter(|entry| entry.completed)
             .map(|entry| RequestPluginInstallInstalledEntry {
+                category_id: entry.category_id.clone(),
                 entry_id: entry.entry_id.clone(),
                 tool_id: entry.tool_id.clone(),
                 tool_type: entry.tool_type,
@@ -367,7 +373,7 @@ impl RequestPluginInstallHandler {
             }
         }
 
-        let completed = user_confirmed && entries.iter().all(|entry| entry.completed);
+        let completed = user_confirmed && request_plugin_install_picker_completed(&args, &entries);
         let content = serde_json::to_string(&RequestPluginInstallPickerResult {
             completed,
             user_confirmed,
@@ -393,6 +399,7 @@ impl CoreToolRuntime for RequestPluginInstallHandler {}
 
 #[derive(Clone)]
 struct RequestedPickerInstallEntry {
+    category_id: Option<String>,
     entry_id: String,
     tool: DiscoverableTool,
 }
@@ -400,6 +407,7 @@ struct RequestedPickerInstallEntry {
 impl RequestedPickerInstallEntry {
     fn result(&self, completed: bool) -> RequestPluginInstallEntryResult {
         RequestPluginInstallEntryResult {
+            category_id: self.category_id.clone(),
             entry_id: self.entry_id.clone(),
             tool_type: self.tool.tool_type(),
             tool_id: self.tool.id().to_string(),
@@ -421,31 +429,108 @@ fn validate_request_plugin_install_picker_args<'a>(
     app_server_client_name: Option<&str>,
 ) -> Result<Vec<RequestPluginInstallResolvedPickerEntry<'a>>, FunctionCallError> {
     let mut resolved_entries = Vec::new();
-    let mut seen_entry_ids = HashSet::new();
+    let mut seen_entry_keys = HashSet::new();
 
-    for entry in &args.entries {
-        resolved_entries.push(validate_request_plugin_install_picker_entry(
-            entry,
-            discoverable_tools,
-            app_server_client_name,
-            &mut seen_entry_ids,
-        )?);
-    }
-
-    if resolved_entries.is_empty() {
-        return Err(FunctionCallError::RespondToModel(
-            "picker install requests must include at least one entry".to_string(),
-        ));
+    match (&args.entries, &args.categories) {
+        (Some(entries), None) => {
+            for entry in entries {
+                resolved_entries.push(validate_request_plugin_install_picker_entry(
+                    None,
+                    entry,
+                    discoverable_tools,
+                    app_server_client_name,
+                    &mut seen_entry_keys,
+                )?);
+            }
+            if resolved_entries.is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "picker install requests must include at least one entry".to_string(),
+                ));
+            }
+        }
+        (None, Some(categories)) => {
+            validate_request_plugin_install_picker_categories(
+                categories,
+                discoverable_tools,
+                app_server_client_name,
+                &mut seen_entry_keys,
+                &mut resolved_entries,
+            )?;
+        }
+        _ => {
+            return Err(FunctionCallError::RespondToModel(
+                "picker install requests must include exactly one of entries or categories"
+                    .to_string(),
+            ));
+        }
     }
 
     Ok(resolved_entries)
 }
 
+fn validate_request_plugin_install_picker_categories<'a>(
+    categories: &'a [RequestPluginInstallPickerCategory],
+    discoverable_tools: &'a [DiscoverableTool],
+    app_server_client_name: Option<&str>,
+    seen_entry_keys: &mut HashSet<(String, String)>,
+    resolved_entries: &mut Vec<RequestPluginInstallResolvedPickerEntry<'a>>,
+) -> Result<(), FunctionCallError> {
+    if categories.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "picker install requests must include at least one category".to_string(),
+        ));
+    }
+
+    let mut seen_category_ids = HashSet::new();
+    for category in categories {
+        if category.id.trim().is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "categories[].id must not be empty".to_string(),
+            ));
+        }
+        if !seen_category_ids.insert(category.id.clone()) {
+            return Err(FunctionCallError::RespondToModel(
+                "categories[].id must be unique within each picker".to_string(),
+            ));
+        }
+        if category.title.trim().is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "categories[].title must not be empty".to_string(),
+            ));
+        }
+        if category.entries.is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "categories[].entries must include at least one install candidate".to_string(),
+            ));
+        }
+        if category.min_installed.is_some_and(|min_installed| {
+            min_installed == 0 || min_installed as usize > category.entries.len()
+        }) {
+            return Err(FunctionCallError::RespondToModel(
+                "categories[].min_installed must be between 1 and the number of category entries"
+                    .to_string(),
+            ));
+        }
+        for entry in &category.entries {
+            resolved_entries.push(validate_request_plugin_install_picker_entry(
+                Some(category.id.as_str()),
+                entry,
+                discoverable_tools,
+                app_server_client_name,
+                seen_entry_keys,
+            )?);
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_request_plugin_install_picker_entry<'a>(
+    category_id: Option<&'a str>,
     entry: &'a RequestPluginInstallPickerEntry,
     discoverable_tools: &'a [DiscoverableTool],
     app_server_client_name: Option<&str>,
-    seen_entry_ids: &mut HashSet<String>,
+    seen_entry_keys: &mut HashSet<(String, String)>,
 ) -> Result<RequestPluginInstallResolvedPickerEntry<'a>, FunctionCallError> {
     if entry.id.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
@@ -465,9 +550,10 @@ fn validate_request_plugin_install_picker_entry<'a>(
         ));
     }
 
-    if !seen_entry_ids.insert(entry.id.clone()) {
+    let category_key = category_id.unwrap_or("").to_string();
+    if !seen_entry_keys.insert((category_key, entry.id.clone())) {
         return Err(FunctionCallError::RespondToModel(
-            "entries[].id must be unique within each picker".to_string(),
+            "entries[].id must be unique within each picker category".to_string(),
         ));
     }
 
@@ -481,6 +567,7 @@ fn validate_request_plugin_install_picker_entry<'a>(
     })?;
 
     Ok(RequestPluginInstallResolvedPickerEntry {
+        category_id,
         entry_id: entry.id.as_str(),
         tool,
     })
@@ -492,6 +579,7 @@ fn requested_picker_install_entries(
     resolved_entries
         .iter()
         .map(|entry| RequestedPickerInstallEntry {
+            category_id: entry.category_id.map(ToString::to_string),
             entry_id: entry.entry_id.to_string(),
             tool: entry.tool.clone(),
         })
@@ -531,6 +619,32 @@ async fn maybe_persist_disabled_install_request(
             "failed to persist disabled tool suggestion"
         );
         return;
+    }
+
+    session.reload_user_config_layer().await;
+}
+
+async fn maybe_persist_disabled_install_requests(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+    requested_entries: &[RequestedPickerInstallEntry],
+    response: &ElicitationResponse,
+) {
+    if !request_plugin_install_response_requests_persistent_disable(response) {
+        return;
+    }
+
+    for entry in requested_entries {
+        if let Err(err) =
+            persist_disabled_install_request(&turn.config.codex_home, &entry.tool).await
+        {
+            warn!(
+                error = %err,
+                tool_id = entry.tool.id(),
+                "failed to persist disabled tool suggestion"
+            );
+            return;
+        }
     }
 
     session.reload_user_config_layer().await;
@@ -697,10 +811,37 @@ fn response_reports_picker_entry_completed(
     requested_entry: &RequestedPickerInstallEntry,
 ) -> bool {
     response_installed_entries.iter().any(|installed_entry| {
-        installed_entry.entry_id == requested_entry.entry_id
+        installed_entry.category_id == requested_entry.category_id
+            && installed_entry.entry_id == requested_entry.entry_id
             && installed_entry.tool_id == requested_entry.tool.id()
             && installed_entry.tool_type == requested_entry.tool.tool_type()
     })
+}
+
+fn request_plugin_install_picker_completed(
+    args: &RequestPluginInstallPickerArgs,
+    entries: &[RequestPluginInstallEntryResult],
+) -> bool {
+    match (&args.entries, &args.categories) {
+        (Some(_), None) => entries.iter().all(|entry| entry.completed),
+        (None, Some(categories)) => {
+            entries.iter().any(|entry| entry.completed)
+                && categories.iter().all(|category| {
+                    if category.required != Some(true) {
+                        return true;
+                    }
+                    entries
+                        .iter()
+                        .filter(|entry| {
+                            entry.completed
+                                && entry.category_id.as_deref() == Some(category.id.as_str())
+                        })
+                        .count()
+                        >= category.min_installed.unwrap_or(1) as usize
+                })
+        }
+        _ => false,
+    }
 }
 
 fn tool_type_str(tool_type: DiscoverableToolType) -> &'static str {

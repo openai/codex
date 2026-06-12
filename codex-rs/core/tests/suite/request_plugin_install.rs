@@ -228,7 +228,9 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
     assert!(description.contains(
         "Use this tool only after `list_available_plugins_to_install` returns one or more plugins or connectors that exactly match the user's explicit request."
     ));
-    assert!(description.contains("For multiple exact targets, make one call with `entries`"));
+    assert!(description.contains(
+        "For multiple exact targets, make one call with `entries` for a flat list or `categories`"
+    ));
     assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
     assert!(!description.contains(DISCOVERABLE_GMAIL_ID));
     assert!(!description.contains("tool_search fails to find a good match"));
@@ -239,7 +241,7 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
         .get("oneOf")
         .and_then(Value::as_array)
         .expect("request_plugin_install should expose oneOf parameters");
-    assert_eq!(variants.len(), 2);
+    assert_eq!(variants.len(), 3);
     assert!(variants.iter().any(|variant| {
         variant.pointer("/properties/tool_id").is_some()
             && variant.pointer("/properties/tool_type").is_some()
@@ -247,6 +249,10 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
     assert!(variants.iter().any(|variant| {
         variant.pointer("/properties/entries").is_some()
             && variant.pointer("/properties/categories").is_none()
+    }));
+    assert!(variants.iter().any(|variant| {
+        variant.pointer("/properties/categories").is_some()
+            && variant.pointer("/properties/entries").is_none()
     }));
     let output = requests[1]
         .function_call_output_text(call_id)
