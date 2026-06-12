@@ -302,18 +302,27 @@ fn validate_hook_command_references(
         .iter()
         .map(String::as_str)
         .collect::<HashSet<_>>();
-    let mut handler_count = 0;
+    let mut stop_handler_count = 0;
+    let mut subagent_stop_handler_count = 0;
     for source in sources {
         for (event_name, groups) in source.hooks.clone().into_matcher_groups() {
             for group in groups {
-                if event_name != HookEventName::Stop || group.matcher.is_some() {
+                if !matches!(
+                    event_name,
+                    HookEventName::Stop | HookEventName::SubagentStop
+                ) || group.matcher.is_some()
+                {
                     return Err(AppBundledInternalHookError::new(
                         "hook contract",
-                        "app-bundled Computer Use hooks must use an unfiltered Stop event",
+                        "app-bundled Computer Use hooks must use only unfiltered Stop and SubagentStop events",
                     ));
                 }
                 for handler in group.hooks {
-                    handler_count += 1;
+                    match event_name {
+                        HookEventName::Stop => stop_handler_count += 1,
+                        HookEventName::SubagentStop => subagent_stop_handler_count += 1,
+                        _ => unreachable!("event contract checked above"),
+                    }
                     let HookHandlerConfig::Command {
                         command,
                         command_windows,
@@ -365,10 +374,10 @@ fn validate_hook_command_references(
             }
         }
     }
-    if handler_count != 1 {
+    if stop_handler_count != 1 || subagent_stop_handler_count != 1 {
         return Err(AppBundledInternalHookError::new(
             "hook contract",
-            "app-bundled Computer Use hooks require exactly one handler",
+            "app-bundled Computer Use hooks require exactly one Stop and one SubagentStop handler",
         ));
     }
     Ok(())

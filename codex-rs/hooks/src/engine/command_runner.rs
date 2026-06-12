@@ -476,12 +476,14 @@ fn has_unique_entry(entries: &[String], expected: &str) -> bool {
 }
 
 fn parse_internal_invocation(handler: &ConfiguredHandler) -> Result<(String, Vec<String>), String> {
-    if handler.event_name != HookEventName::Stop
-        || handler.matcher.is_some()
+    if !matches!(
+        handler.event_name,
+        HookEventName::Stop | HookEventName::SubagentStop
+    ) || handler.matcher.is_some()
         || handler.timeout_sec != 10
     {
         return Err(
-            "app-bundled internal Computer Use hook must use the exact Stop/10s contract"
+            "app-bundled internal Computer Use hook must use the exact Stop or SubagentStop 10s contract"
                 .to_string(),
         );
     }
@@ -758,6 +760,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn app_bundled_internal_subagent_stop_uses_the_same_direct_invocation() {
+        let mut handler = internal_handler();
+        handler.event_name = HookEventName::SubagentStop;
+
+        let invocation = super::parse_internal_invocation(&handler)
+            .expect("accept authenticated SubagentStop contract");
+
+        assert_eq!(
+            invocation,
+            (internal_executable(), vec!["codex-stop-hook".to_string()])
+        );
+    }
+
     fn internal_handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::Stop,
@@ -784,6 +800,17 @@ mod tests {
         #[cfg(not(windows))]
         {
             format!("\"${{PLUGIN_ROOT}}/{COMPUTER_USE_EXECUTABLE}\" codex-stop-hook")
+        }
+    }
+
+    fn internal_executable() -> String {
+        #[cfg(windows)]
+        {
+            "bin/SkyComputerUseClient.exe".to_string()
+        }
+        #[cfg(not(windows))]
+        {
+            COMPUTER_USE_EXECUTABLE.to_string()
         }
     }
 }

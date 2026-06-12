@@ -50,6 +50,39 @@ fn loads_designated_hook_declaration_and_script_from_authenticated_resources() {
         command_windows.as_deref(),
         Some("\"%PLUGIN_ROOT%\\bin\\SkyComputerUseClient.exe\" codex-stop-hook")
     );
+    let HookHandlerConfig::Command {
+        command: subagent_command,
+        command_windows: subagent_command_windows,
+        ..
+    } = &source.hooks.subagent_stop[0].hooks[0]
+    else {
+        panic!("expected SubagentStop command hook");
+    };
+    assert_eq!(subagent_command, command);
+    assert_eq!(subagent_command_windows, command_windows);
+}
+
+#[test]
+fn rejects_incomplete_stop_event_contract() {
+    let fixture = InternalHookFixture::new();
+    fixture.write_json(
+        &format!("{PLUGIN_RELATIVE_ROOT}/hooks/hooks.json"),
+        json!({
+            "hooks": {
+                "Stop": [computer_use_hook_group()]
+            }
+        }),
+    );
+    let plugin_id = PluginId::parse("computer-use@openai-bundled").expect("plugin id");
+
+    let error = load(
+        &fixture.resources,
+        &plugin_id,
+        &fixture.absolute("data/computer-use"),
+    )
+    .expect_err("missing SubagentStop hook must fail closed");
+
+    assert_eq!(error.stage, "hook contract");
 }
 
 #[test]
@@ -298,16 +331,8 @@ impl InternalHookFixture {
             &format!("{PLUGIN_RELATIVE_ROOT}/hooks/hooks.json"),
             json!({
                 "hooks": {
-                    "Stop": [{
-                        "hooks": [{
-                            "type": "command",
-                            "command": format!(
-                                "\"${{PLUGIN_ROOT}}/{COMPUTER_USE_EXECUTABLE}\" codex-stop-hook"
-                            ),
-                            "commandWindows": "\"%PLUGIN_ROOT%\\bin\\SkyComputerUseClient.exe\" codex-stop-hook",
-                            "timeout": 10
-                        }]
-                    }]
+                    "Stop": [computer_use_hook_group()],
+                    "SubagentStop": [computer_use_hook_group()]
                 }
             }),
         );
@@ -339,4 +364,17 @@ impl InternalHookFixture {
         fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
         fs::write(path.as_path(), contents).expect("write fixture");
     }
+}
+
+fn computer_use_hook_group() -> serde_json::Value {
+    json!({
+        "hooks": [{
+            "type": "command",
+            "command": format!(
+                "\"${{PLUGIN_ROOT}}/{COMPUTER_USE_EXECUTABLE}\" codex-stop-hook"
+            ),
+            "commandWindows": "\"%PLUGIN_ROOT%\\bin\\SkyComputerUseClient.exe\" codex-stop-hook",
+            "timeout": 10
+        }]
+    })
 }

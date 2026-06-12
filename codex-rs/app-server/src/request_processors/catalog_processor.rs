@@ -647,11 +647,11 @@ impl CatalogRequestProcessor {
                 config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
             let plugin_hooks = if plugins_enabled {
                 let plugins_input = config.plugins_config_input();
-                let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-                codex_core_plugins::PluginHookLoadOutcome {
-                    hook_sources: plugin_outcome.effective_plugin_hook_sources(),
-                    hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
-                }
+                // Hook discovery includes live Desktop distribution state and
+                // intentionally bypasses the cache for other plugin capabilities.
+                plugins_manager
+                    .plugin_hooks_for_layer_stack(&config.config_layer_stack, &plugins_input)
+                    .await
             } else {
                 codex_core_plugins::PluginHookLoadOutcome::default()
             };

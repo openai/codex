@@ -8,6 +8,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
@@ -177,20 +178,43 @@ pub(crate) async fn run(
         }
     };
 
-    let results = dispatcher::execute_handlers(
+    let (ordinary_handlers, app_bundled_internal_handlers) = matched
+        .into_iter()
+        .partition(|handler| handler.source != HookSource::AppBundledInternal);
+    let ordinary_results = dispatcher::execute_handlers(
         shell,
-        matched,
-        input_json,
+        ordinary_handlers,
+        input_json.clone(),
         request.cwd.as_path(),
-        Some(request.turn_id),
+        Some(request.turn_id.clone()),
         parse_completed,
     )
     .await;
 
-    let aggregate = aggregate_results(results.iter().map(|result| &result.data));
+    let aggregate = aggregate_results(ordinary_results.iter().map(|result| &result.data));
+    let mut hook_events = ordinary_results
+        .into_iter()
+        .map(|result| result.completed)
+        .collect::<Vec<_>>();
+
+    // App-bundled internal Stop/SubagentStop hooks are terminal side effects.
+    // Run them only after ordinary hooks have declined continuation, and never
+    // include their output in the continuation decision.
+    if !aggregate.should_block {
+        let internal_results = dispatcher::execute_handlers(
+            shell,
+            app_bundled_internal_handlers,
+            input_json,
+            request.cwd.as_path(),
+            Some(request.turn_id),
+            parse_completed,
+        )
+        .await;
+        hook_events.extend(internal_results.into_iter().map(|result| result.completed));
+    }
 
     StopOutcome {
-        hook_events: results.into_iter().map(|result| result.completed).collect(),
+        hook_events,
         should_stop: aggregate.should_stop,
         stop_reason: aggregate.stop_reason,
         should_block: aggregate.should_block,
@@ -419,19 +443,31 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> StopOu
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use codex_protocol::ThreadId;
+    use codex_protocol::items::HookPromptFragment;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
+    use codex_protocol::protocol::HookSource;
+    #[cfg(unix)]
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
-    use codex_protocol::items::HookPromptFragment;
-
     use super::StopHandlerData;
+    #[cfg(unix)]
+    use super::StopHookTarget;
+    #[cfg(unix)]
+    use super::StopRequest;
     use super::aggregate_results;
     use super::parse_completed;
+    #[cfg(unix)]
+    use super::run;
+    #[cfg(unix)]
+    use crate::engine::CommandShell;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
 
@@ -590,6 +626,131 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocking_ordinary_stop_hook_defers_app_bundled_internal_hook() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let log_path = temp.path().join("hook-order.log");
+        let handlers = vec![
+            handler_with_source(
+                HookSource::User,
+                format!(
+                    "printf '%s\\n' ordinary >> '{log_path}'; printf '%s' '{{\"decision\":\"block\",\"reason\":\"retry\"}}'",
+                    log_path = log_path.display(),
+                ),
+            ),
+            handler_with_source(
+                HookSource::AppBundledInternal,
+                format!(
+                    "printf '%s\\n' internal >> '{log_path}'",
+                    log_path = log_path.display(),
+                ),
+            ),
+        ];
+
+        let outcome = run(
+            &handlers,
+            &test_shell(),
+            stop_request(
+                AbsolutePathBuf::try_from(temp.path().to_path_buf()).expect("absolute temp path"),
+            ),
+        )
+        .await;
+
+        assert_eq!(
+            outcome
+                .hook_events
+                .iter()
+                .map(|event| (event.run.source, event.run.status))
+                .collect::<Vec<_>>(),
+            vec![(HookSource::User, HookRunStatus::Blocked)]
+        );
+        assert_eq!(
+            (
+                outcome.should_stop,
+                outcome.stop_reason,
+                outcome.should_block,
+                outcome.block_reason,
+                outcome.continuation_fragments,
+            ),
+            (
+                false,
+                None,
+                true,
+                Some("retry".to_string()),
+                vec![HookPromptFragment::from_single_hook(
+                    "retry",
+                    outcome.hook_events[0].run.id.clone(),
+                )],
+            )
+        );
+        assert_eq!(
+            std::fs::read_to_string(log_path).expect("read hook log"),
+            "ordinary\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminal_subagent_stop_runs_app_bundled_internal_hook_last_without_control_flow() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let log_path = temp.path().join("hook-order.log");
+        let handlers = vec![
+            handler_for_event_with_source(
+                HookEventName::SubagentStop,
+                HookSource::User,
+                format!(
+                    "printf '%s\\n' ordinary >> '{log_path}'",
+                    log_path = log_path.display(),
+                ),
+            ),
+            handler_for_event_with_source(
+                HookEventName::SubagentStop,
+                HookSource::AppBundledInternal,
+                format!(
+                    "test \"$(cat '{log_path}')\" = ordinary || exit 9; printf '%s\\n' internal >> '{log_path}'; printf '%s' '{{\"decision\":\"block\",\"reason\":\"ignored\"}}'",
+                    log_path = log_path.display(),
+                ),
+            ),
+        ];
+
+        let mut request = stop_request(
+            AbsolutePathBuf::try_from(temp.path().to_path_buf()).expect("absolute temp path"),
+        );
+        request.target = StopHookTarget::SubagentStop {
+            agent_id: "agent-1".to_string(),
+            agent_type: "worker".to_string(),
+            agent_transcript_path: None,
+        };
+        let outcome = run(&handlers, &test_shell(), request).await;
+
+        assert_eq!(
+            outcome
+                .hook_events
+                .iter()
+                .map(|event| (event.run.source, event.run.status))
+                .collect::<Vec<_>>(),
+            vec![
+                (HookSource::User, HookRunStatus::Completed),
+                (HookSource::AppBundledInternal, HookRunStatus::Blocked),
+            ]
+        );
+        assert_eq!(
+            (
+                outcome.should_stop,
+                outcome.stop_reason,
+                outcome.should_block,
+                outcome.block_reason,
+                outcome.continuation_fragments,
+            ),
+            (false, None, false, None, Vec::new())
+        );
+        assert_eq!(
+            std::fs::read_to_string(log_path).expect("read hook log"),
+            "ordinary\ninternal\n"
+        );
+    }
+
     #[test]
     fn aggregate_results_concatenates_blocking_reasons_in_declaration_order() {
         let aggregate = aggregate_results([
@@ -629,18 +790,53 @@ mod tests {
     }
 
     fn handler() -> ConfiguredHandler {
+        handler_with_source(HookSource::User, "echo hook".to_string())
+    }
+
+    fn handler_with_source(source: HookSource, command: String) -> ConfiguredHandler {
+        handler_for_event_with_source(HookEventName::Stop, source, command)
+    }
+
+    fn handler_for_event_with_source(
+        event_name: HookEventName,
+        source: HookSource,
+        command: String,
+    ) -> ConfiguredHandler {
         ConfiguredHandler {
-            event_name: HookEventName::Stop,
+            event_name,
             matcher: None,
-            command: "echo hook".to_string(),
+            command,
             timeout_sec: 600,
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
-            source: codex_protocol::protocol::HookSource::User,
+            source,
             app_bundled_internal_plugin_root: None,
             app_bundled_internal_source_hooks: None,
             display_order: 0,
             env: std::collections::HashMap::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn test_shell() -> CommandShell {
+        CommandShell {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string()],
+        }
+    }
+
+    #[cfg(unix)]
+    fn stop_request(cwd: AbsolutePathBuf) -> StopRequest {
+        StopRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            cwd,
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+            stop_hook_active: false,
+            last_assistant_message: Some("done".to_string()),
+            target: StopHookTarget::Stop,
         }
     }
 

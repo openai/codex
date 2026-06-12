@@ -3535,16 +3535,20 @@ async fn build_hooks_for_config(
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();
     let plugins_input = config.plugins_config_input();
-    let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-    let plugin_hook_sources = plugin_outcome.effective_plugin_hook_sources();
-    let plugin_hook_load_warnings = plugin_outcome.effective_plugin_hook_warnings();
+    // Hook roots include live Desktop distribution verification state, so do
+    // not reuse the cache for ordinary plugin capabilities here. A transient
+    // verification failure or app update must be observable by the next hook
+    // engine rebuild.
+    let plugin_hooks = plugins_manager
+        .plugin_hooks_for_layer_stack(&config.config_layer_stack, &plugins_input)
+        .await;
     Hooks::new(HooksConfig {
         legacy_notify_argv: config.notify.clone(),
         feature_enabled: config.features.enabled(Feature::CodexHooks),
         bypass_hook_trust: config.bypass_hook_trust,
         config_layer_stack: Some(config.config_layer_stack.clone()),
-        plugin_hook_sources,
-        plugin_hook_load_warnings,
+        plugin_hook_sources: plugin_hooks.hook_sources,
+        plugin_hook_load_warnings: plugin_hooks.hook_load_warnings,
         shell_program: Some(hook_shell_program),
         shell_args: hook_shell_argv,
     })
