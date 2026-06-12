@@ -488,10 +488,11 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
     let configured_helper = helper_dir.path().join("configured-codex-helper.exe");
     std::fs::write(&configured_helper, b"helper").expect("write configured helper");
     let cwd = AbsolutePathBuf::from_absolute_path(helper_dir.path()).expect("absolute cwd");
+    let cwd_uri = PathUri::from_abs_path(&cwd).expect("cwd URI");
     let other_workspace = tempfile::TempDir::new().expect("other workspace");
     let other_workspace_root = AbsolutePathBuf::from_absolute_path(other_workspace.path())
         .expect("absolute other workspace");
-    let workspace_roots = vec![cwd.clone(), other_workspace_root];
+    let workspace_roots = vec![cwd, other_workspace_root];
     let manager = SandboxManager::new();
     let exec_request = manager
         .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
@@ -500,7 +501,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                 command: SandboxCommand {
                     program: configured_helper.as_os_str().to_owned(),
                     args: vec!["--codex-run-as-fs-helper".to_string()],
-                    cwd: cwd.clone(),
+                    cwd: cwd_uri.clone(),
                     env: HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())]),
                     additional_permissions: None,
                 },
@@ -508,7 +509,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                 sandbox: SandboxType::WindowsRestrictedToken,
                 enforce_managed_network: false,
                 network: None,
-                sandbox_policy_cwd: cwd.as_path(),
+                sandbox_policy_cwd: &cwd_uri,
                 codex_linux_sandbox_exe: None,
                 use_legacy_landlock: false,
                 windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
