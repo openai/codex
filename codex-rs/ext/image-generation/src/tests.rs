@@ -21,7 +21,7 @@ use super::GeneratedImageOutput;
 use super::ImageRequest;
 use super::ImagegenArgs;
 use super::imagegen_tool_spec;
-use super::request_for_args;
+use super::request_for_call_args;
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
 
@@ -37,17 +37,19 @@ fn uses_reserved_image_gen_namespace() {
     assert_eq!(function.name, IMAGEGEN_TOOL_NAME);
 }
 
-#[test]
-fn omitted_references_generate_with_fixed_defaults() {
+#[tokio::test]
+async fn omitted_references_generate_with_fixed_defaults() {
     assert_eq!(
-        request_for_args(
+        request_for_call_args(
             &ImagegenArgs {
                 prompt: "paint a moonlit lake".to_string(),
                 referenced_image_paths: None,
                 num_last_images_to_include: None,
             },
-            &[]
+            &[],
+            &[],
         )
+        .await
         .expect("generation request should build"),
         ImageRequest::Generate(ImageGenerationRequest {
             prompt: "paint a moonlit lake".to_string(),
@@ -60,8 +62,8 @@ fn omitted_references_generate_with_fixed_defaults() {
     );
 }
 
-#[test]
-fn recent_image_fallback_selects_newest_images_in_chronological_order() {
+#[tokio::test]
+async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
     let history = vec![
         ResponseItem::Message {
             id: None,
@@ -111,14 +113,16 @@ fn recent_image_fallback_selects_newest_images_in_chronological_order() {
     ];
 
     assert_eq!(
-        request_for_args(
+        request_for_call_args(
             &ImagegenArgs {
                 prompt: "change the lighting".to_string(),
                 referenced_image_paths: None,
                 num_last_images_to_include: Some(4),
             },
             &history,
+            &[],
         )
+        .await
         .expect("history-backed edit request should build"),
         ImageRequest::Edit(expected_edit_request(
             "change the lighting",
@@ -127,9 +131,9 @@ fn recent_image_fallback_selects_newest_images_in_chronological_order() {
     );
 }
 
-#[test]
-fn conflicting_image_selectors_return_tool_error() {
-    let error = request_for_args(
+#[tokio::test]
+async fn conflicting_image_selectors_return_tool_error() {
+    let error = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
             referenced_image_paths: Some(vec![
@@ -140,7 +144,9 @@ fn conflicting_image_selectors_return_tool_error() {
             num_last_images_to_include: Some(1),
         },
         &[],
+        &[],
     )
+    .await
     .expect_err("conflicting selectors should fail");
 
     assert_eq!(
@@ -149,9 +155,9 @@ fn conflicting_image_selectors_return_tool_error() {
     );
 }
 
-#[test]
-fn too_many_referenced_image_paths_return_tool_error() {
-    let error = request_for_args(
+#[tokio::test]
+async fn too_many_referenced_image_paths_return_tool_error() {
+    let error = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
             referenced_image_paths: Some(
@@ -166,7 +172,9 @@ fn too_many_referenced_image_paths_return_tool_error() {
             num_last_images_to_include: None,
         },
         &[],
+        &[],
     )
+    .await
     .expect_err("too many paths should fail before reading files");
 
     assert_eq!(
@@ -175,9 +183,9 @@ fn too_many_referenced_image_paths_return_tool_error() {
     );
 }
 
-#[test]
-fn recent_image_fallback_requires_requested_count() {
-    let error = request_for_args(
+#[tokio::test]
+async fn recent_image_fallback_requires_requested_count() {
+    let error = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
             referenced_image_paths: None,
@@ -189,7 +197,9 @@ fn recent_image_fallback_requires_requested_count() {
             content: vec![input_image("only-image")],
             phase: None,
         }],
+        &[],
     )
+    .await
     .expect_err("history-backed edit should require the requested image count");
 
     assert_eq!(

@@ -9,6 +9,8 @@ use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -387,11 +389,10 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
 }
 
 #[tokio::test]
-async fn start_thread_seeds_extension_data_before_lifecycle_contributors_run() {
-    struct InitialMarker(&'static str);
-
+async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() {
     struct InitialDataRecorder {
-        observed: Arc<std::sync::Mutex<Option<(String, String)>>>,
+        lifecycle_observed: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        mcp_observed: Arc<std::sync::Mutex<Vec<String>>>,
     }
 
     impl codex_extension_api::ThreadLifecycleContributor<Config> for InitialDataRecorder {
@@ -400,17 +401,56 @@ async fn start_thread_seeds_extension_data_before_lifecycle_contributors_run() {
             input: codex_extension_api::ThreadStartInput<'a, Config>,
         ) -> codex_extension_api::ExtensionFuture<'a, ()> {
             Box::pin(async move {
-                let marker = input
+                let selected_root = input
                     .thread_store
-                    .get::<InitialMarker>()
-                    .expect("initial extension data should be available");
-                *self
-                    .observed
+                    .get::<Vec<SelectedCapabilityRoot>>()
+                    .and_then(|roots| roots.first().cloned())
+                    .expect("selected root should be available");
+                self.lifecycle_observed
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((
-                    input.thread_store.level_id().to_string(),
-                    marker.0.to_string(),
-                ));
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((input.thread_store.level_id().to_string(), selected_root.id));
+                input
+                    .thread_store
+                    .insert(Vec::<SelectedCapabilityRoot>::new());
+            })
+        }
+    }
+
+    impl codex_extension_api::McpServerContributor<Config> for InitialDataRecorder {
+        fn id(&self) -> &'static str {
+            "selected_root_test"
+        }
+
+        fn contribute<'a>(
+            &'a self,
+            context: codex_extension_api::McpServerContributionContext<'a, Config>,
+        ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::McpServerContribution>>
+        {
+            Box::pin(async move {
+                let thread_init = context
+                    .thread_init()
+                    .expect("initial MCP resolution should be thread-scoped");
+                let selected_root = thread_init
+                    .get::<Vec<SelectedCapabilityRoot>>()
+                    .and_then(|roots| roots.first().cloned())
+                    .expect("selected root should be available");
+                self.mcp_observed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(selected_root.id.clone());
+                let mut server = codex_mcp::codex_apps_mcp_server_config(
+                    "https://selected.invalid",
+                    /*apps_mcp_product_sku*/ None,
+                );
+                let CapabilityRootLocation::Environment { environment_id, .. } =
+                    &selected_root.location;
+                server.environment_id = environment_id.clone();
+                server.enabled = false;
+                vec![codex_extension_api::McpServerContribution::Set {
+                    name: selected_root.id,
+                    config: Box::new(server),
+                }]
             })
         }
     }
@@ -421,29 +461,43 @@ async fn start_thread_seeds_extension_data_before_lifecycle_contributors_run() {
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
-    let observed = Arc::new(std::sync::Mutex::new(None));
+    let lifecycle_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mcp_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = Arc::new(InitialDataRecorder {
+        lifecycle_observed: Arc::clone(&lifecycle_observed),
+        mcp_observed: Arc::clone(&mcp_observed),
+    });
     let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
-    extensions.thread_lifecycle_contributor(Arc::new(InitialDataRecorder {
-        observed: Arc::clone(&observed),
-    }));
+    extensions.thread_lifecycle_contributor(recorder.clone());
+    extensions.mcp_server_contributor(recorder);
     let manager = ThreadManager::new(
         &config,
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         Arc::new(extensions.build()),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
     );
-    let mut thread_extension_init = codex_extension_api::ExtensionDataInit::new();
-    thread_extension_init.insert(InitialMarker("seeded"));
+    let selected_root_init = |id: &str, environment_id: &str| {
+        let mut init = codex_extension_api::ExtensionDataInit::new();
+        init.insert(vec![SelectedCapabilityRoot {
+            id: id.to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: environment_id.to_string(),
+                path: format!("/plugins/{id}"),
+            },
+        }]);
+        init
+    };
 
-    let thread = manager
+    let first_thread = manager
         .start_thread_with_options(StartThreadOptions {
-            config,
+            config: config.clone(),
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
@@ -451,17 +505,64 @@ async fn start_thread_seeds_extension_data_before_lifecycle_contributors_run() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
-            thread_extension_init,
+            thread_extension_init: selected_root_init("selected-a", "env-a"),
         })
         .await
-        .expect("start thread");
+        .expect("start first thread");
+    let second_thread = manager
+        .start_thread_with_options(StartThreadOptions {
+            config: config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            thread_extension_init: selected_root_init("selected-b", "env-b"),
+        })
+        .await
+        .expect("start second thread");
+    let first_resolved = first_thread.thread.runtime_mcp_config(&config).await;
+    let second_resolved = second_thread.thread.runtime_mcp_config(&config).await;
 
     assert_eq!(
-        observed
+        *lifecycle_observed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone(),
-        Some((thread.thread_id.to_string(), "seeded".to_string()))
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        vec![
+            (first_thread.thread_id.to_string(), "selected-a".to_string()),
+            (
+                second_thread.thread_id.to_string(),
+                "selected-b".to_string()
+            ),
+        ]
+    );
+    assert_eq!(
+        *mcp_observed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        vec![
+            "selected-a".to_string(),
+            "selected-b".to_string(),
+            "selected-a".to_string(),
+            "selected-b".to_string(),
+        ]
+    );
+    let selected_servers = |config: &codex_mcp::McpConfig| {
+        codex_mcp::configured_mcp_servers(config)
+            .into_iter()
+            .filter(|(name, _)| name.starts_with("selected-"))
+            .map(|(name, server)| (name, server.environment_id))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    assert_eq!(
+        selected_servers(&first_resolved),
+        std::collections::BTreeMap::from([("selected-a".to_string(), "env-a".to_string())])
+    );
+    assert_eq!(
+        selected_servers(&second_resolved),
+        std::collections::BTreeMap::from([("selected-b".to_string(), "env-b".to_string())])
     );
 }
 
@@ -481,6 +582,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
@@ -489,14 +591,17 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     );
     let selected_cwd =
         AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
+    std::fs::create_dir_all(&selected_cwd).expect("create selected cwd");
     let environments = vec![TurnEnvironmentSelection {
         environment_id: "local".to_string(),
         cwd: selected_cwd.clone(),
     }];
     let default_cwd = config.cwd.clone();
+    let mut source_config = config.clone();
+    source_config.cwd = selected_cwd.clone();
     let source = manager
         .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
+            config: source_config,
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
@@ -598,6 +703,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),
@@ -637,6 +743,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
@@ -694,6 +801,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
@@ -758,6 +866,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),
@@ -848,6 +957,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store.clone(),
         state_db,
@@ -949,6 +1059,7 @@ async fn new_uses_active_provider_for_model_refresh() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
@@ -1169,6 +1280,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
@@ -1275,6 +1387,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
@@ -1371,6 +1484,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),

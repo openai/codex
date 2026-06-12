@@ -22,6 +22,8 @@ use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::LOCAL_FS;
+use codex_mcp::PluginMcpServerPlacement;
+use codex_mcp::parse_plugin_mcp_config;
 use codex_plugin::AppConnectorId;
 use codex_plugin::LoadedPlugin;
 use codex_plugin::PluginCapabilitySummary;
@@ -36,7 +38,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
 use indexmap::IndexMap;
 use serde::Deserialize;
-use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -59,6 +60,12 @@ const CURATED_PLUGIN_CACHE_VERSION_SHA_PREFIX_LEN: usize = 8;
 pub struct PluginHookLoadOutcome {
     pub hook_sources: Vec<PluginHookSource>,
     pub hook_load_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginAppMetadata {
+    pub id: AppConnectorId,
+    pub category: Option<String>,
 }
 
 enum PluginLoadScope<'a> {
@@ -93,28 +100,6 @@ pub fn log_plugin_load_errors(outcome: &PluginLoadOutcome<McpServerConfig>) {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PluginMcpServersFile {
-    mcp_servers: HashMap<String, JsonValue>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum PluginMcpFile {
-    McpServersObject(PluginMcpServersFile),
-    ServerMap(HashMap<String, JsonValue>),
-}
-
-impl PluginMcpFile {
-    fn into_mcp_servers(self) -> HashMap<String, JsonValue> {
-        match self {
-            Self::McpServersObject(file) => file.mcp_servers,
-            Self::ServerMap(mcp_servers) => mcp_servers,
-        }
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct PluginAppFile {
     #[serde(default)]
     apps: IndexMap<String, PluginAppConfig>,
@@ -123,6 +108,7 @@ struct PluginAppFile {
 #[derive(Debug, Default, Deserialize)]
 struct PluginAppConfig {
     id: String,
+    category: Option<String>,
 }
 
 pub async fn load_plugins_from_layer_stack(
@@ -848,6 +834,14 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
 }
 
 pub async fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
+    load_plugin_app_metadata(plugin_root)
+        .await
+        .into_iter()
+        .map(|app| app.id)
+        .collect()
+}
+
+pub async fn load_plugin_app_metadata(plugin_root: &Path) -> Vec<PluginAppMetadata> {
     if let Some(manifest) = load_plugin_manifest(plugin_root) {
         return load_apps_from_paths(
             plugin_root,
@@ -856,6 +850,16 @@ pub async fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
         .await;
     }
     load_apps_from_paths(plugin_root, default_app_config_paths(plugin_root)).await
+}
+
+pub fn plugin_app_metadata_from_value(value: &JsonValue) -> Vec<PluginAppMetadata> {
+    let Ok(parsed) = serde_json::from_value::<PluginAppFile>(value.clone()) else {
+        return Vec::new();
+    };
+    let mut apps = plugin_app_metadata_from_file(parsed, /*plugin_root*/ None);
+    let mut seen_connector_ids = HashSet::new();
+    apps.retain(|app| seen_connector_ids.insert(app.id.0.clone()));
+    apps
 }
 
 fn plugin_app_config_paths(
@@ -994,8 +998,8 @@ fn append_plugin_hook_file(
 async fn load_apps_from_paths(
     plugin_root: &Path,
     app_config_paths: Vec<AbsolutePathBuf>,
-) -> Vec<AppConnectorId> {
-    let mut connector_ids = Vec::new();
+) -> Vec<PluginAppMetadata> {
+    let mut apps = Vec::new();
     for app_config_path in app_config_paths {
         let Ok(contents) = tokio::fs::read_to_string(app_config_path.as_path()).await else {
             continue;
@@ -1011,21 +1015,40 @@ async fn load_apps_from_paths(
             }
         };
 
-        connector_ids.extend(parsed.apps.into_values().filter_map(|app| {
-            if app.id.trim().is_empty() {
-                warn!(
-                    plugin = %plugin_root.display(),
-                    "plugin app config is missing an app id"
-                );
-                None
-            } else {
-                Some(AppConnectorId(app.id))
-            }
-        }));
+        apps.extend(plugin_app_metadata_from_file(parsed, Some(plugin_root)));
     }
     let mut seen_connector_ids = HashSet::new();
-    connector_ids.retain(|connector_id| seen_connector_ids.insert(connector_id.0.clone()));
-    connector_ids
+    apps.retain(|app| seen_connector_ids.insert(app.id.0.clone()));
+    apps
+}
+
+fn plugin_app_metadata_from_file(
+    parsed: PluginAppFile,
+    plugin_root: Option<&Path>,
+) -> Vec<PluginAppMetadata> {
+    parsed
+        .apps
+        .into_values()
+        .filter_map(|app| {
+            if app.id.trim().is_empty() {
+                if let Some(plugin_root) = plugin_root {
+                    warn!(
+                        plugin = %plugin_root.display(),
+                        "plugin app config is missing an app id"
+                    );
+                }
+                None
+            } else {
+                Some(PluginAppMetadata {
+                    id: AppConnectorId(app.id),
+                    category: app
+                        .category
+                        .map(|category| category.trim().to_string())
+                        .filter(|category| !category.is_empty()),
+                })
+            }
+        })
+        .collect()
 }
 
 pub async fn plugin_telemetry_metadata_from_root(
@@ -1063,7 +1086,10 @@ pub async fn plugin_telemetry_metadata_from_root(
                 plugin_root.as_path(),
                 plugin_app_config_paths(plugin_root.as_path(), manifest_paths),
             )
-            .await,
+            .await
+            .into_iter()
+            .map(|app| app.id)
+            .collect(),
         }),
     }
 }
@@ -1109,99 +1135,29 @@ async fn load_mcp_servers_from_file(
     let Ok(contents) = tokio::fs::read_to_string(mcp_config_path.as_path()).await else {
         return PluginMcpDiscovery::default();
     };
-    let parsed = match serde_json::from_str::<PluginMcpFile>(&contents) {
-        Ok(parsed) => parsed,
-        Err(err) => {
-            warn!(
-                path = %mcp_config_path.display(),
-                "failed to parse plugin MCP config: {err}"
-            );
-            return PluginMcpDiscovery::default();
-        }
-    };
-    normalize_plugin_mcp_servers(
-        plugin_root,
-        parsed.into_mcp_servers(),
-        mcp_config_path.to_string_lossy().as_ref(),
-    )
-}
-
-fn normalize_plugin_mcp_servers(
-    plugin_root: &Path,
-    plugin_mcp_servers: HashMap<String, JsonValue>,
-    source: &str,
-) -> PluginMcpDiscovery {
-    let mut mcp_servers = HashMap::new();
-
-    for (name, config_value) in plugin_mcp_servers {
-        let normalized = normalize_plugin_mcp_server_value(plugin_root, config_value);
-        match serde_json::from_value::<McpServerConfig>(JsonValue::Object(normalized)) {
-            Ok(config) => {
-                mcp_servers.insert(name, config);
-            }
+    let parsed =
+        match parse_plugin_mcp_config(plugin_root, &contents, PluginMcpServerPlacement::Declared) {
+            Ok(parsed) => parsed,
             Err(err) => {
                 warn!(
-                    plugin = %plugin_root.display(),
-                    server = name,
-                    "failed to parse plugin MCP server from {source}: {err}"
+                    path = %mcp_config_path.display(),
+                    "failed to parse plugin MCP config: {err}"
                 );
+                return PluginMcpDiscovery::default();
             }
-        }
-    }
-
-    PluginMcpDiscovery { mcp_servers }
-}
-
-fn normalize_plugin_mcp_server_value(
-    plugin_root: &Path,
-    value: JsonValue,
-) -> JsonMap<String, JsonValue> {
-    let mut object = match value {
-        JsonValue::Object(object) => object,
-        _ => return JsonMap::new(),
-    };
-
-    if let Some(JsonValue::String(transport_type)) = object.remove("type") {
-        match transport_type.as_str() {
-            "http" | "streamable_http" | "streamable-http" => {}
-            "stdio" => {}
-            other => {
-                warn!(
-                    plugin = %plugin_root.display(),
-                    transport = other,
-                    "plugin MCP server uses an unknown transport type"
-                );
-            }
-        }
-    }
-
-    if let Some(JsonValue::Object(mut oauth)) = object.remove("oauth") {
-        if oauth.remove("callbackPort").is_some() {
-            warn!(
-                plugin = %plugin_root.display(),
-                "plugin MCP server OAuth callbackPort is ignored; Codex uses global MCP OAuth callback settings"
-            );
-        }
-
-        if let Some(client_id) = oauth.remove("clientId") {
-            oauth.entry("client_id".to_string()).or_insert(client_id);
-        }
-
-        if !oauth.is_empty() {
-            object.insert("oauth".to_string(), JsonValue::Object(oauth));
-        }
-    }
-
-    if let Some(JsonValue::String(cwd)) = object.get("cwd")
-        && !Path::new(cwd).is_absolute()
-    {
-        object.insert(
-            "cwd".to_string(),
-            JsonValue::String(plugin_root.join(cwd).display().to_string()),
+        };
+    for error in parsed.errors {
+        warn!(
+            plugin = %plugin_root.display(),
+            server = error.name,
+            path = %mcp_config_path.display(),
+            error = error.message,
+            "failed to parse plugin MCP server"
         );
     }
-
-    object
+    PluginMcpDiscovery {
+        mcp_servers: parsed.servers.into_iter().collect(),
+    }
 }
 
 #[derive(Debug, Default)]

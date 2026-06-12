@@ -5,6 +5,7 @@ use anyhow::Result;
 use codex_config::types::AppToolApproval;
 use codex_core::config::Config;
 use codex_features::Feature;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -49,6 +50,32 @@ fn set_calendar_approval_mode(config: &mut Config, approval_mode: AppToolApprova
     let user_config_path = config.codex_home.join("config.toml").abs();
     let user_config = toml::from_str(&format!(
         r#"
+[apps.calendar]
+default_tools_approval_mode = "{approval_mode}"
+"#
+    ))
+    .expect("apps config should parse");
+    config.config_layer_stack = config
+        .config_layer_stack
+        .with_user_config(&user_config_path, user_config);
+}
+
+fn set_calendar_approval_mode_and_default_reviewer(
+    config: &mut Config,
+    approval_mode: AppToolApproval,
+    default_approvals_reviewer: ApprovalsReviewer,
+) {
+    let approval_mode = match approval_mode {
+        AppToolApproval::Auto => "auto",
+        AppToolApproval::Prompt => "prompt",
+        AppToolApproval::Approve => "approve",
+    };
+    let user_config_path = config.codex_home.join("config.toml").abs();
+    let user_config = toml::from_str(&format!(
+        r#"
+[apps._default]
+approvals_reviewer = "{default_approvals_reviewer}"
+
 [apps.calendar]
 default_tools_approval_mode = "{approval_mode}"
 "#
@@ -134,11 +161,17 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
 
     let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
         .with_config(|config| {
+            // Use the opposite global reviewer so this route must come from apps._default.
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config
                 .features
                 .enable(Feature::ToolCallMcpElicitation)
                 .expect("test config should allow feature update");
-            set_calendar_approval_mode(config, AppToolApproval::Prompt);
+            set_calendar_approval_mode_and_default_reviewer(
+                config,
+                AppToolApproval::Prompt,
+                ApprovalsReviewer::User,
+            );
         });
     let test = builder.build(&server).await?;
 
@@ -160,11 +193,14 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
     assert_eq!(begin.call_id, call_id);
 
     let EventMsg::ElicitationRequest(request) = wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::ElicitationRequest(_))
+        matches!(
+            event,
+            EventMsg::ElicitationRequest(_) | EventMsg::TurnComplete(_)
+        )
     })
     .await
     else {
-        unreachable!("event guard guarantees ElicitationRequest");
+        panic!("expected apps._default user to route the app approval to the user");
     };
 
     test.codex
@@ -189,6 +225,110 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
         apps_tool_call
             .pointer("/params/_meta/x-codex-turn-metadata/user_input_requested_during_turn"),
         Some(&json!(true))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apps_default_auto_review_routes_actual_mcp_approval_to_guardian() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let call_id = "calendar-default-auto-review";
+    let calendar_args = serde_json::to_string(&json!({
+        "title": "Lunch",
+        "starts_at": "2026-03-10T12:00:00Z"
+    }))?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parent-tool"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    SEARCH_CALENDAR_NAMESPACE,
+                    SEARCH_CALENDAR_CREATE_TOOL,
+                    &calendar_args,
+                ),
+                ev_completed("resp-parent-tool"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-review"),
+                ev_assistant_message(
+                    "msg-guardian-review",
+                    &json!({
+                        "risk_level": "low",
+                        "user_authorization": "high",
+                        "outcome": "allow",
+                        "rationale": "Creating this calendar event is low risk.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian-review"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-done"),
+                ev_assistant_message("msg-parent-done", "done"),
+                ev_completed("resp-parent-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
+        .with_config(|config| {
+            // Use the opposite global reviewer so this route must come from apps._default.
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config
+                .features
+                .enable(Feature::ToolCallMcpElicitation)
+                .expect("test config should allow feature update");
+            set_calendar_approval_mode_and_default_reviewer(
+                config,
+                AppToolApproval::Prompt,
+                ApprovalsReviewer::AutoReview,
+            );
+        });
+    let test = builder.build(&server).await?;
+
+    submit_user_turn(
+        &test,
+        "Use [$calendar](app://calendar) to create a calendar event.",
+        AskForApproval::OnRequest,
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    let route_event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ElicitationRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    assert!(
+        matches!(route_event, EventMsg::TurnComplete(_)),
+        "expected apps._default auto_review to route the app approval to Guardian"
+    );
+
+    let guardian_request = responses
+        .requests()
+        .into_iter()
+        .find(|request| {
+            request
+                .instructions_text()
+                .starts_with("You are judging one planned coding-agent action.")
+        })
+        .expect("expected a Guardian request for the app MCP approval");
+    assert!(guardian_request.body_contains_text("calendar_create_event"));
+    assert!(guardian_request.body_contains_text("Lunch"));
+
+    let apps_tool_call = recorded_apps_tool_call_by_call_id(&server, call_id).await;
+    assert_eq!(
+        apps_tool_call.pointer("/params/arguments/title"),
+        Some(&json!("Lunch"))
     );
 
     Ok(())

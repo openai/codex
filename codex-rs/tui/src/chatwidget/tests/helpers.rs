@@ -19,7 +19,6 @@ pub(super) async fn test_config() -> Config {
     config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
     config.config_layer_stack = ConfigLayerStack::default();
     config.startup_warnings.clear();
-    config.user_instructions = None;
     config
 }
 
@@ -119,7 +118,8 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
 }
 
 pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info = crate::legacy_core::test_support::construct_model_info_offline(model, config);
+    let model_info =
+        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
     SessionTelemetry::new(
         ThreadId::new(),
         model,
@@ -136,7 +136,7 @@ pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTel
 
 pub(super) fn test_model_catalog(_config: &Config) -> Arc<ModelCatalog> {
     Arc::new(ModelCatalog::new(
-        crate::legacy_core::test_support::all_model_presets().clone(),
+        crate::test_support::TEST_MODEL_PRESETS.clone(),
     ))
 }
 
@@ -152,9 +152,9 @@ pub(super) async fn make_chatwidget_manual(
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let mut cfg = test_config().await;
-    let resolved_model = model_override.map(str::to_owned).unwrap_or_else(|| {
-        crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref())
-    });
+    let resolved_model = model_override
+        .map(str::to_owned)
+        .unwrap_or_else(|| get_model_offline_for_tests(cfg.model.as_deref()));
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
@@ -1208,7 +1208,7 @@ pub(super) fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     String::new()
 }
 
-pub(super) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
+pub(crate) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
@@ -1415,7 +1415,7 @@ pub(super) fn plugins_test_detail(
     description: Option<&str>,
     skills: &[&str],
     hooks: &[(codex_app_server_protocol::HookEventName, usize)],
-    apps: &[(&str, bool)],
+    apps: &[&str],
     mcp_servers: &[&str],
 ) -> PluginDetail {
     PluginDetail {
@@ -1450,12 +1450,12 @@ pub(super) fn plugins_test_detail(
             .collect(),
         apps: apps
             .iter()
-            .map(|(name, needs_auth)| AppSummary {
+            .map(|name| AppSummary {
                 id: format!("{name}-id"),
                 name: (*name).to_string(),
                 description: Some(format!("{name} app")),
                 install_url: Some(format!("https://example.test/{name}")),
-                needs_auth: *needs_auth,
+                category: None,
             })
             .collect(),
         app_templates: Vec::new(),

@@ -207,6 +207,7 @@ pub async fn run_login_with_access_token(
         &config.codex_home,
         &access_token,
         config.cli_auth_credentials_store_mode,
+        config.forced_chatgpt_workspace_id.as_deref(),
         Some(&config.chatgpt_base_url),
     )
     .await
@@ -393,6 +394,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             }
             AuthMode::PersonalAccessToken => {
                 eprintln!("Logged in using personal access token");
+                std::process::exit(0);
+            }
+            AuthMode::BedrockApiKey => {
+                eprintln!("Logged in using Amazon Bedrock API key");
                 std::process::exit(0);
             }
         },
