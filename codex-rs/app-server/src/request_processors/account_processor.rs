@@ -158,6 +158,9 @@ impl AccountRequestProcessor {
 
     pub(crate) fn clear_external_auth(&self) {
         self.auth_manager.clear_external_auth();
+        self.thread_manager
+            .plugins_manager()
+            .set_auth_mode(self.auth_manager.get_api_auth_mode());
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
@@ -173,6 +176,10 @@ impl AccountRequestProcessor {
         thread_manager: &Arc<ThreadManager>,
         auth: Option<CodexAuth>,
     ) {
+        thread_manager
+            .plugins_manager()
+            .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
+
         match config_manager
             .load_latest_config(/*fallback_cwd*/ None)
             .await
@@ -286,6 +293,7 @@ impl AccountRequestProcessor {
             &self.config.codex_home,
             &params.api_key,
             self.config.cli_auth_credentials_store_mode,
+            self.config.auth_keyring_backend_kind(),
         ) {
             Ok(()) => {
                 self.auth_manager.reload().await;
@@ -334,6 +342,7 @@ impl AccountRequestProcessor {
                 CLIENT_ID.to_string(),
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
+                config.auth_keyring_backend_kind(),
             )
         };
         #[cfg(debug_assertions)]

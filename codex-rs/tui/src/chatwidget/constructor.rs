@@ -218,7 +218,6 @@ impl ChatWidget {
             current_goal_status_indicator: None,
             current_goal_status: None,
             external_editor_state: ExternalEditorState::Closed,
-            realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
         };
@@ -230,12 +229,6 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_vim_enabled(widget.config.tui_vim_mode_default);
-        widget
-            .bottom_pane
-            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
-        widget
-            .bottom_pane
-            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -251,13 +244,12 @@ impl ChatWidget {
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_hint_binding);
         #[cfg(target_os = "windows")]
-        widget.bottom_pane.set_windows_degraded_sandbox_active(
-            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                && matches!(
-                    WindowsSandboxLevel::from_config(&widget.config),
-                    WindowsSandboxLevel::RestrictedToken
-                ),
-        );
+        widget
+            .bottom_pane
+            .set_windows_degraded_sandbox_active(matches!(
+                crate::windows_sandbox::level_from_config(&widget.config),
+                WindowsSandboxLevel::RestrictedToken
+            ));
         widget.update_collaboration_mode_indicator();
 
         widget

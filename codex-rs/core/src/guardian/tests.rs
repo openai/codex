@@ -25,6 +25,8 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_models_manager::manager::StaticModelsManager;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -32,6 +34,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -187,7 +190,6 @@ async fn guardian_test_session_turn_and_rx(
         .thread_id = fixed_guardian_parent_session_id();
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    config.user_instructions = None;
     let config = Arc::new(config);
     let models_manager = test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -225,7 +227,6 @@ async fn guardian_test_session_and_turn_with_base_url(
     session.thread_id = fixed_guardian_parent_session_id();
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{base_url}/v1"));
-    config.user_instructions = None;
     let config = Arc::new(config);
     let models_manager = test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -1348,9 +1349,20 @@ fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
     );
 }
 
-async fn guardian_request_model_for_auto_review_override(
+enum GuardianTestCatalog {
+    Bundled,
+    ParentOnly,
+}
+
+async fn guardian_request_model_for_auto_review(
     auto_review_model_override: Option<String>,
-) -> anyhow::Result<(String, String, String)> {
+    catalog: GuardianTestCatalog,
+) -> anyhow::Result<(
+    String,
+    String,
+    String,
+    codex_analytics::GuardianReviewAnalyticsResult,
+)> {
     let server = start_mock_server().await;
     let guardian_assessment = serde_json::json!({
         "outcome": "allow",
@@ -1366,7 +1378,24 @@ async fn guardian_request_model_for_auto_review_override(
     )
     .await;
 
-    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let (mut session, mut turn) = guardian_test_session_and_turn(&server).await;
+    match catalog {
+        GuardianTestCatalog::Bundled => {}
+        GuardianTestCatalog::ParentOnly => {
+            let parent_model = turn.model_info.clone();
+            let auth_manager = Arc::clone(&session.services.auth_manager);
+            let models_manager = StaticModelsManager::new(
+                Some(auth_manager),
+                ModelsResponse {
+                    models: vec![parent_model],
+                },
+            );
+            Arc::get_mut(&mut session)
+                .expect("session should be unique")
+                .services
+                .models_manager = Arc::new(models_manager);
+        }
+    }
     Arc::get_mut(&mut turn)
         .expect("turn should be unique")
         .model_info
@@ -1375,7 +1404,7 @@ async fn guardian_request_model_for_auto_review_override(
     let preferred_model = turn.provider.approval_review_preferred_model().to_string();
     seed_guardian_parent_history(&session, &turn).await;
 
-    let outcome = run_guardian_review_session_for_test(
+    let (outcome, analytics_result) = run_guardian_review_session_for_test(
         Arc::clone(&session),
         turn,
         GuardianApprovalRequest::Shell {
@@ -1392,19 +1421,24 @@ async fn guardian_request_model_for_auto_review_override(
         /*max_attempts*/ 1,
     )
     .await;
-    let (GuardianReviewOutcome::Completed(_), _) = outcome else {
+    let GuardianReviewOutcome::Completed(_) = outcome else {
         panic!("expected guardian assessment");
     };
 
-    let request_model = request_log
-        .single_request()
+    let request = request_log.single_request();
+    let request_model = request
         .body_json()
         .get("model")
         .and_then(|value| value.as_str())
         .expect("guardian request should include a model")
         .to_string();
 
-    Ok((request_model, parent_model, preferred_model))
+    Ok((
+        request_model,
+        parent_model,
+        preferred_model,
+        analytics_result,
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1413,12 +1447,36 @@ async fn guardian_review_uses_model_catalog_override_when_preferred_review_model
     skip_if_no_network!(Ok(()));
 
     let override_model = "guardian-review-model-override".to_string();
-    let (request_model, parent_model, preferred_model) =
-        guardian_request_model_for_auto_review_override(Some(override_model.clone())).await?;
+    let (request_model, parent_model, preferred_model, analytics_result) =
+        guardian_request_model_for_auto_review(
+            Some(override_model.clone()),
+            GuardianTestCatalog::Bundled,
+        )
+        .await?;
 
     assert_eq!(request_model, override_model);
     assert_ne!(request_model, parent_model);
     assert_ne!(request_model, preferred_model);
+    assert_eq!(
+        analytics_result.guardian_catalog_contains_auto_review,
+        Some(true)
+    );
+    assert_eq!(
+        analytics_result.guardian_default_review_model_id.as_deref(),
+        Some(preferred_model.as_str())
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_overridden,
+        Some(true)
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_override.as_deref(),
+        Some(override_model.as_str())
+    );
+    assert_eq!(
+        analytics_result.guardian_model_provider_id.as_deref(),
+        Some(OPENAI_PROVIDER_ID)
+    );
 
     Ok(())
 }
@@ -1428,12 +1486,73 @@ async fn guardian_review_uses_preferred_review_model_without_model_catalog_overr
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (request_model, parent_model, preferred_model) =
-        guardian_request_model_for_auto_review_override(/*auto_review_model_override*/ None)
-            .await?;
+    let (request_model, parent_model, preferred_model, analytics_result) =
+        guardian_request_model_for_auto_review(
+            /*auto_review_model_override*/ None,
+            GuardianTestCatalog::Bundled,
+        )
+        .await?;
 
     assert_eq!(request_model, preferred_model);
     assert_ne!(request_model, parent_model);
+    assert_eq!(
+        analytics_result.guardian_catalog_contains_auto_review,
+        Some(true)
+    );
+    assert_eq!(
+        analytics_result.guardian_default_review_model_id.as_deref(),
+        Some(preferred_model.as_str())
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_overridden,
+        Some(false)
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_override.as_deref(),
+        None
+    );
+    assert_eq!(
+        analytics_result.guardian_model_provider_id.as_deref(),
+        Some(OPENAI_PROVIDER_ID)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_records_missing_auto_review_model_in_analytics_metadata()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (request_model, parent_model, preferred_model, analytics_result) =
+        guardian_request_model_for_auto_review(
+            /*auto_review_model_override*/ None,
+            GuardianTestCatalog::ParentOnly,
+        )
+        .await?;
+
+    assert_eq!(request_model, parent_model);
+    assert_ne!(request_model, preferred_model);
+    assert_eq!(
+        analytics_result.guardian_catalog_contains_auto_review,
+        Some(false)
+    );
+    assert_eq!(
+        analytics_result.guardian_default_review_model_id.as_deref(),
+        Some(preferred_model.as_str())
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_overridden,
+        Some(false)
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_override.as_deref(),
+        None
+    );
+    assert_eq!(
+        analytics_result.guardian_model_provider_id.as_deref(),
+        Some(OPENAI_PROVIDER_ID)
+    );
 
     Ok(())
 }
@@ -2049,7 +2168,6 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         crate::session::tests::make_session_and_context_with_rx().await;
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    config.user_instructions = None;
     let config = Arc::new(config);
     let models_manager = test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),

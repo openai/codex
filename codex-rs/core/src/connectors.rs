@@ -43,6 +43,7 @@ use codex_mcp::codex_apps_tools_cache_key;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::host_owned_codex_apps_enabled;
+use codex_mcp::tool_plugin_provenance;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 
@@ -251,7 +252,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         });
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config).await;
+    let mcp_config = mcp_manager.runtime_config(config).await;
+    let tool_plugin_provenance = tool_plugin_provenance(&mcp_config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
         let cached_connectors = codex_connectors::filter::filter_disallowed_connectors(
@@ -265,7 +267,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         });
     }
 
-    let mcp_config = mcp_manager.runtime_config(config).await;
     let mut mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
     mcp_servers.retain(|name, _| name == CODEX_APPS_MCP_SERVER_NAME);
     let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
@@ -279,6 +280,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     let auth_status_entries = compute_auth_statuses(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
         auth.as_ref(),
     )
     .await;
@@ -290,6 +292,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     let mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
         auth_status_entries,
         &config.permissions.approval_policy,
         INITIAL_SUBMIT_ID.to_owned(),
@@ -600,6 +603,11 @@ pub(crate) fn mcp_approvals_reviewer(
             connector_id
                 .and_then(|connector_id| apps_config.apps.get(connector_id))
                 .and_then(|app| app.approvals_reviewer)
+                .or_else(|| {
+                    apps_config
+                        .default
+                        .and_then(|defaults| defaults.approvals_reviewer)
+                })
         })
     } else {
         None

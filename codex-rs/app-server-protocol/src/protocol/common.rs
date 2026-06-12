@@ -41,6 +41,11 @@ pub enum AuthMode {
     #[ts(rename = "personalAccessToken")]
     #[strum(serialize = "personalAccessToken")]
     PersonalAccessToken,
+    /// Amazon Bedrock bearer token managed by Codex.
+    #[serde(rename = "bedrockApiKey")]
+    #[ts(rename = "bedrockApiKey")]
+    #[strum(serialize = "bedrockApiKey")]
+    BedrockApiKey,
 }
 
 impl AuthMode {
@@ -48,7 +53,7 @@ impl AuthMode {
     pub fn has_chatgpt_account(self) -> bool {
         match self {
             Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::AgentIdentity => false,
+            Self::ApiKey | Self::AgentIdentity | Self::BedrockApiKey => false,
         }
     }
 }
@@ -865,13 +870,13 @@ client_request_definitions! {
     },
     #[experimental("remoteControl/enable")]
     RemoteControlEnable => "remoteControl/enable" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[serde(skip_serializing_if = "Option::is_none")] v2::NullableRemoteControlEnableParams,
         serialization: global("remote-control"),
         response: v2::RemoteControlEnableResponse,
     },
     #[experimental("remoteControl/disable")]
     RemoteControlDisable => "remoteControl/disable" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[serde(skip_serializing_if = "Option::is_none")] v2::NullableRemoteControlDisableParams,
         serialization: global("remote-control"),
         response: v2::RemoteControlDisableResponse,
     },
@@ -1648,6 +1653,7 @@ mod tests {
     use codex_protocol::account::PlanType;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::RealtimeConversationArchitecture;
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
     use codex_protocol::protocol::RealtimeVoice;
@@ -3013,6 +3019,7 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: Some(RealtimeConversationArchitecture::Avas),
                 auto_handoff_output_as_context: None,
                 thread_id: "thr_123".to_string(),
                 model: Some("realtime-treatment-model".to_string()),
@@ -3029,6 +3036,7 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": "avas",
                     "threadId": "thr_123",
                     "autoHandoffOutputAsContext": null,
                     "model": "realtime-treatment-model",
@@ -3050,6 +3058,7 @@ mod tests {
         let default_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
                 auto_handoff_output_as_context: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
@@ -3066,6 +3075,7 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": null,
                     "threadId": "thr_123",
                     "autoHandoffOutputAsContext": null,
                     "model": null,
@@ -3082,6 +3092,7 @@ mod tests {
         let null_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
                 auto_handoff_output_as_context: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
@@ -3098,6 +3109,7 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": null,
                     "threadId": "thr_123",
                     "autoHandoffOutputAsContext": null,
                     "model": null,
@@ -3280,6 +3292,7 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
                 auto_handoff_output_as_context: None,
                 thread_id: "thr_123".to_string(),
                 model: None,

@@ -325,6 +325,26 @@
       "oneOf": [
         {
           "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "input_text"
+              ],
+              "title": "InputTextAgentMessageInputContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "InputTextAgentMessageInputContent",
+          "type": "object"
+        },
+        {
+          "properties": {
             "encrypted_content": {
               "type": "string"
             },
@@ -694,6 +714,12 @@
     "AppSummary": {
       "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
       "properties": {
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": [
             "string",
@@ -711,21 +737,23 @@
         },
         "name": {
           "type": "string"
-        },
-        "needsAuth": {
-          "type": "boolean"
         }
       },
       "required": [
         "id",
-        "name",
-        "needsAuth"
+        "name"
       ],
       "type": "object"
     },
     "AppTemplateSummary": {
       "properties": {
         "canonicalConnectorId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category": {
           "type": [
             "string",
             "null"
@@ -845,6 +873,16 @@
     },
     "AppsDefaultConfig": {
       "properties": {
+        "approvals_reviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "destructive_enabled": {
           "default": true,
           "type": "boolean"
@@ -1004,6 +1042,13 @@
           "description": "Programmatic Codex auth backed by a personal access token.",
           "enum": [
             "personalAccessToken"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Amazon Bedrock bearer token managed by Codex.",
+          "enum": [
+            "bedrockApiKey"
           ],
           "type": "string"
         }
@@ -4806,6 +4851,13 @@
       ],
       "title": "ContextCompactedNotification",
       "type": "object"
+    },
+    "ConversationTextRole": {
+      "enum": [
+        "user",
+        "developer"
+      ],
+      "type": "string"
     },
     "CreditsSnapshot": {
       "properties": {
@@ -8994,6 +9046,12 @@
           },
           "type": "array"
         },
+        "shareUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "skills": {
           "items": {
             "$ref": "#/definitions/SkillSummary"
@@ -10247,6 +10305,13 @@
       "title": "RawResponseItemCompletedNotification",
       "type": "object"
     },
+    "RealtimeConversationArchitecture": {
+      "enum": [
+        "realtimeapi",
+        "avas"
+      ],
+      "type": "string"
+    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -10516,6 +10581,22 @@
         "errored"
       ],
       "type": "string"
+    },
+    "RemoteControlDisableParams": {
+      "properties": {
+        "ephemeral": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "RemoteControlEnableParams": {
+      "properties": {
+        "ephemeral": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
     },
     "RemoteControlStatusChangedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",

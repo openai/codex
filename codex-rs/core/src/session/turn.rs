@@ -35,6 +35,8 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
+use crate::responses_metadata::CodexResponsesMetadata;
+use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
@@ -172,6 +174,7 @@ pub(crate) async fn run_turn(
         .await;
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
         model: turn_context.model_info.slug.clone(),
+        comp_hash: turn_context.comp_hash.clone(),
         realtime_active: Some(turn_context.realtime_active),
     }))
     .await;
@@ -222,17 +225,19 @@ pub(crate) async fn run_turn(
         .await;
 
         let window_id = sess.current_window_id().await;
-        let turn_metadata_header = turn_context
-            .turn_metadata_state
-            .current_header_value_for_model_request(&window_id);
+        let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+            sess.installation_id.clone(),
+            window_id,
+            CodexResponsesRequestKind::Turn,
+        );
+        let tokens_before_sampling = sess.get_total_token_usage().await;
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_extension_data),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
-            &window_id,
-            turn_metadata_header.as_deref(),
+            &responses_metadata,
             sampling_request_input.clone(),
             cancellation_token.child_token(),
         )
@@ -274,6 +279,24 @@ pub(crate) async fn run_turn(
                     needs_follow_up,
                     "post sampling token usage"
                 );
+
+                let tokens_after_sampling = token_status.active_context_tokens;
+                super::token_budget::maybe_record_token_budget_remaining_context(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    tokens_before_sampling,
+                    tokens_after_sampling,
+                )
+                .await;
+
+                let started_new_context_window = sess
+                    .maybe_start_new_context_window(turn_context.as_ref())
+                    .await
+                    .is_some();
+                if started_new_context_window && needs_follow_up {
+                    can_drain_pending_input = !model_needs_follow_up;
+                    continue;
+                }
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
@@ -393,10 +416,10 @@ async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, Pat
     for turn_environment in &turn_context.environments.turn_environments {
         let root = get_git_repo_root_with_fs(
             turn_environment.environment.get_filesystem().as_ref(),
-            &turn_environment.cwd,
+            turn_environment.cwd(),
         )
         .await
-        .unwrap_or_else(|| turn_environment.cwd.clone())
+        .unwrap_or_else(|| turn_environment.cwd().clone())
         .into_path_buf();
         display_roots.push((turn_environment.environment_id.clone(), root));
     }
@@ -443,7 +466,7 @@ async fn build_skills_and_plugins(
         .iter()
         .filter_map(|item| match item {
             TurnInput::UserInput { content, .. } => Some(content.as_slice()),
-            TurnInput::ResponseItem(_) => None,
+            TurnInput::ResponseItem(_) | TurnInput::InterAgentCommunication(_) => None,
         })
         .flatten()
         .cloned()
@@ -607,7 +630,7 @@ async fn build_extension_turn_input_items(
         .enumerate()
         .map(|(index, environment)| TurnInputEnvironment {
             environment_id: environment.environment_id.clone(),
-            cwd: environment.cwd.as_path().to_path_buf(),
+            cwd: environment.cwd().as_path().to_path_buf(),
             is_primary: index == 0,
         })
         .collect::<Vec<_>>();
@@ -662,7 +685,7 @@ async fn track_turn_resolved_config_analytics(
                 .iter()
                 .filter_map(|item| match item {
                     TurnInput::UserInput { content, .. } => Some(content.as_slice()),
-                    TurnInput::ResponseItem(_) => None,
+                    TurnInput::ResponseItem(_) | TurnInput::InterAgentCommunication(_) => None,
                 })
                 .flatten()
                 .filter(|item| {
@@ -779,8 +802,16 @@ async fn run_pre_sampling_compact(
     Ok(())
 }
 
-/// Runs pre-sampling compaction against the previous model when switching to a smaller
-/// context-window model.
+/// Returns true only when both turns declare compaction compatibility hashes and they differ.
+/// A missing hash does not provide enough information to trigger compaction.
+fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
+    previous
+        .zip(current)
+        .is_some_and(|(previous, current)| previous != current)
+}
+
+/// Runs pre-sampling compaction against the previous model when its compaction compatibility
+/// hash changed or when switching to a smaller context-window model.
 ///
 /// Returns `Err(_)` only when compaction was attempted and failed.
 async fn maybe_run_previous_model_inline_compact(
@@ -791,11 +822,28 @@ async fn maybe_run_previous_model_inline_compact(
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(());
     };
+    let should_compact_for_comp_hash_change = comp_hash_changed(
+        previous_turn_settings.comp_hash.as_deref(),
+        turn_context.comp_hash.as_deref(),
+    );
     let previous_model_turn_context = Arc::new(
         turn_context
             .with_model(previous_turn_settings.model, &sess.services.models_manager)
             .await,
     );
+
+    if should_compact_for_comp_hash_change {
+        run_auto_compact(
+            sess,
+            &previous_model_turn_context,
+            client_session,
+            InitialContextInjection::DoNotInject,
+            CompactionReason::CompHashChanged,
+            CompactionPhase::PreTurn,
+        )
+        .await?;
+        return Ok(());
+    }
 
     let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
         return Ok(());
@@ -984,8 +1032,7 @@ async fn run_sampling_request(
     turn_store: Arc<codex_extension_api::ExtensionData>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
-    window_id: &str,
-    turn_metadata_header: Option<&str>,
+    responses_metadata: &CodexResponsesMetadata,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
@@ -1028,8 +1075,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_context),
             Arc::clone(&turn_store),
             client_session,
-            window_id,
-            turn_metadata_header,
+            responses_metadata,
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
@@ -1718,6 +1764,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     false
 }
 
+#[instrument(level = "trace", skip_all)]
 async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,
@@ -1758,8 +1805,7 @@ async fn try_run_sampling_request(
     turn_context: Arc<TurnContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     client_session: &mut ModelClientSession,
-    window_id: &str,
-    turn_metadata_header: Option<&str>,
+    responses_metadata: &CodexResponsesMetadata,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
@@ -1780,14 +1826,13 @@ async fn try_run_sampling_request(
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let mut stream = client_session
         .stream(
-            window_id,
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
             turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
-            turn_metadata_header,
+            responses_metadata,
             &inference_trace,
         )
         .instrument(trace_span!("stream_request"))

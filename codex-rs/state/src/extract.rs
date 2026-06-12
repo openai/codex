@@ -22,6 +22,7 @@ pub fn apply_rollout_item(
         RolloutItem::TurnContext(turn_ctx) => apply_turn_context(metadata, turn_ctx),
         RolloutItem::EventMsg(event) => apply_event_msg(metadata, event),
         RolloutItem::ResponseItem(item) => apply_response_item(metadata, item),
+        RolloutItem::InterAgentCommunication(_) => {}
         RolloutItem::Compacted(_) => {}
     }
     if metadata.model_provider.is_empty() {
@@ -36,9 +37,10 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         RolloutItem::EventMsg(
             EventMsg::TokenCount(_) | EventMsg::UserMessage(_) | EventMsg::ThreadGoalUpdated(_),
         ) => true,
-        RolloutItem::EventMsg(_) | RolloutItem::ResponseItem(_) | RolloutItem::Compacted(_) => {
-            false
-        }
+        RolloutItem::EventMsg(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::Compacted(_) => false,
     }
 }
 
@@ -356,6 +358,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
@@ -394,6 +397,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
@@ -429,6 +433,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
@@ -460,6 +465,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,

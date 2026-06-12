@@ -7,12 +7,12 @@ use crate::legacy_core::check_execpolicy_for_warnings;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
-use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
+use crate::legacy_core::config::ConfigTomlLoadResult;
+use crate::legacy_core::config::load_config_toml_with_layer_stack;
+use crate::legacy_core::config::resolve_bootstrap_auth_keyring_backend_kind;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::legacy_core::format_exec_policy_error_with_source;
-#[cfg(target_os = "windows")]
-use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::session_resume::ResolveCwdOutcome;
 use crate::session_resume::resolve_cwd_for_resume_or_fork;
 pub use crate::startup_error::LocalStateDbStartupError;
@@ -64,6 +64,7 @@ use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
+pub use session_archive_commands::DeleteConfirmation;
 pub use session_archive_commands::SessionArchiveAction;
 pub use session_archive_commands::SessionArchiveCommandOptions;
 pub use session_archive_commands::run_session_archive_command;
@@ -95,22 +96,6 @@ mod app_server_approval_conversions;
 mod app_server_session;
 mod approval_events;
 mod ascii_animation;
-#[cfg(not(target_os = "linux"))]
-mod audio_device;
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
-mod audio_device {
-    use crate::app_event::RealtimeAudioDeviceKind;
-
-    pub(crate) fn list_realtime_audio_device_names(
-        kind: RealtimeAudioDeviceKind,
-    ) -> Result<Vec<String>, String> {
-        Err(format!(
-            "Failed to load realtime {} devices: voice input is unavailable in this build",
-            kind.noun()
-        ))
-    }
-}
 mod bottom_pane;
 mod branch_summary;
 mod chatwidget;
@@ -139,6 +124,7 @@ mod frames;
 mod get_git_diff;
 mod git_action_directives;
 mod goal_display;
+mod goal_files;
 mod history_cell;
 mod hooks_rpc;
 mod ide_context;
@@ -207,68 +193,13 @@ mod update_prompt;
 #[cfg(any(not(debug_assertions), test))]
 mod update_versions;
 mod updates;
+#[cfg(any(not(debug_assertions), test))]
+mod updates_cache;
 mod version;
-#[cfg(not(target_os = "linux"))]
-mod voice;
 mod width;
+#[cfg(any(target_os = "windows", test))]
+mod windows_sandbox;
 mod workspace_command;
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
-mod voice {
-    use crate::app_event_sender::AppEventSender;
-    use crate::legacy_core::config::Config;
-    use codex_app_server_protocol::ThreadRealtimeAudioChunk;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::AtomicU16;
-
-    pub struct VoiceCapture;
-
-    pub(crate) struct RecordingMeterState;
-
-    pub(crate) struct RealtimeAudioPlayer;
-
-    impl VoiceCapture {
-        pub fn start_realtime(_config: &Config, _tx: AppEventSender) -> Result<Self, String> {
-            Err("voice input is unavailable in this build".to_string())
-        }
-
-        pub fn stop(self) {}
-
-        pub fn stopped_flag(&self) -> Arc<AtomicBool> {
-            Arc::new(AtomicBool::new(true))
-        }
-
-        pub fn last_peak_arc(&self) -> Arc<AtomicU16> {
-            Arc::new(AtomicU16::new(0))
-        }
-    }
-
-    impl RecordingMeterState {
-        pub(crate) fn new() -> Self {
-            Self
-        }
-
-        pub(crate) fn next_text(&mut self, _peak: u16) -> String {
-            "⠤⠤⠤⠤".to_string()
-        }
-    }
-
-    impl RealtimeAudioPlayer {
-        pub(crate) fn start(_config: &Config) -> Result<Self, String> {
-            Err("voice output is unavailable in this build".to_string())
-        }
-
-        pub(crate) fn enqueue_frame(
-            &self,
-            _frame: &ThreadRealtimeAudioChunk,
-        ) -> Result<(), String> {
-            Err("voice output is unavailable in this build".to_string())
-        }
-
-        pub(crate) fn clear(&self) {}
-    }
-}
 
 mod wrapping;
 
@@ -1008,7 +939,7 @@ pub async fn run_main(
         loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
 
-    let bootstrap_config_toml = load_config_toml_or_exit(
+    let bootstrap_config = load_bootstrap_config_or_exit(
         &codex_home,
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),
@@ -1017,6 +948,7 @@ pub async fn run_main(
         CloudConfigBundleLoader::default(),
     )
     .await;
+    let bootstrap_config_toml = &bootstrap_config.config_toml;
 
     let chatgpt_base_url = bootstrap_config_toml
         .chatgpt_base_url
@@ -1028,6 +960,7 @@ pub async fn run_main(
         bootstrap_config_toml
             .cli_auth_credentials_store
             .unwrap_or_default(),
+        resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
         chatgpt_base_url,
     )
     .await;
@@ -1040,12 +973,12 @@ pub async fn run_main(
 
     let mut manually_selected_oss_provider = None;
     let model_provider_override = if cli.oss {
-        let config_toml_with_cloud_config;
+        let bootstrap_config_with_cloud_config;
         let config_toml_for_oss = if cli.oss_provider.is_none() {
             // The first load intentionally skips cloud config so we can read
             // auth/base-url settings needed to fetch the bundle. If OSS mode
             // needs a default provider from config, reload with the bundle.
-            config_toml_with_cloud_config = load_config_toml_or_exit(
+            bootstrap_config_with_cloud_config = load_bootstrap_config_or_exit(
                 &codex_home,
                 config_cwd.as_ref(),
                 cli_kv_overrides.clone(),
@@ -1054,9 +987,9 @@ pub async fn run_main(
                 cloud_config_bundle.clone(),
             )
             .await;
-            &config_toml_with_cloud_config
+            &bootstrap_config_with_cloud_config.config_toml
         } else {
-            &bootstrap_config_toml
+            bootstrap_config_toml
         };
 
         let resolved = resolve_oss_provider(cli.oss_provider.as_deref(), config_toml_for_oss);
@@ -1124,7 +1057,7 @@ pub async fn run_main(
 
     let otel_originator = originator().value;
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::legacy_core::otel_init::build_provider(
+        codex_app_server_client::build_otel_provider(
             &config,
             env!("CARGO_PKG_VERSION"),
             /*service_name_override*/ None,
@@ -1147,26 +1080,25 @@ pub async fn run_main(
             None
         }
     };
-    crate::legacy_core::otel_init::record_process_start(otel.as_ref(), otel_originator.as_str());
-    crate::legacy_core::otel_init::install_sqlite_telemetry(
-        otel.as_ref(),
-        otel_originator.as_str(),
-    );
+    if let Some(metrics) = otel.as_ref().and_then(codex_otel::OtelProvider::metrics) {
+        let _ = codex_otel::record_process_start_once(metrics, otel_originator.as_str());
+        let telemetry =
+            codex_rollout::sqlite_telemetry_recorder(metrics.clone(), otel_originator.as_str());
+        let _ = codex_state::install_process_db_telemetry(telemetry);
+    }
     let state_db = init_state_db_for_app_server_target(&config, &app_server_target).await?;
 
     let effective_toml = config.config_layer_stack.effective_config();
     match effective_toml.try_into() {
         Ok(config_toml) => {
-            match crate::legacy_core::personality_migration::maybe_migrate_personality(
+            match codex_app_server_client::migrate_personality_if_needed(
                 &config.codex_home,
                 &config_toml,
                 state_db.clone(),
             )
             .await
             {
-                Ok(
-                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::Applied,
-                ) => {
+                Ok(true) => {
                     config = load_config_or_exit(
                         cli_kv_overrides.clone(),
                         overrides.clone(),
@@ -1176,11 +1108,7 @@ pub async fn run_main(
                     )
                     .await;
                 }
-                Ok(
-                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
-                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
-                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
-                ) => {}
+                Ok(false) => {}
                 Err(err) => {
                     tracing::warn!(error = %err, "failed to run personality migration");
                 }
@@ -1227,6 +1155,7 @@ pub async fn run_main(
         if let Err(err) = enforce_login_restrictions(&AuthConfig {
             codex_home: config.codex_home.to_path_buf(),
             auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+            keyring_backend_kind: config.auth_keyring_backend_kind(),
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
             chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
@@ -1385,7 +1314,7 @@ async fn run_ratatui_app(
                     return Ok(AppExitInfo {
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
-                        thread_name: None,
+                        resume_hint: None,
                         update_action: Some(action),
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -1478,7 +1407,7 @@ async fn run_ratatui_app(
             return Ok(AppExitInfo {
                 token_usage: crate::token_usage::TokenUsage::default(),
                 thread_id: None,
-                thread_name: None,
+                resume_hint: None,
                 update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });
@@ -1495,6 +1424,7 @@ async fn run_ratatui_app(
                 initial_config.codex_home.to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
+                initial_config.auth_keyring_backend_kind(),
                 initial_config.chatgpt_base_url.clone(),
             )
             .await;
@@ -1528,7 +1458,7 @@ async fn run_ratatui_app(
         Ok(AppExitInfo {
             token_usage: crate::token_usage::TokenUsage::default(),
             thread_id: None,
-            thread_name: None,
+            resume_hint: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(format!(
                 "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
@@ -1585,7 +1515,7 @@ async fn run_ratatui_app(
                     return Ok(AppExitInfo {
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
-                        thread_name: None,
+                        resume_hint: None,
                         update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -1646,7 +1576,7 @@ async fn run_ratatui_app(
                 return Ok(AppExitInfo {
                     token_usage: crate::token_usage::TokenUsage::default(),
                     thread_id: None,
-                    thread_name: None,
+                    resume_hint: None,
                     update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
@@ -1691,7 +1621,7 @@ async fn run_ratatui_app(
                         return Ok(AppExitInfo {
                             token_usage: crate::token_usage::TokenUsage::default(),
                             thread_id: None,
-                            thread_name: None,
+                            resume_hint: None,
                             update_action: None,
                             exit_reason: ExitReason::UserRequested,
                         });
@@ -1745,7 +1675,7 @@ async fn run_ratatui_app(
     set_default_client_residency_requirement(config.enforce_residency.value());
     let should_show_trust_screen = should_show_trust_screen(&config);
     #[cfg(target_os = "windows")]
-    let windows_sandbox_level = WindowsSandboxLevel::from_config(&config);
+    let windows_sandbox_level = crate::windows_sandbox::level_from_config(&config);
     #[cfg(target_os = "windows")]
     let required_elevated_sandbox_needs_setup = windows_sandbox_level
         == WindowsSandboxLevel::Elevated
@@ -1755,9 +1685,7 @@ async fn run_ratatui_app(
             .windows_sandbox_mode
             .source
             .is_some()
-        && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
-            config.codex_home.as_path(),
-        );
+        && !crate::windows_sandbox::sandbox_setup_is_complete(config.codex_home.as_path());
     #[cfg(target_os = "windows")]
     let should_prompt_windows_sandbox_nux_at_startup = (trust_decision_was_made
         && windows_sandbox_level == WindowsSandboxLevel::Disabled)
@@ -1995,15 +1923,15 @@ async fn load_config_or_exit_with_fallback_cwd(
 }
 
 #[allow(clippy::print_stderr)]
-async fn load_config_toml_or_exit(
+async fn load_bootstrap_config_or_exit(
     codex_home: &Path,
     cwd: Option<&AbsolutePathBuf>,
     cli_kv_overrides: Vec<(String, codex_config::TomlValue)>,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
     cloud_config_bundle: CloudConfigBundleLoader,
-) -> codex_config::config_toml::ConfigToml {
-    match load_config_as_toml_with_cli_and_load_options(
+) -> ConfigTomlLoadResult {
+    match load_config_toml_with_layer_stack(
         codex_home,
         cwd,
         cli_kv_overrides,

@@ -184,6 +184,7 @@ impl Session {
                     ) {
                         active_segment.previous_turn_settings = Some(PreviousTurnSettings {
                             model: ctx.model.clone(),
+                            comp_hash: ctx.comp_hash.clone(),
                             realtime_active: ctx.realtime_active,
                         });
                         if matches!(
@@ -218,6 +219,11 @@ impl Session {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn |= is_user_turn_boundary(response_item);
+                }
+                RolloutItem::InterAgentCommunication(_) => {
+                    let active_segment =
+                        active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    active_segment.counts_as_user_turn = true;
                 }
                 RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
             }
@@ -265,6 +271,13 @@ impl Session {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
                         std::iter::once(response_item),
+                        turn_context.truncation_policy,
+                    );
+                }
+                RolloutItem::InterAgentCommunication(communication) => {
+                    let response_item = communication.to_model_input_item();
+                    history.record_items(
+                        std::iter::once(&response_item),
                         turn_context.truncation_policy,
                     );
                 }

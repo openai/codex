@@ -6,7 +6,6 @@ use crate::endpoint::realtime_websocket::protocol::ConversationItemContent;
 use crate::endpoint::realtime_websocket::protocol::ConversationItemPayload;
 use crate::endpoint::realtime_websocket::protocol::ConversationItemType;
 use crate::endpoint::realtime_websocket::protocol::ConversationMessageItem;
-use crate::endpoint::realtime_websocket::protocol::ConversationRole;
 use crate::endpoint::realtime_websocket::protocol::NoiseReductionType;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutputModality;
@@ -25,6 +24,7 @@ use crate::endpoint::realtime_websocket::protocol::SessionTurnDetection;
 use crate::endpoint::realtime_websocket::protocol::SessionType;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 use crate::endpoint::realtime_websocket::protocol::TurnDetectionType;
+use codex_protocol::protocol::ConversationTextRole;
 use serde_json::json;
 
 const REALTIME_V2_OUTPUT_MODALITY_AUDIO: &str = "audio";
@@ -36,17 +36,13 @@ const REALTIME_V2_SILENCE_TOOL_NAME: &str = "remain_silent";
 const REALTIME_V2_SILENCE_TOOL_DESCRIPTION: &str = "Call this when the best response is to say nothing. Use it instead of speaking after hidden system/control messages, after background agent updates in silent modes, or whenever acknowledging aloud would be distracting. This tool has no user-visible effect.";
 const REALTIME_V2_INPUT_TRANSCRIPTION_MODEL: &str = "gpt-4o-mini-transcribe";
 
-pub(super) fn conversation_item_create_message(text: String) -> RealtimeOutboundMessage {
-    conversation_message_item_create_message(ConversationRole::User, text)
-}
-
 pub(super) fn conversation_context_item_create_message(text: String) -> RealtimeOutboundMessage {
-    conversation_message_item_create_message(ConversationRole::Developer, text)
+    conversation_item_create_message(text, ConversationTextRole::Developer)
 }
 
-fn conversation_message_item_create_message(
-    role: ConversationRole,
+pub(super) fn conversation_item_create_message(
     text: String,
+    role: ConversationTextRole,
 ) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::ConversationItemCreate {
         item: ConversationItemPayload::Message(ConversationMessageItem {

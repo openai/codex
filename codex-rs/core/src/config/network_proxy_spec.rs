@@ -1,8 +1,8 @@
-use async_trait::async_trait;
 use codex_config::NetworkConstraints;
 use codex_execpolicy::Policy;
 use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::ConfigReloader;
+use codex_network_proxy::ConfigReloaderFuture;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkPolicyDecider;
@@ -58,14 +58,13 @@ impl StaticNetworkProxyReloader {
     }
 }
 
-#[async_trait]
 impl ConfigReloader for StaticNetworkProxyReloader {
-    async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
-        Ok(None)
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(async { Ok(None) })
     }
 
-    async fn reload_now(&self) -> anyhow::Result<ConfigState> {
-        Ok(self.state.clone())
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async { Ok(self.state.clone()) })
     }
 
     fn source_label(&self) -> String {

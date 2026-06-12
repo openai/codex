@@ -189,6 +189,7 @@ use super::mentions_v2::MentionV2Popup;
 use super::mentions_v2::MentionV2Selection;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use super::prompt_args::parse_slash_name;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use super::slash_commands::BuiltinCommandFlags;
@@ -279,6 +280,7 @@ pub enum InputResult {
         text: String,
         text_elements: Vec<TextElement>,
         action: QueuedInputAction,
+        pending_pastes: Vec<(String, String)>,
     },
     /// A bare slash command parsed by the composer.
     ///
@@ -301,6 +303,12 @@ pub enum QueuedInputAction {
     Plain,
     ParseSlash,
     RunShell,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingPasteHandling {
+    Expand,
+    Preserve,
 }
 
 /// Feature flags for reusing the chat composer in other bottom-pane surfaces.
@@ -358,9 +366,6 @@ pub(crate) struct ChatComposer {
     /// This slot is intentionally separate from `ChatComposerHistory` so inline slash commands can
     /// prepare their argument text without also double-recording the full command invocation.
     pending_slash_command_history: Option<HistoryEntry>,
-    // Monotonically increasing identifier for textarea elements we insert.
-    #[cfg(not(target_os = "linux"))]
-    next_element_id: u64,
     skills: Option<Vec<SkillMetadata>>,
     plugins: Option<Vec<PluginCapabilitySummary>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
@@ -373,8 +378,6 @@ pub(crate) struct ChatComposer {
     mentions_v2_enabled: bool,
     goal_command_enabled: bool,
     personality_command_enabled: bool,
-    realtime_conversation_enabled: bool,
-    audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
     history_search: Option<HistorySearchSession>,
@@ -441,8 +444,6 @@ impl ChatComposer {
             service_tier_commands_enabled: self.service_tier_commands_enabled,
             goal_command_enabled: self.goal_command_enabled,
             personality_command_enabled: self.personality_command_enabled,
-            realtime_conversation_enabled: self.realtime_conversation_enabled,
-            audio_device_selection_enabled: self.audio_device_selection_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
             side_conversation_active: self.side_conversation_active,
         }
@@ -527,8 +528,6 @@ impl ChatComposer {
             is_task_running: false,
             queue_submissions: false,
             pending_slash_command_history: None,
-            #[cfg(not(target_os = "linux"))]
-            next_element_id: 0,
             skills: None,
             plugins: None,
             connectors_snapshot: None,
@@ -541,8 +540,6 @@ impl ChatComposer {
             mentions_v2_enabled: false,
             goal_command_enabled: false,
             personality_command_enabled: false,
-            realtime_conversation_enabled: false,
-            audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
             history_search: None,
@@ -560,13 +557,6 @@ impl ChatComposer {
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
         this
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn next_id(&mut self) -> String {
-        let id = self.next_element_id;
-        self.next_element_id = self.next_element_id.wrapping_add(1);
-        id.to_string()
     }
 
     pub(crate) fn set_frame_requester(&mut self, frame_requester: FrameRequester) {
@@ -691,14 +681,6 @@ impl ChatComposer {
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.personality_command_enabled = enabled;
-    }
-
-    pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
-        self.realtime_conversation_enabled = enabled;
-    }
-
-    pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
-        self.audio_device_selection_enabled = enabled;
     }
 
     pub fn set_side_conversation_active(&mut self, active: bool) {
@@ -2637,13 +2619,18 @@ impl ChatComposer {
         &mut self,
         record_history: bool,
     ) -> Option<(String, Vec<TextElement>)> {
-        self.prepare_submission_text_with_options(record_history, SlashValidation::Immediate)
+        self.prepare_submission_text_with_options(
+            record_history,
+            SlashValidation::Immediate,
+            PendingPasteHandling::Expand,
+        )
     }
 
     fn prepare_submission_text_with_options(
         &mut self,
         record_history: bool,
         slash_validation: SlashValidation,
+        pending_paste_handling: PendingPasteHandling,
     ) -> Option<(String, Vec<TextElement>)> {
         let mut text = self.current_text();
         let original_input = text.clone();
@@ -2657,7 +2644,9 @@ impl ChatComposer {
         self.draft.textarea.set_text_clearing_elements("");
         self.draft.is_bash_mode = false;
 
-        if !self.draft.pending_pastes.is_empty() {
+        if pending_paste_handling == PendingPasteHandling::Expand
+            && !self.draft.pending_pastes.is_empty()
+        {
             // Expand placeholders so element byte ranges stay aligned.
             let (expanded, expanded_elements) =
                 Self::expand_pending_pastes(&text, text_elements, &self.draft.pending_pastes);
@@ -2726,7 +2715,11 @@ impl ChatComposer {
                 local_image_paths: self.attachments.local_image_paths(),
                 remote_image_urls: self.attachments.remote_image_urls(),
                 mention_bindings: original_mention_bindings,
-                pending_pastes: Vec::new(),
+                pending_pastes: if pending_paste_handling == PendingPasteHandling::Preserve {
+                    original_pending_pastes.clone()
+                } else {
+                    Vec::new()
+                },
             });
         }
         self.draft.pending_pastes.clear();
@@ -2765,12 +2758,26 @@ impl ChatComposer {
             }
             let raw_text = self.draft.textarea.text();
             let defer_slash_validation = self.slash_input().should_parse_on_dequeue(raw_text);
+            let preserve_pending_pastes = defer_slash_validation
+                && !self.draft.pending_pastes.is_empty()
+                && parse_slash_name(raw_text)
+                    .is_some_and(|(name, _, _)| name == SlashCommand::Goal.command());
+            let pending_pastes = if preserve_pending_pastes {
+                self.draft.pending_pastes.clone()
+            } else {
+                Vec::new()
+            };
             if let Some((text, text_elements)) = self.prepare_submission_text_with_options(
                 /*record_history*/ true,
                 if defer_slash_validation {
                     SlashValidation::Deferred
                 } else {
                     SlashValidation::Immediate
+                },
+                if preserve_pending_pastes {
+                    PendingPasteHandling::Preserve
+                } else {
+                    PendingPasteHandling::Expand
                 },
             ) {
                 let action = slash_input::queued_input_action(&text, defer_slash_validation);
@@ -2779,6 +2786,7 @@ impl ChatComposer {
                         text,
                         text_elements,
                         action,
+                        pending_pastes,
                     },
                     true,
                 );
@@ -2850,6 +2858,7 @@ impl ChatComposer {
                         text,
                         text_elements,
                         action: QueuedInputAction::Plain,
+                        pending_pastes: Vec::new(),
                     },
                     true,
                 )
@@ -3957,23 +3966,6 @@ fn footer_insert_newline_key(
         .or_else(|| bindings.first().copied())
 }
 
-#[cfg(not(target_os = "linux"))]
-impl ChatComposer {
-    pub fn update_recording_meter_in_place(&mut self, id: &str, text: &str) -> bool {
-        self.draft.textarea.update_named_element_by_id(id, text)
-    }
-
-    pub fn insert_recording_meter_placeholder(&mut self, text: &str) -> String {
-        let id = self.next_id();
-        self.draft.textarea.insert_named_element(text, id.clone());
-        id
-    }
-
-    pub fn remove_recording_meter_placeholder(&mut self, id: &str) {
-        let _ = self.draft.textarea.replace_element_by_id(id, "");
-    }
-}
-
 fn skill_description(skill: &SkillMetadata) -> Option<String> {
     let description = skill
         .interface
@@ -4575,26 +4567,6 @@ mod tests {
             !bottom_row.contains("K label"),
             "expected flash to override hint override, saw: {bottom_row:?}",
         );
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn remove_recording_meter_placeholder_clears_placeholder_text() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-
-        let id = composer.insert_recording_meter_placeholder("⠤⠤⠤⠤");
-        composer.remove_recording_meter_placeholder(&id);
-
-        assert_eq!(composer.draft.textarea.text(), "");
-        assert!(composer.draft.textarea.named_element_range(&id).is_none());
     }
 
     #[test]
@@ -7342,6 +7314,7 @@ mod tests {
                 text: "hi".to_string(),
                 text_elements: Vec::new(),
                 action: QueuedInputAction::Plain,
+                pending_pastes: Vec::new(),
             }
         );
         assert!(composer.draft.textarea.text().is_empty());
@@ -8369,6 +8342,7 @@ mod tests {
                 text: "queued before session".to_string(),
                 text_elements: Vec::new(),
                 action: QueuedInputAction::Plain,
+                pending_pastes: Vec::new(),
             }
         );
     }
@@ -8400,6 +8374,7 @@ mod tests {
                     text,
                     text_elements,
                     action,
+                    ..
                 } => {
                     assert_eq!(text, input);
                     assert!(text_elements.is_empty());
@@ -8577,6 +8552,7 @@ mod tests {
                     text,
                     text_elements,
                     action,
+                    ..
                 } => {
                     assert_eq!(text, expected_text);
                     assert!(text_elements.is_empty());

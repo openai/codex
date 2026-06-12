@@ -5,7 +5,6 @@ use crate::endpoint::realtime_websocket::protocol::ConversationItemContent;
 use crate::endpoint::realtime_websocket::protocol::ConversationItemPayload;
 use crate::endpoint::realtime_websocket::protocol::ConversationItemType;
 use crate::endpoint::realtime_websocket::protocol::ConversationMessageItem;
-use crate::endpoint::realtime_websocket::protocol::ConversationRole;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::SessionAudio;
@@ -14,18 +13,15 @@ use crate::endpoint::realtime_websocket::protocol::SessionAudioInput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioOutput;
 use crate::endpoint::realtime_websocket::protocol::SessionType;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
-
-pub(super) fn conversation_item_create_message(text: String) -> RealtimeOutboundMessage {
-    conversation_message_item_create_message(ConversationRole::User, text)
-}
+use codex_protocol::protocol::ConversationTextRole;
 
 pub(super) fn conversation_context_item_create_message(text: String) -> RealtimeOutboundMessage {
-    conversation_message_item_create_message(ConversationRole::Developer, text)
+    conversation_item_create_message(text, ConversationTextRole::Developer)
 }
 
-fn conversation_message_item_create_message(
-    role: ConversationRole,
+pub(super) fn conversation_item_create_message(
     text: String,
+    role: ConversationTextRole,
 ) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::ConversationItemCreate {
         item: ConversationItemPayload::Message(ConversationMessageItem {

@@ -2,8 +2,11 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
+use std::future::Future;
+use std::pin::Pin;
 
 pub type Result<T> = std::result::Result<T, CloudTaskError>;
+pub type CloudBackendFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CloudTaskError {
@@ -130,41 +133,44 @@ impl Default for TaskText {
     }
 }
 
-#[async_trait::async_trait]
 pub trait CloudBackend: Send + Sync {
-    async fn list_tasks(
-        &self,
-        env: Option<&str>,
+    fn list_tasks<'a>(
+        &'a self,
+        env: Option<&'a str>,
         limit: Option<i64>,
-        cursor: Option<&str>,
-    ) -> Result<TaskListPage>;
-    async fn get_task_summary(&self, id: TaskId) -> Result<TaskSummary>;
-    async fn get_task_diff(&self, id: TaskId) -> Result<Option<String>>;
+        cursor: Option<&'a str>,
+    ) -> CloudBackendFuture<'a, TaskListPage>;
+    fn get_task_summary(&self, id: TaskId) -> CloudBackendFuture<'_, TaskSummary>;
+    fn get_task_diff(&self, id: TaskId) -> CloudBackendFuture<'_, Option<String>>;
     /// Return assistant output messages (no diff) when available.
-    async fn get_task_messages(&self, id: TaskId) -> Result<Vec<String>>;
+    fn get_task_messages(&self, id: TaskId) -> CloudBackendFuture<'_, Vec<String>>;
     /// Return the creating prompt and assistant messages (when available).
-    async fn get_task_text(&self, id: TaskId) -> Result<TaskText>;
+    fn get_task_text(&self, id: TaskId) -> CloudBackendFuture<'_, TaskText>;
     /// Return any sibling attempts (best-of-N) for the given assistant turn.
-    async fn list_sibling_attempts(
+    fn list_sibling_attempts(
         &self,
         task: TaskId,
         turn_id: String,
-    ) -> Result<Vec<TurnAttempt>>;
+    ) -> CloudBackendFuture<'_, Vec<TurnAttempt>>;
     /// Dry-run apply (preflight) that validates whether the patch would apply cleanly.
     /// Never modifies the working tree. When `diff_override` is supplied, the provided diff is
     /// used instead of re-fetching the task details so callers can apply alternate attempts.
-    async fn apply_task_preflight(
+    fn apply_task_preflight(
         &self,
         id: TaskId,
         diff_override: Option<String>,
-    ) -> Result<ApplyOutcome>;
-    async fn apply_task(&self, id: TaskId, diff_override: Option<String>) -> Result<ApplyOutcome>;
-    async fn create_task(
+    ) -> CloudBackendFuture<'_, ApplyOutcome>;
+    fn apply_task(
         &self,
-        env_id: &str,
-        prompt: &str,
-        git_ref: &str,
+        id: TaskId,
+        diff_override: Option<String>,
+    ) -> CloudBackendFuture<'_, ApplyOutcome>;
+    fn create_task<'a>(
+        &'a self,
+        env_id: &'a str,
+        prompt: &'a str,
+        git_ref: &'a str,
         qa_mode: bool,
         best_of_n: usize,
-    ) -> Result<CreatedTask>;
+    ) -> CloudBackendFuture<'a, CreatedTask>;
 }

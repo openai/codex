@@ -138,9 +138,8 @@ pub(crate) trait WorkspaceCommandExecutor: Send + Sync {
     /// Runs a workspace command and returns captured output or an app-server request error.
     ///
     /// Callers should treat errors as infrastructure failures and should treat successful output
-    /// with a non-zero exit code as ordinary command failure. Returning a future instead of using
-    /// `async_trait` keeps the trait object-safe while matching the repo's native async trait
-    /// conventions.
+    /// with a non-zero exit code as ordinary command failure. Returning a boxed future keeps the
+    /// trait object-safe.
     fn run(
         &self,
         command: WorkspaceCommand,

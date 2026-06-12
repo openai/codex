@@ -21,6 +21,7 @@ use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AppToolApproval;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
@@ -37,6 +38,7 @@ use rmcp::model::ReadResourceResult;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::ResolvedMcpCatalog;
 use crate::codex_apps::codex_apps_tools_cache_key;
 use crate::connection_manager::McpConnectionManager;
 use crate::runtime::McpRuntimeContext;
@@ -113,6 +115,8 @@ pub struct McpConfig {
     pub codex_home: PathBuf,
     /// Preferred credential store for MCP OAuth tokens.
     pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
+    /// Backend used when MCP OAuth storage is configured for keyring-backed persistence.
+    pub auth_keyring_backend_kind: AuthKeyringBackendKind,
     /// Optional fixed localhost callback port for MCP OAuth login.
     pub mcp_oauth_callback_port: Option<u16>,
     /// Optional OAuth redirect URI override for MCP login.
@@ -135,13 +139,8 @@ pub struct McpConfig {
     pub prefix_mcp_tool_names: bool,
     /// Client-side elicitation capabilities advertised during MCP initialization.
     pub client_elicitation_capability: ElicitationCapability,
-    /// Materialized MCP servers keyed by server name.
-    ///
-    /// A host may add compatibility built-ins and extension overlays before
-    /// calling runtime entry points in this crate.
-    pub configured_mcp_servers: HashMap<String, McpServerConfig>,
-    /// Winning plugin owner for plugin-provided MCP servers, keyed by server name.
-    pub plugin_ids_by_mcp_server_name: HashMap<String, String>,
+    /// Resolved MCP registrations keyed by logical server name.
+    pub mcp_server_catalog: ResolvedMcpCatalog,
     /// Plugin metadata used to attribute MCP tools/connectors to plugin display names.
     pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
 }
@@ -176,6 +175,7 @@ impl ToolPluginProvenance {
 
     fn from_config(config: &McpConfig) -> Self {
         let mut tool_plugin_provenance = Self::default();
+        let plugin_ids_by_mcp_server_name = config.mcp_server_catalog.plugin_ids_by_server_name();
         for plugin in &config.plugin_capability_summaries {
             for connector_id in &plugin.app_connector_ids {
                 tool_plugin_provenance
@@ -185,7 +185,9 @@ impl ToolPluginProvenance {
                     .push(plugin.display_name.clone());
             }
 
-            for server_name in &plugin.mcp_server_names {
+            for server_name in plugin.mcp_server_names.iter().filter(|server_name| {
+                plugin_ids_by_mcp_server_name.get(*server_name) == Some(&plugin.config_name)
+            }) {
                 tool_plugin_provenance
                     .plugin_display_names_by_mcp_server_name
                     .entry(server_name.clone())
@@ -206,8 +208,7 @@ impl ToolPluginProvenance {
             plugin_names.sort_unstable();
             plugin_names.dedup();
         }
-        tool_plugin_provenance.plugin_ids_by_mcp_server_name =
-            config.plugin_ids_by_mcp_server_name.clone();
+        tool_plugin_provenance.plugin_ids_by_mcp_server_name = plugin_ids_by_mcp_server_name;
 
         tool_plugin_provenance
     }
@@ -218,7 +219,7 @@ pub fn host_owned_codex_apps_enabled(config: &McpConfig, auth: Option<&CodexAuth
 }
 
 pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {
-    config.configured_mcp_servers.clone()
+    config.mcp_server_catalog.configured_servers()
 }
 
 pub fn effective_mcp_servers(
@@ -264,6 +265,7 @@ pub async fn read_mcp_resource(
     let auth_statuses = compute_auth_statuses(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind,
         auth,
     )
     .await;
@@ -273,6 +275,7 @@ pub async fn read_mcp_resource(
     let manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind,
         auth_statuses,
         &config.approval_policy,
         String::new(),
@@ -332,6 +335,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let auth_status_entries = compute_auth_statuses(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind,
         auth,
     )
     .await;
@@ -345,6 +349,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind,
         auth_status_entries.clone(),
         &config.approval_policy,
         submit_id,

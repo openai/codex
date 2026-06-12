@@ -35,6 +35,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::save_auth;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
@@ -119,8 +120,10 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
             last_refresh: None,
             agent_identity: None,
             personal_access_token: None,
+            bedrock_api_key: None,
         },
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;

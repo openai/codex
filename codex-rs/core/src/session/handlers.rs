@@ -274,7 +274,7 @@ pub(super) async fn user_input_or_turn_inner(
     }
 }
 
-/// Records an inter-agent assistant envelope, then lets the shared pending-work scheduler
+/// Queues an inter-agent message, then lets the shared pending-work scheduler
 /// decide whether an idle session should start a regular turn.
 pub async fn inter_agent_communication(
     sess: &Arc<Session>,

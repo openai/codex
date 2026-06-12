@@ -29,6 +29,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
+use codex_utils_path_uri::PathUri;
 use std::io;
 use std::sync::Arc;
 
@@ -64,9 +65,10 @@ impl FsRequestProcessor {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         let bytes = self
             .file_system()?
-            .read_file(&params.path, /*sandbox*/ None)
+            .read_file(&path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -83,8 +85,9 @@ impl FsRequestProcessor {
                 "fs/writeFile requires valid base64 dataBase64: {err}"
             ))
         })?;
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         self.file_system()?
-            .write_file(&params.path, bytes, /*sandbox*/ None)
+            .write_file(&path, bytes, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -94,9 +97,10 @@ impl FsRequestProcessor {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         self.file_system()?
             .create_directory(
-                &params.path,
+                &path,
                 CreateDirectoryOptions {
                     recursive: params.recursive.unwrap_or(true),
                 },
@@ -111,9 +115,10 @@ impl FsRequestProcessor {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         let metadata = self
             .file_system()?
-            .get_metadata(&params.path, /*sandbox*/ None)
+            .get_metadata(&path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -129,9 +134,10 @@ impl FsRequestProcessor {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         let entries = self
             .file_system()?
-            .read_directory(&params.path, /*sandbox*/ None)
+            .read_directory(&path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadDirectoryResponse {
@@ -150,9 +156,10 @@ impl FsRequestProcessor {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
+        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
         self.file_system()?
             .remove(
-                &params.path,
+                &path,
                 RemoveOptions {
                     recursive: params.recursive.unwrap_or(true),
                     force: params.force.unwrap_or(true),
@@ -168,10 +175,13 @@ impl FsRequestProcessor {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
+        let source_path = PathUri::from_abs_path(&params.source_path).map_err(map_fs_error)?;
+        let destination_path =
+            PathUri::from_abs_path(&params.destination_path).map_err(map_fs_error)?;
         self.file_system()?
             .copy(
-                &params.source_path,
-                &params.destination_path,
+                &source_path,
+                &destination_path,
                 CopyOptions {
                     recursive: params.recursive,
                 },

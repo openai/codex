@@ -61,8 +61,6 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
-    pub(crate) realtime_conversation_enabled: bool,
-    pub(crate) audio_device_selection_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
     pub(crate) side_conversation_active: bool,
 }
@@ -77,8 +75,6 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.plugins_command_enabled || *cmd != SlashCommand::Plugins)
         .filter(|(_, cmd)| flags.goal_command_enabled || *cmd != SlashCommand::Goal)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
-        .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
-        .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
         .filter(|(_, cmd)| !flags.side_conversation_active || cmd.available_in_side_conversation())
         .collect()
 }
@@ -106,12 +102,16 @@ pub(crate) fn commands_for_input(
         .collect()
 }
 
-/// Find a single built-in command by exact name, after applying feature gating.
+/// Find a single built-in command by a recognized name or alias, after applying feature gating.
 ///
-/// Side-conversation gating is intentionally enforced by dispatch rather than exact lookup so a
+/// Side-conversation gating is intentionally enforced by dispatch rather than command lookup so a
 /// typed command can produce a side-specific unavailable message while the popup still hides it.
 pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Option<SlashCommand> {
-    let cmd = SlashCommand::from_str(name).ok()?;
+    let cmd = SlashCommand::from_str(name).ok().or_else(|| {
+        let repeated_os = name.strip_prefix('g')?.strip_suffix("al")?;
+        (!repeated_os.is_empty() && repeated_os.bytes().all(|byte| byte == b'o'))
+            .then_some(SlashCommand::Goal)
+    })?;
     builtins_for_input(BuiltinCommandFlags {
         side_conversation_active: false,
         ..flags
@@ -166,8 +166,6 @@ mod tests {
             service_tier_commands_enabled: true,
             goal_command_enabled: true,
             personality_command_enabled: true,
-            realtime_conversation_enabled: true,
-            audio_device_selection_enabled: true,
             allow_elevate_sandbox: true,
             side_conversation_active: false,
         }
@@ -184,6 +182,14 @@ mod tests {
         assert_eq!(
             find_builtin_command("clear", all_enabled_flags()),
             Some(SlashCommand::Clear)
+        );
+    }
+
+    #[test]
+    fn goal_command_allows_extra_os_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("goooooooooooal", all_enabled_flags()),
+            Some(SlashCommand::Goal)
         );
     }
 
@@ -254,28 +260,6 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.goal_command_enabled = false;
         assert_eq!(find_builtin_command("goal", flags), None);
-    }
-
-    #[test]
-    fn realtime_command_is_hidden_when_realtime_is_disabled() {
-        let mut flags = all_enabled_flags();
-        flags.realtime_conversation_enabled = false;
-        assert_eq!(find_builtin_command("realtime", flags), None);
-    }
-
-    #[test]
-    fn settings_command_is_hidden_when_realtime_is_disabled() {
-        let mut flags = all_enabled_flags();
-        flags.realtime_conversation_enabled = false;
-        flags.audio_device_selection_enabled = false;
-        assert_eq!(find_builtin_command("settings", flags), None);
-    }
-
-    #[test]
-    fn settings_command_is_hidden_when_audio_device_selection_is_disabled() {
-        let mut flags = all_enabled_flags();
-        flags.audio_device_selection_enabled = false;
-        assert_eq!(find_builtin_command("settings", flags), None);
     }
 
     #[test]

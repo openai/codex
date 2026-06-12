@@ -18,6 +18,7 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::backoff;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
+use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeTranscriptDelta;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
@@ -228,8 +229,12 @@ impl RealtimeWebsocketConnection {
         self.writer.send_audio_frame(frame).await
     }
 
-    pub async fn send_conversation_item_create(&self, text: String) -> Result<(), ApiError> {
-        self.writer.send_conversation_item_create(text).await
+    pub async fn send_conversation_item_create(
+        &self,
+        text: String,
+        role: ConversationTextRole,
+    ) -> Result<(), ApiError> {
+        self.writer.send_conversation_item_create(text, role).await
     }
 
     pub async fn send_conversation_function_call_output(
@@ -287,9 +292,17 @@ impl RealtimeWebsocketWriter {
             .await
     }
 
-    pub async fn send_conversation_item_create(&self, text: String) -> Result<(), ApiError> {
-        self.send_json(&conversation_item_create_message(self.event_parser, text))
-            .await
+    pub async fn send_conversation_item_create(
+        &self,
+        text: String,
+        role: ConversationTextRole,
+    ) -> Result<(), ApiError> {
+        self.send_json(&conversation_item_create_message(
+            self.event_parser,
+            text,
+            role,
+        ))
+        .await
     }
 
     pub async fn send_conversation_context_item_create(
@@ -1618,6 +1631,7 @@ mod tests {
                 .expect("text");
             let third_json: Value = serde_json::from_str(&third).expect("json");
             assert_eq!(third_json["type"], "conversation.item.create");
+            assert_eq!(third_json["item"]["role"], "developer");
             assert_eq!(
                 third_json["item"]["content"][0]["type"],
                 Value::String("input_text".to_string())
@@ -1755,7 +1769,10 @@ mod tests {
             .await
             .expect("send audio");
         connection
-            .send_conversation_item_create("hello agent".to_string())
+            .send_conversation_item_create(
+                "hello agent".to_string(),
+                ConversationTextRole::Developer,
+            )
             .await
             .expect("send item");
         connection
@@ -1957,6 +1974,7 @@ mod tests {
                 .expect("text");
             let second_json: Value = serde_json::from_str(&second).expect("json");
             assert_eq!(second_json["type"], "conversation.item.create");
+            assert_eq!(second_json["item"]["role"], "developer");
             assert_eq!(
                 second_json["item"]["type"],
                 Value::String("message".to_string())
@@ -2039,7 +2057,10 @@ mod tests {
         );
 
         connection
-            .send_conversation_item_create("delegate this".to_string())
+            .send_conversation_item_create(
+                "delegate this".to_string(),
+                ConversationTextRole::Developer,
+            )
             .await
             .expect("send text item");
         connection

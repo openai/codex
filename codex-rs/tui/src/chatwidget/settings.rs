@@ -58,13 +58,11 @@ impl ChatWidget {
     pub(crate) fn set_windows_sandbox_mode(&mut self, mode: Option<WindowsSandboxModeToml>) {
         self.config.permissions.windows_sandbox_mode = mode;
         #[cfg(target_os = "windows")]
-        self.bottom_pane.set_windows_degraded_sandbox_active(
-            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                && matches!(
-                    WindowsSandboxLevel::from_config(&self.config),
-                    WindowsSandboxLevel::RestrictedToken
-                ),
-        );
+        self.bottom_pane
+            .set_windows_degraded_sandbox_active(matches!(
+                crate::windows_sandbox::level_from_config(&self.config),
+                WindowsSandboxLevel::RestrictedToken
+            ));
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -77,18 +75,6 @@ impl ChatWidget {
             );
         }
         let enabled = self.config.features.enabled(feature);
-        if feature == Feature::RealtimeConversation {
-            let realtime_conversation_enabled = self.realtime_conversation_enabled();
-            self.bottom_pane
-                .set_realtime_conversation_enabled(realtime_conversation_enabled);
-            self.bottom_pane
-                .set_audio_device_selection_enabled(self.realtime_audio_device_selection_enabled());
-            if !realtime_conversation_enabled && self.realtime_conversation.is_live() {
-                self.request_realtime_conversation_close(Some(
-                    "Realtime voice mode was closed because the feature was disabled.".to_string(),
-                ));
-            }
-        }
         if feature == Feature::FastMode {
             self.refresh_effective_service_tier();
             self.sync_service_tier_commands();
@@ -121,13 +107,11 @@ impl ChatWidget {
             feature,
             Feature::WindowsSandbox | Feature::WindowsSandboxElevated
         ) {
-            self.bottom_pane.set_windows_degraded_sandbox_active(
-                crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                    && matches!(
-                        WindowsSandboxLevel::from_config(&self.config),
-                        WindowsSandboxLevel::RestrictedToken
-                    ),
-            );
+            self.bottom_pane
+                .set_windows_degraded_sandbox_active(matches!(
+                    crate::windows_sandbox::level_from_config(&self.config),
+                    WindowsSandboxLevel::RestrictedToken
+                ));
         }
         enabled
     }
@@ -235,17 +219,6 @@ impl ChatWidget {
             .set_connectors_enabled(self.connectors_enabled());
     }
 
-    pub(crate) fn set_realtime_audio_device(
-        &mut self,
-        kind: RealtimeAudioDeviceKind,
-        name: Option<String>,
-    ) {
-        match kind {
-            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone = name,
-            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker = name,
-        }
-    }
-
     /// Set the syntax theme override in the widget's config copy.
     pub(crate) fn set_tui_theme(&mut self, theme: Option<String>) {
         self.config.tui_theme = theme;
@@ -275,28 +248,6 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.as_deref())
             .unwrap_or_else(|| self.current_collaboration_mode.model())
-    }
-
-    pub(crate) fn realtime_conversation_is_live(&self) -> bool {
-        self.realtime_conversation.is_live()
-    }
-
-    pub(super) fn current_realtime_audio_device_name(
-        &self,
-        kind: RealtimeAudioDeviceKind,
-    ) -> Option<String> {
-        match kind {
-            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone.clone(),
-            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker.clone(),
-        }
-    }
-
-    pub(super) fn current_realtime_audio_selection_label(
-        &self,
-        kind: RealtimeAudioDeviceKind,
-    ) -> String {
-        self.current_realtime_audio_device_name(kind)
-            .unwrap_or_else(|| "System default".to_string())
     }
 
     pub(super) fn sync_personality_command_enabled(&mut self) {

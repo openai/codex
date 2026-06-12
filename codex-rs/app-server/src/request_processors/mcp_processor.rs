@@ -161,6 +161,7 @@ impl McpRequestProcessor {
             &name,
             &url,
             config.mcp_oauth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
             http_headers,
             env_http_headers,
             &resolved_scopes.scopes,
@@ -203,22 +204,28 @@ impl McpRequestProcessor {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
-        let config = match params.thread_id.as_deref() {
+        let (config, thread) = match params.thread_id.as_deref() {
             Some(thread_id) => {
                 let (_, thread) = self.load_thread(thread_id).await?;
                 let thread_config = thread.config().await;
-                self.config_manager
+                let config = self
+                    .config_manager
                     .load_latest_config_for_thread(thread_config.as_ref())
                     .await
-                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+                (config, Some(thread))
             }
-            None => self.load_latest_config(/*fallback_cwd*/ None).await?,
+            None => (self.load_latest_config(/*fallback_cwd*/ None).await?, None),
         };
-        let mcp_config = self
-            .thread_manager
-            .mcp_manager()
-            .runtime_config(&config)
-            .await;
+        let mcp_config = match thread {
+            Some(thread) => thread.runtime_mcp_config(&config).await,
+            None => {
+                self.thread_manager
+                    .mcp_manager()
+                    .runtime_config(&config)
+                    .await
+            }
+        };
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
         // This status path has no turn-selected environment. Use config cwd

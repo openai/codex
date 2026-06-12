@@ -104,8 +104,8 @@ impl ChatWidget {
             && self.has_queued_follow_up_messages()
             && self.bottom_pane.no_modal_or_popup_active()
         {
-            if let Some(user_message) = self.pop_latest_queued_user_message() {
-                self.restore_user_message_to_composer(user_message);
+            if let Some(composer) = self.pop_latest_queued_composer_state() {
+                self.restore_composer_state(composer);
                 self.refresh_pending_input_preview();
                 self.request_redraw();
             }
@@ -355,20 +355,10 @@ impl ChatWidget {
     /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
     /// is armed.
     ///
-    /// Active realtime conversations take precedence over bottom-pane Ctrl+C handling so the
-    /// first press always stops live voice, even when the composer contains the recording meter.
-    ///
     /// When the double-press quit shortcut is enabled, pressing the same shortcut again before
     /// expiry requests a shutdown-first quit.
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
-        if self.realtime_conversation.is_live() {
-            self.bottom_pane.clear_quit_shortcut_hint();
-            self.quit_shortcut_expires_at = None;
-            self.quit_shortcut_key = None;
-            self.stop_realtime_conversation_from_ui();
-            return;
-        }
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
             if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {

@@ -167,7 +167,7 @@ Example with notification opt-out:
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, and optionally pass `model` and `version` to override configured realtime selection for this session only. By default, automatic backend Codex text follows the legacy speakable handoff path. Pass `autoHandoffOutputAsContext: true` to send automatic backend Codex text as silent developer context, then use `thread/realtime/appendHandoff` when the app wants realtime to speak a backend update. Returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`.
 - `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
-- `thread/realtime/appendText` — append text input to the active realtime session (experimental); returns `{}`.
+- `thread/realtime/appendText` — append text input to the active realtime session with a required `role` of `user` or `developer` (experimental); returns `{}`. Older clients that omit `role` default to `user`.
 - `thread/realtime/appendHandoff` — append assistant output to the active realtime session (experimental); returns `{}`. For v1 sessions this sends `conversation.handoff.append`.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
@@ -207,12 +207,12 @@ Example with notification opt-out:
 - `marketplace/upgrade` — upgrade all configured Git plugin marketplaces, or one named marketplace when `marketplaceName` is provided. Returns selected marketplace names, upgraded roots, and per-marketplace errors.
 - `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata, plugin `availability` (`AVAILABLE` by default or `DISABLED_BY_ADMIN` for remote plugins blocked upstream), fail-open `marketplaceLoadErrors` entries for marketplace files that could not be parsed or loaded, and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category (**under development; do not call from production clients yet**).
 - `plugin/installed` — list installed plugin rows plus any explicitly requested local install-suggestion plugin names, without fetching the broader remote catalog. Mention surfaces can use this narrower view when they need plugin mention payloads rather than plugin-page discovery data (**under development; do not call from production clients yet**).
-- `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/hooks/apps/MCP server names. Returned plugin skills include their current `enabled` state after local config filtering; bundled hooks are returned as lightweight declaration summaries keyed for correlation with `hooks/list`. Plugin app summaries also include `needsAuth` when the server can determine connector accessibility (**under development; do not call from production clients yet**).
+- `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/hooks/apps/MCP server names. Remote plugin details expose the canonical `shareUrl` supplied by the remote catalog when available; it is `null` for local plugins or when the catalog omits it. This field is separate from `summary.shareContext`, which continues to describe user and workspace sharing state. Returned plugin skills include their current `enabled` state after local config filtering; bundled hooks are returned as lightweight declaration summaries keyed for correlation with `hooks/list`. Use `plugin/install`'s `appsNeedingAuth` to drive post-install authentication and `app/list`'s `isAccessible` to determine current connector accessibility (**under development; do not call from production clients yet**).
 - `plugin/skill/read` — read remote plugin skill markdown on demand by `remoteMarketplaceName`, `remotePluginId`, and `skillName`. This lets clients preview uninstalled remote plugin skills without downloading the plugin bundle.
 - `skills/changed` — notification emitted when watched local skill files change.
 - `app/list` — list available apps.
-- `remoteControl/enable` — experimental; enable remote control for the current app-server process and return the current remote-control status snapshot. The caller is responsible for persisting the desired setting outside app-server.
-- `remoteControl/disable` — experimental; disable remote control for the current app-server process and return the current remote-control status snapshot. This does not revoke already enrolled controller devices.
+- `remoteControl/enable` — experimental; enable remote control for the current app-server process and return the current remote-control status snapshot. By default, any missing enrollment is completed before the response and the preference is persisted for the current app-server client scope. Pass `ephemeral: true` to enable remote control only for the current process without changing the persisted preference.
+- `remoteControl/disable` — experimental; disable remote control for the current app-server process and return the current remote-control status snapshot. By default, the disabled preference is persisted for the current app-server client scope. Pass `ephemeral: true` to disable only for the current process without changing the persisted preference. This does not revoke already enrolled controller devices.
 - `remoteControl/status/read` — experimental; read the current remote-control status snapshot. `status` is one of `disabled`, `connecting`, `connected`, or `errored`; `serverName` is the local machine name used by this app-server process; `environmentId` is a string when the app-server has a current enrollment and `null` when that enrollment is cleared, invalidated, or remote control is disabled.
 - `remoteControl/pairing/start` — experimental; start a short-lived remote-control pairing artifact for the current app-server process. Pass `manualCode: true` to also request a manual pairing code. Returns `pairingCode`, `manualPairingCode`, `environmentId`, and Unix-seconds `expiresAt`; app-server intentionally does not expose the backend `serverId`.
 - `remoteControl/pairing/status` — experimental; poll whether a remote-control `pairingCode` or `manualPairingCode` has been claimed. Pass exactly one of the two fields. Returns `claimed`.
@@ -1782,13 +1782,18 @@ The server also emits `app/list/updated` notifications whenever either source (a
 ```
 
 Connected apps may override the thread's approval reviewer in `config.toml`.
-When omitted, the app inherits the top-level `approvals_reviewer` value:
+Use `apps._default.approvals_reviewer` to set the reviewer for all apps, and a
+per-app value to override that default. When both are omitted, the app inherits
+the top-level `approvals_reviewer` value:
 
 ```toml
 approvals_reviewer = "auto_review"
 
-[apps.demo-app]
+[apps._default]
 approvals_reviewer = "user"
+
+[apps.demo-app]
+approvals_reviewer = "auto_review"
 ```
 
 Setting the app value to `"user"` routes its approval prompts to the user

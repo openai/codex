@@ -81,6 +81,8 @@ pub enum Feature {
     ShellTool,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
     CodexHooks,
+    /// Store CLI auth in the encrypted local secrets backend when keyring storage is selected.
+    SecretAuthStorage,
 
     // Experimental
     /// Enable JavaScript code mode backed by the in-process V8 runtime.
@@ -183,6 +185,8 @@ pub enum Feature {
     ImageGeneration,
     /// Replace hosted image generation with the standalone image-generation extension.
     ImageGenExt,
+    /// Resize all inline data-URL images before recording them in history.
+    ResizeAllImages,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
@@ -195,6 +199,8 @@ pub enum Feature {
     GuardianApproval,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
+    /// Add current context-window metadata to model-visible context.
+    TokenBudget,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -745,6 +751,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::SecretAuthStorage,
+        key: "secret_auth_storage",
+        stage: Stage::Stable,
+        default_enabled: cfg!(windows),
+    },
+    FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
         stage: Stage::Stable,
@@ -1087,6 +1099,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ResizeAllImages,
+        key: "resize_all_images",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::SkillMcpDependencyInstall,
         key: "skill_mcp_dependency_install",
         stage: Stage::Stable,
@@ -1133,6 +1151,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::TokenBudget,
+        key: "token_budget",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::CollaborationModes,
@@ -1233,8 +1257,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteCompactionV2,
         key: "remote_compaction_v2",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WorkspaceDependencies,
@@ -1257,7 +1281,13 @@ pub fn unstable_features_warning_event(
     let mut under_development_feature_keys = Vec::new();
     if let Some(table) = effective_features {
         for (key, value) in table {
-            if value.as_bool() != Some(true) {
+            let is_enabled = value.as_bool() == Some(true)
+                || value
+                    .as_table()
+                    .and_then(|table| table.get("enabled"))
+                    .and_then(toml::Value::as_bool)
+                    == Some(true);
+            if !is_enabled {
                 continue;
             }
             let Some(spec) = FEATURES.iter().find(|spec| spec.key == key.as_str()) else {
@@ -1276,6 +1306,7 @@ pub fn unstable_features_warning_event(
         return None;
     }
 
+    under_development_feature_keys.sort();
     let under_development_feature_keys = under_development_feature_keys.join(", ");
     let message = format!(
         "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {config_path}."

@@ -44,6 +44,7 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_features::FEATURES;
 use codex_features::Feature;
+use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
@@ -337,6 +338,7 @@ impl RealtimeE2eHarness {
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+                architecture: None,
                 thread_id: self.thread_id.clone(),
                 auto_handoff_output_as_context,
                 model: None,
@@ -417,6 +419,7 @@ impl RealtimeE2eHarness {
             .send_thread_realtime_append_text_request(ThreadRealtimeAppendTextParams {
                 thread_id,
                 text: text.to_string(),
+                role: ConversationTextRole::User,
             })
             .await?;
         let response: JSONRPCResponse = timeout(
@@ -603,6 +606,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             auto_handoff_output_as_context: None,
             thread_id: thread_start.thread.id.clone(),
             model: Some("realtime-treatment-model".to_string()),
@@ -678,6 +682,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         .send_thread_realtime_append_text_request(ThreadRealtimeAppendTextParams {
             thread_id: started.thread_id.clone(),
             text: "hello".to_string(),
+            role: ConversationTextRole::Developer,
         })
         .await?;
     let text_append_response: JSONRPCResponse = timeout(
@@ -777,6 +782,25 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         connection[0].body_json()["session"]["instructions"].as_str(),
         Some(startup_context_instructions.as_str()),
     );
+    let text_request = connection
+        .iter()
+        .map(WebSocketRequest::body_json)
+        .find(|request| request["type"] == "conversation.item.create")
+        .context("expected conversation item request")?;
+    assert_eq!(
+        text_request,
+        json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "developer",
+                "content": [{
+                    "type": "input_text",
+                    "text": "hello",
+                }],
+            },
+        })
+    );
     let mut request_types = [
         connection[1].body_json()["type"]
             .as_str()
@@ -859,6 +883,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             auto_handoff_output_as_context: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
@@ -1036,6 +1061,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             auto_handoff_output_as_context: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
@@ -1136,6 +1162,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     let thread_id = thread_start.thread.id;
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             auto_handoff_output_as_context: None,
             thread_id: thread_id.clone(),
             model: None,
@@ -2366,6 +2393,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             auto_handoff_output_as_context: None,
             thread_id: thread_start.thread.id,
             model: None,
@@ -2428,6 +2456,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             auto_handoff_output_as_context: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
