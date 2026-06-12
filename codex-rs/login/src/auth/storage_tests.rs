@@ -214,7 +214,7 @@ fn seed_secrets_backend_and_fallback_auth_file_for_delete(
     );
     manager.set(
         &SecretScope::Global,
-        &CLI_AUTH_SECRET_NAME,
+        &CODEX_AUTH_SECRET_NAME,
         &serde_json::to_string(auth)?,
     )?;
     let auth_file = get_auth_file(codex_home);
@@ -235,7 +235,7 @@ fn seed_secrets_backend_with_auth(
     );
     manager.set(
         &SecretScope::Global,
-        &CLI_AUTH_SECRET_NAME,
+        &CODEX_AUTH_SECRET_NAME,
         &serde_json::to_string(auth)?,
     )?;
     Ok(())
@@ -253,7 +253,7 @@ fn assert_keyring_saved_auth_and_removed_fallback(
         LocalSecretsNamespace::CodexAuth,
     );
     let saved_value = manager
-        .get(&SecretScope::Global, &CLI_AUTH_SECRET_NAME)?
+        .get(&SecretScope::Global, &CODEX_AUTH_SECRET_NAME)?
         .context("encrypted auth entry should exist")?;
     let expected_serialized = serde_json::to_string(expected)?;
     assert_eq!(saved_value, expected_serialized);

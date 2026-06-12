@@ -1640,7 +1640,21 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
 ) -> std::io::Result<ConfigToml> {
-    load_config_toml_with_layer_stack(codex_home, cwd, cli_overrides, loader_overrides)
+    load_config_as_toml_with_cli_and_load_options(codex_home, cwd, cli_overrides, loader_overrides)
+        .await
+}
+
+/// DEPRECATED for most callers: prefer [Config::load_with_cli_overrides()] or
+/// [ConfigBuilder] because working with [ConfigToml] directly means
+/// [ConfigRequirements] have not been applied yet, which risks skipping
+/// required constraints.
+pub async fn load_config_as_toml_with_cli_and_load_options(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    options: impl Into<ConfigLoadOptions>,
+) -> std::io::Result<ConfigToml> {
+    load_config_toml_with_layer_stack(codex_home, cwd, cli_overrides, options)
         .await
         .map(|result| result.config_toml)
 }
@@ -1655,10 +1669,8 @@ pub struct ConfigTomlLoadResult {
     pub config_layer_stack: ConfigLayerStack,
 }
 
-/// DEPRECATED for most callers: prefer [Config::load_with_cli_overrides()] or
-/// [ConfigBuilder] because working with [ConfigToml] directly means
-/// [ConfigRequirements] have not been applied yet, which risks skipping
-/// required constraints.
+/// Loads the partially merged config together with the layer stack used to
+/// derive it, before constructing a full [`Config`].
 pub async fn load_config_toml_with_layer_stack(
     codex_home: &Path,
     cwd: Option<&AbsolutePathBuf>,
