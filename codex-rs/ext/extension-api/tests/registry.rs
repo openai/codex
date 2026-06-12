@@ -5,6 +5,7 @@ use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ApprovalReviewError;
 use codex_extension_api::ApprovalReviewInput;
 use codex_extension_api::ApprovalReviewOutcome;
+use codex_extension_api::ApprovalReviewRunner;
 use codex_extension_api::ApprovalReviewSource;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
@@ -260,6 +261,16 @@ struct RecordingApprovalContributor {
     calls: Arc<Mutex<Vec<ApprovalCall>>>,
 }
 
+struct UnusedApprovalRunner;
+
+impl ApprovalReviewRunner for UnusedApprovalRunner {
+    fn run(&self) -> ExtensionFuture<'_, Result<ApprovalReviewOutcome, ApprovalReviewError>> {
+        Box::pin(std::future::ready(Err(ApprovalReviewError::new(
+            "test contributor should not invoke the runner",
+        ))))
+    }
+}
+
 impl ApprovalReviewContributor for RecordingApprovalContributor {
     fn review<'a>(
         &'a self,
@@ -303,6 +314,7 @@ fn approval_review_input<'a>(
     action: &'a GuardianAssessmentAction,
     approval_policy: &'a AskForApproval,
 ) -> ApprovalReviewInput<'a> {
+    static RUNNER: UnusedApprovalRunner = UnusedApprovalRunner;
     ApprovalReviewInput {
         session_store,
         thread_store,
@@ -316,6 +328,7 @@ fn approval_review_input<'a>(
         approval_policy,
         retry_reason: Some("initial review timed out"),
         source: ApprovalReviewSource::DelegatedSubagent,
+        runner: &RUNNER,
     }
 }
 

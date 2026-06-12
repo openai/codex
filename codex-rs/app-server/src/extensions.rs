@@ -171,8 +171,21 @@ pub(crate) fn guardian_agent_spawner(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
+    use codex_extension_api::ApprovalReviewError;
+    use codex_extension_api::ApprovalReviewInput;
+    use codex_extension_api::ApprovalReviewOutcome;
+    use codex_extension_api::ApprovalReviewRunner;
+    use codex_extension_api::ApprovalReviewSource;
+    use codex_extension_api::ExtensionData;
+    use codex_extension_api::ExtensionFuture;
+    use codex_protocol::approvals::GuardianAssessmentAction;
+    use codex_protocol::config_types::ApprovalsReviewer;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ThreadGoal as CoreThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
@@ -181,6 +194,68 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
+
+    struct RecordingApprovalRunner(AtomicUsize);
+
+    impl ApprovalReviewRunner for RecordingApprovalRunner {
+        fn run(&self) -> ExtensionFuture<'_, Result<ApprovalReviewOutcome, ApprovalReviewError>> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(std::future::ready(Ok(ApprovalReviewOutcome::decision(
+                ReviewDecision::Approved,
+            ))))
+        }
+    }
+
+    #[tokio::test]
+    async fn installed_guardian_claims_only_auto_review_requests() {
+        let mut builder = ExtensionRegistryBuilder::<Config>::new();
+        codex_guardian::install(&mut builder, ());
+        let registry = builder.build();
+        let session_store = ExtensionData::new("session");
+        let thread_store = ExtensionData::new(ThreadId::default().to_string());
+        let turn_store = ExtensionData::new("turn");
+        let action = GuardianAssessmentAction::RequestPermissions {
+            reason: Some("run command".to_string()),
+            permissions: Default::default(),
+        };
+        let approval_policy = AskForApproval::OnRequest;
+        let runner = RecordingApprovalRunner(AtomicUsize::new(0));
+        let input = |reviewer, approval_policy| ApprovalReviewInput {
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+            review_id: "review",
+            turn_id: "turn",
+            target_item_id: None,
+            prompt: "review command",
+            action: &action,
+            reviewer,
+            approval_policy,
+            retry_reason: None,
+            source: ApprovalReviewSource::MainTurn,
+            runner: &runner,
+        };
+
+        assert_eq!(
+            registry
+                .approval_review(input(ApprovalsReviewer::AutoReview, &approval_policy))
+                .await,
+            Ok(ApprovalReviewOutcome::decision(ReviewDecision::Approved))
+        );
+        assert_eq!(
+            registry
+                .approval_review(input(ApprovalsReviewer::User, &approval_policy))
+                .await,
+            Ok(ApprovalReviewOutcome::Abstain)
+        );
+        assert_eq!(
+            registry
+                .approval_review(input(ApprovalsReviewer::AutoReview, &AskForApproval::Never))
+                .await,
+            Ok(ApprovalReviewOutcome::Abstain)
+        );
+        assert_eq!(runner.0.load(Ordering::Relaxed), 1);
+    }
 
     #[tokio::test]
     async fn app_server_event_sink_uses_listener_fifo_for_goal_updates_and_clears() {

@@ -3,11 +3,16 @@ use std::sync::Arc;
 use codex_core::config::Config;
 use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
+use codex_extension_api::ApprovalReviewContributor;
+use codex_extension_api::ApprovalReviewInput;
+use codex_extension_api::ApprovalReviewOutcome;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::protocol::AskForApproval;
 
 /// Guardian extension dependencies supplied by the host at construction time.
 #[derive(Clone, Debug)]
@@ -68,10 +73,35 @@ where
     }
 }
 
+impl<S> ApprovalReviewContributor for GuardianExtension<S>
+where
+    S: Send + Sync,
+{
+    fn review<'a>(
+        &'a self,
+        input: ApprovalReviewInput<'a>,
+    ) -> ExtensionFuture<'a, Result<ApprovalReviewOutcome, codex_extension_api::ApprovalReviewError>>
+    {
+        Box::pin(async move {
+            if input.reviewer != ApprovalsReviewer::AutoReview
+                || !matches!(
+                    input.approval_policy,
+                    AskForApproval::OnRequest | AskForApproval::Granular(_)
+                )
+            {
+                return Ok(ApprovalReviewOutcome::Abstain);
+            }
+            input.runner.run().await
+        })
+    }
+}
+
 /// Installs the guardian contributors into the extension registry.
 pub fn install<S>(registry: &mut ExtensionRegistryBuilder<Config>, agent_spawner: S)
 where
     S: Send + Sync + 'static,
 {
-    registry.thread_lifecycle_contributor(Arc::new(GuardianExtension::new(agent_spawner)));
+    let extension = Arc::new(GuardianExtension::new(agent_spawner));
+    registry.thread_lifecycle_contributor(extension.clone());
+    registry.approval_review_contributor(extension);
 }

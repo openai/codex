@@ -8,6 +8,7 @@ mod user_instructions;
 pub use approval_review::ApprovalReviewError;
 pub use approval_review::ApprovalReviewInput;
 pub use approval_review::ApprovalReviewOutcome;
+pub use approval_review::ApprovalReviewRunner;
 pub use approval_review::ApprovalReviewSource;
 pub use capabilities::AgentSpawnFuture;
 pub use capabilities::AgentSpawner;

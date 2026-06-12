@@ -7,6 +7,16 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
 use crate::ExtensionData;
+use crate::ExtensionFuture;
+
+/// Request-scoped host capability that executes the configured approval review.
+///
+/// Contributors decide whether they own a request before invoking this runner.
+/// The host retains responsibility for the underlying review runtime while the
+/// contributor owns routing policy and the returned decision.
+pub trait ApprovalReviewRunner: Send + Sync {
+    fn run(&self) -> ExtensionFuture<'_, Result<ApprovalReviewOutcome, ApprovalReviewError>>;
+}
 
 /// Identifies the runtime that originated an approval-review request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +47,7 @@ pub struct ApprovalReviewInput<'a> {
     pub approval_policy: &'a AskForApproval,
     pub retry_reason: Option<&'a str>,
     pub source: ApprovalReviewSource,
+    pub runner: &'a dyn ApprovalReviewRunner,
 }
 
 /// Result of offering an approval request to one extension contributor.

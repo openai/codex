@@ -16,7 +16,9 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use codex_extension_api::ApprovalReviewInput;
 use codex_extension_api::ApprovalReviewOutcome;
+use codex_extension_api::ApprovalReviewRunner;
 use codex_extension_api::ApprovalReviewSource;
+use codex_extension_api::ExtensionFuture;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::ReviewDecision;
@@ -55,6 +57,65 @@ impl AutomatedApprovalDecision {
     }
 }
 
+struct CoreApprovalReviewRunner<'a> {
+    session: &'a std::sync::Arc<crate::session::session::Session>,
+    turn: &'a std::sync::Arc<crate::session::turn_context::TurnContext>,
+    review_id: &'a str,
+    request: &'a GuardianApprovalRequest,
+    retry_reason: Option<&'a str>,
+    source: ApprovalReviewSource,
+    cancellation_token: Option<&'a CancellationToken>,
+}
+
+impl ApprovalReviewRunner for CoreApprovalReviewRunner<'_> {
+    fn run(
+        &self,
+    ) -> ExtensionFuture<'_, Result<ApprovalReviewOutcome, codex_extension_api::ApprovalReviewError>>
+    {
+        Box::pin(async move {
+            let decision = if let Some(cancellation_token) = self.cancellation_token {
+                let review_rx = crate::guardian::spawn_approval_request_review(
+                    std::sync::Arc::clone(self.session),
+                    std::sync::Arc::clone(self.turn),
+                    self.review_id.to_string(),
+                    self.request.clone(),
+                    self.retry_reason.map(str::to_string),
+                    match self.source {
+                        ApprovalReviewSource::MainTurn => {
+                            codex_analytics::GuardianApprovalRequestSource::MainTurn
+                        }
+                        ApprovalReviewSource::DelegatedSubagent => {
+                            codex_analytics::GuardianApprovalRequestSource::DelegatedSubagent
+                        }
+                    },
+                    cancellation_token.clone(),
+                );
+                review_rx.await.unwrap_or(ReviewDecision::Denied)
+            } else {
+                review_approval_request(
+                    self.session,
+                    self.turn,
+                    self.review_id.to_string(),
+                    self.request.clone(),
+                    self.retry_reason.map(str::to_string),
+                )
+                .await
+            };
+            let denial_message = match decision {
+                ReviewDecision::Denied | ReviewDecision::Abort => {
+                    Some(guardian_rejection_message(self.session, self.review_id).await)
+                }
+                ReviewDecision::TimedOut => Some(guardian_timeout_message()),
+                _ => None,
+            };
+            Ok(ApprovalReviewOutcome::Decision {
+                decision,
+                denial_message,
+            })
+        })
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn request_automated_approval(
     session: &std::sync::Arc<crate::session::session::Session>,
@@ -70,6 +131,15 @@ pub(crate) async fn request_automated_approval(
         .map_err(|error| format!("failed to render review prompt: {error}"))?
         .text;
     let approval_policy = turn.approval_policy.value();
+    let runner = CoreApprovalReviewRunner {
+        session,
+        turn,
+        review_id: &review_id,
+        request: &request,
+        retry_reason: retry_reason.as_deref(),
+        source,
+        cancellation_token: None,
+    };
     let review_input = ApprovalReviewInput {
         session_store: &session.services.session_extension_data,
         thread_store: &session.services.thread_extension_data,
@@ -83,6 +153,7 @@ pub(crate) async fn request_automated_approval(
         approval_policy: &approval_policy,
         retry_reason: retry_reason.as_deref(),
         source,
+        runner: &runner,
     };
     match session
         .services
@@ -99,15 +170,12 @@ pub(crate) async fn request_automated_approval(
             source: AutomatedApprovalSource::Extension,
         }),
         Ok(ApprovalReviewOutcome::Abstain) => {
-            let decision =
-                review_approval_request(session, turn, review_id.clone(), request, retry_reason)
-                    .await;
-            let denial_message = match decision {
-                ReviewDecision::Denied | ReviewDecision::Abort => {
-                    Some(guardian_rejection_message(session, &review_id).await)
-                }
-                ReviewDecision::TimedOut => Some(guardian_timeout_message()),
-                _ => None,
+            let ApprovalReviewOutcome::Decision {
+                decision,
+                denial_message,
+            } = runner.run().await.map_err(|error| error.to_string())?
+            else {
+                return Err("core approval reviewer unexpectedly abstained".to_string());
             };
             Ok(AutomatedApprovalDecision {
                 decision,
@@ -138,6 +206,15 @@ pub(crate) async fn request_automated_approval_with_cancel(
         }
     };
     let approval_policy = turn.approval_policy.value();
+    let runner = CoreApprovalReviewRunner {
+        session,
+        turn,
+        review_id: &review_id,
+        request: &request,
+        retry_reason: retry_reason.as_deref(),
+        source,
+        cancellation_token: Some(&cancellation_token),
+    };
     let review_input = ApprovalReviewInput {
         session_store: &session.services.session_extension_data,
         thread_store: &session.services.thread_extension_data,
@@ -151,6 +228,7 @@ pub(crate) async fn request_automated_approval_with_cancel(
         approval_policy: &approval_policy,
         retry_reason: retry_reason.as_deref(),
         source,
+        runner: &runner,
     };
 
     let extension_outcome = tokio::select! {
@@ -168,33 +246,23 @@ pub(crate) async fn request_automated_approval_with_cancel(
             source: AutomatedApprovalSource::Extension,
         })),
         Ok(ApprovalReviewOutcome::Abstain) => {
-            let review_rx = crate::guardian::spawn_approval_request_review(
-                std::sync::Arc::clone(session),
-                std::sync::Arc::clone(turn),
-                review_id.clone(),
-                request,
-                retry_reason,
-                match source {
-                    ApprovalReviewSource::MainTurn => {
-                        codex_analytics::GuardianApprovalRequestSource::MainTurn
-                    }
-                    ApprovalReviewSource::DelegatedSubagent => {
-                        codex_analytics::GuardianApprovalRequestSource::DelegatedSubagent
-                    }
-                },
-                cancellation_token.clone(),
-            );
-            let decision = tokio::select! {
+            let outcome = tokio::select! {
                 biased;
                 _ = cancellation_token.cancelled() => return None,
-                decision = review_rx => decision.unwrap_or(ReviewDecision::Denied),
+                outcome = runner.run() => outcome,
             };
-            let denial_message = match decision {
-                ReviewDecision::Denied | ReviewDecision::Abort => {
-                    Some(guardian_rejection_message(session, &review_id).await)
-                }
-                ReviewDecision::TimedOut => Some(guardian_timeout_message()),
-                _ => None,
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(error) => return Some(Err(error.to_string())),
+            };
+            let ApprovalReviewOutcome::Decision {
+                decision,
+                denial_message,
+            } = outcome
+            else {
+                return Some(Err(
+                    "core approval reviewer unexpectedly abstained".to_string()
+                ));
             };
             Some(Ok(AutomatedApprovalDecision {
                 decision,
