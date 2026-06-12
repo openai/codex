@@ -2,7 +2,6 @@ use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::histogram_data;
 use crate::harness::latest_metrics;
-use codex_otel::MetricsError;
 use codex_otel::Result;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
@@ -74,39 +73,6 @@ fn record_duration_seconds_uses_fractional_seconds_and_scaled_buckets() -> Resul
         metric.description(),
         "Duration of Codex requests in seconds."
     );
-
-    Ok(())
-}
-
-#[test]
-fn duration_histograms_reject_conflicting_instrument_metadata() -> Result<()> {
-    let (metrics, _exporter) = build_metrics_with_defaults(&[])?;
-    metrics.record_duration("codex.request_duration", Duration::from_millis(15), &[])?;
-
-    let error = metrics
-        .record_duration_seconds_with_description(
-            "codex.request_duration",
-            "Duration of Codex requests in seconds.",
-            Duration::from_millis(15),
-            &[],
-        )
-        .expect_err("conflicting metadata should fail");
-    metrics.shutdown()?;
-
-    assert!(matches!(
-        error,
-        MetricsError::ConflictingDurationHistogram {
-            name,
-            existing_unit,
-            existing_description,
-            requested_unit,
-            requested_description,
-        } if name == "codex.request_duration"
-            && existing_unit == "ms"
-            && existing_description == "Duration in milliseconds."
-            && requested_unit == "s"
-            && requested_description == "Duration of Codex requests in seconds."
-    ));
 
     Ok(())
 }

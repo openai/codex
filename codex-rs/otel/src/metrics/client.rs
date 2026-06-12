@@ -57,6 +57,7 @@ const SECOND_DURATION_BOUNDARIES: &[f64] = &[
 #[derive(Debug, Eq, Hash, PartialEq)]
 struct InstrumentKey {
     name: String,
+    unit: Option<&'static str>,
     description: Option<String>,
 }
 
@@ -94,20 +95,13 @@ impl MetricReader for SharedManualReader {
 }
 
 #[derive(Debug)]
-struct CachedDurationHistogram {
-    unit: &'static str,
-    description: String,
-    histogram: Histogram<f64>,
-}
-
-#[derive(Debug)]
 struct MetricsClientInner {
     meter_provider: SdkMeterProvider,
     meter: Meter,
     counters: Mutex<HashMap<InstrumentKey, Counter<u64>>>,
     gauges: Mutex<HashMap<InstrumentKey, Gauge<i64>>>,
     histograms: Mutex<HashMap<String, Histogram<f64>>>,
-    duration_histograms: Mutex<HashMap<String, CachedDurationHistogram>>,
+    duration_histograms: Mutex<HashMap<InstrumentKey, Histogram<f64>>>,
     runtime_reader: Option<Arc<ManualReader>>,
     default_tags: BTreeMap<String, String>,
 }
@@ -135,6 +129,7 @@ impl MetricsClientInner {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = InstrumentKey {
             name: name.to_string(),
+            unit: None,
             description: description.map(str::to_string),
         };
         let counter = counters.entry(key).or_insert_with(|| {
@@ -179,6 +174,7 @@ impl MetricsClientInner {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = InstrumentKey {
             name: name.to_string(),
+            unit: None,
             description: description.map(str::to_string),
         };
         let gauge = gauges.entry(key).or_insert_with(|| {
@@ -208,36 +204,19 @@ impl MetricsClientInner {
             .duration_histograms
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let histogram = match histograms.entry(name.to_string()) {
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                let cached = entry.into_mut();
-                if cached.unit != unit || cached.description != description {
-                    return Err(MetricsError::ConflictingDurationHistogram {
-                        name: name.to_string(),
-                        existing_unit: cached.unit.to_string(),
-                        existing_description: cached.description.clone(),
-                        requested_unit: unit.to_string(),
-                        requested_description: description.to_string(),
-                    });
-                }
-                &cached.histogram
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                &entry
-                    .insert(CachedDurationHistogram {
-                        unit,
-                        description: description.to_string(),
-                        histogram: self
-                            .meter
-                            .f64_histogram(name.to_string())
-                            .with_unit(unit)
-                            .with_description(description.to_string())
-                            .with_boundaries(boundaries.to_vec())
-                            .build(),
-                    })
-                    .histogram
-            }
+        let key = InstrumentKey {
+            name: name.to_string(),
+            unit: Some(unit),
+            description: Some(description.to_string()),
         };
+        let histogram = histograms.entry(key).or_insert_with(|| {
+            self.meter
+                .f64_histogram(name.to_string())
+                .with_unit(unit)
+                .with_description(description.to_string())
+                .with_boundaries(boundaries.to_vec())
+                .build()
+        });
         histogram.record(value, &attributes);
         Ok(())
     }

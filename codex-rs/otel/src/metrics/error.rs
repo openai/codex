@@ -20,17 +20,6 @@ pub enum MetricsError {
     #[error("counter increment must be non-negative for {name}: {inc}")]
     NegativeCounterIncrement { name: String, inc: i64 },
 
-    #[error(
-        "duration histogram {name} is already registered with unit {existing_unit} and description {existing_description:?}; requested unit {requested_unit} and description {requested_description:?}"
-    )]
-    ConflictingDurationHistogram {
-        name: String,
-        existing_unit: String,
-        existing_description: String,
-        requested_unit: String,
-        requested_description: String,
-    },
-
     #[error("failed to build OTLP metrics exporter")]
     ExporterBuild {
         #[source]
