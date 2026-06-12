@@ -103,12 +103,12 @@ impl ExecRequest {
     pub(crate) fn from_sandbox_exec_request(
         request: SandboxExecRequest,
         options: ExecOptions,
-        windows_sandbox_policy_cwd: AbsolutePathBuf,
         windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
     ) -> Self {
         let SandboxExecRequest {
             command,
             cwd,
+            sandbox_policy_cwd: windows_sandbox_policy_cwd,
             mut env,
             network,
             sandbox,

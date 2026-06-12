@@ -9,7 +9,6 @@ workspace = true
 
 [dependencies]
 codex-protocol = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 

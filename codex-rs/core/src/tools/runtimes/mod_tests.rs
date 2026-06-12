@@ -25,6 +25,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -88,18 +89,21 @@ async fn test_network_proxy() -> anyhow::Result<NetworkProxy> {
 async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::Result<()> {
     let proxy = test_network_proxy().await?;
     let dir = tempdir().expect("create temp dir");
-    let cwd = dir.path().abs();
+    let command_cwd = dir.path().join("command").abs();
+    let native_sandbox_policy_cwd = dir.path().join("sandbox-policy").abs();
     let mut env = HashMap::from([("CUSTOM_ENV".to_string(), "kept".to_string())]);
     proxy.apply_to_env(&mut env);
 
     let command = vec!["/bin/echo".to_string(), "ok".to_string()];
     let command = build_sandbox_command(
         &command,
-        &cwd,
+        &command_cwd,
         &exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated),
         /*additional_permissions*/ None,
     )
     .expect("build sandbox command");
+    assert_eq!(command.cwd, PathUri::from_abs_path(&command_cwd)?);
+    let sandbox_policy_cwd = PathUri::from_abs_path(&native_sandbox_policy_cwd)?;
     let options = ExecOptions {
         expiration: ExecExpiration::DefaultTimeout,
         capture_policy: ExecCapturePolicy::ShellTool,
@@ -111,8 +115,8 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         permissions: &permissions,
         enforce_managed_network: false,
         manager: &manager,
-        sandbox_cwd: &cwd,
-        workspace_roots: std::slice::from_ref(&cwd),
+        sandbox_cwd: &sandbox_policy_cwd,
+        workspace_roots: std::slice::from_ref(&native_sandbox_policy_cwd),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
@@ -131,6 +135,11 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         )
         .expect("prepare exec request");
 
+    assert_eq!(exec_request.cwd, command_cwd);
+    assert_eq!(
+        exec_request.windows_sandbox_policy_cwd,
+        native_sandbox_policy_cwd
+    );
     assert_eq!(exec_request.network, None);
     for key in PROXY_ENV_KEYS {
         assert_eq!(exec_request.env.get(*key), None, "{key} should be unset");

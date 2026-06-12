@@ -57,7 +57,7 @@ pub(crate) async fn load_project_instructions(
             config,
             filesystem.as_ref(),
             &turn_environment.environment_id,
-            &turn_environment.cwd,
+            turn_environment.cwd(),
         )
         .await
         {

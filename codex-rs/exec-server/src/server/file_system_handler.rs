@@ -189,7 +189,6 @@ fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
 mod tests {
     use codex_protocol::protocol::NetworkAccess;
     use codex_protocol::protocol::SandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
@@ -207,8 +206,14 @@ mod tests {
         )
         .expect("runtime paths");
         let handler = FileSystemHandler::new(runtime_paths);
-        let sandbox_cwd =
-            AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute tempdir");
+        let sandbox_cwd = PathUri::from_path(temp_dir.path()).expect("tempdir URI");
+        let sandbox_context = |sandbox_policy| {
+            FileSystemSandboxContext::from_legacy_sandbox_policy(
+                sandbox_policy,
+                sandbox_cwd.clone(),
+            )
+            .expect("sandbox context")
+        };
 
         for (file_name, sandbox_policy) in [
             ("danger.txt", SandboxPolicy::DangerFullAccess),
@@ -225,10 +230,7 @@ mod tests {
                 .write_file(FsWriteFileParams {
                     path: path.clone(),
                     data_base64: STANDARD.encode("ok"),
-                    sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
-                        sandbox_policy.clone(),
-                        sandbox_cwd.clone(),
-                    )),
+                    sandbox: Some(sandbox_context(sandbox_policy.clone())),
                 })
                 .await
                 .expect("write file");
@@ -236,10 +238,7 @@ mod tests {
             let canonicalized = handler
                 .canonicalize(FsCanonicalizeParams {
                     path: path.clone(),
-                    sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
-                        sandbox_policy.clone(),
-                        sandbox_cwd.clone(),
-                    )),
+                    sandbox: Some(sandbox_context(sandbox_policy.clone())),
                 })
                 .await
                 .expect("canonicalize file");
@@ -254,10 +253,7 @@ mod tests {
             let response = handler
                 .read_file(FsReadFileParams {
                     path,
-                    sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
-                        sandbox_policy,
-                        sandbox_cwd.clone(),
-                    )),
+                    sandbox: Some(sandbox_context(sandbox_policy)),
                 })
                 .await
                 .expect("read file");

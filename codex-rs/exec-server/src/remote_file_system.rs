@@ -321,6 +321,7 @@ mod tests {
     use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -337,7 +338,7 @@ mod tests {
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
         let sandbox_context = FileSystemSandboxContext::from_permission_profile_with_cwd(
             permissions,
-            absolute_test_path("host-checkout"),
+            path_uri("host-checkout"),
         );
 
         let remote_context =
@@ -356,7 +357,7 @@ mod tests {
         }]);
         let permissions =
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
-        let cwd = absolute_test_path("host-checkout");
+        let cwd = path_uri("host-checkout");
         let sandbox_context =
             FileSystemSandboxContext::from_permission_profile_with_cwd(permissions, cwd.clone());
 
@@ -399,5 +400,9 @@ mod tests {
     fn absolute_test_path(name: &str) -> AbsolutePathBuf {
         let path = std::env::temp_dir().join(name);
         AbsolutePathBuf::from_absolute_path(&path).expect("absolute path")
+    }
+
+    fn path_uri(name: &str) -> PathUri {
+        PathUri::from_abs_path(&absolute_test_path(name)).expect("path URI")
     }
 }

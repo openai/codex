@@ -648,12 +648,12 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .expect("build resumed turn context");
     assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
     assert_eq!(
-        resumed_turn.environments.turn_environments[0].cwd,
-        default_cwd
+        resumed_turn.environments.turn_environments[0].cwd(),
+        &default_cwd
     );
     assert_ne!(
-        resumed_turn.environments.turn_environments[0].cwd,
-        selected_cwd
+        resumed_turn.environments.turn_environments[0].cwd(),
+        &selected_cwd
     );
 
     let forked = manager
@@ -675,12 +675,12 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .expect("build forked turn context");
     assert_eq!(forked_turn.environments.turn_environments.len(), 1);
     assert_eq!(
-        forked_turn.environments.turn_environments[0].cwd,
-        default_cwd
+        forked_turn.environments.turn_environments[0].cwd(),
+        &default_cwd
     );
     assert_ne!(
-        forked_turn.environments.turn_environments[0].cwd,
-        selected_cwd
+        forked_turn.environments.turn_environments[0].cwd(),
+        &selected_cwd
     );
 }
 

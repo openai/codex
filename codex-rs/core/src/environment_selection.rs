@@ -58,7 +58,7 @@ impl ResolvedTurnEnvironments {
             return None;
         };
 
-        (!environment.environment.is_remote()).then_some(&environment.cwd)
+        (!environment.environment.is_remote()).then_some(environment.cwd())
     }
 }
 
@@ -96,12 +96,12 @@ pub(crate) async fn resolve_environment_selections(
                 None
             }
         };
-        turn_environments.push(TurnEnvironment {
+        turn_environments.push(TurnEnvironment::new(
             environment_id,
             environment,
-            cwd: selected_environment.cwd.clone(),
+            selected_environment.cwd.clone(),
             shell,
-        });
+        )?);
     }
     Ok(ResolvedTurnEnvironments { turn_environments })
 }
@@ -270,22 +270,26 @@ url = "ws://127.0.0.1:8765"
                 .expect("remote environment"),
         );
         let remote = ResolvedTurnEnvironments {
-            turn_environments: vec![TurnEnvironment {
-                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                environment: remote_environment.clone(),
-                cwd: cwd.clone(),
-                shell: None,
-            }],
+            turn_environments: vec![
+                TurnEnvironment::new(
+                    REMOTE_ENVIRONMENT_ID.to_string(),
+                    remote_environment.clone(),
+                    cwd.clone(),
+                    /*shell*/ None,
+                )
+                .expect("remote cwd URI"),
+            ],
         };
         let multiple = ResolvedTurnEnvironments {
             turn_environments: vec![
                 local.primary().expect("local environment").clone(),
-                TurnEnvironment {
-                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    environment: remote_environment,
-                    cwd: cwd.clone(),
-                    shell: None,
-                },
+                TurnEnvironment::new(
+                    REMOTE_ENVIRONMENT_ID.to_string(),
+                    remote_environment,
+                    cwd.clone(),
+                    /*shell*/ None,
+                )
+                .expect("remote cwd URI"),
             ],
         };
 

@@ -314,7 +314,7 @@ impl Session {
         let mcp_runtime_context = match turn_context.environments.primary() {
             Some(turn_environment) => McpRuntimeContext::new(
                 Arc::clone(&self.services.environment_manager),
-                turn_environment.cwd.to_path_buf(),
+                turn_environment.cwd().to_path_buf(),
             ),
             None => McpRuntimeContext::new(
                 Arc::clone(&self.services.environment_manager),
