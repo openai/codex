@@ -676,15 +676,30 @@ async fn multiple_environment_docs_use_labeled_layout_and_preserve_source_order(
         .await
         .expect("instructions expected");
     let inner = format!(
-        "global instructions\n\nfor `primary` with root {}\n\nprimary root doc\n\nprimary nested doc\n\nfor `secondary` with root {}\n\nsecondary doc",
+        r#"global instructions
+
+for `primary` with root {}
+
+primary root doc
+
+primary nested doc
+
+for `secondary` with root {}
+
+secondary doc"#,
         primary_nested.display(),
         secondary.path().display(),
     );
 
     assert_eq!(loaded.environment_labeled_text(), inner);
     assert_eq!(loaded.text(), inner);
-    let expected_fragment =
-        format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{inner}\n</INSTRUCTIONS>");
+    let expected_fragment = format!(
+        r#"# AGENTS.md instructions
+
+<INSTRUCTIONS>
+{inner}
+</INSTRUCTIONS>"#
+    );
     assert_eq!(loaded.render(), expected_fragment);
     assert_eq!(
         loaded.sources().cloned().collect::<Vec<_>>(),
