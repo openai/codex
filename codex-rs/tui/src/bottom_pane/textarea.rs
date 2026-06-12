@@ -79,7 +79,6 @@ fn split_word_pieces(run: &str) -> Vec<(usize, &str)> {
 struct TextElement {
     id: u64,
     range: Range<usize>,
-    name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,7 +208,6 @@ impl TextArea {
                 self.elements.push(TextElement {
                     id,
                     range: start..end,
-                    name: None,
                 });
             }
             self.elements.sort_by_key(|e| e.range.start);
@@ -1470,72 +1468,11 @@ impl TextArea {
         id
     }
 
-    #[cfg(not(target_os = "linux"))]
-    pub fn insert_named_element(&mut self, text: &str, id: String) {
-        let start = self.clamp_pos_for_insertion(self.cursor_pos);
-        self.insert_str_at(start, text);
-        let end = start + text.len();
-        self.add_element_with_id(start..end, Some(id));
-        // Place cursor at end of inserted element
-        self.set_cursor(end);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn replace_element_by_id(&mut self, id: &str, text: &str) -> bool {
-        if let Some(idx) = self
-            .elements
-            .iter()
-            .position(|e| e.name.as_deref() == Some(id))
-        {
-            let range = self.elements[idx].range.clone();
-            self.replace_range_raw(range, text);
-            self.elements.retain(|e| e.name.as_deref() != Some(id));
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Update the element's text in place, preserving its id so callers can
-    /// update it again later (e.g. recording -> transcribing -> final).
-    #[allow(dead_code)]
-    pub fn update_named_element_by_id(&mut self, id: &str, text: &str) -> bool {
-        if let Some(elem_idx) = self
-            .elements
-            .iter()
-            .position(|e| e.name.as_deref() == Some(id))
-        {
-            let old_range = self.elements[elem_idx].range.clone();
-            let start = old_range.start;
-            self.replace_range_raw(old_range, text);
-            // After replace_range_raw, the old element entry was removed if fully overlapped.
-            // Re-add an updated element with the same id and new range.
-            let new_end = start + text.len();
-            self.add_element_with_id(start..new_end, Some(id.to_string()));
-            true
-        } else {
-            false
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn named_element_range(&self, id: &str) -> Option<std::ops::Range<usize>> {
-        self.elements
-            .iter()
-            .find(|e| e.name.as_deref() == Some(id))
-            .map(|e| e.range.clone())
-    }
-
-    fn add_element_with_id(&mut self, range: Range<usize>, name: Option<String>) -> u64 {
+    fn add_element(&mut self, range: Range<usize>) -> u64 {
         let id = self.next_element_id();
-        let elem = TextElement { id, range, name };
-        self.elements.push(elem);
+        self.elements.push(TextElement { id, range });
         self.elements.sort_by_key(|e| e.range.start);
         id
-    }
-
-    fn add_element(&mut self, range: Range<usize>) -> u64 {
-        self.add_element_with_id(range, /*name*/ None)
     }
 
     /// Mark an existing text range as an atomic element without changing the text.
