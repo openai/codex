@@ -597,6 +597,7 @@ pub(crate) fn marketplace_plugin_root_is_visible(
 
     let declared_capabilities = load_declared_plugin_capabilities(plugin_root, &manifest.paths);
     let has_skills = !declared_capabilities.skills.is_empty();
+    let has_hooks = !declared_capabilities.hooks.is_empty();
     let apps = declared_capabilities
         .apps
         .into_iter()
@@ -614,6 +615,7 @@ pub(crate) fn marketplace_plugin_root_is_visible(
     plugin_is_visible_in_marketplace(
         PluginCapabilities::new(apps, mcp_servers),
         has_skills,
+        has_hooks,
         capability_context,
     )
 }

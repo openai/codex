@@ -74,6 +74,7 @@ pub(crate) fn resolve_plugin_capabilities<M>(
 fn plugin_has_usable_capabilities<M>(
     capabilities: PluginCapabilities<M>,
     has_skills: bool,
+    has_hooks: bool,
     context: PluginCapabilityContext,
 ) -> bool {
     if !context.apps_route_available() && !app_declarations_are_covered_by_mcp(&capabilities) {
@@ -81,19 +82,20 @@ fn plugin_has_usable_capabilities<M>(
     }
 
     let capabilities = resolve_plugin_capabilities(capabilities, context);
-    has_skills || !capabilities.apps.is_empty() || !capabilities.mcp_servers.is_empty()
+    has_skills || has_hooks || !capabilities.apps.is_empty() || !capabilities.mcp_servers.is_empty()
 }
 
 pub(crate) fn plugin_is_visible_in_marketplace<M>(
     capabilities: PluginCapabilities<M>,
     has_skills: bool,
+    has_hooks: bool,
     context: PluginCapabilityContext,
 ) -> bool {
     if !context.filters_marketplace_plugins() {
         return true;
     }
 
-    plugin_has_usable_capabilities(capabilities, has_skills, context)
+    plugin_has_usable_capabilities(capabilities, has_skills, has_hooks, context)
 }
 
 #[cfg(test)]

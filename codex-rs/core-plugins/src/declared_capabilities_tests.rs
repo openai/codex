@@ -1,5 +1,7 @@
 use super::*;
+use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestPaths;
+use codex_config::HooksFile;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
@@ -48,11 +50,22 @@ fn sorted_mcp_server_names(capabilities: &DeclaredPluginCapabilities) -> Vec<Str
     names
 }
 
+fn sorted_hook_names(capabilities: &DeclaredPluginCapabilities) -> Vec<String> {
+    let mut names = capabilities
+        .hooks
+        .iter()
+        .map(|hook| hook.name.clone())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 #[test]
 fn loads_default_declared_capability_paths() {
     let tmp = TempDir::new().unwrap();
     let plugin_root = tmp.path().join("plugin");
     fs::create_dir_all(plugin_root.join("skills/example")).unwrap();
+    fs::create_dir_all(plugin_root.join("hooks")).unwrap();
     fs::write(
         plugin_root.join(".app.json"),
         r#"{
@@ -82,6 +95,19 @@ fn loads_default_declared_capability_paths() {
 }"#,
     )
     .unwrap();
+    fs::write(
+        plugin_root.join("hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [{ "type": "command", "command": "echo session" }]
+      }
+    ]
+  }
+}"#,
+    )
+    .unwrap();
 
     let capabilities =
         load_declared_plugin_capabilities(&absolute_path(&plugin_root), &empty_manifest_paths());
@@ -95,6 +121,10 @@ fn loads_default_declared_capability_paths() {
         sorted_mcp_server_names(&capabilities),
         vec!["docs".to_string(), "linear".to_string()]
     );
+    assert_eq!(
+        sorted_hook_names(&capabilities),
+        vec!["SessionStart".to_string()]
+    );
 }
 
 #[test]
@@ -102,6 +132,7 @@ fn manifest_paths_replace_default_declared_capability_paths() {
     let tmp = TempDir::new().unwrap();
     let plugin_root = tmp.path().join("plugin");
     fs::create_dir_all(plugin_root.join("configured")).unwrap();
+    fs::create_dir_all(plugin_root.join("hooks")).unwrap();
     fs::write(
         plugin_root.join(".app.json"),
         r#"{"apps":{"default_app":{"id":"connector_default"}}}"#,
@@ -112,8 +143,14 @@ fn manifest_paths_replace_default_declared_capability_paths() {
         r#"{"mcpServers":{"default_mcp":{"command":"default-mcp"}}}"#,
     )
     .unwrap();
+    fs::write(
+        plugin_root.join("hooks/hooks.json"),
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo default"}]}]}}"#,
+    )
+    .unwrap();
     let configured_apps = plugin_root.join("configured/apps.json");
     let configured_mcp = plugin_root.join("configured/mcp.json");
+    let configured_hooks = plugin_root.join("configured/hooks.json");
     fs::write(
         &configured_apps,
         r#"{"apps":{"configured_app":{"id":"connector_configured"}}}"#,
@@ -124,12 +161,19 @@ fn manifest_paths_replace_default_declared_capability_paths() {
         r#"{"configured_mcp":{"command":"configured-mcp"}}"#,
     )
     .unwrap();
+    fs::write(
+        &configured_hooks,
+        r#"{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"echo configured"}]}]}}"#,
+    )
+    .unwrap();
 
     let manifest_paths = PluginManifestPaths {
         skills: Some(absolute_path(plugin_root.join("configured").join("skills"))),
         apps: Some(absolute_path(configured_apps)),
         mcp_servers: Some(absolute_path(configured_mcp)),
-        hooks: None,
+        hooks: Some(PluginManifestHooks::Paths(vec![absolute_path(
+            configured_hooks,
+        )])),
     };
 
     let capabilities =
@@ -153,4 +197,38 @@ fn manifest_paths_replace_default_declared_capability_paths() {
         sorted_mcp_server_names(&capabilities),
         vec!["configured_mcp".to_string()]
     );
+    assert_eq!(
+        sorted_hook_names(&capabilities),
+        vec!["PostToolUse".to_string()]
+    );
+}
+
+#[test]
+fn loads_inline_declared_hooks() {
+    let tmp = TempDir::new().unwrap();
+    let plugin_root = tmp.path().join("plugin");
+    let hooks_file = serde_json::from_str::<HooksFile>(
+        r#"{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "echo stop" }]
+      }
+    ]
+  }
+}"#,
+    )
+    .unwrap();
+
+    let manifest_paths = PluginManifestPaths {
+        skills: None,
+        apps: None,
+        mcp_servers: None,
+        hooks: Some(PluginManifestHooks::Inline(vec![hooks_file])),
+    };
+
+    let capabilities =
+        load_declared_plugin_capabilities(&absolute_path(&plugin_root), &manifest_paths);
+
+    assert_eq!(sorted_hook_names(&capabilities), vec!["Stop".to_string()]);
 }
