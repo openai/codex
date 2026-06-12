@@ -40,6 +40,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn remote_control_preference(
     state_db: &StateRuntime,
@@ -83,7 +84,41 @@ async fn listen_off_honors_persisted_remote_control_enable() -> Result<()> {
         .await?;
 
     let _app_server = TestAppServer::new_with_args(codex_home.path(), &["--listen", "off"]).await?;
-    timeout(DEFAULT_TIMEOUT, listener.accept()).await??;
+    timeout(STARTUP_TIMEOUT, listener.accept()).await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn listen_off_exits_without_persisted_remote_control_enable() -> Result<()> {
+    for persisted_preference in [None, Some(false)] {
+        let codex_home = TempDir::new()?;
+        let listener = configured_remote_control_listener(codex_home.path()).await?;
+        if let Some(remote_control_enabled) = persisted_preference {
+            let websocket_url = format!(
+                "ws://{}/backend-api/wham/remote/control/server",
+                listener.local_addr()?
+            );
+            let state_db =
+                StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string())
+                    .await?;
+            state_db
+                .upsert_remote_control_enrollment(&RemoteControlEnrollmentRecord {
+                    websocket_url,
+                    account_id: "account_id".to_string(),
+                    app_server_client_name: None,
+                    server_id: "server-id".to_string(),
+                    environment_id: "environment-id".to_string(),
+                    server_name: "server-name".to_string(),
+                    remote_control_enabled: Some(remote_control_enabled),
+                })
+                .await?;
+        }
+
+        let mut app_server =
+            TestAppServer::new_with_args(codex_home.path(), &["--listen", "off"]).await?;
+        let status = timeout(STARTUP_TIMEOUT, app_server.wait_for_exit()).await??;
+        assert!(!status.success());
+    }
     Ok(())
 }
 

@@ -5,6 +5,7 @@ use super::protocol::normalize_remote_control_url;
 use super::publish_current_enrollment;
 use super::websocket::RemoteControlStatusPublisher;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
+use codex_state::RemoteControlEnrollmentRecord;
 use std::io;
 use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
@@ -33,7 +34,61 @@ pub(super) async fn acquire_persistence_lock(lock: &Semaphore) -> SemaphorePermi
     lock.acquire().await.unwrap_or_else(|_| unreachable!())
 }
 
+pub(super) fn desired_state_from_persisted_enrollment(
+    enrollment: Option<RemoteControlEnrollmentRecord>,
+) -> RemoteControlDesiredState {
+    if enrollment.and_then(|enrollment| enrollment.remote_control_enabled) == Some(true) {
+        RemoteControlDesiredState::Enabled {
+            persistence_preference: Some(true),
+        }
+    } else {
+        RemoteControlDesiredState::Disabled
+    }
+}
+
 impl RemoteControlHandle {
+    pub async fn resolve_persisted_preference(
+        &self,
+        app_server_client_name: Option<&str>,
+    ) -> io::Result<bool> {
+        let _transition = self
+            .desired_state_rpc_lock
+            .acquire()
+            .await
+            .unwrap_or_else(|_| unreachable!());
+        if !matches!(
+            *self.desired_state_tx.borrow(),
+            RemoteControlDesiredState::Unknown
+        ) {
+            return Ok(self.desired_state_tx.borrow().is_enabled());
+        }
+
+        let state_db = self
+            .state_db
+            .as_deref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, RemoteControlUnavailable))?;
+        let auth = super::auth::load_remote_control_auth(&self.auth_manager).await?;
+        let remote_control_target = normalize_remote_control_url(&self.remote_control_url)?;
+        let app_server_client_name = self.pairing_persistence_key(app_server_client_name)?;
+        let enrollment = state_db
+            .get_remote_control_enrollment(
+                &remote_control_target.websocket_url,
+                &auth.account_id,
+                app_server_client_name.as_deref(),
+            )
+            .await
+            .map_err(io::Error::other)?;
+        let desired_state = desired_state_from_persisted_enrollment(enrollment);
+        self.desired_state_tx.send_if_modified(|state| {
+            if !matches!(*state, RemoteControlDesiredState::Unknown) {
+                return false;
+            }
+            *state = desired_state;
+            true
+        });
+        Ok(self.desired_state_tx.borrow().is_enabled())
+    }
+
     pub async fn enable(
         &self,
         app_server_client_name: Option<&str>,

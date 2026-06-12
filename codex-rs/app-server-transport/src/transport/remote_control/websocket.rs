@@ -3,6 +3,7 @@ use super::RemoteControlEnrollmentSelection;
 use super::RemoteControlPairingPersistenceKey;
 use super::desired_state::RemoteControlDesiredState;
 use super::desired_state::acquire_persistence_lock;
+use super::desired_state::desired_state_from_persisted_enrollment;
 use super::protocol::ClientEnvelope;
 use super::protocol::ClientEvent;
 use super::protocol::ClientId;
@@ -35,7 +36,6 @@ use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_core::util::backoff;
 use codex_login::AuthManager;
 use codex_login::UnauthorizedRecovery;
-use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
@@ -1628,18 +1628,6 @@ async fn resolve_desired_state_after_account_change(
         true
     });
     Ok(())
-}
-
-fn desired_state_from_persisted_enrollment(
-    enrollment: Option<RemoteControlEnrollmentRecord>,
-) -> RemoteControlDesiredState {
-    if enrollment.and_then(|enrollment| enrollment.remote_control_enabled) == Some(true) {
-        RemoteControlDesiredState::Enabled {
-            persistence_preference: Some(true),
-        }
-    } else {
-        RemoteControlDesiredState::Disabled
-    }
 }
 
 fn websocket_response_reports_missing_remote_app_server(
