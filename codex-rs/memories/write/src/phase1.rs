@@ -460,7 +460,7 @@ mod job {
             return false;
         };
 
-        matches_marked_fragment(text, "# AGENTS.md instructions for ", "</INSTRUCTIONS>")
+        matches_marked_fragment(text, "# AGENTS.md instructions", "</INSTRUCTIONS>")
             || matches_marked_fragment(text, "<skill>", "</skill>")
     }
 
@@ -485,6 +485,10 @@ mod job {
             let cases = [
                 (
                     "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>",
+                    true,
+                ),
+                (
+                    "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>",
                     true,
                 ),
                 (
@@ -664,6 +668,10 @@ mod tests {
                     text:
                         "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
                             .to_string(),
+                },
+                ContentItem::InputText {
+                    text: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
+                        .to_string(),
                 },
                 ContentItem::InputText {
                     text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>"

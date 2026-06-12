@@ -491,14 +491,17 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     );
     let selected_cwd =
         AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
+    std::fs::create_dir_all(&selected_cwd).expect("create selected cwd");
     let environments = vec![TurnEnvironmentSelection {
         environment_id: "local".to_string(),
         cwd: selected_cwd.clone(),
     }];
     let default_cwd = config.cwd.clone();
+    let mut source_config = config.clone();
+    source_config.cwd = selected_cwd.clone();
     let source = manager
         .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
+            config: source_config,
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,

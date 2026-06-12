@@ -553,7 +553,7 @@ impl Session {
             user_instructions: session_configuration
                 .loaded_agents_md
                 .as_ref()
-                .map(LoadedAgentsMd::text),
+                .map(LoadedAgentsMd::render),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             multi_agent_version,
             personality: session_configuration.personality,

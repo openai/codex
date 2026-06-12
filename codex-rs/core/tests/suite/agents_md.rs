@@ -3,16 +3,20 @@ use anyhow::anyhow;
 use codex_core::ForkSnapshot;
 use codex_core::StartThreadOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::create_directory_symlink;
+use core_test_support::get_remote_test_env;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
@@ -61,7 +65,7 @@ async fn agents_instructions(mut builder: TestCodexBuilder) -> Result<String> {
     request
         .message_input_texts("user")
         .into_iter()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
+        .find(|text| text.starts_with("# AGENTS.md instructions"))
         .ok_or_else(|| anyhow::anyhow!("instructions message not found"))
 }
 
@@ -79,7 +83,7 @@ fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
     request
         .message_input_texts("user")
         .into_iter()
-        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .filter(|text| text.starts_with("# AGENTS.md instructions"))
         .collect()
 }
 
@@ -88,8 +92,29 @@ fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> Strin
     format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
 }
 
+fn expected_provider_only_instruction_fragment(contents: &str) -> String {
+    format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
+}
+
 fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
     assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
+}
+
+async fn submit_thread_turn(thread: &Arc<codex_core::CodexThread>, prompt: &str) -> Result<()> {
+    thread
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    Ok(())
 }
 
 fn request_body_contains(request: &wiremock::Request, text: &str) -> bool {
@@ -315,7 +340,7 @@ async fn symlinked_cwd_uses_logical_parent_for_agents_discovery() -> Result<()> 
         .single_request()
         .message_input_texts("user")
         .into_iter()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
+        .find(|text| text.starts_with("# AGENTS.md instructions"))
         .expect("instructions message");
     assert!(instructions.contains("logical parent doc"));
     assert!(instructions.contains("workspace doc"));
@@ -362,7 +387,7 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
         .single_request()
         .message_input_texts("user")
         .into_iter()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
+        .find(|text| text.starts_with("# AGENTS.md instructions"))
         .expect("instructions message");
     assert!(instructions.contains("global doc\n\n--- project-doc ---\n\nproject doc"));
 
@@ -562,6 +587,126 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapshot() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("multi-env-response-1"),
+                responses::ev_completed("multi-env-response-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("multi-env-response-2"),
+                responses::ev_completed("multi-env-response-2"),
+            ]),
+        ],
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let global_source =
+        write_global_file(home.as_ref(), GLOBAL_AGENTS_FILENAME, GLOBAL_INSTRUCTIONS)?;
+    let provider = Arc::new(RecordingUserInstructionsProvider::new(Arc::new(
+        CodexHomeUserInstructionsProvider::new(AbsolutePathBuf::try_from(
+            home.path().to_path_buf(),
+        )?),
+    )));
+    let local_root = TempDir::new()?;
+    let local_source = local_root.path().join(GLOBAL_AGENTS_FILENAME);
+    std::fs::write(&local_source, "local project instructions")?;
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_user_instructions_provider(provider.clone())
+        .with_workspace_setup(|cwd, fs| async move {
+            fs.write_file(
+                &PathUri::from_path(cwd.join(GLOBAL_AGENTS_FILENAME))?,
+                b"remote project instructions".to_vec(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        });
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    let remote_source = test.config.cwd.join(GLOBAL_AGENTS_FILENAME);
+    let thread = test
+        .thread_manager
+        .start_thread_with_options(StartThreadOptions {
+            config: test.config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: vec![
+                TurnEnvironmentSelection {
+                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                    cwd: test.config.cwd.clone(),
+                },
+                TurnEnvironmentSelection {
+                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: local_root.path().to_path_buf().try_into()?,
+                },
+            ],
+            thread_extension_init: Default::default(),
+        })
+        .await?;
+    assert_eq!(provider.load_count(), 2);
+    assert_eq!(
+        thread.thread.instruction_sources().await,
+        vec![
+            global_source.clone(),
+            remote_source.clone(),
+            local_source.clone().try_into()?,
+        ]
+    );
+
+    submit_thread_turn(&thread.thread, "first multi-environment turn").await?;
+
+    write_global_file(
+        home.as_ref(),
+        GLOBAL_AGENTS_OVERRIDE_FILENAME,
+        NEW_GLOBAL_INSTRUCTIONS,
+    )?;
+    test.fs()
+        .write_file(
+            &PathUri::from_path(test.config.cwd.join(GLOBAL_AGENTS_OVERRIDE_FILENAME))?,
+            b"new remote project instructions".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+    std::fs::write(
+        local_root.path().join(GLOBAL_AGENTS_OVERRIDE_FILENAME),
+        "new local project instructions",
+    )?;
+    submit_thread_turn(&thread.thread, "second multi-environment turn").await?;
+
+    let contents = format!(
+        "{GLOBAL_INSTRUCTIONS}\n\nfor `{REMOTE_ENVIRONMENT_ID}` with root {}\n\nremote project instructions\n\nfor `{LOCAL_ENVIRONMENT_ID}` with root {}\n\nlocal project instructions",
+        test.config.cwd.display(),
+        local_root.path().display(),
+    );
+    let expected =
+        format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>");
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_single_instruction_fragment(&requests[0], &expected);
+    assert_single_instruction_fragment(&requests[1], &expected);
+    assert_eq!(provider.load_count(), 2);
+    assert_eq!(
+        thread.thread.instruction_sources().await,
+        vec![global_source, remote_source, local_source.try_into()?]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> {
     // Set up a malformed global instruction file and one model response.
     let server = responses::start_mock_server().await;
@@ -604,7 +749,7 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
         "expected warning to contain \"invalid UTF-8\"; observed: {warning}"
     );
     let expected_fragment =
-        expected_instruction_fragment(&test.config.cwd, "global\u{FFFD}instructions");
+        expected_provider_only_instruction_fragment("global\u{FFFD}instructions");
     assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);
 
     Ok(())
@@ -690,8 +835,7 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
         Some(initial_input.as_slice()),
         "cold resume should replay the original structured input prefix"
     );
-    let expected_fragment =
-        expected_instruction_fragment(&initial.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let expected_fragment = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &expected_fragment);
     assert_single_instruction_fragment(&requests[1], &expected_fragment);
 
@@ -797,8 +941,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
         Some(parent_input.as_slice()),
         "fork should replay the parent's original structured input prefix"
     );
-    let expected_fragment =
-        expected_instruction_fragment(&parent.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let expected_fragment = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &expected_fragment);
     assert_single_instruction_fragment(&requests[1], &expected_fragment);
 
@@ -933,8 +1076,7 @@ async fn run_subagent_global_instruction_case(fork_context: bool) -> Result<()> 
     .map_err(|_| anyhow!("timed out waiting for the subagent request"))?;
 
     // Assert parent and child report and render the parent's creation-time snapshot exactly once.
-    let expected_fragment =
-        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let expected_fragment = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&seed_request, &expected_fragment);
     assert_single_instruction_fragment(&spawn_request, &expected_fragment);
     assert_single_instruction_fragment(&child_request, &expected_fragment);
