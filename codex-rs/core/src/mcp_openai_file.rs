@@ -13,6 +13,7 @@
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::upload_openai_file;
 use codex_login::CodexAuth;
 use codex_utils_path_uri::PathUri;
@@ -139,6 +140,14 @@ async fn build_uploaded_argument_value(
         return Err(contextualize_error(format!(
             "path `{}` is not a file",
             resolved_path.display()
+        )));
+    }
+    if metadata.size > OPENAI_FILE_UPLOAD_LIMIT_BYTES {
+        return Err(contextualize_error(format!(
+            "file `{}` is too large: {} bytes exceeds the limit of {} bytes",
+            resolved_path.display(),
+            metadata.size,
+            OPENAI_FILE_UPLOAD_LIMIT_BYTES,
         )));
     }
     let contents = fs
@@ -288,6 +297,31 @@ mod tests {
                 "file_size_bytes": 5,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn build_uploaded_argument_value_rejects_oversized_file_before_reading() {
+        let (_, mut turn_context) = make_session_and_context().await;
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let dir = tempdir().expect("temp dir");
+        let file_path = dir.path().join("oversized.bin");
+        let file = std::fs::File::create(&file_path).expect("create sparse file");
+        file.set_len(OPENAI_FILE_UPLOAD_LIMIT_BYTES + 1)
+            .expect("size sparse file");
+        set_primary_environment_cwd(&mut turn_context, dir.path());
+
+        let error = build_uploaded_argument_value(
+            &turn_context,
+            Some(&auth),
+            "file",
+            /*index*/ None,
+            "oversized.bin",
+        )
+        .await
+        .expect_err("oversized file should be rejected");
+
+        assert!(error.contains("is too large"));
+        assert!(error.contains(&(OPENAI_FILE_UPLOAD_LIMIT_BYTES + 1).to_string()));
     }
 
     #[tokio::test]
