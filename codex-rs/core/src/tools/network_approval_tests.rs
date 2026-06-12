@@ -178,6 +178,21 @@ fn allow_once_and_allow_for_session_both_allow_network() {
 }
 
 #[test]
+fn automated_network_denial_preserves_extension_rationale() {
+    let rationale = "the requested host is unrelated to the user's task";
+    let approval = AutomatedApprovalDecision {
+        decision: ReviewDecision::Denied,
+        denial_message: Some(rationale.to_string()),
+        source: crate::tools::approval_dispatch::AutomatedApprovalSource::Extension,
+    };
+
+    assert_eq!(
+        automated_network_denial(&approval),
+        NetworkApprovalOutcome::DeniedByPolicy(rationale.to_string())
+    );
+}
+
+#[test]
 fn only_never_policy_disables_network_approval_flow() {
     assert!(!allows_network_approval_flow(AskForApproval::Never));
     assert!(allows_network_approval_flow(AskForApproval::OnRequest));

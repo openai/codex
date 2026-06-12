@@ -1,15 +1,15 @@
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianNetworkAccessTrigger;
-use crate::guardian::guardian_rejection_message;
-use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
-use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::session::session::Session;
+use crate::tools::approval_dispatch::AutomatedApprovalDecision;
+use crate::tools::approval_dispatch::request_automated_approval;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
+use codex_extension_api::ApprovalReviewSource;
 use codex_hooks::PermissionRequestDecision;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestObserver;
@@ -155,6 +155,10 @@ enum PendingApprovalDecision {
 enum NetworkApprovalOutcome {
     DeniedByUser,
     DeniedByPolicy(String),
+}
+
+fn automated_network_denial(approval: &AutomatedApprovalDecision) -> NetworkApprovalOutcome {
+    NetworkApprovalOutcome::DeniedByPolicy(approval.denial_message())
 }
 
 fn network_approval_outcome_to_result(
@@ -498,25 +502,41 @@ impl NetworkApprovalService {
         }
         let use_guardian = routes_approval_to_guardian(&turn_context);
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
-        let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
-            review_approval_request(
-                &session,
-                &turn_context,
-                review_id,
-                GuardianApprovalRequest::NetworkAccess {
-                    id: guardian_approval_id.clone(),
-                    turn_id: owner_call
-                        .as_ref()
-                        .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
-                    target,
-                    host: request.host,
-                    protocol,
-                    port: key.port,
-                    trigger: owner_call.as_ref().map(|call| call.trigger.clone()),
-                },
-                Some(policy_denial_message.clone()),
+        let automated_approval = if let Some(review_id) = guardian_review_id.clone() {
+            let request = GuardianApprovalRequest::NetworkAccess {
+                id: guardian_approval_id.clone(),
+                turn_id: owner_call
+                    .as_ref()
+                    .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
+                target,
+                host: request.host,
+                protocol,
+                port: key.port,
+                trigger: owner_call.as_ref().map(|call| call.trigger.clone()),
+            };
+            Some(
+                request_automated_approval(
+                    &session,
+                    &turn_context,
+                    review_id,
+                    request,
+                    turn_context.config.approvals_reviewer,
+                    Some(policy_denial_message.clone()),
+                    ApprovalReviewSource::MainTurn,
+                )
+                .await
+                .unwrap_or_else(|message| AutomatedApprovalDecision {
+                    decision: ReviewDecision::Denied,
+                    denial_message: Some(message),
+                    source:
+                        crate::tools::approval_dispatch::AutomatedApprovalSource::ExtensionError,
+                }),
             )
-            .await
+        } else {
+            None
+        };
+        let approval_decision = if let Some(automated) = automated_approval.as_ref() {
+            automated.decision.clone()
         } else {
             let available_decisions = None;
             session
@@ -615,12 +635,11 @@ impl NetworkApprovalService {
                 }
             },
             ReviewDecision::Denied | ReviewDecision::Abort => {
-                if let Some(review_id) = guardian_review_id.as_deref() {
+                if let Some(automated) = automated_approval.as_ref() {
                     if let Some(owner_call) = owner_call.as_ref() {
-                        let message = guardian_rejection_message(session.as_ref(), review_id).await;
                         self.record_call_outcome(
                             &owner_call.registration_id,
-                            NetworkApprovalOutcome::DeniedByPolicy(message),
+                            automated_network_denial(automated),
                         )
                         .await;
                     }
@@ -637,7 +656,14 @@ impl NetworkApprovalService {
                 if let Some(owner_call) = owner_call.as_ref() {
                     self.record_call_outcome(
                         &owner_call.registration_id,
-                        NetworkApprovalOutcome::DeniedByPolicy(guardian_timeout_message()),
+                        automated_approval.as_ref().map_or_else(
+                            || {
+                                NetworkApprovalOutcome::DeniedByPolicy(
+                                    "automatic approval review timed out".to_string(),
+                                )
+                            },
+                            automated_network_denial,
+                        ),
                     )
                     .await;
                 }

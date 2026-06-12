@@ -1,9 +1,12 @@
 //! Ordered approval dispatch for the normal orchestrated tool runtimes.
 
+use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::format_guardian_action_pretty;
 use crate::guardian::guardian_assessment_action;
+use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_request_target_item_id;
 use crate::guardian::guardian_request_turn_id;
+use crate::guardian::guardian_timeout_message;
 use crate::guardian::review_approval_request;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::tools::flat_tool_name;
@@ -17,6 +20,101 @@ use codex_extension_api::ApprovalReviewSource;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::ReviewDecision;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AutomatedApprovalSource {
+    Extension,
+    ExtensionError,
+    Guardian,
+}
+
+#[derive(Debug)]
+pub(crate) struct AutomatedApprovalDecision {
+    pub decision: ReviewDecision,
+    pub denial_message: Option<String>,
+    pub source: AutomatedApprovalSource,
+}
+
+impl AutomatedApprovalDecision {
+    pub(crate) fn denial_message(&self) -> String {
+        self.denial_message
+            .clone()
+            .unwrap_or_else(|| match self.source {
+                AutomatedApprovalSource::Extension => {
+                    "automatic approval reviewer denied the action".to_string()
+                }
+                AutomatedApprovalSource::ExtensionError => {
+                    "automatic approval review failed".to_string()
+                }
+                AutomatedApprovalSource::Guardian => "Guardian denied this request.".to_string(),
+            })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn request_automated_approval(
+    session: &std::sync::Arc<crate::session::session::Session>,
+    turn: &std::sync::Arc<crate::session::turn_context::TurnContext>,
+    review_id: String,
+    request: GuardianApprovalRequest,
+    reviewer: codex_protocol::config_types::ApprovalsReviewer,
+    retry_reason: Option<String>,
+    source: ApprovalReviewSource,
+) -> Result<AutomatedApprovalDecision, String> {
+    let action = guardian_assessment_action(&request);
+    let prompt = format_guardian_action_pretty(&request)
+        .map_err(|error| format!("failed to render review prompt: {error}"))?
+        .text;
+    let approval_policy = turn.approval_policy.value();
+    let review_input = ApprovalReviewInput {
+        session_store: &session.services.session_extension_data,
+        thread_store: &session.services.thread_extension_data,
+        turn_store: turn.extension_data.as_ref(),
+        review_id: &review_id,
+        turn_id: guardian_request_turn_id(&request, &turn.sub_id),
+        target_item_id: guardian_request_target_item_id(&request),
+        prompt: &prompt,
+        action: &action,
+        reviewer,
+        approval_policy: &approval_policy,
+        retry_reason: retry_reason.as_deref(),
+        source,
+    };
+
+    match session
+        .services
+        .extensions
+        .approval_review(review_input)
+        .await
+    {
+        Ok(ApprovalReviewOutcome::Decision {
+            decision,
+            denial_message,
+        }) => Ok(AutomatedApprovalDecision {
+            decision,
+            denial_message,
+            source: AutomatedApprovalSource::Extension,
+        }),
+        Ok(ApprovalReviewOutcome::Abstain) => {
+            let decision =
+                review_approval_request(session, turn, review_id.clone(), request, retry_reason)
+                    .await;
+            let denial_message = match decision {
+                ReviewDecision::Denied | ReviewDecision::Abort => {
+                    Some(guardian_rejection_message(session, &review_id).await)
+                }
+                ReviewDecision::TimedOut => Some(guardian_timeout_message()),
+                _ => None,
+            };
+            Ok(AutomatedApprovalDecision {
+                decision,
+                denial_message,
+                source: AutomatedApprovalSource::Guardian,
+            })
+        }
+        Err(error) => Err(format!("automatic approval review failed: {error}")),
+    }
+}
 
 pub(crate) async fn request_approval<Rq, Out, T>(
     tool: &mut T,
@@ -74,82 +172,45 @@ where
                     "automatic approval review is not supported for this tool".to_string(),
                 )
             })?;
-        let action = guardian_assessment_action(&request);
-        let prompt = format_guardian_action_pretty(&request)
-            .map_err(|error| {
-                ToolError::Rejected(format!("failed to render review prompt: {error}"))
-            })?
-            .text;
-        let approval_policy = approval_ctx.turn.approval_policy.value();
-        let review_input = ApprovalReviewInput {
-            session_store: &approval_ctx.session.services.session_extension_data,
-            thread_store: &approval_ctx.session.services.thread_extension_data,
-            turn_store: approval_ctx.turn.extension_data.as_ref(),
-            review_id: &review_id,
-            turn_id: guardian_request_turn_id(&request, &approval_ctx.turn.sub_id),
-            target_item_id: guardian_request_target_item_id(&request),
-            prompt: &prompt,
-            action: &action,
-            reviewer: approval_ctx.turn.config.approvals_reviewer,
-            approval_policy: &approval_policy,
-            retry_reason: approval_ctx.retry_reason.as_deref(),
-            source: ApprovalReviewSource::MainTurn,
-        };
-
-        let decision = match approval_ctx
-            .session
-            .services
-            .extensions
-            .approval_review(review_input)
-            .await
+        let automated = match request_automated_approval(
+            approval_ctx.session,
+            approval_ctx.turn,
+            review_id,
+            request,
+            approval_ctx.turn.config.approvals_reviewer,
+            approval_ctx.retry_reason,
+            ApprovalReviewSource::MainTurn,
+        )
+        .await
         {
-            Ok(ApprovalReviewOutcome::Decision {
-                decision,
-                denial_message,
-            }) => {
-                if matches!(decision, ReviewDecision::Denied | ReviewDecision::Abort) {
-                    let message = denial_message.unwrap_or_else(|| {
-                        "automatic approval reviewer denied the action".to_string()
-                    });
-                    otel.tool_decision(
-                        tool_name.as_ref(),
-                        &tool_ctx.call_id,
-                        &decision,
-                        ToolDecisionSource::AutomatedReviewer,
-                    );
-                    return Err(ToolError::Rejected(message));
-                }
-                decision
-            }
-            Ok(ApprovalReviewOutcome::Abstain) => {
-                review_approval_request(
-                    approval_ctx.session,
-                    approval_ctx.turn,
-                    review_id,
-                    request,
-                    approval_ctx.retry_reason,
-                )
-                .await
-            }
-            Err(error) => {
-                let decision = ReviewDecision::Denied;
+            Ok(automated) => automated,
+            Err(message) => {
                 otel.tool_decision(
                     tool_name.as_ref(),
                     &tool_ctx.call_id,
-                    &decision,
+                    &ReviewDecision::Denied,
                     ToolDecisionSource::AutomatedReviewer,
                 );
-                return Err(ToolError::Rejected(format!(
-                    "automatic approval review failed: {error}"
-                )));
+                return Err(ToolError::Rejected(message));
             }
         };
+        let decision = automated.decision.clone();
         otel.tool_decision(
             tool_name.as_ref(),
             &tool_ctx.call_id,
             &decision,
             ToolDecisionSource::AutomatedReviewer,
         );
+        if matches!(decision, ReviewDecision::Denied | ReviewDecision::Abort) {
+            return Err(ToolError::Rejected(automated.denial_message()));
+        }
+        if decision == ReviewDecision::TimedOut {
+            return Err(ToolError::Rejected(
+                automated
+                    .denial_message
+                    .unwrap_or_else(guardian_timeout_message),
+            ));
+        }
         return Ok(decision);
     }
 
