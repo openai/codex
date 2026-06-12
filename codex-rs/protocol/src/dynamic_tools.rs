@@ -88,10 +88,17 @@ struct LegacyDynamicToolSpec {
 pub fn normalize_dynamic_tool_specs(
     values: Vec<JsonValue>,
 ) -> Result<Vec<DynamicToolSpec>, serde_json::Error> {
-    let has_legacy_format = values.iter().any(|value| {
+    let has_legacy_fields = |value: &JsonValue| {
         value.get("namespace").is_some()
             || value.get("exposeToContext").is_some()
             || value.get("type").is_none()
+    };
+    let has_legacy_format = values.iter().any(|value| {
+        has_legacy_fields(value)
+            || value
+                .get("tools")
+                .and_then(JsonValue::as_array)
+                .is_some_and(|tools| tools.iter().any(&has_legacy_fields))
     });
     let has_canonical_format = values.iter().any(|value| value.get("type").is_some());
     if has_legacy_format && has_canonical_format {

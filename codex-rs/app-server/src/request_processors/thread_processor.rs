@@ -326,6 +326,11 @@ fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
                 if !seen_namespaces.insert(name) {
                     return Err(format!("duplicate dynamic tool namespace: {name}"));
                 }
+                if namespace.tools.is_empty() {
+                    return Err(format!(
+                        "dynamic tool namespace must contain at least one tool: {name}"
+                    ));
+                }
                 let mut seen_namespace_tools = HashSet::new();
                 for tool in &namespace.tools {
                     let DynamicToolNamespaceTool::Function(tool) = tool;

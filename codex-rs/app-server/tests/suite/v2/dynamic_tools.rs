@@ -209,45 +209,76 @@ async fn thread_start_rejects_mixed_dynamic_tool_formats() -> Result<()> {
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let thread_req = mcp
-        .send_raw_request(
-            "thread/start",
-            Some(json!({
-                "dynamicTools": [
-                    {
-                        "type": "function",
-                        "name": "canonical_tool",
-                        "description": "Canonical tool",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {}
-                        }
-                    },
-                    {
-                        "namespace": "legacy_app",
-                        "name": "legacy_tool",
-                        "description": "Legacy tool",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {}
-                        }
+    for (dynamic_tools, expected_error) in [
+        (
+            json!([
+                {
+                    "type": "function",
+                    "name": "canonical_tool",
+                    "description": "Canonical tool",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
                     }
-                ]
-            })),
+                },
+                {
+                    "namespace": "legacy_app",
+                    "name": "legacy_tool",
+                    "description": "Legacy tool",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }
+            ]),
+            "either canonical or legacy format",
+        ),
+        (
+            json!([{
+                "type": "namespace",
+                "name": "canonical_namespace",
+                "description": "Canonical namespace",
+                "tools": [{
+                    "type": "function",
+                    "name": "legacy_visibility_tool",
+                    "description": "Uses a legacy visibility field",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    },
+                    "exposeToContext": false
+                }]
+            }]),
+            "either canonical or legacy format",
+        ),
+        (
+            json!([{
+                "type": "namespace",
+                "name": "empty_namespace",
+                "description": "Contains no tools",
+                "tools": []
+            }]),
+            "must contain at least one tool",
+        ),
+    ] {
+        let thread_req = mcp
+            .send_raw_request(
+                "thread/start",
+                Some(json!({ "dynamicTools": dynamic_tools })),
+            )
+            .await?;
+        let error = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(thread_req)),
         )
-        .await?;
-    let error = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    assert_eq!(error.error.code, -32600);
-    assert!(
-        error
-            .error
-            .message
-            .contains("either canonical or legacy format")
-    );
+        .await??;
+        assert_eq!(error.error.code, -32600);
+        assert!(
+            error.error.message.contains(expected_error),
+            "unexpected error: {}",
+            error.error.message
+        );
+    }
 
     Ok(())
 }
