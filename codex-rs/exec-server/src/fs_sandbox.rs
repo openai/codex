@@ -62,16 +62,12 @@ impl FileSystemSandboxRunner {
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
         let cwd = sandbox_cwd(sandbox)?;
-        let helper_paths = self.helper_paths_for_launch()?;
         let mut file_system_policy = sandbox.permissions.file_system_sandbox_policy();
-        // The sandboxed child re-enters Codex as the filesystem helper. On Windows
-        // that executable can be a materialized copy under CODEX_HOME/.sandbox-bin,
-        // so derive helper read roots from the exact helper path we will launch.
         let helper_read_roots = if sandbox.use_legacy_landlock {
             Vec::new()
         } else {
             helper_read_roots(
-                &helper_paths.sandboxed_helper,
+                &self.runtime_paths.codex_self_exe,
                 self.runtime_paths.codex_linux_sandbox_exe.as_ref(),
             )
         };
@@ -83,47 +79,9 @@ impl FileSystemSandboxRunner {
             &file_system_policy,
             network_policy,
         );
-        let command =
-            self.sandbox_exec_request(&permission_profile, &cwd, sandbox, &helper_paths)?;
+        let command = self.sandbox_exec_request(&permission_profile, &cwd, sandbox)?;
         let request_json = serde_json::to_vec(&request).map_err(json_error)?;
         run_command(command, request_json).await
-    }
-
-    fn helper_paths_for_launch(&self) -> Result<FsHelperLaunchPaths, JSONRPCErrorError> {
-        #[cfg(target_os = "windows")]
-        {
-            // Windows sandbox launch grants are prepared around the executable
-            // path that the sandbox will spawn. When exec-server is embedded or
-            // hosted, `current_exe()` can point at the host process instead of
-            // the configured Codex binary, so materialize the runtime-provided
-            // helper and use that exact path for the sandboxed fs-helper.
-            let codex_home = codex_utils_home_dir::find_codex_home().map_err(|err| {
-                internal_error(format!(
-                    "windows fs sandbox helper failed to resolve CODEX_HOME: {err}"
-                ))
-            })?;
-            let sandboxed_helper = codex_windows_sandbox::resolve_exe_for_launch(
-                self.runtime_paths.codex_self_exe.as_path(),
-                codex_home.as_path(),
-            );
-            let sandboxed_helper = AbsolutePathBuf::from_absolute_path(sandboxed_helper.as_path())
-                .map_err(|err| {
-                    internal_error(format!(
-                        "windows fs sandbox helper path is not absolute: {err}"
-                    ))
-                })?;
-            Ok(FsHelperLaunchPaths {
-                sandboxed_helper,
-                windows_wrapper: self.runtime_paths.codex_self_exe.clone(),
-            })
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            Ok(FsHelperLaunchPaths {
-                sandboxed_helper: self.runtime_paths.codex_self_exe.clone(),
-            })
-        }
     }
 
     fn sandbox_exec_request(
@@ -131,7 +89,6 @@ impl FileSystemSandboxRunner {
         permission_profile: &PermissionProfile,
         cwd: &AbsolutePathBuf,
         sandbox_context: &FileSystemSandboxContext,
-        helper_paths: &FsHelperLaunchPaths,
     ) -> Result<PreparedFsHelperCommand, JSONRPCErrorError> {
         let sandbox_manager = SandboxManager::new();
         let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
@@ -143,8 +100,9 @@ impl FileSystemSandboxRunner {
             /*has_managed_network_requirements*/ false,
         );
         let command = SandboxCommand {
-            program: helper_paths
-                .sandboxed_helper
+            program: self
+                .runtime_paths
+                .codex_self_exe
                 .as_path()
                 .as_os_str()
                 .to_owned(),
@@ -169,8 +127,14 @@ impl FileSystemSandboxRunner {
             .map_err(|err| invalid_request(format!("failed to prepare fs sandbox: {err}")))?;
         #[cfg(target_os = "windows")]
         if command.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
-            let request_file =
-                windows::wrap_sandbox_exec_request(&mut command, &helper_paths.windows_wrapper)?;
+            windows::materialize_sandboxed_helper(
+                &mut command,
+                &self.runtime_paths.codex_self_exe,
+            )?;
+            let request_file = windows::wrap_sandbox_exec_request(
+                &mut command,
+                &self.runtime_paths.codex_self_exe,
+            )?;
             return Ok(PreparedFsHelperCommand::with_windows_wrapper_request_file(
                 command,
                 request_file,
@@ -178,12 +142,6 @@ impl FileSystemSandboxRunner {
         }
         Ok(PreparedFsHelperCommand::new(command))
     }
-}
-
-struct FsHelperLaunchPaths {
-    sandboxed_helper: AbsolutePathBuf,
-    #[cfg(target_os = "windows")]
-    windows_wrapper: AbsolutePathBuf,
 }
 
 struct PreparedFsHelperCommand {
@@ -348,8 +306,25 @@ async fn run_command(
     command: PreparedFsHelperCommand,
     request_json: Vec<u8>,
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
-    let output = run_child_command(command, request_json).await?;
-    if !output.success {
+    let PreparedFsHelperCommand {
+        request,
+        #[cfg(target_os = "windows")]
+        _windows_wrapper_request_file,
+    } = command;
+    let mut child = spawn_child_command(request)?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| internal_error("failed to open fs sandbox helper stdin".to_string()))?;
+    stdin.write_all(&request_json).await.map_err(io_error)?;
+    stdin.shutdown().await.map_err(io_error)?;
+    drop(stdin);
+
+    let output = child.wait_with_output().await.map_err(io_error)?;
+    #[cfg(target_os = "windows")]
+    drop(_windows_wrapper_request_file);
+
+    if !output.status.success() {
         return Err(internal_error(format!(
             "fs sandbox helper failed with status {status}: {stderr}",
             status = output.status,
@@ -361,35 +336,6 @@ async fn run_command(
         FsHelperResponse::Ok(payload) => Ok(payload),
         FsHelperResponse::Error(error) => Err(error),
     }
-}
-
-struct FsHelperCommandOutput {
-    success: bool,
-    status: String,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
-async fn run_child_command(
-    command: PreparedFsHelperCommand,
-    request_json: Vec<u8>,
-) -> Result<FsHelperCommandOutput, JSONRPCErrorError> {
-    let mut child = spawn_child_command(command.request)?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| internal_error("failed to open fs sandbox helper stdin".to_string()))?;
-    stdin.write_all(&request_json).await.map_err(io_error)?;
-    stdin.shutdown().await.map_err(io_error)?;
-    drop(stdin);
-
-    let output = child.wait_with_output().await.map_err(io_error)?;
-    Ok(FsHelperCommandOutput {
-        success: output.status.success(),
-        status: output.status.to_string(),
-        stdout: output.stdout,
-        stderr: output.stderr,
-    })
 }
 
 fn spawn_child_command(
@@ -450,7 +396,6 @@ mod tests {
     use crate::ExecServerRuntimePaths;
 
     use super::FileSystemSandboxRunner;
-    use super::FsHelperLaunchPaths;
     use super::add_helper_runtime_permissions;
     use super::helper_env;
     use super::helper_env_from_vars;
@@ -618,14 +563,8 @@ mod tests {
         let permission_profile =
             PermissionProfile::from_runtime_permissions(&file_system_policy, network_policy);
         let sandbox_context = sandbox_context_with_cwd(&file_system_policy, cwd.clone());
-        let helper_paths = FsHelperLaunchPaths {
-            sandboxed_helper: runner.runtime_paths.codex_self_exe.clone(),
-            #[cfg(target_os = "windows")]
-            windows_wrapper: runner.runtime_paths.codex_self_exe.clone(),
-        };
-
         let request = runner
-            .sandbox_exec_request(&permission_profile, &cwd, &sandbox_context, &helper_paths)
+            .sandbox_exec_request(&permission_profile, &cwd, &sandbox_context)
             .expect("sandbox exec request");
 
         assert_eq!(request.request.env.get(&path_key), Some(&path));

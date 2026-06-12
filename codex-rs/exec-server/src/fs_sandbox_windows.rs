@@ -6,8 +6,32 @@ use codex_sandboxing::SandboxExecRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::rpc::internal_error;
+use crate::rpc::invalid_request;
 
 const WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST: &[&str] = &["USERNAME", "USERPROFILE"];
+
+pub(super) fn materialize_sandboxed_helper(
+    request: &mut SandboxExecRequest,
+    source: &AbsolutePathBuf,
+) -> Result<(), JSONRPCErrorError> {
+    let codex_home = codex_utils_home_dir::find_codex_home().map_err(|err| {
+        internal_error(format!(
+            "windows fs sandbox helper failed to resolve CODEX_HOME: {err}"
+        ))
+    })?;
+    let helper =
+        codex_windows_sandbox::resolve_exe_for_launch(source.as_path(), codex_home.as_path());
+    let helper = AbsolutePathBuf::from_absolute_path(helper.as_path()).map_err(|err| {
+        internal_error(format!(
+            "windows fs sandbox helper path is not absolute: {err}"
+        ))
+    })?;
+    let Some(program) = request.command.first_mut() else {
+        return Err(invalid_request("fs sandbox command was empty".to_string()));
+    };
+    *program = helper.as_path().to_string_lossy().into_owned();
+    Ok(())
+}
 
 pub(super) fn wrap_sandbox_exec_request(
     request: &mut SandboxExecRequest,
@@ -136,16 +160,47 @@ impl Drop for WindowsSandboxWrapperRequestFile {
 mod tests {
     use std::collections::HashMap;
     use std::ffi::OsString;
+    use std::path::PathBuf;
 
     use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::NetworkSandboxPolicy;
+    use codex_sandboxing::SandboxExecRequest;
+    use codex_sandboxing::SandboxType;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     use super::WindowsSandboxWrapperRequestFile;
     use super::add_wrapper_setup_env_from_vars;
+    use super::materialize_sandboxed_helper;
     use super::wrapper_request_dir;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn wrapper_setup_env_preserves_only_setup_identity() {
@@ -208,5 +263,91 @@ mod tests {
         drop(request_file);
 
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn materialized_helper_rewrites_inner_command_path() {
+        let codex_home = tempfile::TempDir::new().expect("codex home");
+        let _guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
+        let helper_dir = tempfile::TempDir::new().expect("helper dir");
+        let configured_helper = helper_dir.path().join("configured-codex-helper.exe");
+        std::fs::write(&configured_helper, b"helper").expect("write configured helper");
+        let configured_helper =
+            AbsolutePathBuf::from_absolute_path(&configured_helper).expect("absolute helper");
+        let cwd = AbsolutePathBuf::from_absolute_path(helper_dir.path()).expect("absolute cwd");
+        let file_system_sandbox_policy = FileSystemSandboxPolicy::read_only();
+        let mut request = SandboxExecRequest {
+            command: vec![
+                configured_helper.as_path().display().to_string(),
+                "--codex-run-as-fs-helper".to_string(),
+            ],
+            cwd,
+            env: HashMap::new(),
+            network: None,
+            sandbox: SandboxType::WindowsRestrictedToken,
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            windows_sandbox_private_desktop: false,
+            permission_profile: PermissionProfile::read_only(),
+            file_system_sandbox_policy,
+            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+            arg0: None,
+        };
+
+        materialize_sandboxed_helper(&mut request, &configured_helper)
+            .expect("materialize sandboxed helper");
+
+        let materialized_helper = PathBuf::from(&request.command[0]);
+        assert_eq!(
+            materialized_helper.file_name(),
+            configured_helper.as_path().file_name()
+        );
+        assert_eq!(
+            materialized_helper
+                .parent()
+                .and_then(std::path::Path::file_name),
+            Some(std::ffi::OsStr::new(".sandbox-bin"))
+        );
+        assert!(materialized_helper.exists());
+    }
+
+    #[test]
+    fn wrapper_request_preserves_elevated_level() {
+        let codex_home = tempfile::TempDir::new().expect("codex home");
+        let _guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
+        let command_cwd =
+            AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("absolute command cwd");
+        let file_system_sandbox_policy = FileSystemSandboxPolicy::read_only();
+        let mut request = SandboxExecRequest {
+            command: vec![
+                "helper.exe".to_string(),
+                "--codex-run-as-fs-helper".to_string(),
+            ],
+            cwd: command_cwd,
+            env: HashMap::new(),
+            network: None,
+            sandbox: SandboxType::WindowsRestrictedToken,
+            windows_sandbox_level: WindowsSandboxLevel::Elevated,
+            windows_sandbox_private_desktop: true,
+            permission_profile: PermissionProfile::read_only(),
+            file_system_sandbox_policy,
+            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+            arg0: None,
+        };
+        let wrapper = AbsolutePathBuf::from_absolute_path(codex_home.path().join("codex.exe"))
+            .expect("absolute wrapper");
+
+        let request_file = super::wrap_sandbox_exec_request(&mut request, &wrapper)
+            .expect("wrap sandbox exec request");
+        let wrapper_request: codex_windows_sandbox::WindowsSandboxWrapperRequest =
+            serde_json::from_slice(
+                &std::fs::read(&request_file.path).expect("read wrapper request"),
+            )
+            .expect("decode wrapper request");
+
+        assert_eq!(
+            wrapper_request.windows_sandbox_level,
+            WindowsSandboxLevel::Elevated
+        );
+        assert_eq!(wrapper_request.windows_sandbox_private_desktop, true);
     }
 }
