@@ -7,6 +7,10 @@ use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -106,6 +110,116 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Result<()> {
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            responses::sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+
+    let namespace = "resume_tools";
+    let namespace_description = "Tools available after resume.";
+    let tool_name = "resume_lookup";
+    let tool_description = "Look up a value after resume.";
+    let input_schema = json!({
+        "type": "object",
+        "properties": { "query": { "type": "string" } },
+        "required": ["query"],
+        "additionalProperties": false,
+    });
+    let dynamic_tool = DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        name: namespace.to_string(),
+        description: namespace_description.to_string(),
+        tools: vec![DynamicToolNamespaceTool::Function(
+            DynamicToolFunctionSpec {
+                name: tool_name.to_string(),
+                description: tool_description.to_string(),
+                input_schema: input_schema.clone(),
+                defer_loading: false,
+            },
+        )],
+    });
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+    });
+    let base_test = builder.build(&server).await?;
+    let started = base_test
+        .thread_manager
+        .start_thread_with_tools(base_test.config.clone(), vec![dynamic_tool])
+        .await?;
+    let rollout_path = started
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    started
+        .thread
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "persist this thread".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&started.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let mut resume_builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+    });
+    let resumed = resume_builder
+        .resume(&server, base_test.home.clone(), rollout_path)
+        .await?;
+    resumed.submit_turn("use the restored tool").await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let resumed_body = requests[1].body_json();
+    let tools = resumed_body
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .expect("resumed request tools");
+    let restored_namespace = tools
+        .iter()
+        .find(|tool| tool.get("name") == Some(&json!(namespace)))
+        .expect("dynamic tool namespace should be restored from rollout metadata");
+    assert_eq!(
+        restored_namespace,
+        &json!({
+            "type": "namespace",
+            "name": namespace,
+            "description": namespace_description,
+            "tools": [{
+                "type": "function",
+                "name": tool_name,
+                "description": tool_description,
+                "strict": false,
+                "parameters": input_schema,
+            }],
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_restores_legacy_dynamic_tools_from_rollout_with_sqlite_enabled() -> Result<()> {
     let server = start_mock_server().await;
     let mock = mount_sse_sequence(
         &server,
