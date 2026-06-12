@@ -1,9 +1,13 @@
 # Foreign-OS exec-server tests
 
 This directory cross-builds a small Windows exec-server fixture and runs it
-under a pinned Wine runtime from x86-64 Linux Bazel. It links only
-`codex-exec-server` because the full Codex Windows graph does not yet
-cross-build, and the smaller target is faster to iterate on.
+under a pinned Wine runtime from x86-64 Linux Bazel. A real Linux app-server
+drives it through the normal model tool-call and remote-execution path. The
+Windows fixture links only `codex-exec-server` because the full Codex Windows
+graph does not yet cross-build, and the smaller target is faster to iterate on.
+The test intentionally records the current host-shell mismatch: app-server
+chooses a Unix shell on Linux, so the Windows remote command fails before
+running.
 
 ## Running the test
 

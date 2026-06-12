@@ -21,15 +21,27 @@ wine_rust_test(
     srcs = ["wine_windows_exec_server_test.rs"],
     crate_name = "wine_windows_exec_server_test",
     crate_root = "wine_windows_exec_server_test.rs",
+    data = [
+        "//codex-rs/app-server:codex-app-server",
+    ],
+    rustc_env = {
+        "BAZEL_PACKAGE": "codex-rs/exec-server/tests/foreign-os",
+    },
     windows_binaries = {
         "wine-windows-exec-server": ":windows-exec-server",
     },
     deps = [
         "//bazel/rules/testing/wine:wine_test_support",
+        "//codex-rs/app-server-protocol",
+        "//codex-rs/app-server/tests/common",
+        "//codex-rs/core/tests/common",
         "//codex-rs/exec-server",
+        "//codex-rs/features",
         "//codex-rs/utils/cargo-bin",
         "@crates//:anyhow",
         "@crates//:pretty_assertions",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
         "@crates//:tokio",
     ],
 )
