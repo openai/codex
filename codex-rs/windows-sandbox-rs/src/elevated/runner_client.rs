@@ -28,6 +28,7 @@ use std::time::Instant;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
 use windows_sys::Win32::Foundation::DuplicateHandle;
+use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -49,9 +50,27 @@ const RUNNER_SPAWN_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const RUNNER_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
 const WAIT_OBJECT_0: u32 = 0;
 
+#[derive(Debug)]
+struct RunnerLogonError {
+    code: u32,
+}
+
+impl std::fmt::Display for RunnerLogonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CreateProcessWithLogonW failed: {}", self.code)
+    }
+}
+
+impl std::error::Error for RunnerLogonError {}
+
 pub(crate) struct RunnerTransport {
     pipe_write: File,
     pipe_read: File,
+}
+
+pub(crate) fn is_stale_sandbox_creds_error(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<RunnerLogonError>()
+        .is_some_and(|err| err.code == ERROR_LOGON_FAILURE)
 }
 
 impl RunnerTransport {
@@ -275,12 +294,12 @@ pub(crate) fn spawn_runner_transport(
         SetErrorMode(previous_error_mode);
     }
     if spawn_res == 0 {
-        let err = unsafe { GetLastError() } as i32;
+        let err = unsafe { GetLastError() };
         unsafe {
             CloseHandle(h_pipe_in);
             CloseHandle(h_pipe_out);
         }
-        return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {err}"));
+        return Err(RunnerLogonError { code: err }.into());
     }
     let expected_runner_pid = pi.dwProcessId;
 
@@ -391,5 +410,26 @@ fn wait_for_complete_frame(pipe_read: &File, timeout: Duration) -> Result<()> {
         }
 
         std::thread::sleep(RUNNER_SPAWN_READY_POLL_INTERVAL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RunnerLogonError;
+    use super::is_stale_sandbox_creds_error;
+    use pretty_assertions::assert_eq;
+    use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
+    use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+
+    #[test]
+    fn stale_sandbox_creds_error_recognizes_logon_failures() {
+        assert_eq!(
+            [ERROR_LOGON_FAILURE, ERROR_NOT_FOUND].map(|code| {
+                let err =
+                    anyhow::Error::new(RunnerLogonError { code }).context("runner launch failed");
+                is_stale_sandbox_creds_error(&err)
+            }),
+            [true, false]
+        );
     }
 }
