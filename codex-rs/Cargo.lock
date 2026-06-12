@@ -3286,13 +3286,21 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-core-plugins",
+ "codex-exec-server",
  "codex-extension-api",
  "codex-features",
  "codex-login",
  "codex-mcp",
+ "codex-plugin",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-path-uri",
  "pretty_assertions",
+ "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

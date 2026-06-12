@@ -664,14 +664,7 @@ async fn load_plugin(
             restriction_product,
             skill_config_rules,
         } => {
-            loaded_plugin.manifest_name = manifest
-                .interface
-                .as_ref()
-                .and_then(|interface| interface.display_name.as_deref())
-                .map(str::trim)
-                .filter(|display_name| !display_name.is_empty())
-                .map(str::to_string)
-                .or_else(|| Some(manifest.name.clone()));
+            loaded_plugin.manifest_name = Some(manifest.display_name().to_string());
             loaded_plugin.manifest_description = manifest.description.clone();
             loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
             let resolved_skills = load_plugin_skills(

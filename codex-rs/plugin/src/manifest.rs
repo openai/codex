@@ -71,6 +71,16 @@ impl<Resource> Default for PluginManifestInterface<Resource> {
 }
 
 impl<Resource> PluginManifest<Resource> {
+    /// Returns the model- and UI-facing package name, falling back to the manifest name.
+    pub fn display_name(&self) -> &str {
+        self.interface
+            .as_ref()
+            .and_then(|interface| interface.display_name.as_deref())
+            .map(str::trim)
+            .filter(|display_name| !display_name.is_empty())
+            .unwrap_or(&self.name)
+    }
+
     pub(crate) fn try_map_resources<Mapped, Error>(
         self,
         mut map: impl FnMut(Resource) -> Result<Mapped, Error>,

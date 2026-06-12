@@ -1,4 +1,5 @@
 use crate::manifest::parse_plugin_manifest;
+use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_plugin::PluginProvider;
@@ -77,6 +78,25 @@ pub struct ExecutorPluginProvider {
     environment_manager: Arc<EnvironmentManager>,
 }
 
+/// A resolved plugin paired with the concrete environment used to read it.
+#[derive(Clone)]
+pub struct ResolvedExecutorPlugin {
+    plugin: ResolvedPlugin,
+    environment: Arc<Environment>,
+}
+
+impl ResolvedExecutorPlugin {
+    /// Returns the source-neutral plugin descriptor.
+    pub fn plugin(&self) -> &ResolvedPlugin {
+        &self.plugin
+    }
+
+    /// Returns the concrete environment that resolved the descriptor.
+    pub fn environment(&self) -> &Environment {
+        self.environment.as_ref()
+    }
+}
+
 impl ExecutorPluginProvider {
     /// Creates a provider backed by the active execution environments.
     pub fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
@@ -84,15 +104,12 @@ impl ExecutorPluginProvider {
             environment_manager,
         }
     }
-}
 
-impl PluginProvider for ExecutorPluginProvider {
-    type Error = ExecutorPluginProviderError;
-
-    async fn resolve(
+    /// Resolves a plugin and retains the exact environment used for filesystem access.
+    pub async fn resolve_bound(
         &self,
         selected_root: &SelectedCapabilityRoot,
-    ) -> Result<Option<ResolvedPlugin>, Self::Error> {
+    ) -> Result<Option<ResolvedExecutorPlugin>, ExecutorPluginProviderError> {
         let root_id = &selected_root.id;
         let plugin_root = selected_plugin_root(selected_root)?;
         let CapabilityRootLocation::Environment { environment_id, .. } = &selected_root.location;
@@ -103,9 +120,30 @@ impl PluginProvider for ExecutorPluginProvider {
                 root_id: root_id.clone(),
                 environment_id: environment_id.clone(),
             })?;
-        let file_system = environment.get_filesystem();
+        let plugin = resolve_plugin_root(
+            selected_root,
+            plugin_root,
+            environment.get_filesystem().as_ref(),
+        )
+        .await?;
 
-        resolve_plugin_root(selected_root, plugin_root, file_system.as_ref()).await
+        Ok(plugin.map(|plugin| ResolvedExecutorPlugin {
+            plugin,
+            environment,
+        }))
+    }
+}
+
+impl PluginProvider for ExecutorPluginProvider {
+    type Error = ExecutorPluginProviderError;
+
+    async fn resolve(
+        &self,
+        selected_root: &SelectedCapabilityRoot,
+    ) -> Result<Option<ResolvedPlugin>, Self::Error> {
+        self.resolve_bound(selected_root)
+            .await
+            .map(|plugin| plugin.map(|plugin| plugin.plugin))
     }
 }
 
