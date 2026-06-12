@@ -8,7 +8,6 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
@@ -31,6 +30,7 @@ use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_extension_api::ApprovalReviewMcpAnnotations;
 use codex_extension_api::ApprovalReviewSource;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
@@ -1379,7 +1379,7 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
         tool_description: metadata.and_then(|metadata| metadata.tool_description.clone()),
         annotations: metadata
             .and_then(|metadata| metadata.annotations.as_ref())
-            .map(|annotations| GuardianMcpAnnotations {
+            .map(|annotations| ApprovalReviewMcpAnnotations {
                 destructive_hint: annotations.destructive_hint,
                 open_world_hint: annotations.open_world_hint,
                 read_only_hint: annotations.read_only_hint,

@@ -8,7 +8,6 @@ use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
@@ -41,6 +40,7 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_exec_server::Environment;
+use codex_extension_api::ApprovalReviewNetworkAccessTrigger;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -240,7 +240,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         Some(NetworkApprovalSpec {
             network: Some(network.clone()),
             mode: NetworkApprovalMode::Deferred,
-            trigger: GuardianNetworkAccessTrigger {
+            trigger: ApprovalReviewNetworkAccessTrigger {
                 call_id: ctx.call_id.clone(),
                 tool_name: flat_tool_name(&ctx.tool_name).into_owned(),
                 command: req.command.clone(),

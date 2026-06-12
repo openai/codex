@@ -21,7 +21,7 @@ use super::GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS;
 use super::GUARDIAN_RECENT_ENTRY_LIMIT;
 use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
-use super::approval_request::format_guardian_action_pretty;
+use super::format_guardian_action_pretty;
 pub(crate) use codex_guardian::guardian_truncate_text;
 
 /// Transcript entry retained for guardian review after filtering.

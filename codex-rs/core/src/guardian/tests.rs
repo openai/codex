@@ -5,7 +5,7 @@ use crate::config::Constrained;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
-use crate::guardian::approval_request::guardian_request_target_item_id;
+use crate::guardian::guardian_request_target_item_id;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
@@ -20,6 +20,8 @@ use codex_config::Sourced;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_exec_server::LOCAL_FS;
+use codex_extension_api::ApprovalReviewMcpAnnotations;
+use codex_extension_api::ApprovalReviewNetworkAccessTrigger;
 use codex_features::Feature;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
@@ -774,7 +776,7 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
         connector_description: None,
         tool_title: Some("Navigate".to_string()),
         tool_description: None,
-        annotations: Some(GuardianMcpAnnotations {
+        annotations: Some(ApprovalReviewMcpAnnotations {
             destructive_hint: Some(true),
             open_world_hint: None,
             read_only_hint: Some(false),
@@ -811,7 +813,7 @@ fn guardian_approval_request_to_json_renders_network_access_trigger() -> serde_j
         host: "example.com".to_string(),
         protocol: NetworkApprovalProtocol::Https,
         port: 443,
-        trigger: Some(GuardianNetworkAccessTrigger {
+        trigger: Some(ApprovalReviewNetworkAccessTrigger {
             call_id: "call-1".to_string(),
             tool_name: "shell".to_string(),
             command: vec!["curl".to_string(), "https://example.com".to_string()],
@@ -861,7 +863,7 @@ async fn build_guardian_prompt_items_explains_network_access_review_scope() -> a
             host: "example.com".to_string(),
             protocol: NetworkApprovalProtocol::Https,
             port: 443,
-            trigger: Some(GuardianNetworkAccessTrigger {
+            trigger: Some(ApprovalReviewNetworkAccessTrigger {
                 call_id: "call-1".to_string(),
                 tool_name: "shell".to_string(),
                 command: vec!["curl".to_string(), "https://example.com".to_string()],
@@ -974,7 +976,7 @@ fn guardian_request_target_item_id_omits_network_access_trigger_call_id() {
         host: "example.com".to_string(),
         protocol: NetworkApprovalProtocol::Https,
         port: 443,
-        trigger: Some(GuardianNetworkAccessTrigger {
+        trigger: Some(ApprovalReviewNetworkAccessTrigger {
             call_id: "call-1".to_string(),
             tool_name: "shell".to_string(),
             command: vec!["curl".to_string(), "https://example.com".to_string()],

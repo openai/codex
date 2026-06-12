@@ -11,7 +11,6 @@
 //! 3. Fail closed on timeout, execution failure, or malformed output.
 //! 4. Apply the guardian's explicit allow/deny outcome.
 
-mod approval_request;
 mod metrics;
 mod prompt;
 mod review;
@@ -23,15 +22,14 @@ use codex_protocol::protocol::GuardianAssessmentOutcome;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub(crate) use approval_request::format_guardian_action_pretty;
+pub(crate) use codex_guardian::format_guardian_action_pretty;
 #[cfg(test)]
-pub(crate) use approval_request::guardian_approval_request_to_json;
-pub(crate) use approval_request::guardian_assessment_action;
-pub(crate) use approval_request::guardian_request_target_item_id;
-pub(crate) use approval_request::guardian_request_turn_id;
-// Compatibility aliases while core call sites migrate to extension-api names.
-pub(crate) use codex_extension_api::ApprovalReviewMcpAnnotations as GuardianMcpAnnotations;
-pub(crate) use codex_extension_api::ApprovalReviewNetworkAccessTrigger as GuardianNetworkAccessTrigger;
+pub(crate) use codex_guardian::guardian_approval_request_to_json;
+pub(crate) use codex_guardian::guardian_assessment_action;
+pub(crate) use codex_guardian::guardian_request_target_item_id;
+pub(crate) use codex_guardian::guardian_request_turn_id;
+pub(crate) use codex_guardian::guardian_reviewed_action;
+// Compatibility alias while the remaining core request call sites migrate.
 pub(crate) use codex_extension_api::ApprovalReviewRequest as GuardianApprovalRequest;
 pub(crate) use codex_guardian::AUTO_REVIEW_DENIAL_WINDOW_SIZE;
 pub(crate) use codex_guardian::GuardianRejection;

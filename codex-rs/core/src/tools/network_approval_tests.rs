@@ -241,7 +241,7 @@ async fn register_call_with_default_shell_trigger(
         .register_call(
             registration_id.to_string(),
             "turn-1".to_string(),
-            GuardianNetworkAccessTrigger {
+            ApprovalReviewNetworkAccessTrigger {
                 call_id: "call-1".to_string(),
                 tool_name: "shell_command".to_string(),
                 command: vec!["curl".to_string(), "https://example.com".to_string()],
@@ -261,7 +261,7 @@ async fn register_call_with_default_shell_trigger(
 #[tokio::test]
 async fn active_call_preserves_triggering_command_context() {
     let service = NetworkApprovalService::default();
-    let expected = GuardianNetworkAccessTrigger {
+    let expected = ApprovalReviewNetworkAccessTrigger {
         call_id: "call-1".to_string(),
         tool_name: "shell_command".to_string(),
         command: vec!["curl".to_string(), "https://example.com".to_string()],

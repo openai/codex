@@ -1,5 +1,4 @@
 use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
@@ -9,6 +8,7 @@ use crate::tools::approval_dispatch::AutomatedApprovalDecision;
 use crate::tools::approval_dispatch::request_automated_approval;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
+use codex_extension_api::ApprovalReviewNetworkAccessTrigger;
 use codex_extension_api::ApprovalReviewSource;
 use codex_hooks::PermissionRequestDecision;
 use codex_network_proxy::BlockedRequest;
@@ -49,7 +49,7 @@ pub(crate) enum NetworkApprovalMode {
 pub(crate) struct NetworkApprovalSpec {
     pub network: Option<NetworkProxy>,
     pub mode: NetworkApprovalMode,
-    pub trigger: GuardianNetworkAccessTrigger,
+    pub trigger: ApprovalReviewNetworkAccessTrigger,
     pub command: String,
 }
 
@@ -226,7 +226,7 @@ impl PendingHostApproval {
 struct ActiveNetworkApprovalCall {
     registration_id: String,
     turn_id: String,
-    trigger: GuardianNetworkAccessTrigger,
+    trigger: ApprovalReviewNetworkAccessTrigger,
     command: String,
     cancellation_token: CancellationToken,
 }
@@ -269,7 +269,7 @@ impl NetworkApprovalService {
         &self,
         registration_id: String,
         turn_id: String,
-        trigger: GuardianNetworkAccessTrigger,
+        trigger: ApprovalReviewNetworkAccessTrigger,
         command: String,
         cancellation_token: CancellationToken,
     ) {

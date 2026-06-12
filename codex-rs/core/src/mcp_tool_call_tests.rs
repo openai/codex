@@ -1668,7 +1668,7 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
             connector_description: None,
             tool_title: None,
             tool_description: None,
-            annotations: Some(GuardianMcpAnnotations {
+            annotations: Some(ApprovalReviewMcpAnnotations {
                 destructive_hint: Some(true),
                 open_world_hint: Some(true),
                 read_only_hint: Some(false),

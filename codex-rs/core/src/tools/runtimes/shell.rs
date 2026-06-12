@@ -11,7 +11,6 @@ pub(crate) mod zsh_fork_backend;
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -38,6 +37,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use crate::tools::sandboxing::sandbox_permissions_preserving_denied_reads;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_extension_api::ApprovalReviewNetworkAccessTrigger;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -217,7 +217,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         Some(NetworkApprovalSpec {
             network: Some(network.clone()),
             mode: NetworkApprovalMode::Immediate,
-            trigger: GuardianNetworkAccessTrigger {
+            trigger: ApprovalReviewNetworkAccessTrigger {
                 call_id: ctx.call_id.clone(),
                 tool_name: flat_tool_name(&ctx.tool_name).into_owned(),
                 command: req.command.clone(),
