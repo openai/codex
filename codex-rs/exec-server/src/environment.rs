@@ -296,16 +296,19 @@ impl EnvironmentManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match environments.get(&environment_id) {
             // Update the shared client inside the stable Environment handle.
-            Some(existing) if existing.is_remote() => existing
-                .set_remote_transport(ExecServerTransportParams::websocket_url(exec_server_url)),
+            Some(existing) if existing.is_remote() => {
+                existing.set_remote_transport(ExecServerTransportParams::websocket_url(
+                    exec_server_url,
+                ));
+                existing.start_loading_info();
+            }
             _ => {
-                environments.insert(
-                    environment_id,
-                    Arc::new(Environment::remote_inner(
-                        exec_server_url,
-                        self.local_runtime_paths.clone(),
-                    )),
-                );
+                let environment = Arc::new(Environment::remote_inner(
+                    exec_server_url,
+                    self.local_runtime_paths.clone(),
+                ));
+                environment.start_loading_info();
+                environments.insert(environment_id, environment);
             }
         }
         Ok(())
@@ -517,6 +520,42 @@ impl Environment {
     /// Returns environment information from the selected execution/filesystem environment.
     pub async fn info(&self) -> Result<EnvironmentInfo, ExecServerError> {
         self.info_provider.info().await
+    }
+
+    /// Returns already-loaded environment information without starting a connection.
+    pub fn current_info(&self) -> Option<EnvironmentInfo> {
+        self.remote_client.as_ref().map_or_else(
+            || Some(EnvironmentInfo::local()),
+            LazyRemoteExecServerClient::current_environment_info,
+        )
+    }
+
+    /// Starts loading remote metadata without making the caller wait for it.
+    pub fn start_loading_info(self: &Arc<Self>) {
+        if self.current_info().is_some() || !self.is_ready() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let Some(remote_client) = self.remote_client.clone() else {
+            return;
+        };
+        let Some(load_token) = remote_client.try_begin_environment_info_load() else {
+            return;
+        };
+        let environment = Arc::clone(self);
+        runtime.spawn(async move {
+            let result = environment.info().await;
+            let transport_changed = remote_client.environment_info_load_token() != load_token;
+            let reload_requested = remote_client.finish_environment_info_load(load_token);
+            if let Err(err) = result {
+                tracing::warn!("failed to load environment metadata: {err}");
+            }
+            if transport_changed || reload_requested {
+                environment.start_loading_info();
+            }
+        });
     }
 
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
@@ -964,6 +1003,20 @@ mod tests {
             first.exec_server_url().as_deref(),
             Some(exec_server_url.as_str())
         );
+        let loaded_info = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(info) = first.current_info() {
+                    break info;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("environment metadata should load in the background");
+        assert_eq!(
+            first.info().await.expect("cached environment info"),
+            loaded_info
+        );
         assert_eq!(manager.default_environment_id(), None);
 
         manager
@@ -977,6 +1030,7 @@ mod tests {
             second.exec_server_url().as_deref(),
             Some("ws://127.0.0.1:9876")
         );
+        assert_eq!(second.current_info(), None);
         assert!(Arc::ptr_eq(&first, &second));
         assert!(Arc::ptr_eq(&exec_backend, &second.get_exec_backend()));
         assert!(Arc::ptr_eq(&http_client, &second.get_http_client()));

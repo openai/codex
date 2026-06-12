@@ -8,7 +8,8 @@ use ts_rs::TS;
 #[ts(export_to = "v2/")]
 pub struct EnvironmentAddParams {
     pub environment_id: String,
-    pub exec_server_url: String,
+    #[ts(optional = nullable)]
+    pub exec_server_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

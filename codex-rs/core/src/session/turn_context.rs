@@ -704,7 +704,6 @@ impl Session {
             self.services.environment_manager.as_ref(),
             session_configuration.environment_selections(),
         )
-        .await
         .unwrap_or_else(|err| {
             warn!("failed to resolve turn environments: {err}");
             ResolvedTurnEnvironments::default()
@@ -748,6 +747,7 @@ impl Session {
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let fs = primary_turn_environment
+            .filter(|turn_environment| turn_environment.environment.is_ready())
             .map(|turn_environment| turn_environment.environment.get_filesystem());
         let skills_outcome = Arc::new(
             self.services

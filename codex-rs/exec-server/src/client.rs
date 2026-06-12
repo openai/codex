@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
@@ -84,6 +85,9 @@ use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
+
+const ENVIRONMENT_INFO_RELOAD_PENDING: u64 = 1 << 63;
+const ENVIRONMENT_INFO_LOAD_TOKEN_MASK: u64 = !ENVIRONMENT_INFO_RELOAD_PENDING;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
 use crate::rpc::RpcClientEvent;
@@ -203,12 +207,15 @@ pub(crate) struct LazyRemoteExecServerClient {
     state: Arc<StdMutex<LazyRemoteExecServerClientState>>,
     transport_revision_tx: watch::Sender<u64>,
     connect_lock: Arc<Semaphore>,
+    environment_info_lock: Arc<Semaphore>,
+    environment_info_load_state: Arc<AtomicU64>,
 }
 
 struct LazyRemoteExecServerClientState {
     // None means we do not know how to connect to this environment yet.
     transport_params: Option<Arc<ExecServerTransportParams>>,
     client: Option<ExecServerClient>,
+    environment_info: Option<EnvironmentInfo>,
 }
 
 impl LazyRemoteExecServerClient {
@@ -227,9 +234,12 @@ impl LazyRemoteExecServerClient {
             state: Arc::new(StdMutex::new(LazyRemoteExecServerClientState {
                 transport_params: transport_params.map(Arc::new),
                 client: None,
+                environment_info: None,
             })),
             transport_revision_tx,
             connect_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
+            environment_info_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
+            environment_info_load_state: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -306,6 +316,7 @@ impl LazyRemoteExecServerClient {
         }
         state.transport_params = Some(Arc::new(transport_params));
         state.client = None;
+        state.environment_info = None;
         drop(state);
         // Notify after releasing the state lock so woken callers can inspect it immediately.
         self.transport_revision_tx
@@ -380,7 +391,116 @@ impl HttpClient for LazyRemoteExecServerClient {
 
 impl LazyRemoteExecServerClient {
     pub(crate) async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
-        self.get().await?.environment_info().await
+        if let Some(info) = self.current_environment_info() {
+            return Ok(info);
+        }
+        let _info_permit =
+            self.environment_info_lock.acquire().await.map_err(|_| {
+                ExecServerError::Protocol("environment info lock closed".to_string())
+            })?;
+        loop {
+            if let Some(info) = self.current_environment_info() {
+                return Ok(info);
+            }
+            let transport_params = self.wait_for_transport().await?;
+            let client = self.get().await?;
+            let mut transport_revision_rx = self.transport_revision_tx.subscribe();
+            if !self.is_current_transport(&transport_params) {
+                continue;
+            }
+            let info = tokio::select! {
+                result = client.environment_info() => {
+                    match result {
+                        Ok(info) => info,
+                        Err(_err) if !self.is_current_transport(&transport_params) => continue,
+                        Err(err) => return Err(err),
+                    }
+                }
+                changed = transport_revision_rx.changed() => {
+                    changed.map_err(|_| ExecServerError::Closed)?;
+                    continue;
+                }
+            };
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state
+                .transport_params
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &transport_params))
+            {
+                state.environment_info = Some(info.clone());
+                return Ok(info);
+            }
+        }
+    }
+
+    pub(crate) fn current_environment_info(&self) -> Option<EnvironmentInfo> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .environment_info
+            .clone()
+    }
+
+    pub(crate) fn try_begin_environment_info_load(&self) -> Option<u64> {
+        if self.current_environment_info().is_some() {
+            return None;
+        }
+        let token = self.environment_info_load_token();
+        let mut state = self.environment_info_load_state.load(Ordering::Acquire);
+        loop {
+            if state == 0 {
+                match self.environment_info_load_state.compare_exchange(
+                    0,
+                    token,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return Some(token),
+                    Err(next_state) => state = next_state,
+                }
+            } else {
+                let pending_state = state | ENVIRONMENT_INFO_RELOAD_PENDING;
+                if pending_state == state {
+                    return None;
+                }
+                match self.environment_info_load_state.compare_exchange(
+                    state,
+                    pending_state,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return None,
+                    Err(next_state) => state = next_state,
+                }
+            }
+        }
+    }
+
+    pub(crate) fn finish_environment_info_load(&self, token: u64) -> bool {
+        let mut state = self.environment_info_load_state.load(Ordering::Acquire);
+        loop {
+            debug_assert_eq!(state & ENVIRONMENT_INFO_LOAD_TOKEN_MASK, token);
+            let reload_requested = state & ENVIRONMENT_INFO_RELOAD_PENDING != 0;
+            match self.environment_info_load_state.compare_exchange(
+                state,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return reload_requested,
+                Err(next_state) => state = next_state,
+            }
+        }
+    }
+
+    pub(crate) fn environment_info_load_token(&self) -> u64 {
+        self.transport_revision_tx
+            .borrow()
+            .wrapping_add(1)
+            .min(ENVIRONMENT_INFO_LOAD_TOKEN_MASK)
     }
 }
 
@@ -1074,6 +1194,7 @@ mod tests {
     use tokio::io::duplex;
     use tokio::net::TcpListener;
     use tokio::net::TcpStream;
+    use tokio::sync::Barrier;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
     use tokio::time::Duration;
@@ -1757,6 +1878,37 @@ mod tests {
             .expect("stale server should be released");
         stale_server.await.expect("stale server should finish");
         ready_server.await.expect("ready server should finish");
+    }
+
+    #[tokio::test]
+    async fn environment_info_load_preserves_concurrent_reload_handoff() {
+        for _ in 0..100 {
+            let client = Arc::new(LazyRemoteExecServerClient::new(
+                ExecServerTransportParams::WebSocketUrl {
+                    websocket_url: "ws://127.0.0.1:8765".to_string(),
+                    connect_timeout: Duration::from_secs(1),
+                    initialize_timeout: Duration::from_secs(1),
+                },
+            ));
+            let first_token = client
+                .try_begin_environment_info_load()
+                .expect("first load should start");
+            let barrier = Arc::new(Barrier::new(2));
+            let contender = {
+                let barrier = Arc::clone(&barrier);
+                let client = Arc::clone(&client);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    client.try_begin_environment_info_load()
+                })
+            };
+
+            barrier.wait().await;
+            let reload_requested = client.finish_environment_info_load(first_token);
+            let contender_token = contender.await.expect("contender should not panic");
+
+            assert!(reload_requested || contender_token.is_some());
+        }
     }
 
     #[tokio::test]

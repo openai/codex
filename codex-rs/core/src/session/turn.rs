@@ -414,12 +414,16 @@ pub(crate) async fn run_turn(
 async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
     let mut display_roots = Vec::new();
     for turn_environment in &turn_context.environments.turn_environments {
-        let root = get_git_repo_root_with_fs(
-            turn_environment.environment.get_filesystem().as_ref(),
-            &turn_environment.cwd,
-        )
-        .await
-        .unwrap_or_else(|| turn_environment.cwd.clone())
+        let root = if turn_environment.environment.is_ready() {
+            get_git_repo_root_with_fs(
+                turn_environment.environment.get_filesystem().as_ref(),
+                &turn_environment.cwd,
+            )
+            .await
+            .unwrap_or_else(|| turn_environment.cwd.clone())
+        } else {
+            turn_environment.cwd.clone()
+        }
         .into_path_buf();
         display_roots.push((turn_environment.environment_id.clone(), root));
     }

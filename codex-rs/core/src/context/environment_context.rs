@@ -15,6 +15,8 @@ use std::path::PathBuf;
 
 use super::ContextualUserFragment;
 
+const ENVIRONMENT_SHELL_LOADING: &str = "still loading";
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EnvironmentContext {
     pub(crate) environments: EnvironmentContextEnvironments,
@@ -47,11 +49,25 @@ impl EnvironmentContextEnvironment {
             .map(|environment| Self {
                 id: environment.environment_id.clone(),
                 cwd: environment.cwd.clone(),
-                shell: environment
-                    .shell
-                    .as_ref()
-                    .map(|shell| shell.name().to_string())
-                    .unwrap_or_else(|| shell.name().to_string()),
+                shell: if environment.environment.is_remote() {
+                    environment
+                        .environment
+                        .current_info()
+                        .map(|info| info.shell.name)
+                        .or_else(|| {
+                            environment
+                                .shell
+                                .as_ref()
+                                .map(|shell| shell.name().to_string())
+                        })
+                        .unwrap_or_else(|| ENVIRONMENT_SHELL_LOADING.to_string())
+                } else {
+                    environment
+                        .shell
+                        .as_ref()
+                        .map(|shell| shell.name().to_string())
+                        .unwrap_or_else(|| shell.name().to_string())
+                },
             })
             .collect()
     }

@@ -7,6 +7,7 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::CapabilityRootLocation;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -14,6 +15,7 @@ use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
@@ -308,6 +310,96 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
     assert_eq!(error.id, RequestId::Integer(request_id));
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(error.error.message, "unknown turn environment id `missing`");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_and_first_turn_do_not_wait_for_pending_environment() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let environment_request_id = mcp
+        .send_raw_request(
+            "environment/add",
+            Some(json!({"environmentId": "pending-environment"})),
+        )
+        .await?;
+    let environment_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(environment_request_id)),
+    )
+    .await??;
+    assert_eq!(environment_response.result, json!({}));
+
+    let environment = TurnEnvironmentParams {
+        environment_id: "pending-environment".to_string(),
+        cwd: codex_home.path().to_path_buf().try_into()?,
+    };
+    let environment_cwd = std::fs::canonicalize(environment.cwd.as_path())?;
+    let thread_request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            environments: Some(vec![environment]),
+            selected_capability_roots: Some(vec![SelectedCapabilityRoot {
+                id: "pending-skills".to_string(),
+                location: CapabilityRootLocation::Environment {
+                    environment_id: "pending-environment".to_string(),
+                    path: environment_cwd.to_string_lossy().into_owned(),
+                },
+            }]),
+            ..Default::default()
+        })
+        .await?;
+    let thread_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_response)?;
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "start before the environment is ready".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    let model_request = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/responses"))
+        .context("expected model request")?;
+    let model_request_body = model_request
+        .body_json::<Value>()
+        .context("model request body should be JSON")?
+        .to_string();
+    assert!(model_request_body.contains("<shell>still loading</shell>"));
+    assert!(
+        model_request_body.contains(&format!("<cwd>{}</cwd>", environment_cwd.display())),
+        "expected cwd {} in model request",
+        environment_cwd.display()
+    );
 
     Ok(())
 }

@@ -65,6 +65,12 @@ impl SkillProvider for ExecutorSkillProvider {
                     ));
                     continue;
                 };
+                if !environment.is_ready() {
+                    catalog.warnings.push(format!(
+                        "Selected capability root `{selected_root_id}` is unavailable while environment `{environment_id}` is starting."
+                    ));
+                    continue;
+                }
                 let root_path = match executor_absolute_path(&path) {
                     Ok(root_path) => root_path,
                     Err(err) => {

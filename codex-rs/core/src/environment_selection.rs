@@ -42,6 +42,7 @@ impl ResolvedTurnEnvironments {
         self.turn_environments.first()
     }
 
+    #[cfg(test)]
     pub(crate) fn primary_environment(&self) -> Option<Arc<codex_exec_server::Environment>> {
         self.primary()
             .map(|environment| Arc::clone(&environment.environment))
@@ -49,6 +50,7 @@ impl ResolvedTurnEnvironments {
 
     pub(crate) fn primary_filesystem(&self) -> Option<Arc<dyn ExecutorFileSystem>> {
         self.primary()
+            .filter(|environment| environment.environment.is_ready())
             .map(|environment| environment.environment.get_filesystem())
     }
 
@@ -61,7 +63,7 @@ impl ResolvedTurnEnvironments {
     }
 }
 
-pub(crate) async fn resolve_environment_selections(
+pub(crate) fn resolve_environment_selections(
     environment_manager: &EnvironmentManager,
     environments: &[TurnEnvironmentSelection],
 ) -> CodexResult<ResolvedTurnEnvironments> {
@@ -80,8 +82,9 @@ pub(crate) async fn resolve_environment_selections(
             .ok_or_else(|| {
                 CodexErr::InvalidRequest(format!("unknown turn environment id `{environment_id}`"))
             })?;
-        let shell = match environment.info().await {
-            Ok(info) => match Shell::from_environment_shell_info(info.shell) {
+        environment.start_loading_info();
+        let shell = match environment.current_info() {
+            Some(info) => match Shell::from_environment_shell_info(info.shell) {
                 Ok(shell) => Some(shell),
                 Err(err) => {
                     tracing::warn!(
@@ -90,10 +93,7 @@ pub(crate) async fn resolve_environment_selections(
                     None
                 }
             },
-            Err(err) => {
-                tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
-                None
-            }
+            None => None,
         };
         turn_environments.push(TurnEnvironment {
             environment_id,
@@ -205,7 +205,6 @@ url = "ws://127.0.0.1:8765"
                 },
             ],
         )
-        .await
         .expect_err("duplicate environment id should fail");
 
         assert!(err.to_string().contains("duplicate"));
@@ -224,7 +223,6 @@ url = "ws://127.0.0.1:8765"
                 cwd: selected_cwd,
             }],
         )
-        .await
         .expect("environment selections should resolve");
 
         assert_eq!(
@@ -262,7 +260,6 @@ url = "ws://127.0.0.1:8765"
                 cwd: cwd.clone(),
             }],
         )
-        .await
         .expect("local environment should resolve");
         let remote_environment = Arc::new(
             Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))

@@ -1382,8 +1382,7 @@ impl ThreadManagerState {
             }
         }
         let environment_selections =
-            resolve_environment_selections(self.environment_manager.as_ref(), &environments)
-                .await?;
+            resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
         let user_instructions = self
             .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
             .await;

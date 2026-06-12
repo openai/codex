@@ -528,10 +528,7 @@ impl Codex {
             .startup_warnings
             .extend(user_instruction_provider_warnings);
         // TODO(anp) assemble instructions from multiple environments
-        let primary_environment = environment_selections.primary_environment();
-        let primary_fs = primary_environment
-            .as_ref()
-            .map(|environment| environment.get_filesystem());
+        let primary_fs = environment_selections.primary_filesystem();
         let loaded_agents_md =
             load_project_instructions(&mut config, user_instructions, primary_fs.as_deref()).await;
 

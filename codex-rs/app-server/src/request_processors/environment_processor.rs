@@ -16,9 +16,16 @@ impl EnvironmentRequestProcessor {
         &self,
         params: EnvironmentAddParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.environment_manager
-            .upsert_environment(params.environment_id, params.exec_server_url)
-            .map_err(|err| invalid_request(err.to_string()))?;
+        match params.exec_server_url {
+            Some(exec_server_url) => self
+                .environment_manager
+                .upsert_environment(params.environment_id, exec_server_url),
+            None => self
+                .environment_manager
+                .register_pending_environment(params.environment_id)
+                .map(drop),
+        }
+        .map_err(|err| invalid_request(err.to_string()))?;
         Ok(Some(EnvironmentAddResponse {}.into()))
     }
 }
