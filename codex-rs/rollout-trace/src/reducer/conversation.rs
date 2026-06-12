@@ -322,7 +322,6 @@ impl TraceReducer {
                 role: ConversationRole::Assistant,
                 channel: None,
                 kind: ConversationItemKind::CompactionMarker,
-                agent_message: None,
                 // The summary is a separate model/provider-visible item. Keep the marker body
                 // empty so transcript renderers cannot mistake the boundary for prompt content.
                 body: ConversationBody { parts: Vec::new() },
@@ -420,7 +419,6 @@ impl TraceReducer {
                 role: item.role,
                 channel: item.channel,
                 kind: item.kind,
-                agent_message: item.agent_message,
                 body: item.body,
                 call_id: item.call_id,
                 produced_by,
@@ -581,7 +579,6 @@ fn conversation_item_matches(
     item.role == normalized.role
         && item.channel == normalized.channel
         && item.kind == normalized.kind
-        && item.agent_message == normalized.agent_message
         && body_matches
         && item.call_id == normalized.call_id
 }

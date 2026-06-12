@@ -526,7 +526,7 @@ pub enum Op {
         thread_settings: ThreadSettingsOverrides,
     },
 
-    /// Inter-agent communication that should be recorded as agent-message history
+    /// Inter-agent communication that should be recorded as assistant history
     /// while still using the normal thread submission lifecycle.
     InterAgentCommunication {
         communication: InterAgentCommunication,

@@ -1,3 +1,5 @@
+use crate::context::ContextualUserFragment;
+use crate::context::SubagentNotification;
 pub use codex_api::ResponseEvent;
 use codex_config::types::Personality;
 use codex_protocol::error::Result;
@@ -56,6 +58,8 @@ impl Default for Prompt {
 
 impl Prompt {
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
+        let (subagent_notification_start, subagent_notification_end) =
+            SubagentNotification::type_markers();
         self.input
             .iter()
             .cloned()
@@ -67,7 +71,13 @@ impl Prompt {
                     return item;
                 }
                 InterAgentCommunication::from_message_content(content)
-                    .filter(|communication| communication.encrypted_content.is_some())
+                    .filter(|communication| {
+                        communication.encrypted_content.is_some()
+                            || communication
+                                .content
+                                .starts_with(subagent_notification_start)
+                                && communication.content.ends_with(subagent_notification_end)
+                    })
                     .map(|communication| communication.to_model_input_item())
                     .unwrap_or(item)
             })

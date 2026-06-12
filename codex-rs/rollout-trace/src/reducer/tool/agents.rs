@@ -736,25 +736,13 @@ fn push_unique(items: &mut Vec<String>, item: &str) {
 }
 
 fn inter_agent_message_fields(item: &ConversationItem) -> Option<(String, String)> {
-    if item.role != ConversationRole::Assistant || item.kind != ConversationItemKind::Message {
-        return None;
-    }
-    if let Some(agent_message) = &item.agent_message {
-        let [content] = item.body.parts.as_slice() else {
-            return None;
-        };
-        let message_content = match content {
-            ConversationPart::Text { text } => text,
-            ConversationPart::Encoded { label, value } if label == "encrypted_content" => value,
-            _ => return None,
-        };
-        return Some((agent_message.recipient.clone(), message_content.clone()));
-    }
-
-    // Older traces store multi-agent v2 deliveries as assistant messages whose
+    // Multi-agent v2 injects mailbox deliveries as assistant messages whose
     // text is serialized `InterAgentCommunication`. Treat only that exact
     // transport shape as an edge target; ordinary assistant JSON must not be
     // mistaken for cross-thread delivery.
+    if item.role != ConversationRole::Assistant || item.kind != ConversationItemKind::Message {
+        return None;
+    }
     let [ConversationPart::Text { text }] = item.body.parts.as_slice() else {
         return None;
     };

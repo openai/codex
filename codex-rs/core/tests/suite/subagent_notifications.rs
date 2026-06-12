@@ -1107,7 +1107,7 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plaintext_multi_agent_v2_communication_sends_agent_message() -> Result<()> {
+async fn plaintext_multi_agent_v2_subagent_notification_sends_agent_message() -> Result<()> {
     let server = start_mock_server().await;
     let test = test_codex()
         .with_model("koffing")

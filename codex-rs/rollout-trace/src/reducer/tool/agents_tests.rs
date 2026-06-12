@@ -246,17 +246,18 @@ fn sub_agent_started_activity_creates_spawn_edge() -> anyhow::Result<()> {
     )?;
     start_thread(&writer, child_thread_id, "/root/reviewer")?;
     start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
+    let delivered = inter_agent_message(
+        "/root",
+        "/root/reviewer",
+        "review this",
+        /*trigger_turn*/ true,
+    );
     append_inference_request(
         &writer,
         child_thread_id,
         "turn-child-1",
         "inference-child-1",
-        vec![json!({
-            "type": "agent_message",
-            "author": "/root",
-            "recipient": "/root/reviewer",
-            "content": [{"type": "input_text", "text": "review this"}]
-        })],
+        vec![message("assistant", &delivered)],
     )?;
 
     let replayed = replay_bundle(temp.path())?;
