@@ -1,0 +1,11 @@
+---
+source: tui/src/app/tests.rs
+expression: "crate::chatwidget::tests::helpers::render_bottom_popup(&app.chat_widget, 80)"
+---
+  Replace goal?
+  New objective: New goal
+
+› 1. Replace current goal  Set the new objective and start it now
+  2. Cancel                Keep the current goal
+
+  Press enter to confirm or esc to go back
