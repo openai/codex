@@ -1999,16 +1999,24 @@ fn apply_otel_requirement(
         configured.extend(required);
     }
     if let Some(required) = required.tracestate {
-        let configured = configured.tracestate.get_or_insert_default();
-        for (member, required_fields) in required {
-            let configured_fields = configured.entry(member).or_default();
-            conflict |= required_fields.iter().any(|(key, value)| {
-                configured_fields
-                    .get(key)
-                    .is_some_and(|current| current != value)
-            });
-            configured_fields.extend(required_fields);
-        }
+        let configured_tracestate = configured.tracestate.take().unwrap_or_default();
+        conflict |= required.iter().any(|(member, required_fields)| {
+            configured_tracestate
+                .get(member)
+                .is_some_and(|configured_fields| {
+                    required_fields.iter().any(|(key, value)| {
+                        configured_fields
+                            .get(key)
+                            .is_some_and(|current| current != value)
+                    })
+                })
+        });
+        configured.tracestate = Some(otel::merge_required_tracestate(
+            configured_tracestate,
+            required,
+            &source,
+            startup_warnings,
+        ));
     }
 
     if conflict {

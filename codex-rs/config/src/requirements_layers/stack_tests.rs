@@ -393,6 +393,89 @@ sandbox_private_desktop = true
 }
 
 #[test]
+fn otel_exporters_replace_atomically_across_layers() {
+    let high_source = RequirementSource::EnterpriseManaged {
+        id: "req_high".to_string(),
+        name: "High".to_string(),
+    };
+    let low_source = RequirementSource::EnterpriseManaged {
+        id: "req_low".to_string(),
+        name: "Low".to_string(),
+    };
+    let composed = compose_requirements_for_hostname(
+        vec![
+            RequirementsLayerEntry::from_toml(
+                low_source.clone(),
+                r#"
+[otel]
+log_user_prompt = true
+environment = "low"
+exporter = { otlp-http = { endpoint = "https://logs.low.example", protocol = "binary", headers = { Authorization = "old-secret" } } }
+trace_exporter = { otlp-http = { endpoint = "https://traces.low.example", protocol = "json", headers = { Trace = "old-trace" } } }
+metrics_exporter = { otlp-grpc = { endpoint = "https://metrics.low.example", headers = { Metrics = "old-metrics" } } }
+
+[otel.span_attributes]
+region = "us"
+team = "low"
+
+[otel.tracestate.vendor]
+low = "one"
+shared = "low"
+"#,
+            ),
+            RequirementsLayerEntry::from_toml(
+                high_source.clone(),
+                r#"
+[otel]
+environment = "high"
+exporter = { otlp-grpc = { endpoint = "https://logs.high.example" } }
+trace_exporter = { otlp-http = { endpoint = "https://traces.high.example", protocol = "binary" } }
+metrics_exporter = "none"
+
+[otel.span_attributes]
+team = "high"
+
+[otel.tracestate.vendor]
+high = "two"
+shared = "high"
+"#,
+            ),
+        ],
+        /*hostname*/ None,
+    )
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed.otel,
+        Some(Sourced::new(
+            expected_requirements(
+                r#"
+[otel]
+log_user_prompt = true
+environment = "high"
+exporter = { otlp-grpc = { endpoint = "https://logs.high.example" } }
+trace_exporter = { otlp-http = { endpoint = "https://traces.high.example", protocol = "binary" } }
+metrics_exporter = "none"
+
+[otel.span_attributes]
+region = "us"
+team = "high"
+
+[otel.tracestate.vendor]
+high = "two"
+low = "one"
+shared = "high"
+"#,
+            )
+            .otel
+            .expect("expected OTEL requirements"),
+            RequirementSource::composite([high_source, low_source]),
+        ))
+    );
+}
+
+#[test]
 fn merged_table_source_is_composite_in_priority_order() {
     let high_source = RequirementSource::EnterpriseManaged {
         id: "req_high".to_string(),

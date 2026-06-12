@@ -1,0 +1,89 @@
+use crate::RequirementSource;
+use crate::Sourced;
+use crate::types::OtelConfigToml;
+use std::collections::BTreeMap;
+
+/// Merges one OTEL requirements layer into an output assembled high-to-low.
+///
+/// Exporters and scalar settings are exact leaves, while trace metadata is
+/// recursively merged by key. Keeping this policy typed prevents exporter
+/// variants, credentials, and TLS settings from being combined field by field.
+pub(super) fn merge(
+    output: &mut Option<Sourced<OtelConfigToml>>,
+    incoming: Option<OtelConfigToml>,
+    source: &RequirementSource,
+) {
+    let Some(incoming) = incoming.filter(|value| !is_empty(value)) else {
+        return;
+    };
+    let Some(output) = output.as_mut() else {
+        *output = Some(Sourced::new(incoming, source.clone()));
+        return;
+    };
+
+    let OtelConfigToml {
+        log_user_prompt,
+        environment,
+        exporter,
+        trace_exporter,
+        metrics_exporter,
+        span_attributes,
+        tracestate,
+    } = incoming;
+
+    macro_rules! fill_exact_leaf {
+        ($field:ident) => {
+            if output.value.$field.is_none() {
+                output.value.$field = $field;
+            }
+        };
+    }
+
+    fill_exact_leaf!(log_user_prompt);
+    fill_exact_leaf!(environment);
+    fill_exact_leaf!(exporter);
+    fill_exact_leaf!(trace_exporter);
+    fill_exact_leaf!(metrics_exporter);
+    merge_map(&mut output.value.span_attributes, span_attributes);
+    merge_nested_map(&mut output.value.tracestate, tracestate);
+    super::stack::merge_output_source(&mut output.source, source);
+}
+
+fn merge_map(
+    output: &mut Option<BTreeMap<String, String>>,
+    incoming: Option<BTreeMap<String, String>>,
+) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    let output = output.get_or_insert_default();
+    for (key, value) in incoming {
+        output.entry(key).or_insert(value);
+    }
+}
+
+fn merge_nested_map(
+    output: &mut Option<BTreeMap<String, BTreeMap<String, String>>>,
+    incoming: Option<BTreeMap<String, BTreeMap<String, String>>>,
+) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    let output = output.get_or_insert_default();
+    for (member, fields) in incoming {
+        let output_fields = output.entry(member).or_default();
+        for (key, value) in fields {
+            output_fields.entry(key).or_insert(value);
+        }
+    }
+}
+
+fn is_empty(value: &OtelConfigToml) -> bool {
+    value.log_user_prompt.is_none()
+        && value.environment.is_none()
+        && value.exporter.is_none()
+        && value.trace_exporter.is_none()
+        && value.metrics_exporter.is_none()
+        && value.span_attributes.is_none()
+        && value.tracestate.is_none()
+}

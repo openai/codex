@@ -36,6 +36,65 @@ pub(crate) fn resolve_config(
     }
 }
 
+/// Merges user-configured tracestate into a validated required base.
+///
+/// Required member fields always win. Other configured fields are admitted one
+/// at a time only when the complete candidate remains W3C-valid; rejected
+/// fields produce startup warnings rather than erasing required metadata.
+pub(crate) fn merge_required_tracestate(
+    configured: BTreeMap<String, BTreeMap<String, String>>,
+    required: BTreeMap<String, BTreeMap<String, String>>,
+    source: &impl Display,
+    startup_warnings: &mut Vec<String>,
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    let mut effective = required.clone();
+    for (member_key, configured_fields) in configured {
+        for (field_key, value) in configured_fields {
+            if required
+                .get(&member_key)
+                .is_some_and(|required_fields| required_fields.contains_key(&field_key))
+            {
+                continue;
+            }
+
+            let mut candidate = effective.clone();
+            candidate
+                .entry(member_key.clone())
+                .or_default()
+                .insert(field_key.clone(), value);
+            retain_valid_configured_tracestate(
+                candidate,
+                &format!("otel.tracestate.{member_key}.{field_key}"),
+                source,
+                startup_warnings,
+                &mut effective,
+            );
+        }
+    }
+    effective
+}
+
+fn retain_valid_configured_tracestate(
+    candidate: BTreeMap<String, BTreeMap<String, String>>,
+    config_key: &str,
+    source: &impl Display,
+    startup_warnings: &mut Vec<String>,
+    effective: &mut BTreeMap<String, BTreeMap<String, String>>,
+) {
+    match codex_otel::validate_tracestate_entries(&candidate) {
+        Ok(()) => {
+            *effective = candidate;
+        }
+        Err(err) => {
+            let message = format!(
+                "Ignoring configured `{config_key}` because it would invalidate tracestate required by {source}: {err}"
+            );
+            tracing::warn!("{message}");
+            startup_warnings.push(message);
+        }
+    }
+}
+
 fn resolve_span_attributes(
     span_attributes: Option<BTreeMap<String, String>>,
     startup_warnings: &mut Vec<String>,

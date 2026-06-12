@@ -9457,6 +9457,50 @@ async fn invalid_required_otel_trace_metadata_fails_closed() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn required_otel_tracestate_survives_invalid_user_merge() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let configured_overflow = "u".repeat(/*n*/ 120);
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"
+[otel.tracestate.vendor]
+required = "configured"
+keep = "kept"
+zz_overflow = {configured_overflow:?}
+"#
+        ),
+    )?;
+    let required_value = "r".repeat(/*n*/ 120);
+    let requirements = format!("[otel.tracestate.vendor]\nrequired = {required_value:?}\n");
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+        )
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.otel.tracestate,
+        BTreeMap::from([(
+            "vendor".to_string(),
+            BTreeMap::from([
+                ("keep".to_string(), "kept".to_string()),
+                ("required".to_string(), required_value),
+            ]),
+        )])
+    );
+    assert!(config.startup_warnings.iter().any(|warning| {
+        warning.contains("otel.tracestate.vendor.zz_overflow")
+            && warning.contains("would invalidate tracestate required by")
+    }));
+    Ok(())
+}
+
+#[tokio::test]
 async fn conflicting_login_method_requirements_fail_closed() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
