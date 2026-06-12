@@ -36,12 +36,6 @@ dev = [
   { include-group = "format" },
 ]
 
-[tool.uv.build-backend]
-module-name = "openai_codex"
-source-include = [
-  "examples/README.md",
-]
-
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
