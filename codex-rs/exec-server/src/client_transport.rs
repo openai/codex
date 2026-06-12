@@ -48,15 +48,17 @@ impl ExecServerClient {
                 })
                 .await
             }
-            crate::client_api::ExecServerTransportParams::NoiseRendezvous { provider } => {
-                let args = provider.connect_args().await?;
-                // A provider must not return credentials for another environment.
-                if args.bundle.environment_id != provider.environment_id() {
-                    return Err(ExecServerError::Protocol(
-                        "Noise rendezvous provider returned a different environment id".to_string(),
-                    ));
-                }
-                Self::connect_noise_rendezvous(args).await
+            crate::client_api::ExecServerTransportParams::NoiseRendezvous {
+                provider,
+                identity,
+            } => {
+                let bundle = provider.connect_bundle(identity.public_key()).await?;
+                Self::connect_noise_rendezvous(NoiseRendezvousConnectArgs::new(
+                    bundle,
+                    identity,
+                    ENVIRONMENT_CLIENT_NAME.to_string(),
+                ))
+                .await
             }
             crate::client_api::ExecServerTransportParams::StdioCommand {
                 command,

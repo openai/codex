@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use crate::ExecServerError;
 
 const MAX_REORDER_DISTANCE: u32 = 64;
-const MAX_PENDING_FRAMES: usize = 64;
 const MAX_PENDING_BYTES: usize = 1024 * 1024;
 
 /// Reorders relay records before they reach Noise's implicit receive nonce.
@@ -36,15 +35,8 @@ impl OrderedCiphertextFrames {
                     "Noise relay ciphertext exceeds reorder window".to_string(),
                 ));
             }
-            let pending_bytes = self
-                .pending_bytes
-                .checked_add(payload.len())
-                .ok_or_else(|| {
-                    ExecServerError::Protocol(
-                        "Noise relay pending ciphertext byte count overflowed".to_string(),
-                    )
-                })?;
-            if self.pending.len() >= MAX_PENDING_FRAMES || pending_bytes > MAX_PENDING_BYTES {
+            let pending_bytes = self.pending_bytes + payload.len();
+            if pending_bytes > MAX_PENDING_BYTES {
                 return Err(ExecServerError::Protocol(
                     "Noise relay pending ciphertext buffer is full".to_string(),
                 ));

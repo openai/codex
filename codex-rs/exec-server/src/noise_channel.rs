@@ -33,7 +33,6 @@ use serde::Serialize;
 pub const NOISE_CHANNEL_SUITE: &str = "Noise_hybridIK_X25519+MLKEM768_AESGCM_SHA256";
 
 const X25519_PUBLIC_KEY_LEN: usize = 32;
-const MAX_TRANSPORT_RECORDS_PER_DIRECTION: u64 = u32::MAX as u64;
 const PROLOGUE_DOMAIN: &[u8] = b"codex-exec-server-relay-noise/v1";
 
 type Handshake = HybridHandshake<X25519, MlKem768, MlKem768, AesGcm, Sha256>;
@@ -185,11 +184,6 @@ pub(crate) struct NoiseTransport {
 impl NoiseTransport {
     /// Encrypt the next transport record.
     pub(crate) fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, NoiseChannelError> {
-        if self.transport.sending_nonce() >= MAX_TRANSPORT_RECORDS_PER_DIRECTION {
-            return Err(NoiseChannelError::InvalidState(
-                "transport record nonce exhausted",
-            ));
-        }
         let frame_len = plaintext.len().checked_add(AesGcm::tag_len()).ok_or(
             NoiseChannelError::InvalidMessage("transport plaintext is too large"),
         )?;
@@ -199,11 +193,6 @@ impl NoiseTransport {
 
     /// Decrypt the next ordered transport record.
     pub(crate) fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, NoiseChannelError> {
-        if self.transport.receiving_nonce() >= MAX_TRANSPORT_RECORDS_PER_DIRECTION {
-            return Err(NoiseChannelError::InvalidState(
-                "transport record nonce exhausted",
-            ));
-        }
         if ciphertext.len() < AesGcm::tag_len() {
             return Err(NoiseChannelError::InvalidMessage(
                 "transport ciphertext is too short",
@@ -221,24 +210,21 @@ pub(crate) fn noise_channel_prologue(
     environment_id: &str,
     executor_registration_id: &str,
     stream_id: &str,
-) -> Result<Vec<u8>, NoiseChannelError> {
+) -> Vec<u8> {
     let mut prologue = Vec::new();
-    append_prologue_part(&mut prologue, PROLOGUE_DOMAIN)?;
-    append_prologue_part(&mut prologue, environment_id.as_bytes())?;
-    append_prologue_part(&mut prologue, executor_registration_id.as_bytes())?;
-    append_prologue_part(&mut prologue, stream_id.as_bytes())?;
-    Ok(prologue)
+    append_prologue_part(&mut prologue, PROLOGUE_DOMAIN);
+    append_prologue_part(&mut prologue, environment_id.as_bytes());
+    append_prologue_part(&mut prologue, executor_registration_id.as_bytes());
+    append_prologue_part(&mut prologue, stream_id.as_bytes());
+    prologue
 }
 
-fn append_prologue_part(prologue: &mut Vec<u8>, part: &[u8]) -> Result<(), NoiseChannelError> {
+fn append_prologue_part(prologue: &mut Vec<u8>, part: &[u8]) {
     // Length prefixes make component boundaries unambiguous. Raw concatenation
     // would allow different identifier tuples to produce the same prologue.
-    let len = u32::try_from(part.len()).map_err(|_| {
-        NoiseChannelError::InvalidMessage("Noise channel prologue part is too large")
-    })?;
+    let len = part.len() as u64;
     prologue.extend_from_slice(&len.to_be_bytes());
     prologue.extend_from_slice(part);
-    Ok(())
 }
 
 fn ensure_noise_frame_len(

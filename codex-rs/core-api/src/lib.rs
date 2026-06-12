@@ -54,7 +54,6 @@ pub use codex_exec_server::NoiseChannelPublicKey;
 pub use codex_exec_server::NoiseRendezvousConnectArgs;
 pub use codex_exec_server::NoiseRendezvousConnectBundle;
 pub use codex_exec_server::NoiseRendezvousConnectProvider;
-pub use codex_exec_server::SharedNoiseRendezvousConnectProvider;
 pub use codex_extension_api::LoadUserInstructionsFuture;
 pub use codex_extension_api::LoadedUserInstructions;
 pub use codex_extension_api::UserInstructions;

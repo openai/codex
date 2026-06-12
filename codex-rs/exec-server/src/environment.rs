@@ -9,7 +9,8 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::HttpClient;
-use crate::SharedNoiseRendezvousConnectProvider;
+use crate::NoiseChannelIdentity;
+use crate::NoiseRendezvousConnectProvider;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
@@ -292,20 +293,20 @@ impl EnvironmentManager {
     pub fn upsert_noise_environment(
         &self,
         environment_id: String,
-        provider: SharedNoiseRendezvousConnectProvider,
+        provider: Arc<dyn NoiseRendezvousConnectProvider>,
     ) -> Result<(), ExecServerError> {
         if environment_id.is_empty() {
             return Err(ExecServerError::Protocol(
                 "environment id cannot be empty".to_string(),
             ));
         }
-        if environment_id != provider.environment_id() {
-            return Err(ExecServerError::Protocol(
-                "Noise environment id does not match connection provider".to_string(),
-            ));
-        }
+        let identity = NoiseChannelIdentity::generate().map_err(|error| {
+            ExecServerError::Protocol(format!(
+                "failed to generate Noise harness identity: {error}"
+            ))
+        })?;
         let environment = Environment::remote_with_transport(
-            ExecServerTransportParams::NoiseRendezvous { provider },
+            ExecServerTransportParams::NoiseRendezvous { provider, identity },
             self.local_runtime_paths.clone(),
         );
         self.environments
