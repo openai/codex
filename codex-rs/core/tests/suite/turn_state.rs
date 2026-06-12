@@ -88,6 +88,60 @@ async fn responses_turn_state_persists_within_turn_and_resets_after() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_turn_state_updates_are_replayed_within_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = vec![
+        sse_response(sse(vec![
+            ev_response_created("resp-1"),
+            ev_shell_command_call("shell-1", "echo one"),
+            ev_completed("resp-1"),
+        ]))
+        .insert_header(TURN_STATE_HEADER, "ts-1"),
+        sse_response(sse(vec![
+            ev_response_created("resp-2"),
+            ev_shell_command_call("shell-2", "echo two"),
+            ev_completed("resp-2"),
+        ]))
+        .insert_header(TURN_STATE_HEADER, "ts-2"),
+        sse_response(sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-3"),
+        ])),
+        sse_response(sse(vec![
+            ev_response_created("resp-4"),
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-4"),
+        ])),
+    ];
+    let request_log = mount_response_sequence(&server, responses).await;
+    let test = test_codex().build(&server).await?;
+
+    // Phase 1: the first response mints state for the first same-turn follow-up.
+    // Phase 2: the next response replaces it before the second follow-up.
+    test.submit_turn("run two shell commands").await?;
+    // Phase 3: a new logical turn starts without state from the completed turn.
+    test.submit_turn("start a new turn").await?;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[0].header(TURN_STATE_HEADER), None);
+    assert_eq!(
+        requests[1].header(TURN_STATE_HEADER).as_deref(),
+        Some("ts-1")
+    );
+    assert_eq!(
+        requests[2].header(TURN_STATE_HEADER).as_deref(),
+        Some("ts-2")
+    );
+    assert_eq!(requests[3].header(TURN_STATE_HEADER), None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_turn_state_persists_within_turn_and_resets_after() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

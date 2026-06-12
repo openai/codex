@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::map::Map as JsonMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -335,7 +335,7 @@ impl ResponsesWebsocketClient {
         &self,
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
-        turn_state: Option<Arc<OnceLock<String>>>,
+        turn_state: Option<Arc<StdMutex<String>>>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
         let ws_url = self
@@ -436,7 +436,7 @@ fn merge_request_headers(
 async fn connect_websocket(
     url: Url,
     headers: HeaderMap,
-    turn_state: Option<Arc<OnceLock<String>>>,
+    turn_state: Option<Arc<StdMutex<String>>>,
 ) -> Result<(WsStream, StatusCode, bool, Option<String>, Option<String>), ApiError> {
     ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
@@ -493,7 +493,9 @@ async fn connect_websocket(
             .get(X_CODEX_TURN_STATE_HEADER)
             .and_then(|value| value.to_str().ok())
     {
-        let _ = turn_state.set(header_value.to_string());
+        *turn_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = header_value.to_string();
     }
     Ok((
         WsStream::new(stream),

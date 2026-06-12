@@ -26,7 +26,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -238,17 +237,7 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
-    /// Turn state for sticky routing.
-    ///
-    /// This is an `OnceLock` that stores the turn state value received from the server
-    /// on turn start via the `x-codex-turn-state` response header. Once set, this value
-    /// should be sent back to the server in the `x-codex-turn-state` request header for
-    /// all subsequent requests within the same turn to maintain sticky routing.
-    ///
-    /// This is a contract between the client and server: we receive it at turn start,
-    /// keep sending it unchanged between turn requests (e.g., for retries, incremental
-    /// appends, or continuation requests), and must not send it between different turns.
-    turn_state: Arc<OnceLock<String>>,
+    turn_state: Arc<StdMutex<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -375,7 +364,7 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
-            turn_state: Arc::new(OnceLock::new()),
+            turn_state: Arc::new(StdMutex::new(String::new())),
         }
     }
 
@@ -806,7 +795,7 @@ impl ModelClient {
         api_provider: codex_api::Provider,
         api_auth: SharedAuthProvider,
         responses_metadata: &CodexResponsesMetadata,
-        turn_state: Option<Arc<OnceLock<String>>>,
+        turn_state: Option<Arc<StdMutex<String>>>,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
@@ -892,7 +881,7 @@ impl ModelClient {
     async fn build_websocket_headers(
         &self,
         responses_metadata: &CodexResponsesMetadata,
-        turn_state: Option<&Arc<OnceLock<String>>>,
+        turn_state: Option<&Arc<StdMutex<String>>>,
     ) -> ApiHeaderMap {
         let mut headers =
             build_responses_headers(self.state.beta_features_header.as_deref(), turn_state);
@@ -1133,10 +1122,6 @@ impl ModelClientSession {
             self.websocket_session.last_request = None;
             self.websocket_session.last_response_rx = None;
             self.websocket_session.last_response_from_untraced_warmup = false;
-            let turn_state = options
-                .turn_state
-                .clone()
-                .unwrap_or_else(|| Arc::clone(&self.turn_state));
             let new_conn = match self
                 .client
                 .connect_websocket(
@@ -1144,7 +1129,7 @@ impl ModelClientSession {
                     api_provider,
                     api_auth,
                     responses_metadata,
-                    Some(turn_state),
+                    options.turn_state.clone(),
                     auth_context,
                     request_route_telemetry,
                 )
@@ -1656,7 +1641,7 @@ fn stamp_ws_stream_request_start_ms(request: &mut ResponsesWsRequest) {
 /// - `x-codex-turn-state`: sticky routing token captured earlier in the turn.
 fn build_responses_headers(
     beta_features_header: Option<&str>,
-    turn_state: Option<&Arc<OnceLock<String>>>,
+    turn_state: Option<&Arc<StdMutex<String>>>,
 ) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
     if let Some(value) = beta_features_header
@@ -1665,11 +1650,15 @@ fn build_responses_headers(
     {
         headers.insert("x-codex-beta-features", header_value);
     }
-    if let Some(turn_state) = turn_state
-        && let Some(state) = turn_state.get()
-        && let Ok(header_value) = HeaderValue::from_str(state)
-    {
-        headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
+    if let Some(turn_state) = turn_state {
+        let state = turn_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.is_empty()
+            && let Ok(header_value) = HeaderValue::from_str(&state)
+        {
+            headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
+        }
     }
     headers
 }

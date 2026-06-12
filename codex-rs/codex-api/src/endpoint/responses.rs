@@ -20,7 +20,7 @@ use http::HeaderValue;
 use http::Method;
 use serde_json::Value;
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 use tracing::instrument;
 
 pub struct ResponsesClient<T: HttpTransport> {
@@ -35,7 +35,7 @@ pub struct ResponsesOptions {
     pub session_source: Option<SessionSource>,
     pub extra_headers: HeaderMap,
     pub compression: Compression,
-    pub turn_state: Option<Arc<OnceLock<String>>>,
+    pub turn_state: Option<Arc<Mutex<String>>>,
 }
 
 impl<T: HttpTransport> ResponsesClient<T> {
@@ -119,7 +119,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
         body: Value,
         extra_headers: HeaderMap,
         compression: Compression,
-        turn_state: Option<Arc<OnceLock<String>>>,
+        turn_state: Option<Arc<Mutex<String>>>,
     ) -> Result<ResponseStream, ApiError> {
         let request_compression = match compression {
             Compression::None => RequestCompression::None,
