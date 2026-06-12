@@ -42,24 +42,17 @@ pub struct RequestPluginInstallResult {
     pub completed: bool,
     pub user_confirmed: bool,
     pub action_type: DiscoverableToolAction,
-    pub installed_entries: Vec<RequestPluginInstallInstalledEntry>,
     pub entries: Vec<RequestPluginInstallEntryResult>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct RequestPluginInstallInstalledEntry {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub category_id: Option<String>,
-    pub entry_id: String,
     pub tool_id: String,
     pub tool_type: DiscoverableToolType,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct RequestPluginInstallEntryResult {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub category_id: Option<String>,
-    pub entry_id: String,
     pub tool_type: DiscoverableToolType,
     pub tool_id: String,
     pub tool_name: String,
@@ -80,14 +73,12 @@ pub struct RequestPluginInstallMeta<'a> {
 
 #[derive(Debug)]
 pub struct RequestPluginInstallResolvedPickerEntry<'a> {
-    pub category_id: Option<String>,
-    pub entry_id: String,
+    pub category_index: Option<usize>,
     pub tool: &'a DiscoverableTool,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct RequestPluginInstallEntryMeta<'a> {
-    pub id: &'a str,
     pub tool_id: &'a str,
     pub tool_name: &'a str,
     pub tool_type: DiscoverableToolType,
@@ -103,7 +94,6 @@ pub struct RequestPluginInstallEntryMeta<'a> {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct RequestPluginInstallCategoryMeta<'a> {
-    pub id: String,
     pub title: &'a str,
     pub entries: Vec<RequestPluginInstallEntryMeta<'a>>,
 }
@@ -169,14 +159,12 @@ fn build_request_plugin_install_meta<'a>(
             .iter()
             .enumerate()
             .map(|(category_index, category)| {
-                let category_id = request_plugin_install_category_id(category_index);
                 let entries = resolved_entries
                     .iter()
-                    .filter(|entry| entry.category_id.as_deref() == Some(category_id.as_str()))
+                    .filter(|entry| entry.category_index == Some(category_index))
                     .map(build_request_plugin_install_entry_meta)
                     .collect();
                 RequestPluginInstallCategoryMeta {
-                    id: category_id,
                     title: category.title.as_str(),
                     entries,
                 }
@@ -206,7 +194,6 @@ fn build_request_plugin_install_entry_meta<'a>(
     };
 
     RequestPluginInstallEntryMeta {
-        id: entry.entry_id.as_str(),
         tool_id: tool.id(),
         tool_name: tool.name(),
         tool_type: tool.tool_type(),
@@ -222,10 +209,6 @@ fn discoverable_tool_description(tool: &DiscoverableTool) -> Option<&str> {
         DiscoverableTool::Connector(connector) => connector.description.as_deref(),
         DiscoverableTool::Plugin(plugin) => plugin.description.as_deref(),
     }
-}
-
-fn request_plugin_install_category_id(category_index: usize) -> String {
-    format!("category-{category_index}")
 }
 
 #[cfg(test)]
