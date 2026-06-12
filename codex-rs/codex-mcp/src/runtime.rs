@@ -32,27 +32,24 @@ pub struct SandboxState {
 /// Runtime context used when resolving per-server MCP environments.
 ///
 /// `McpConfig` describes what servers exist. This value carries the canonical
-/// environment registry plus the local stdio fallback cwd used when a local
-/// stdio server omits its own working directory.
+/// environment registry plus the stdio fallback cwd used when a server omits
+/// its own working directory.
 #[derive(Clone)]
 pub struct McpRuntimeContext {
     environment_manager: Arc<EnvironmentManager>,
-    local_stdio_fallback_cwd: PathBuf,
+    stdio_fallback_cwd: PathBuf,
 }
 
 impl McpRuntimeContext {
-    pub fn new(
-        environment_manager: Arc<EnvironmentManager>,
-        local_stdio_fallback_cwd: PathBuf,
-    ) -> Self {
+    pub fn new(environment_manager: Arc<EnvironmentManager>, stdio_fallback_cwd: PathBuf) -> Self {
         Self {
             environment_manager,
-            local_stdio_fallback_cwd,
+            stdio_fallback_cwd,
         }
     }
 
-    pub(crate) fn local_stdio_fallback_cwd(&self) -> PathBuf {
-        self.local_stdio_fallback_cwd.clone()
+    pub(crate) fn stdio_fallback_cwd(&self) -> PathBuf {
+        self.stdio_fallback_cwd.clone()
     }
 
     pub(crate) fn resolve_server_environment(
@@ -67,9 +64,6 @@ impl McpRuntimeContext {
             .environment_manager
             .get_environment(&config.environment_id)
         {
-            if !config.is_local_environment() {
-                ensure_remote_stdio_cwd(server_name, config)?;
-            }
             return Ok(Some(environment));
         }
 
@@ -87,27 +81,6 @@ impl McpRuntimeContext {
             config.environment_id
         ))
     }
-}
-
-fn ensure_remote_stdio_cwd(
-    server_name: &str,
-    config: &codex_config::McpServerConfig,
-) -> Result<(), String> {
-    let codex_config::McpServerTransportConfig::Stdio { cwd, .. } = &config.transport else {
-        return Ok(());
-    };
-    let Some(cwd) = cwd else {
-        return Err(format!(
-            "remote stdio MCP server `{server_name}` requires an absolute cwd"
-        ));
-    };
-    if cwd.is_absolute() {
-        return Ok(());
-    }
-    Err(format!(
-        "remote stdio MCP server `{server_name}` requires an absolute cwd, got `{}`",
-        cwd.display()
-    ))
 }
 
 pub(crate) fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
@@ -233,13 +206,8 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
-        let mut remote_stdio = stdio_server("remote");
-        let McpServerTransportConfig::Stdio { cwd, .. } = &mut remote_stdio.transport else {
-            unreachable!("stdio helper should build stdio transport");
-        };
-        *cwd = Some(std::env::temp_dir());
         for resolved_runtime in [
-            runtime_context.resolve_server_environment("stdio", &remote_stdio),
+            runtime_context.resolve_server_environment("stdio", &stdio_server("remote")),
             runtime_context.resolve_server_environment("http", &http_server("remote")),
         ] {
             let resolved_runtime = match resolved_runtime {
@@ -264,33 +232,5 @@ mod tests {
             Err(error) => panic!("local stdio MCP should resolve: {error}"),
         };
         assert!(resolved_runtime.is_some());
-    }
-
-    #[tokio::test]
-    async fn remote_stdio_requires_absolute_cwd() {
-        let runtime_context = McpRuntimeContext::new(
-            Arc::new(
-                EnvironmentManager::create_for_tests(
-                    Some("ws://127.0.0.1:8765".to_string()),
-                    /*local_runtime_paths*/ None,
-                )
-                .await,
-            ),
-            PathBuf::from("/tmp"),
-        );
-        let mut remote_stdio = stdio_server("remote");
-        let McpServerTransportConfig::Stdio { cwd, .. } = &mut remote_stdio.transport else {
-            unreachable!("stdio helper should build stdio transport");
-        };
-        *cwd = Some(PathBuf::from("relative"));
-
-        let error = match runtime_context.resolve_server_environment("stdio", &remote_stdio) {
-            Ok(_) => panic!("remote stdio MCP should require absolute cwd"),
-            Err(error) => error,
-        };
-        assert_eq!(
-            error,
-            "remote stdio MCP server `stdio` requires an absolute cwd, got `relative`"
-        );
     }
 }

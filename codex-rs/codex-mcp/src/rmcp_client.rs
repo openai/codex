@@ -601,6 +601,18 @@ async fn make_rmcp_client(
             env_vars,
             cwd,
         } => {
+            let cwd = if is_local_environment {
+                cwd
+            } else {
+                let cwd = cwd.unwrap_or_else(|| runtime_context.stdio_fallback_cwd());
+                if !cwd.is_absolute() {
+                    return Err(StartupOutcomeError::from(anyhow!(
+                        "remote stdio MCP server `{server_name}` requires an absolute cwd, got `{}`",
+                        cwd.display()
+                    )));
+                }
+                Some(cwd)
+            };
             let command_os: OsString = command.into();
             let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
             let env_os = env.map(|env| {
@@ -613,7 +625,7 @@ async fn make_rmcp_client(
                 // `ExecutorStdioServerLauncher` once the executor-backed path
                 // preserves `LocalStdioServerLauncher` semantics.
                 Arc::new(LocalStdioServerLauncher::new(
-                    runtime_context.local_stdio_fallback_cwd(),
+                    runtime_context.stdio_fallback_cwd(),
                 )) as Arc<dyn StdioServerLauncher>
             } else {
                 let Some(environment) = resolved_environment.as_ref() else {
