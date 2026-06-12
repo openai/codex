@@ -33,9 +33,9 @@ use crate::server::ConnectionProcessor;
 /// Stream IDs are supplied by the untrusted relay peer and may be reused. The
 /// instance ID prevents a delayed writer notification from removing a newer
 /// stream that happens to use the same routing ID.
-pub(super) struct ClosedNoiseVirtualStream {
-    pub(super) stream_id: String,
-    pub(super) instance_id: u64,
+pub(crate) struct ClosedNoiseVirtualStream {
+    pub(crate) stream_id: String,
+    pub(crate) instance_id: u64,
 }
 
 /// One authenticated JSON-RPC stream carried by the executor's physical relay.
@@ -43,7 +43,7 @@ pub(super) struct ClosedNoiseVirtualStream {
 /// Inbound delivery is intentionally nonblocking. An overloaded or abandoned
 /// stream fails independently instead of stalling every stream multiplexed over
 /// the same physical websocket.
-pub(super) struct NoiseVirtualStream {
+pub(crate) struct NoiseVirtualStream {
     incoming_tx: mpsc::Sender<JsonRpcConnectionEvent>,
     disconnected_tx: watch::Sender<bool>,
     transport: Arc<Mutex<NoiseTransport>>,
@@ -53,20 +53,20 @@ pub(super) struct NoiseVirtualStream {
 }
 
 impl NoiseVirtualStream {
-    pub(super) fn disconnect(self, reason: Option<String>) {
+    pub(crate) fn disconnect(self, reason: Option<String>) {
         let _ = self.disconnected_tx.send(true);
         let _ = self
             .incoming_tx
             .try_send(JsonRpcConnectionEvent::Disconnected { reason });
     }
 
-    pub(super) fn is_instance(&self, instance_id: u64) -> bool {
+    pub(crate) fn is_instance(&self, instance_id: u64) -> bool {
         self.instance_id == instance_id
     }
 
     /// Reorder and decrypt one inbound record, then queue complete JSON-RPC messages.
     /// This must stay nonblocking because all virtual streams share the read loop.
-    pub(super) fn receive_data(&mut self, data: RelayData) -> Result<(), ExecServerError> {
+    pub(crate) fn receive_data(&mut self, data: RelayData) -> Result<(), ExecServerError> {
         for ciphertext in self.inbound_ciphertexts.push(data.seq, data.payload)? {
             let plaintext = {
                 let mut transport = self
@@ -95,7 +95,7 @@ impl NoiseVirtualStream {
 ///
 /// The returned value is the read half; the spawned task owns outbound framing
 /// and reports its instance ID on exit so stream-ID reuse is safe.
-pub(super) fn spawn_noise_virtual_stream(
+pub(crate) fn spawn_noise_virtual_stream(
     stream_id: String,
     instance_id: u64,
     processor: ConnectionProcessor,

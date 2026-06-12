@@ -29,7 +29,7 @@ use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -292,7 +292,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
     std::fs::write(&large_file_path, &large_file_contents)?;
     let read_response = client
         .fs_read_file(FsReadFileParams {
-            path: AbsolutePathBuf::try_from(large_file_path)?,
+            path: PathUri::from_path(large_file_path)?,
             sandbox: None,
         })
         .await?;
