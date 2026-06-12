@@ -207,7 +207,15 @@ impl CloudConfigBundleLoader {
         )
     }
 
+    /// Returns the bundle result currently published by this loader.
+    ///
+    /// A pending loader waits for its initial result. Once a result is ready,
+    /// this returns that snapshot immediately; later refreshes are observed by
+    /// future calls. If the publisher is dropped before the initial result,
+    /// this returns an internal lifecycle error.
     pub async fn get(&self) -> Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError> {
+        // Each call uses its own watch cursor so concurrent callers can wait
+        // for the initial publication independently.
         let mut state = self.state.clone();
         loop {
             let result = match &*state.borrow_and_update() {
