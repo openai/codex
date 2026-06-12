@@ -1401,7 +1401,10 @@ async fn handle_realtime_server_event(
             }
             false
         }
-        RealtimeEvent::Error(_) => true,
+        RealtimeEvent::Error(message) => {
+            error!(message, "realtime stream error event received");
+            true
+        }
         RealtimeEvent::SessionUpdated {
             realtime_session_id,
             ..

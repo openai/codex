@@ -1581,6 +1581,7 @@ mod tests {
                 .expect("text");
             let third_json: Value = serde_json::from_str(&third).expect("json");
             assert_eq!(third_json["type"], "conversation.item.create");
+            assert_eq!(third_json["item"]["content"][0]["type"], "input_text");
             assert_eq!(third_json["item"]["content"][0]["text"], "hello agent");
 
             let fourth = ws
