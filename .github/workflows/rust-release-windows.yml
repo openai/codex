@@ -89,6 +89,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Configure LLVM linker
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+
       - name: Cargo build (Windows binaries)
         shell: bash
         run: |

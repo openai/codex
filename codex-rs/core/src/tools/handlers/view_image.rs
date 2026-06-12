@@ -1,3 +1,4 @@
+use codex_features::Feature;
 use codex_protocol::items::ImageViewItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -8,6 +9,7 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::InputModality;
 use codex_utils_image::PromptImageMode;
+use codex_utils_image::data_url_from_bytes;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
 
@@ -25,6 +27,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_utils_path_uri::PathUri;
 
 pub struct ViewImageHandler {
     options: ViewImageToolOptions,
@@ -64,7 +67,6 @@ enum ViewImageDetail {
     Original,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ViewImageHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("view_image")
@@ -78,7 +80,13 @@ impl ToolExecutor<ToolInvocation> for ViewImageHandler {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ViewImageHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -139,9 +147,15 @@ impl ToolExecutor<ToolInvocation> for ViewImageHandler {
         let abs_path = cwd.join(path);
         let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, &cwd);
         let fs = turn_environment.environment.get_filesystem();
+        let path_uri = PathUri::from_abs_path(&abs_path).map_err(|error| {
+            FunctionCallError::RespondToModel(format!(
+                "unable to locate image at `{}`: {error}",
+                abs_path.display()
+            ))
+        })?;
 
         let metadata = fs
-            .get_metadata(&abs_path, Some(&sandbox))
+            .get_metadata(&path_uri, Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -157,7 +171,7 @@ impl ToolExecutor<ToolInvocation> for ViewImageHandler {
             )));
         }
         let file_bytes = fs
-            .read_file(&abs_path, Some(&sandbox))
+            .read_file(&path_uri, Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -170,25 +184,30 @@ impl ToolExecutor<ToolInvocation> for ViewImageHandler {
         let can_request_original_detail = can_request_original_image_detail(&turn.model_info);
         let use_original_detail =
             can_request_original_detail && matches!(detail, Some(ViewImageDetail::Original));
-        let image_mode = if use_original_detail {
-            PromptImageMode::Original
-        } else {
-            PromptImageMode::ResizeToFit
-        };
         let image_detail = if use_original_detail {
             ImageDetail::Original
         } else {
             DEFAULT_IMAGE_DETAIL
         };
 
-        let image =
-            load_for_prompt_bytes(abs_path.as_path(), file_bytes, image_mode).map_err(|error| {
-                FunctionCallError::RespondToModel(format!(
-                    "unable to process image at `{}`: {error}",
-                    abs_path.display()
-                ))
-            })?;
-        let image_url = image.into_data_url();
+        let image_url = if turn.features.enabled(Feature::ResizeAllImages) {
+            // The history insertion path owns image decoding and resizing when this is enabled.
+            data_url_from_bytes("application/octet-stream", &file_bytes)
+        } else {
+            let image_mode = if use_original_detail {
+                PromptImageMode::Original
+            } else {
+                PromptImageMode::ResizeToFit
+            };
+            load_for_prompt_bytes(abs_path.as_path(), file_bytes, image_mode)
+                .map_err(|error| {
+                    FunctionCallError::RespondToModel(format!(
+                        "unable to process image at `{}`: {error}",
+                        abs_path.display()
+                    ))
+                })?
+                .into_data_url()
+        };
 
         let item = TurnItem::ImageView(ImageViewItem {
             id: call_id,
@@ -213,7 +232,7 @@ pub struct ViewImageOutput {
 
 impl ToolOutput for ViewImageOutput {
     fn log_preview(&self) -> String {
-        self.image_url.clone()
+        format!("<image data URL omitted: {} bytes>", self.image_url.len())
     }
 
     fn success_for_logging(&self) -> bool {
@@ -258,6 +277,16 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    #[test]
+    fn log_preview_omits_image_data() {
+        let output = ViewImageOutput {
+            image_url: "data:image/png;base64,AAA".to_string(),
+            image_detail: DEFAULT_IMAGE_DETAIL,
+        };
+
+        assert_eq!(output.log_preview(), "<image data URL omitted: 25 bytes>");
+    }
 
     #[test]
     fn code_mode_result_returns_image_url_object() {

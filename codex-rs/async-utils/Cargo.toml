@@ -8,7 +8,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
 tokio-util.workspace = true
 

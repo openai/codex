@@ -4,6 +4,7 @@ use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
 use codex_extension_api::ThreadLifecycleContributor;
@@ -69,12 +70,16 @@ impl ContextContributor for MemoriesExtension {
     }
 }
 
-#[async_trait::async_trait]
 impl ThreadLifecycleContributor<Config> for MemoriesExtension {
-    async fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
-        input
-            .thread_store
-            .insert(MemoriesExtensionConfig::from_config(input.config));
+    fn on_thread_start<'a>(
+        &'a self,
+        input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            input
+                .thread_store
+                .insert(MemoriesExtensionConfig::from_config(input.config));
+        })
     }
 }
 

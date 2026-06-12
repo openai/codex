@@ -10,6 +10,7 @@ use codex_core::image_generation_artifact_path;
 use codex_extension_api::ExtensionTurnItem;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
+use codex_extension_api::ToolEnvironment;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolOutput;
@@ -32,6 +33,7 @@ use codex_tools::default_namespace_description;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
@@ -78,7 +80,6 @@ struct ImagegenArgs {
     num_last_images_to_include: Option<usize>,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolCall> for ImageGenerationTool {
     /// Keeps the tool in the existing image-generation Responses namespace.
     fn tool_name(&self) -> ToolName {
@@ -96,9 +97,17 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
     }
 
     /// Executes the selected image operation and returns the completed image result.
-    async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+    fn handle(&self, call: ToolCall) -> codex_extension_api::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(call))
+    }
+}
+
+impl ImageGenerationTool {
+    async fn handle_call(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
-        let request = request_for_args(&args, call.conversation_history.items())?;
+        let request =
+            request_for_call_args(&args, call.conversation_history.items(), &call.environments)
+                .await?;
         call.turn_item_emitter
             .emit_started(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
                 id: call.call_id.clone(),
@@ -149,10 +158,10 @@ enum ImageRequest {
     Edit(ImageEditRequest),
 }
 
-/// Builds a generation or edit request from the mutually exclusive image selectors.
-fn request_for_args(
+async fn request_for_call_args(
     args: &ImagegenArgs,
     history: &[ResponseItem],
+    environments: &[ToolEnvironment],
 ) -> Result<ImageRequest, FunctionCallError> {
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
     if paths.len() > MAX_EDIT_IMAGES {
@@ -171,7 +180,18 @@ fn request_for_args(
                 size: Some("auto".to_string()),
             }));
         }
-        (false, None) => paths.iter().map(image_url).collect::<Result<Vec<_>, _>>()?,
+        (false, None) => {
+            let Some(environment) = environments.first() else {
+                return Err(FunctionCallError::RespondToModel(
+                    "referenced image paths are unavailable in this session".to_string(),
+                ));
+            };
+            let mut images = Vec::with_capacity(paths.len());
+            for path in paths {
+                images.push(image_url(path, environment).await?);
+            }
+            images
+        }
         (true, Some(count)) => {
             if !(1..=MAX_EDIT_IMAGES).contains(&count) {
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -209,7 +229,6 @@ fn request_for_args(
     }))
 }
 
-/// Selects the newest requested images while preserving their conversation order.
 fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
     let mut function_call_ids = HashSet::new();
     let mut custom_tool_call_ids = HashSet::new();
@@ -302,13 +321,26 @@ fn output_image_urls(output: &FunctionCallOutputPayload) -> impl Iterator<Item =
         })
 }
 
-fn image_url(path: &AbsolutePathBuf) -> Result<ImageUrl, FunctionCallError> {
-    let bytes = std::fs::read(path).map_err(|error| {
+async fn image_url(
+    path: &AbsolutePathBuf,
+    environment: &ToolEnvironment,
+) -> Result<ImageUrl, FunctionCallError> {
+    let path_uri = PathUri::from_abs_path(path).map_err(|error| {
         FunctionCallError::RespondToModel(format!(
             "unable to read referenced image at `{}`: {error}",
             path.display()
         ))
     })?;
+    let bytes = environment
+        .file_system
+        .read_file(&path_uri, Some(&environment.file_system_sandbox_context))
+        .await
+        .map_err(|error| {
+            FunctionCallError::RespondToModel(format!(
+                "unable to read referenced image at `{}`: {error}",
+                path.display()
+            ))
+        })?;
     let image = load_for_prompt_bytes(path.as_path(), bytes, PromptImageMode::Original).map_err(
         |error| {
             FunctionCallError::RespondToModel(format!(

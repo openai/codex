@@ -221,6 +221,16 @@ deny = [
     # Wrapper crates can optionally be specified to allow the crate when it
     # is a direct dependency of the otherwise banned crate
     #{ crate = "ansi_term@0.11.0", wrappers = ["this-crate-directly-depends-on-ansi_term"] },
+    # Removing async-trait materially improves debug build times:
+    # https://github.com/openai/codex/pull/27304
+    { crate = "async-trait", wrappers = [
+        "hickory-proto",
+        "opentelemetry-http",
+        "pagable",
+        "rmcp",
+        "tonic",
+        "zbus",
+    ], reason = "first-party traits must use native async trait methods with explicit Send bounds" },
 ]
 
 # List of features to allow/deny

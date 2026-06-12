@@ -4,8 +4,10 @@ use std::sync::Arc;
 
 mod executor;
 mod host;
+mod orchestrator;
 
 use codex_core_skills::HostLoadedSkills;
+use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 use crate::catalog::SkillAuthority;
@@ -18,6 +20,7 @@ use crate::catalog::SkillSearchResult;
 
 pub use executor::ExecutorSkillProvider;
 pub use host::HostSkillProvider;
+pub use orchestrator::OrchestratorSkillProvider;
 
 #[derive(Clone, Debug)]
 pub struct SkillListQuery {
@@ -26,7 +29,8 @@ pub struct SkillListQuery {
     pub host: Option<Arc<HostLoadedSkills>>,
     pub include_host_skills: bool,
     pub include_bundled_skills: bool,
-    pub include_remote_skills: bool,
+    pub include_orchestrator_skills: bool,
+    pub mcp_resources: Option<Arc<McpResourceClient>>,
 }
 
 #[derive(Clone, Debug)]
@@ -35,6 +39,7 @@ pub struct SkillReadRequest {
     pub package: SkillPackageId,
     pub resource: SkillResourceId,
     pub host: Option<Arc<HostLoadedSkills>>,
+    pub mcp_resources: Option<Arc<McpResourceClient>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

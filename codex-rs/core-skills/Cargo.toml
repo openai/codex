@@ -26,6 +26,7 @@ codex-protocol = { workspace = true }
 codex-skills = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }

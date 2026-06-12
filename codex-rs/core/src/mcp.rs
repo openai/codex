@@ -10,10 +10,12 @@ use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::EffectiveMcpServer;
 use codex_mcp::McpConfig;
-use codex_mcp::ToolPluginProvenance;
+use codex_mcp::McpServerRegistration;
+use codex_mcp::codex_apps_mcp_server_config;
 use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
-use codex_mcp::tool_plugin_provenance as collect_tool_plugin_provenance;
+
+const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 
 #[derive(Clone)]
 pub struct McpManager {
@@ -40,17 +42,57 @@ impl McpManager {
         }
     }
 
-    /// Returns the MCP config after applying runtime-only extension overlays.
+    /// Returns the MCP config after applying compatibility built-ins and
+    /// runtime-only extension overlays.
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
         let mut mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
-        let contributions = self.contributions(config).await;
-        if contributions
-            .iter()
-            .any(|contribution| contribution.name() == CODEX_APPS_MCP_SERVER_NAME)
-        {
-            mcp_config.legacy_apps_mcp_loader_enabled = false;
+        let mut catalog = mcp_config.mcp_server_catalog.to_builder();
+        if mcp_config.apps_enabled {
+            catalog.register(McpServerRegistration::from_compatibility(
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                LEGACY_CODEX_APPS_REGISTRATION_ID,
+                codex_apps_mcp_server_config(
+                    &mcp_config.chatgpt_base_url,
+                    mcp_config.apps_mcp_product_sku.as_deref(),
+                ),
+            ));
+        } else {
+            catalog.remove_compatibility(
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                LEGACY_CODEX_APPS_REGISTRATION_ID,
+            );
         }
-        Self::apply_to_configured_servers(&contributions, &mut mcp_config.configured_mcp_servers);
+
+        let mut contribution_order = 0;
+        for contributor in self.extensions.mcp_server_contributors() {
+            for contribution in contributor.contribute(config).await {
+                match contribution {
+                    McpServerContribution::Set {
+                        name,
+                        config: server_config,
+                    } => catalog.register(McpServerRegistration::from_extension(
+                        name,
+                        contributor.id(),
+                        contribution_order,
+                        *server_config,
+                    )),
+                    McpServerContribution::Remove { name } => {
+                        catalog.remove_extension(name, contributor.id(), contribution_order)
+                    }
+                }
+                contribution_order += 1;
+            }
+        }
+        let catalog = catalog.build();
+        for conflict in catalog.conflicts() {
+            tracing::warn!(
+                server = conflict.name,
+                outcome = ?conflict.outcome,
+                contenders = ?conflict.contenders,
+                "conflicting MCP server actions; using resolved catalog outcome"
+            );
+        }
+        mcp_config.mcp_server_catalog = catalog;
         mcp_config
     }
 
@@ -74,35 +116,5 @@ impl McpManager {
     ) -> HashMap<String, EffectiveMcpServer> {
         let mcp_config = self.runtime_config(config).await;
         effective_mcp_servers(&mcp_config, auth)
-    }
-
-    /// Returns provenance for plugin-owned servers in the configured view.
-    pub async fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
-        let mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
-        collect_tool_plugin_provenance(&mcp_config)
-    }
-
-    async fn contributions(&self, config: &Config) -> Vec<McpServerContribution> {
-        let mut contributions = Vec::new();
-        for contributor in self.extensions.mcp_server_contributors() {
-            contributions.extend(contributor.contribute(config).await);
-        }
-        contributions
-    }
-
-    fn apply_to_configured_servers(
-        contributions: &[McpServerContribution],
-        servers: &mut HashMap<String, McpServerConfig>,
-    ) {
-        for contribution in contributions {
-            match contribution {
-                McpServerContribution::Set { name, config } => {
-                    servers.insert(name.clone(), config.as_ref().clone());
-                }
-                McpServerContribution::Remove { name } => {
-                    servers.remove(name);
-                }
-            }
-        }
     }
 }
