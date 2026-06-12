@@ -18,7 +18,7 @@ INSERT INTO security_events (
     call_id,
     tool_name,
     resource,
-    sandbox_type,
+    sandbox_backend,
     reason,
     path,
     host,
@@ -42,7 +42,7 @@ INSERT INTO security_events (
         .bind(event.call_id.as_deref())
         .bind(event.tool_name.as_deref())
         .bind(event.resource.map(SecurityEventResource::as_str))
-        .bind(event.sandbox_type.as_deref())
+        .bind(event.sandbox_backend.as_deref())
         .bind(event.reason.as_deref())
         .bind(event.path.as_deref())
         .bind(event.host.as_deref())
@@ -149,7 +149,7 @@ SELECT
     call_id,
     tool_name,
     resource,
-    sandbox_type,
+    sandbox_backend,
     reason,
     path,
     host,

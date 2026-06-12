@@ -7,7 +7,7 @@ CREATE TABLE security_events (
     call_id TEXT,
     tool_name TEXT,
     resource TEXT,
-    sandbox_type TEXT,
+    sandbox_backend TEXT,
     reason TEXT,
     path TEXT,
     host TEXT,

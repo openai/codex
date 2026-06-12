@@ -114,7 +114,7 @@ fn security_event_create_params(
             call_id: context.call_id.clone(),
             tool_name: context.tool_name.clone(),
             resource: Some(SecurityEventResource::FileSystem),
-            sandbox_type: Some(violation.sandbox_type.as_metric_tag().to_string()),
+            sandbox_backend: Some(violation.backend.as_str().to_string()),
             reason: Some(violation.reason.as_str().to_string()),
             path: violation.path.clone(),
             host: None,
@@ -137,7 +137,7 @@ fn security_event_create_params(
             call_id: context.call_id.clone(),
             tool_name: context.tool_name.clone(),
             resource: Some(SecurityEventResource::Network),
-            sandbox_type: None,
+            sandbox_backend: Some(violation.backend.as_str().to_string()),
             reason: Some(violation.reason.clone()),
             path: None,
             host: Some(violation.host.clone()),
@@ -181,7 +181,7 @@ fn emit_sandbox_violation_audit_event(
         slug = metadata.and_then(|metadata| metadata.slug.as_deref()),
         security.event.kind = SecurityEventKind::SandboxViolation.as_str(),
         sandbox.resource = fields.resource.as_str(),
-        sandbox.type = fields.sandbox_type,
+        sandbox.backend = fields.backend,
         sandbox.reason = fields.reason,
         tool.call_id = call_id,
         tool.name = tool_name,
@@ -199,7 +199,7 @@ fn emit_sandbox_violation_audit_event(
 
 struct SandboxViolationAuditFields<'a> {
     resource: SecurityEventResource,
-    sandbox_type: Option<&'a str>,
+    backend: &'a str,
     reason: &'a str,
     path: Option<&'a str>,
     host: Option<&'a str>,
@@ -216,7 +216,7 @@ impl<'a> SandboxViolationAuditFields<'a> {
         match event {
             SandboxViolationEvent::FileSystem(violation) => Self {
                 resource: SecurityEventResource::FileSystem,
-                sandbox_type: Some(violation.sandbox_type.as_metric_tag()),
+                backend: violation.backend.as_str(),
                 reason: violation.reason.as_str(),
                 path: violation.path.as_deref(),
                 host: None,
@@ -229,7 +229,7 @@ impl<'a> SandboxViolationAuditFields<'a> {
             },
             SandboxViolationEvent::Network(violation) => Self {
                 resource: SecurityEventResource::Network,
-                sandbox_type: None,
+                backend: violation.backend.as_str(),
                 reason: violation.reason.as_str(),
                 path: None,
                 host: Some(violation.host.as_str()),
