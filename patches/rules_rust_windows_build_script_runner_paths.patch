@@ -102,16 +102,15 @@
      let Args {
          progname,
          crate_links,
-@@ -55,7 +135,8 @@ fn run_buildrs() -> Result<(), String> {
-         cargo_manifest_maker.create_runfiles_dir().unwrap()
-     }
+@@ -54,6 +134,6 @@ fn run_buildrs() -> Result<(), String> {
+     cargo_manifest_maker.create_runfiles_dir().unwrap();
  
 -    let out_dir_abs = exec_root.join(out_dir);
 +    let out_dir_abs = shorten_windows_path(&exec_root_join(&exec_root, &out_dir));
      // For some reason Google's RBE does not create the output directory, force create it.
      create_dir_all(&out_dir_abs)
          .unwrap_or_else(|_| panic!("Failed to make output directory: {:?}", out_dir_abs));
-@@ -89,11 +170,12 @@ fn run_buildrs() -> Result<(), String> {
+@@ -87,11 +167,12 @@ fn run_buildrs() -> Result<(), String> {
  
      let working_directory = resolve_rundir(&rundir, &exec_root, &manifest_dir)?;
  
@@ -126,7 +125,7 @@
          .env("CARGO_MANIFEST_DIR", manifest_dir)
          .env("RUSTC", rustc)
          .env("RUST_BACKTRACE", "full");
-@@ -123,7 +205,7 @@ fn run_buildrs() -> Result<(), String> {
+@@ -121,7 +202,7 @@ fn run_buildrs() -> Result<(), String> {
  
      for tool_env_var in &["CC", "CXX", "LD"] {
          if let Some(tool_path) = env::var_os(tool_env_var) {
@@ -135,7 +134,7 @@
          }
      }
  
-@@ -139,7 +221,7 @@ fn run_buildrs() -> Result<(), String> {
+@@ -137,7 +218,7 @@ fn run_buildrs() -> Result<(), String> {
              command.env_remove("AR");
              command.env_remove("ARFLAGS");
          } else {
@@ -144,7 +143,7 @@
          }
      }
  
-@@ -257,7 +339,8 @@ fn resolve_rundir(rundir: &str, exec_root: &Path, manifest_dir: &Path) -> Result
+@@ -319,7 +400,8 @@ fn resolve_rundir(rundir: &str, exec_root: &Path, manifest_dir: &Path) -> Result
      if rundir.is_empty() {
          return Ok(manifest_dir.to_owned());
      }
@@ -157,7 +156,7 @@
 diff --git a/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs b/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs
 --- a/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs
 +++ b/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs
-@@ -282,7 +282,7 @@
+@@ -316,7 +316,7 @@
      /// been copied into the runfiles directory.
      fn drain_runfiles_dir_windows(&self) -> Result<(), String> {
          for dest in self.runfiles.values() {

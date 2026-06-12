@@ -1,6 +1,6 @@
 --- a/rust/private/rustc.bzl
 +++ b/rust/private/rustc.bzl
-@@ -501,11 +501,41 @@
+@@ -501,11 +501,25 @@
                      filtered_args.append(version)
                      # Keep library search path flags
 

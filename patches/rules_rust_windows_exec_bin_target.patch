@@ -10,7 +10,7 @@
 diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 --- a/rust/private/rustc.bzl
 +++ b/rust/private/rustc.bzl
-@@ -129,6 +129,20 @@
+@@ -130,7 +130,21 @@ is_proc_macro_dep_enabled = rule(
      build_setting = config.bool(flag = True),
  )
  
@@ -32,7 +32,9 @@ diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 +def _get_rustc_env(attr, toolchain, crate_name, use_exec_target = False):
      """Gathers rustc environment variables
  
-@@ -147,6 +161,6 @@
+     Args:
+@@ -149,8 +163,8 @@ def _get_rustc_env(attr, toolchain, crate_name):
+         pre = ""
  
      result = {
 -        "CARGO_CFG_TARGET_ARCH": "" if toolchain.target_arch == None else toolchain.target_arch,
@@ -41,7 +43,8 @@ diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 +        "CARGO_CFG_TARGET_OS": "" if _effective_target_os(toolchain, use_exec_target) == None else _effective_target_os(toolchain, use_exec_target),
          "CARGO_CRATE_NAME": crate_name,
          "CARGO_PKG_AUTHORS": "",
-@@ -997,9 +1011,11 @@
+         "CARGO_PKG_DESCRIPTION": "",
+@@ -1020,10 +1034,12 @@ def construct_arguments(
      if build_metadata and not use_json_output:
          fail("build_metadata requires parse_json_output")
  
@@ -54,18 +57,22 @@ diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 +    env = _get_rustc_env(attr, toolchain, crate_info.name, use_exec_target)
  
      # Wrapper args first
-@@ -1138,5 +1154,5 @@
+     process_wrapper_flags = ctx.actions.args()
+@@ -1164,14 +1180,14 @@ def construct_arguments(
      if error_format != "json":
          # Color is not compatible with json output.
          rustc_flags.add("--color=always")
 -    rustc_flags.add(toolchain.target_flag_value, format = "--target=%s")
 +    rustc_flags.add(_effective_target_flag_value(toolchain, use_exec_target), format = "--target=%s")
      if hasattr(attr, "crate_features"):
-@@ -1144,6 +1160,6 @@
+         rustc_flags.add_all(getattr(attr, "crate_features"), before_each = "--cfg", format_each = 'feature="%s"')
      if linker_script:
          rustc_flags.add(linker_script, format = "--codegen=link-arg=-T%s")
  
      # Tell Rustc where to find the standard library (or libcore)
 -    rustc_flags.add_all(toolchain.rust_std_paths, before_each = "-L", format_each = "%s")
 +    rustc_flags.add_all(_effective_rust_std_paths(toolchain, use_exec_target), before_each = "-L", format_each = "%s")
-     rustc_flags.add_all(rust_flags, map_each = map_flag)
+-
++
+     rustc_flags.add_all(
+         _extract_allowed_unstable_features_from_flags(rust_flags, all_allowed_unstable_features),

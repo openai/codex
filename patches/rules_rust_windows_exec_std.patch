@@ -14,7 +14,7 @@ diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
 +        exec_rust_std = None,
          rust_std = None,
          rustfmt = None,
-         linker = None):
+         linker = None,
 @@ -315,6 +316,14 @@
          # Made available to support $(location) expansion in stdlib_linkflags and extra_rustc_flags.
          transitive_file_sets.append(depset(ctx.files.rust_std))
