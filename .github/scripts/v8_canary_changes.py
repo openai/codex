@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WINDOWS_SOURCE_BUILD_PATHS = {
     ".github/scripts/rusty_v8_bazel.py",
+    ".github/scripts/rusty_v8_module_bazel.py",
     ".github/scripts/v8_canary_changes.py",
     ".github/workflows/rusty-v8-release.yml",
     ".github/workflows/v8-canary.yml",
