@@ -440,7 +440,7 @@ impl App {
                 self.handle_pet_selected(tui, pet_id);
             }
             AppEvent::PetDisabled => {
-                self.handle_pet_disabled(tui).await;
+                self.handle_pet_disabled(tui, app_server).await;
             }
             AppEvent::PetPreviewRequested { pet_id } => {
                 self.chat_widget.start_pet_picker_preview(pet_id);
@@ -454,7 +454,7 @@ impl App {
                 result,
             } => {
                 return self
-                    .handle_pet_selection_loaded(tui, request_id, pet_id, result)
+                    .handle_pet_selection_loaded(tui, app_server, request_id, pet_id, result)
                     .await;
             }
             AppEvent::ConfiguredPetLoaded { pet_id, result } => {
@@ -1390,12 +1390,12 @@ impl App {
                 self.chat_widget.on_plugin_mentions_loaded(plugins);
             }
             AppEvent::PersistPersonalitySelection { personality } => {
-                match crate::config_update::write_config_batch(
+                match crate::config_update::write_config_edit(
                     app_server.request_handle(),
-                    vec![crate::config_update::replace_config_value(
+                    crate::config_update::replace_config_value(
                         "personality",
                         serde_json::json!(personality.to_string()),
-                    )],
+                    ),
                 )
                 .await
                 {
@@ -1443,19 +1443,24 @@ impl App {
                 }
             }
             AppEvent::PersistRealtimeAudioDeviceSelection { kind, name } => {
-                let builder = match kind {
-                    RealtimeAudioDeviceKind::Microphone => {
-                        ConfigEditsBuilder::for_config(&self.config)
-                            .set_realtime_microphone(name.as_deref())
-                    }
-                    RealtimeAudioDeviceKind::Speaker => {
-                        ConfigEditsBuilder::for_config(&self.config)
-                            .set_realtime_speaker(name.as_deref())
-                    }
+                let key_path = match kind {
+                    RealtimeAudioDeviceKind::Microphone => "audio.microphone",
+                    RealtimeAudioDeviceKind::Speaker => "audio.speaker",
                 };
+                let edit = name.as_ref().map_or_else(
+                    || crate::config_update::clear_config_value(key_path),
+                    |name| {
+                        crate::config_update::replace_config_value(
+                            key_path,
+                            serde_json::json!(name),
+                        )
+                    },
+                );
 
-                match builder.apply().await {
-                    Ok(()) => {
+                match crate::config_update::write_config_edit(app_server.request_handle(), edit)
+                    .await
+                {
+                    Ok(_) => {
                         match kind {
                             RealtimeAudioDeviceKind::Microphone => {
                                 self.config.realtime_audio.microphone = name.clone();
@@ -1592,12 +1597,12 @@ impl App {
                 self.chat_widget.set_approvals_reviewer(policy);
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
-                if let Err(err) = crate::config_update::write_config_batch(
+                if let Err(err) = crate::config_update::write_config_edit(
                     app_server.request_handle(),
-                    vec![crate::config_update::replace_config_value(
+                    crate::config_update::replace_config_value(
                         "approvals_reviewer",
                         serde_json::json!(policy.to_string()),
-                    )],
+                    ),
                 )
                 .await
                 {
@@ -1646,10 +1651,14 @@ impl App {
                     .await;
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
-                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
-                    .set_hide_full_access_warning(/*acknowledged*/ true)
-                    .apply()
-                    .await
+                if let Err(err) = crate::config_update::write_config_edit(
+                    app_server.request_handle(),
+                    crate::config_update::replace_config_value(
+                        "notice.hide_full_access_warning",
+                        serde_json::json!(true),
+                    ),
+                )
+                .await
                 {
                     tracing::error!(
                         error = %err,
@@ -1661,10 +1670,14 @@ impl App {
                 }
             }
             AppEvent::PersistWorldWritableWarningAcknowledged => {
-                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
-                    .set_hide_world_writable_warning(/*acknowledged*/ true)
-                    .apply()
-                    .await
+                if let Err(err) = crate::config_update::write_config_edit(
+                    app_server.request_handle(),
+                    crate::config_update::replace_config_value(
+                        "notice.hide_world_writable_warning",
+                        serde_json::json!(true),
+                    ),
+                )
+                .await
                 {
                     tracing::error!(
                         error = %err,
@@ -1676,10 +1689,14 @@ impl App {
                 }
             }
             AppEvent::PersistRateLimitSwitchPromptHidden => {
-                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
-                    .set_hide_rate_limit_model_nudge(/*acknowledged*/ true)
-                    .apply()
-                    .await
+                if let Err(err) = crate::config_update::write_config_edit(
+                    app_server.request_handle(),
+                    crate::config_update::replace_config_value(
+                        "notice.hide_rate_limit_model_nudge",
+                        serde_json::json!(true),
+                    ),
+                )
+                .await
                 {
                     tracing::error!(
                         error = %err,
@@ -1700,11 +1717,8 @@ impl App {
                 } else {
                     crate::config_update::clear_config_value(key_path)
                 };
-                if let Err(err) = crate::config_update::write_config_batch(
-                    app_server.request_handle(),
-                    vec![edit],
-                )
-                .await
+                if let Err(err) =
+                    crate::config_update::write_config_edit(app_server.request_handle(), edit).await
                 {
                     tracing::error!(
                         error = %err,
@@ -1719,10 +1733,18 @@ impl App {
                 from_model,
                 to_model,
             } => {
-                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
-                    .record_model_migration_seen(from_model.as_str(), to_model.as_str())
-                    .apply()
-                    .await
+                let key_path = format!(
+                    "notice.model_migrations.{}",
+                    crate::config_update::quoted_key_path_segment(&from_model)
+                );
+                if let Err(err) = crate::config_update::write_config_edit(
+                    app_server.request_handle(),
+                    crate::config_update::replace_config_value(
+                        key_path,
+                        serde_json::json!(to_model),
+                    ),
+                )
+                .await
                 {
                     tracing::error!(
                         error = %err,
@@ -1960,15 +1982,22 @@ impl App {
                 use_theme_colors,
             } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
-                let items_edit = crate::legacy_core::config::edit::status_line_items_edit(&ids);
-                let colors_edit =
-                    crate::legacy_core::config::edit::status_line_use_colors_edit(use_theme_colors);
-                let apply_result = ConfigEditsBuilder::for_config(&self.config)
-                    .with_edits([items_edit, colors_edit])
-                    .apply()
-                    .await;
+                let apply_result = crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![
+                        crate::config_update::replace_config_value(
+                            "tui.status_line",
+                            serde_json::json!(&ids),
+                        ),
+                        crate::config_update::replace_config_value(
+                            "tui.status_line_use_colors",
+                            serde_json::json!(use_theme_colors),
+                        ),
+                    ],
+                )
+                .await;
                 match apply_result {
-                    Ok(()) => {
+                    Ok(_) => {
                         self.config.tui_status_line = Some(ids.clone());
                         self.config.tui_status_line_use_colors = use_theme_colors;
                         self.chat_widget.setup_status_line(items, use_theme_colors);
@@ -1995,13 +2024,16 @@ impl App {
             }
             AppEvent::TerminalTitleSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
-                let edit = crate::legacy_core::config::edit::terminal_title_items_edit(&ids);
-                let apply_result = ConfigEditsBuilder::for_config(&self.config)
-                    .with_edits([edit])
-                    .apply()
-                    .await;
+                let apply_result = crate::config_update::write_config_edit(
+                    app_server.request_handle(),
+                    crate::config_update::replace_config_value(
+                        "tui.terminal_title",
+                        serde_json::json!(&ids),
+                    ),
+                )
+                .await;
                 match apply_result {
-                    Ok(()) => {
+                    Ok(_) => {
                         self.config.tui_terminal_title = Some(ids.clone());
                         self.chat_widget.setup_terminal_title(items);
                     }
@@ -2021,13 +2053,16 @@ impl App {
                 self.chat_widget.cancel_terminal_title_setup();
             }
             AppEvent::SyntaxThemeSelected { name } => {
-                let edit = crate::legacy_core::config::edit::syntax_theme_edit(&name);
-                let apply_result = ConfigEditsBuilder::for_config(&self.config)
-                    .with_edits([edit])
-                    .apply()
-                    .await;
+                let apply_result = crate::config_update::write_config_edit(
+                    app_server.request_handle(),
+                    crate::config_update::replace_config_value(
+                        "tui.theme",
+                        serde_json::json!(&name),
+                    ),
+                )
+                .await;
                 match apply_result {
-                    Ok(()) => {
+                    Ok(_) => {
                         // Ensure the selected theme is active in the current
                         // session.  The preview callback covers arrow-key
                         // navigation, but if the user presses Enter without
@@ -2078,11 +2113,11 @@ impl App {
                 key,
                 intent,
             } => {
-                self.apply_keymap_capture(context, action, key, intent)
+                self.apply_keymap_capture(app_server, context, action, key, intent)
                     .await;
             }
             AppEvent::KeymapCleared { context, action } => {
-                self.apply_keymap_clear(context, action).await;
+                self.apply_keymap_clear(app_server, context, action).await;
             }
         }
         Ok(AppRunControl::Continue)
@@ -2090,6 +2125,7 @@ impl App {
 
     async fn apply_keymap_capture(
         &mut self,
+        app_server: &AppServerSession,
         context: String,
         action: String,
         key: String,
@@ -2132,14 +2168,9 @@ impl App {
             }
         };
 
-        let edit =
-            crate::legacy_core::config::edit::keymap_bindings_edit(&context, &action, &bindings);
-        match ConfigEditsBuilder::for_config(&self.config)
-            .with_edits([edit])
-            .apply()
-            .await
-        {
-            Ok(()) => {
+        let edit = crate::config_update::build_keymap_bindings_edit(&context, &action, &bindings);
+        match crate::config_update::write_config_edit(app_server.request_handle(), edit).await {
+            Ok(_) => {
                 self.config.tui_keymap = keymap_config.clone();
                 self.keymap = runtime_keymap.clone();
                 self.chat_widget
@@ -2161,7 +2192,12 @@ impl App {
         self.chat_widget.submit_op(AppCommand::reload_user_config());
     }
 
-    async fn apply_keymap_clear(&mut self, context: String, action: String) {
+    async fn apply_keymap_clear(
+        &mut self,
+        app_server: &AppServerSession,
+        context: String,
+        action: String,
+    ) {
         let keymap_config = match crate::keymap_setup::keymap_without_custom_binding(
             &self.config.tui_keymap,
             &context,
@@ -2183,13 +2219,9 @@ impl App {
             }
         };
 
-        let edit = crate::legacy_core::config::edit::keymap_binding_clear_edit(&context, &action);
-        match ConfigEditsBuilder::for_config(&self.config)
-            .with_edits([edit])
-            .apply()
-            .await
-        {
-            Ok(()) => {
+        let edit = crate::config_update::build_keymap_binding_clear_edit(&context, &action);
+        match crate::config_update::write_config_edit(app_server.request_handle(), edit).await {
+            Ok(_) => {
                 self.config.tui_keymap = keymap_config.clone();
                 self.keymap = runtime_keymap.clone();
                 self.chat_widget

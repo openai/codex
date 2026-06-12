@@ -39,9 +39,13 @@ pub(crate) fn clear_config_value(key_path: impl Into<String>) -> ConfigEdit {
     replace_config_value(key_path, JsonValue::Null)
 }
 
+pub(crate) fn quoted_key_path_segment(segment: &str) -> String {
+    let segment = segment.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{segment}\"")
+}
+
 pub(crate) fn app_scoped_key_path(app_id: &str, key_path: &str) -> String {
-    let app_id = serde_json::Value::String(app_id.to_string()).to_string();
-    format!("apps.{app_id}.{key_path}")
+    format!("apps.{}.{key_path}", quoted_key_path_segment(app_id))
 }
 
 pub(crate) fn format_config_error(err: &impl Display) -> String {
@@ -144,6 +148,30 @@ pub(crate) fn build_oss_provider_edit(provider: &str) -> ConfigEdit {
     replace_config_value("oss_provider", serde_json::json!(provider))
 }
 
+fn keymap_binding_key_path(context: &str, action: &str) -> String {
+    format!(
+        "tui.keymap.{}.{}",
+        quoted_key_path_segment(context),
+        quoted_key_path_segment(action)
+    )
+}
+
+pub(crate) fn build_keymap_bindings_edit(
+    context: &str,
+    action: &str,
+    keys: &[String],
+) -> ConfigEdit {
+    let value = match keys {
+        [key] => serde_json::json!(key),
+        keys => serde_json::json!(keys),
+    };
+    replace_config_value(keymap_binding_key_path(context, action), value)
+}
+
+pub(crate) fn build_keymap_binding_clear_edit(context: &str, action: &str) -> ConfigEdit {
+    clear_config_value(keymap_binding_key_path(context, action))
+}
+
 pub(crate) async fn write_config_batch(
     request_handle: AppServerRequestHandle,
     edits: Vec<ConfigEdit>,
@@ -161,6 +189,13 @@ pub(crate) async fn write_config_batch(
         })
         .await
         .wrap_err("config/batchWrite failed in TUI")
+}
+
+pub(crate) async fn write_config_edit(
+    request_handle: AppServerRequestHandle,
+    edit: ConfigEdit,
+) -> Result<ConfigWriteResponse> {
+    write_config_batch(request_handle, vec![edit]).await
 }
 
 pub(crate) async fn write_trusted_project(
