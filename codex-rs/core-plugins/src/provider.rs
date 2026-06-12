@@ -1,5 +1,4 @@
 use crate::manifest::parse_plugin_manifest;
-use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_plugin::PluginProvider;
@@ -78,11 +77,11 @@ pub struct ExecutorPluginProvider {
     environment_manager: Arc<EnvironmentManager>,
 }
 
-/// A resolved plugin paired with the concrete environment used to read it.
+/// A resolved plugin paired with the concrete filesystem used to read it.
 #[derive(Clone)]
 pub struct ResolvedExecutorPlugin {
     plugin: ResolvedPlugin,
-    environment: Arc<Environment>,
+    file_system: Arc<dyn ExecutorFileSystem>,
 }
 
 impl ResolvedExecutorPlugin {
@@ -91,9 +90,9 @@ impl ResolvedExecutorPlugin {
         &self.plugin
     }
 
-    /// Returns the concrete environment that resolved the descriptor.
-    pub fn environment(&self) -> &Environment {
-        self.environment.as_ref()
+    /// Returns the concrete filesystem that resolved the descriptor.
+    pub fn file_system(&self) -> &dyn ExecutorFileSystem {
+        self.file_system.as_ref()
     }
 }
 
@@ -105,7 +104,7 @@ impl ExecutorPluginProvider {
         }
     }
 
-    /// Resolves a plugin and retains the exact environment used for filesystem access.
+    /// Resolves a plugin and retains the exact filesystem used for package access.
     pub async fn resolve_bound(
         &self,
         selected_root: &SelectedCapabilityRoot,
@@ -120,16 +119,12 @@ impl ExecutorPluginProvider {
                 root_id: root_id.clone(),
                 environment_id: environment_id.clone(),
             })?;
-        let plugin = resolve_plugin_root(
-            selected_root,
-            plugin_root,
-            environment.get_filesystem().as_ref(),
-        )
-        .await?;
+        let file_system = environment.get_filesystem();
+        let plugin = resolve_plugin_root(selected_root, plugin_root, file_system.as_ref()).await?;
 
         Ok(plugin.map(|plugin| ResolvedExecutorPlugin {
             plugin,
-            environment,
+            file_system,
         }))
     }
 }

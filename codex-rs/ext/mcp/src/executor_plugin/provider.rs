@@ -52,12 +52,7 @@ impl ExecutorPluginMcpProvider {
     ) -> Result<Vec<(String, McpServerConfig)>, ExecutorPluginMcpProviderError> {
         let ResolvedPluginLocation::Environment { root, .. } = plugin.plugin().location();
 
-        load_from_file_system(
-            plugin.plugin(),
-            root,
-            plugin.environment().get_filesystem().as_ref(),
-        )
-        .await
+        load_from_file_system(plugin.plugin(), root, plugin.file_system()).await
     }
 }
 
