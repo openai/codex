@@ -28,6 +28,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -114,7 +115,7 @@ struct GuardianReviewSession {
     codex: Codex,
     cancel_token: CancellationToken,
     reuse_key: GuardianReviewSessionReuseKey,
-    review_lock: Semaphore,
+    review_lock: Arc<Semaphore>,
     state: Mutex<GuardianReviewState>,
 }
 
@@ -149,6 +150,11 @@ struct GuardianReviewForkSnapshot {
     initial_history: InitialHistory,
     prior_review_count: usize,
     last_reviewed_transcript_cursor: Option<GuardianTranscriptCursor>,
+}
+
+struct ReservedGuardianReviewSession {
+    review_session: Arc<GuardianReviewSession>,
+    review_guard: OwnedSemaphorePermit,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -233,6 +239,17 @@ impl GuardianReviewSession {
         drop(tokio::spawn(async move {
             review_session.shutdown().await;
         }));
+    }
+
+    fn shutdown_reserved_in_background(self: Arc<Self>, review_guard: OwnedSemaphorePermit) {
+        drop(tokio::spawn(async move {
+            let _review_guard = review_guard;
+            self.shutdown().await;
+        }));
+    }
+
+    fn try_acquire_review_lock(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.review_lock).try_acquire_owned().ok()
     }
 
     async fn fork_snapshot(&self) -> Option<GuardianReviewForkSnapshot> {
@@ -355,11 +372,20 @@ impl GuardianReviewSessionManager {
                 if trunk.reuse_key == reuse_key {
                     should_schedule_prewarm = false;
                 }
-                if should_schedule_prewarm && trunk.review_lock.try_acquire().is_ok() {
-                    stale_trunk_to_shutdown = state.trunk.take();
-                } else if should_schedule_prewarm {
-                    info!("guardian trunk prewarm skipped because a stale trunk is currently busy");
-                    should_schedule_prewarm = false;
+                if should_schedule_prewarm {
+                    if let Some(review_guard) = trunk.try_acquire_review_lock() {
+                        stale_trunk_to_shutdown = state.trunk.take().map(|review_session| {
+                            ReservedGuardianReviewSession {
+                                review_session,
+                                review_guard,
+                            }
+                        });
+                    } else {
+                        info!(
+                            "guardian trunk prewarm skipped because a stale trunk is currently busy"
+                        );
+                        should_schedule_prewarm = false;
+                    }
                 }
             }
 
@@ -376,8 +402,10 @@ impl GuardianReviewSessionManager {
             info!("cancelling stale guardian trunk prewarm before scheduling a replacement");
             prewarm.cancel_token.cancel();
         }
-        if let Some(review_session) = stale_trunk_to_shutdown {
-            review_session.shutdown_in_background();
+        if let Some(reserved_review_session) = stale_trunk_to_shutdown {
+            reserved_review_session
+                .review_session
+                .shutdown_reserved_in_background(reserved_review_session.review_guard);
         }
         if !should_schedule_prewarm {
             return;
@@ -427,9 +455,14 @@ impl GuardianReviewSessionManager {
                     state.prewarm = None;
                     if let Some(trunk) = state.trunk.as_ref()
                         && trunk.reuse_key != reuse_key
-                        && trunk.review_lock.try_acquire().is_ok()
+                        && let Some(review_guard) = trunk.try_acquire_review_lock()
                     {
-                        stale_trunk_to_shutdown = state.trunk.take();
+                        stale_trunk_to_shutdown = state.trunk.take().map(|review_session| {
+                            ReservedGuardianReviewSession {
+                                review_session,
+                                review_guard,
+                            }
+                        });
                     }
                     if state.trunk.is_none() {
                         state.trunk = spawned_session_to_shutdown.take();
@@ -443,8 +476,10 @@ impl GuardianReviewSessionManager {
             if installed {
                 info!("guardian trunk prewarm installed");
             }
-            if let Some(review_session) = stale_trunk_to_shutdown {
-                review_session.shutdown_in_background();
+            if let Some(reserved_review_session) = stale_trunk_to_shutdown {
+                reserved_review_session
+                    .review_session
+                    .shutdown_reserved_in_background(reserved_review_session.review_guard);
             }
             if let Some(review_session) = spawned_session_to_shutdown {
                 review_session.shutdown().await;
@@ -492,9 +527,16 @@ impl GuardianReviewSessionManager {
                 }
                 if let Some(trunk) = state.trunk.as_ref()
                     && trunk.reuse_key != next_reuse_key
-                    && trunk.review_lock.try_acquire().is_ok()
+                    && let Some(review_guard) = trunk.try_acquire_review_lock()
                 {
-                    stale_trunk_to_shutdown = state.trunk.take();
+                    stale_trunk_to_shutdown =
+                        state
+                            .trunk
+                            .take()
+                            .map(|review_session| ReservedGuardianReviewSession {
+                                review_session,
+                                review_guard,
+                            });
                 }
 
                 let pending_prewarm_completion = if state.trunk.is_none() {
@@ -556,8 +598,10 @@ impl GuardianReviewSessionManager {
             }
         };
 
-        if let Some(review_session) = stale_trunk_to_shutdown {
-            review_session.shutdown_in_background();
+        if let Some(reserved_review_session) = stale_trunk_to_shutdown {
+            reserved_review_session
+                .review_session
+                .shutdown_reserved_in_background(reserved_review_session.review_guard);
         }
 
         let Some(trunk) = trunk_candidate else {
@@ -579,9 +623,9 @@ impl GuardianReviewSessionManager {
             .await;
         }
 
-        let trunk_guard = match trunk.review_lock.try_acquire() {
-            Ok(trunk_guard) => trunk_guard,
-            Err(_) => {
+        let trunk_guard = match trunk.try_acquire_review_lock() {
+            Some(trunk_guard) => trunk_guard,
+            None => {
                 return Box::pin(self.run_ephemeral_review(
                     params,
                     next_reuse_key,
@@ -629,7 +673,7 @@ impl GuardianReviewSessionManager {
             reuse_key,
             codex,
             cancel_token: CancellationToken::new(),
-            review_lock: Semaphore::new(/*permits*/ 1),
+            review_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
             state: Mutex::new(GuardianReviewState {
                 prior_review_count: 0,
                 last_reviewed_transcript_cursor: None,
@@ -652,7 +696,7 @@ impl GuardianReviewSessionManager {
                 reuse_key,
                 codex,
                 cancel_token: CancellationToken::new(),
-                review_lock: Semaphore::new(/*permits*/ 1),
+                review_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
                 state: Mutex::new(GuardianReviewState {
                     prior_review_count: 0,
                     last_reviewed_transcript_cursor: None,
@@ -808,7 +852,7 @@ async fn spawn_guardian_review_session(
         codex,
         cancel_token,
         reuse_key,
-        review_lock: Semaphore::new(/*permits*/ 1),
+        review_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         state: Mutex::new(GuardianReviewState {
             prior_review_count,
             last_reviewed_transcript_cursor: initial_transcript_cursor,
@@ -1285,7 +1329,7 @@ mod tests {
                 },
                 cancel_token: CancellationToken::new(),
                 reuse_key,
-                review_lock: Semaphore::new(/*permits*/ 1),
+                review_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
                 state: Mutex::new(GuardianReviewState {
                     prior_review_count: 0,
                     last_reviewed_transcript_cursor: None,
@@ -1559,6 +1603,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_review_cancels_stale_pending_prewarm_before_reusing_matching_trunk() {
+        let params = test_review_params().await;
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &params.spawn_config,
+            params.parent_session.user_instructions().await,
+        );
+        let mut stale_spawn_config = params.spawn_config.clone();
+        stale_spawn_config.model = Some("different-guardian-model".to_string());
+        let stale_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &stale_spawn_config,
+            params.parent_session.user_instructions().await,
+        );
+        let stale_cancel_token = CancellationToken::new();
+        let (_stale_completion_tx, stale_completion) = watch::channel(false);
+        let (mut review_session, tx_event, rx_sub) = test_review_session().await;
+        review_session.reuse_key = reuse_key;
+        let manager = GuardianReviewSessionManager {
+            state: Arc::new(Mutex::new(GuardianReviewSessionState {
+                trunk: Some(Arc::new(review_session)),
+                prewarm: Some(GuardianReviewSessionPrewarm {
+                    reuse_key: stale_reuse_key,
+                    cancel_token: stale_cancel_token.clone(),
+                    completion: stale_completion,
+                }),
+                ephemeral_reviews: Vec::new(),
+            })),
+        };
+
+        let review = tokio::spawn(async move { manager.run_review(params).await });
+        let submission = rx_sub.recv().await.expect("guardian submission");
+        tx_event
+            .send(turn_complete_event(
+                submission.id.as_str(),
+                Some("fresh assessment"),
+                Some(42),
+            ))
+            .await
+            .expect("queue guardian completion");
+        let (outcome, analytics_result) = review.await.expect("review should complete");
+
+        let GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)) = outcome else {
+            panic!("expected completed guardian review");
+        };
+        assert_eq!(last_agent_message.as_deref(), Some("fresh assessment"));
+        assert!(stale_cancel_token.is_cancelled());
+        assert!(matches!(
+            analytics_result.guardian_session_kind,
+            Some(GuardianReviewSessionKind::TrunkReused)
+        ));
+    }
+
+    #[tokio::test]
     async fn run_review_waits_for_matching_pending_prewarm() {
         let params = test_review_params().await;
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -1581,12 +1677,16 @@ mod tests {
         let review_manager = Arc::clone(&manager);
         let review = tokio::spawn(async move { review_manager.run_review(params).await });
 
-        for _ in 0..50 {
-            if completion_tx.receiver_count() > 1 {
-                break;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if completion_tx.receiver_count() > 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
+        })
+        .await
+        .expect("review should subscribe to pending prewarm completion");
         assert_eq!(completion_tx.receiver_count(), 2);
         assert!(!cancel_token.is_cancelled());
         assert!(!review.is_finished());

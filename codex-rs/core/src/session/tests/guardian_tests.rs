@@ -82,6 +82,80 @@ async fn wait_for_guardian_trunk_rollout_path(session: &Session) -> PathBuf {
     .expect("guardian trunk prewarm should complete")
 }
 
+fn configure_guardian_auto_review(
+    session: &mut Session,
+    turn_context: &mut TurnContext,
+    model_provider_base_url: Option<String>,
+) {
+    turn_context
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("test setup should allow updating approval policy");
+    turn_context
+        .features
+        .enable(Feature::GuardianApproval)
+        .expect("test setup should allow enabling guardian approvals");
+    let mut config = (*turn_context.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config.model_provider.base_url = model_provider_base_url;
+    let config = Arc::new(config);
+    let models_manager = models_manager_with_provider(
+        config.codex_home.to_path_buf(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    );
+    session.services.models_manager = models_manager;
+    turn_context.config = Arc::clone(&config);
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
+}
+
+struct WaitingRegularTask;
+
+impl SessionTask for WaitingRegularTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.guardian_prewarm_test"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<SessionTaskContext>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<TurnInput>,
+        cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        cancellation_token.cancelled().await;
+        None
+    }
+}
+
+async fn seed_active_regular_task(session: &Session, turn_context: Arc<TurnContext>) {
+    let task: Arc<dyn crate::tasks::AnySessionTask> = Arc::new(WaitingRegularTask);
+    let active_turn = ActiveTurn {
+        task: Some(crate::state::RunningTask {
+            done: Arc::new(tokio::sync::Notify::new()),
+            kind: TaskKind::Regular,
+            task,
+            cancellation_token: CancellationToken::new(),
+            handle: tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+                std::future::pending::<()>(),
+            )),
+            turn_context: Arc::clone(&turn_context),
+            turn_extension_data: Arc::clone(&turn_context.extension_data),
+            _agent_execution_guard: None,
+            _timer: None,
+        }),
+        ..ActiveTurn::default()
+    };
+    *session.active_turn.lock().await = Some(active_turn);
+}
+
 #[tokio::test]
 async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     let server = start_mock_server().await;
@@ -179,6 +253,53 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     assert_eq!(guardian_request.path(), "/v1/responses");
     assert!(guardian_request.body_contains_text("request_permissions"));
     assert!(guardian_request.body_contains_text("need network"));
+}
+
+#[tokio::test]
+async fn regular_turn_start_schedules_guardian_trunk_prewarm() {
+    let (mut session, mut turn_context_raw) = make_session_and_context().await;
+    configure_guardian_auto_review(&mut session, &mut turn_context_raw, /*base_url*/ None);
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context_raw);
+
+    session
+        .spawn_task(Arc::clone(&turn_context), Vec::new(), WaitingRegularTask)
+        .await;
+
+    let prewarmed_trunk_rollout_path = wait_for_guardian_trunk_rollout_path(&session).await;
+    assert!(prewarmed_trunk_rollout_path.exists());
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    session.guardian_review_session.shutdown().await;
+}
+
+#[tokio::test]
+async fn network_policy_amendment_schedules_guardian_trunk_prewarm_for_active_regular_turn() {
+    let (mut session, mut turn_context_raw) = make_session_and_context().await;
+    configure_guardian_auto_review(&mut session, &mut turn_context_raw, /*base_url*/ None);
+    fs::create_dir_all(turn_context_raw.config.codex_home.join("rules"))
+        .expect("create execpolicy rules dir");
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context_raw);
+    seed_active_regular_task(session.as_ref(), Arc::clone(&turn_context)).await;
+
+    session
+        .persist_network_policy_amendment(
+            &codex_protocol::approvals::NetworkPolicyAmendment {
+                host: "api.example.com".to_string(),
+                action: codex_protocol::approvals::NetworkPolicyRuleAction::Allow,
+            },
+            &codex_protocol::protocol::NetworkApprovalContext {
+                host: "api.example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+            },
+        )
+        .await
+        .expect("network policy amendment should persist");
+
+    let prewarmed_trunk_rollout_path = wait_for_guardian_trunk_rollout_path(&session).await;
+    assert!(prewarmed_trunk_rollout_path.exists());
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    session.guardian_review_session.shutdown().await;
 }
 
 #[tokio::test]
