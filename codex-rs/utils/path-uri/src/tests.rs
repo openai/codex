@@ -62,7 +62,7 @@ fn file_uri_parses_a_windows_path_on_any_host() {
 #[test]
 fn file_uri_falls_back_for_windows_prefixes_without_a_uri_representation() {
     for (native_path, expected_uri) in [
-        (r"\\.\COM1", "file:///%00/bad/path/XABcAC4AXABDAE8ATQAxAA"),
+        (r"\\.\COM1", "file:///%00/bad/path/XABcAC4AXABDAE8ATQAxAFwA"),
         (
             r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.rs",
             "file:///%00/bad/path/XABcAD8AXABWAG8AbAB1AG0AZQB7ADAAMAAwADAAMAAwADAAMAAtADAAMAAwADAALQAwADAAMAAwAC0AMAAwADAAMAAtADAAMAAwADAAMAAwADAAMAAwADAAMAAwAH0AXABmAGkAbABlAC4AcgBzAA",
