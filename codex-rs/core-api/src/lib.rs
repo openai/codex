@@ -51,7 +51,6 @@ pub use codex_exec_server::ExecServerError;
 pub use codex_exec_server::ExecServerRuntimePaths;
 pub use codex_exec_server::NoiseChannelIdentity;
 pub use codex_exec_server::NoiseChannelPublicKey;
-pub use codex_exec_server::NoiseRendezvousConnectArgs;
 pub use codex_exec_server::NoiseRendezvousConnectBundle;
 pub use codex_exec_server::NoiseRendezvousConnectProvider;
 pub use codex_extension_api::LoadUserInstructionsFuture;

@@ -29,9 +29,6 @@ use crate::relay_proto::relay_message_frame;
 use crate::server::ConnectionProcessor;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
-const MAX_RELAY_RESET_REASON_BYTES: usize = 256;
-const MAX_RELAY_STREAM_ID_BYTES: usize = 128;
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum RelayFrameBodyKind {
     Data,
@@ -82,11 +79,6 @@ impl RelayMessageFrame {
         }
     }
 
-    /// Validate cleartext routing metadata before a frame reaches either the
-    /// direct JSON-RPC parser or the Noise relay state machine.
-    ///
-    /// The encrypted path intentionally leaves this metadata visible to
-    /// rendezvous, so it must be canonical and tightly bounded everywhere.
     pub(crate) fn validate(&self) -> Result<RelayFrameBodyKind, ExecServerError> {
         if self.version != RELAY_MESSAGE_FRAME_VERSION {
             return Err(ExecServerError::Protocol(format!(
@@ -94,19 +86,9 @@ impl RelayMessageFrame {
                 self.version
             )));
         }
-        if self.stream_id.is_empty() {
+        if self.stream_id.trim().is_empty() {
             return Err(ExecServerError::Protocol(
                 "relay message frame is missing stream_id".to_string(),
-            ));
-        }
-        if self.stream_id.trim() != self.stream_id {
-            return Err(ExecServerError::Protocol(
-                "relay message frame stream_id is not canonical".to_string(),
-            ));
-        }
-        if self.stream_id.len() > MAX_RELAY_STREAM_ID_BYTES {
-            return Err(ExecServerError::Protocol(
-                "relay message frame stream_id is too long".to_string(),
             ));
         }
         match self.body.as_ref() {
@@ -121,9 +103,9 @@ impl RelayMessageFrame {
             Some(relay_message_frame::Body::AckFrame(_)) => Ok(RelayFrameBodyKind::Ack),
             Some(relay_message_frame::Body::Resume(_)) => Ok(RelayFrameBodyKind::Resume),
             Some(relay_message_frame::Body::Reset(reset)) => {
-                if reset.reason.is_empty() || reset.reason.len() > MAX_RELAY_RESET_REASON_BYTES {
+                if reset.reason.is_empty() {
                     return Err(ExecServerError::Protocol(
-                        "relay reset message frame has invalid reason".to_string(),
+                        "relay reset message frame is missing reason".to_string(),
                     ));
                 }
                 Ok(RelayFrameBodyKind::Reset)
