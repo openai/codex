@@ -1,6 +1,3 @@
-#[cfg(not(target_os = "linux"))]
-compile_error!("the Wine exec-server test can only run on Linux");
-
 use std::collections::BTreeMap;
 
 use anyhow::Context;
@@ -75,8 +72,7 @@ async fn exercise_through_app_server(stdout: ChildStdout) -> Result<()> {
         "compact",
     )?;
 
-    let app_server_program =
-        codex_utils_cargo_bin::find_resource!("../../../app-server/codex-app-server")?;
+    let app_server_program = codex_utils_cargo_bin::cargo_bin("codex-app-server")?;
     let mut app_server = TestAppServer::new_with_program_and_env(
         codex_home.path(),
         &app_server_program,

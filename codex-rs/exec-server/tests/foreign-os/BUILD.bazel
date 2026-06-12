@@ -21,11 +21,8 @@ wine_rust_test(
     srcs = ["wine_windows_exec_server_test.rs"],
     crate_name = "wine_windows_exec_server_test",
     crate_root = "wine_windows_exec_server_test.rs",
-    data = [
-        "//codex-rs/app-server:codex-app-server",
-    ],
-    rustc_env = {
-        "BAZEL_PACKAGE": "codex-rs/exec-server/tests/foreign-os",
+    host_binaries = {
+        "codex-app-server": "//codex-rs/app-server:codex-app-server",
     },
     windows_binaries = {
         "wine-windows-exec-server": ":windows-exec-server",
