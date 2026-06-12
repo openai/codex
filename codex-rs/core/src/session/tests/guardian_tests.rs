@@ -17,6 +17,12 @@ use codex_exec_server::EnvironmentManager;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
+use codex_extension_api::ApprovalReviewContributor;
+use codex_extension_api::ApprovalReviewError;
+use codex_extension_api::ApprovalReviewInput;
+use codex_extension_api::ApprovalReviewOutcome;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_model_provider::create_model_provider;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -48,6 +54,22 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
+
+struct ApprovingPermissionsContributor;
+
+impl ApprovalReviewContributor for ApprovingPermissionsContributor {
+    fn review<'a>(
+        &'a self,
+        input: ApprovalReviewInput<'a>,
+    ) -> ExtensionFuture<'a, Result<ApprovalReviewOutcome, ApprovalReviewError>> {
+        Box::pin(async move {
+            assert_eq!(input.reviewer, ApprovalsReviewer::AutoReview);
+            Ok(ApprovalReviewOutcome::decision(
+                ReviewDecision::ApprovedForSession,
+            ))
+        })
+    }
+}
 
 fn expect_text_output<T>(output: &T) -> String
 where
@@ -165,6 +187,89 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     assert_eq!(guardian_request.path(), "/v1/responses");
     assert!(guardian_request.body_contains_text("request_permissions"));
     assert!(guardian_request.body_contains_text("need network"));
+}
+
+#[tokio::test]
+async fn request_permissions_uses_extension_decision_and_records_session_grant() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    turn_context
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("test setup should allow updating approval policy");
+    turn_context
+        .features
+        .enable(Feature::GuardianApproval)
+        .expect("test setup should allow enabling guardian approvals");
+    let mut config = (*turn_context.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    turn_context.config = Arc::new(config);
+    let mut extensions = ExtensionRegistryBuilder::<crate::config::Config>::new();
+    extensions.approval_review_contributor(Arc::new(ApprovingPermissionsContributor));
+    session.services.extensions = Arc::new(extensions.build());
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let requested_permissions = RequestPermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        ..RequestPermissionProfile::default()
+    };
+    let environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .selection();
+    let response = session
+        .request_permissions_for_environment(
+            &turn_context,
+            "perm-call-extension".to_string(),
+            RequestPermissionsArgs {
+                environment_id: None,
+                reason: Some("need network".to_string()),
+                permissions: requested_permissions.clone(),
+            },
+            environment,
+            CancellationToken::new(),
+        )
+        .await;
+
+    assert_eq!(
+        response,
+        Some(RequestPermissionsResponse {
+            permissions: requested_permissions.clone(),
+            scope: PermissionGrantScope::Session,
+            strict_auto_review: false,
+        })
+    );
+    assert_eq!(
+        session
+            .granted_session_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+            .await,
+        Some(requested_permissions.into())
+    );
+
+    let cancellation_token = CancellationToken::new();
+    cancellation_token.cancel();
+    let cancelled_response = session
+        .request_permissions_for_environment(
+            &turn_context,
+            "perm-call-extension-cancelled".to_string(),
+            RequestPermissionsArgs {
+                environment_id: None,
+                reason: Some("need more network".to_string()),
+                permissions: RequestPermissionProfile::default(),
+            },
+            turn_context
+                .environments
+                .primary()
+                .expect("primary environment")
+                .selection(),
+            cancellation_token,
+        )
+        .await;
+    assert_eq!(cancelled_response, None);
 }
 
 #[tokio::test]

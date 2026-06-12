@@ -20,6 +20,7 @@ use codex_extension_api::ApprovalReviewSource;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::ReviewDecision;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AutomatedApprovalSource {
@@ -83,7 +84,6 @@ pub(crate) async fn request_automated_approval(
         retry_reason: retry_reason.as_deref(),
         source,
     };
-
     match session
         .services
         .extensions
@@ -116,6 +116,93 @@ pub(crate) async fn request_automated_approval(
             })
         }
         Err(error) => Err(format!("automatic approval review failed: {error}")),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn request_automated_approval_with_cancel(
+    session: &std::sync::Arc<crate::session::session::Session>,
+    turn: &std::sync::Arc<crate::session::turn_context::TurnContext>,
+    review_id: String,
+    request: GuardianApprovalRequest,
+    reviewer: codex_protocol::config_types::ApprovalsReviewer,
+    retry_reason: Option<String>,
+    source: ApprovalReviewSource,
+    cancellation_token: CancellationToken,
+) -> Option<Result<AutomatedApprovalDecision, String>> {
+    let action = guardian_assessment_action(&request);
+    let prompt = match format_guardian_action_pretty(&request) {
+        Ok(prompt) => prompt.text,
+        Err(error) => {
+            return Some(Err(format!("failed to render review prompt: {error}")));
+        }
+    };
+    let approval_policy = turn.approval_policy.value();
+    let review_input = ApprovalReviewInput {
+        session_store: &session.services.session_extension_data,
+        thread_store: &session.services.thread_extension_data,
+        turn_store: turn.extension_data.as_ref(),
+        review_id: &review_id,
+        turn_id: guardian_request_turn_id(&request, &turn.sub_id),
+        target_item_id: guardian_request_target_item_id(&request),
+        prompt: &prompt,
+        action: &action,
+        reviewer,
+        approval_policy: &approval_policy,
+        retry_reason: retry_reason.as_deref(),
+        source,
+    };
+
+    let extension_outcome = tokio::select! {
+        biased;
+        _ = cancellation_token.cancelled() => return None,
+        outcome = session.services.extensions.approval_review(review_input) => outcome,
+    };
+    match extension_outcome {
+        Ok(ApprovalReviewOutcome::Decision {
+            decision,
+            denial_message,
+        }) => Some(Ok(AutomatedApprovalDecision {
+            decision,
+            denial_message,
+            source: AutomatedApprovalSource::Extension,
+        })),
+        Ok(ApprovalReviewOutcome::Abstain) => {
+            let review_rx = crate::guardian::spawn_approval_request_review(
+                std::sync::Arc::clone(session),
+                std::sync::Arc::clone(turn),
+                review_id.clone(),
+                request,
+                retry_reason,
+                match source {
+                    ApprovalReviewSource::MainTurn => {
+                        codex_analytics::GuardianApprovalRequestSource::MainTurn
+                    }
+                    ApprovalReviewSource::DelegatedSubagent => {
+                        codex_analytics::GuardianApprovalRequestSource::DelegatedSubagent
+                    }
+                },
+                cancellation_token.clone(),
+            );
+            let decision = tokio::select! {
+                biased;
+                _ = cancellation_token.cancelled() => return None,
+                decision = review_rx => decision.unwrap_or(ReviewDecision::Denied),
+            };
+            let denial_message = match decision {
+                ReviewDecision::Denied | ReviewDecision::Abort => {
+                    Some(guardian_rejection_message(session, &review_id).await)
+                }
+                ReviewDecision::TimedOut => Some(guardian_timeout_message()),
+                _ => None,
+            };
+            Some(Ok(AutomatedApprovalDecision {
+                decision,
+                denial_message,
+                source: AutomatedApprovalSource::Guardian,
+            }))
+        }
+        Err(error) => Some(Err(format!("automatic approval review failed: {error}"))),
     }
 }
 

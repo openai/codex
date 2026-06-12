@@ -1,4 +1,5 @@
 use super::*;
+use codex_extension_api::ApprovalReviewSource;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
@@ -450,19 +451,20 @@ async fn review_guardian_mcp_elicitation(
         GuardianElicitationReview::ApprovalRequest(guardian_request) => *guardian_request,
     };
 
-    let review_id = crate::guardian::new_guardian_review_id();
-    let decision = crate::guardian::review_approval_request(
+    let automated = crate::tools::approval_dispatch::request_automated_approval(
         &session,
         &turn_context,
-        review_id.clone(),
+        crate::guardian::new_guardian_review_id(),
         guardian_request,
+        approvals_reviewer,
         /*retry_reason*/ None,
+        ApprovalReviewSource::MainTurn,
     )
     .await;
-    Ok(Some(
-        mcp_elicitation_response_from_guardian_decision(session.as_ref(), &review_id, decision)
-            .await,
-    ))
+    Ok(Some(match automated {
+        Ok(automated) => mcp_elicitation_response_from_automated(&automated),
+        Err(message) => mcp_elicitation_decline_with_message(message),
+    }))
 }
 
 fn guardian_elicitation_review_request(
@@ -604,18 +606,17 @@ fn mcp_elicitation_request_id(id: &RequestId) -> String {
     }
 }
 
-async fn mcp_elicitation_response_from_guardian_decision(
-    session: &Session,
-    review_id: &str,
-    decision: ReviewDecision,
+fn mcp_elicitation_response_from_automated(
+    automated: &crate::tools::approval_dispatch::AutomatedApprovalDecision,
 ) -> ElicitationResponse {
-    let denial_message = match decision {
-        ReviewDecision::Denied => {
-            Some(crate::guardian::guardian_rejection_message(session, review_id).await)
-        }
+    let denial_message = match &automated.decision {
+        ReviewDecision::Denied | ReviewDecision::TimedOut => Some(automated.denial_message()),
         _ => None,
     };
-    mcp_elicitation_response_from_guardian_decision_parts(decision, denial_message)
+    mcp_elicitation_response_from_guardian_decision_parts(
+        automated.decision.clone(),
+        denial_message,
+    )
 }
 
 fn mcp_elicitation_response_from_guardian_decision_parts(

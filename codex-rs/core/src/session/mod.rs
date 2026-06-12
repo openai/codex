@@ -2207,29 +2207,27 @@ impl Session {
                 let active = self.active_turn.lock().await;
                 active.as_ref().map(|active| Arc::clone(&active.turn_state))
             };
-            let review_id = crate::guardian::new_guardian_review_id();
-            let session = Arc::clone(self);
-            let turn = Arc::clone(turn_context);
             let request = crate::guardian::GuardianApprovalRequest::RequestPermissions {
                 id: call_id,
                 turn_id: turn_context.sub_id.clone(),
                 reason: args.reason,
                 permissions: requested_permissions.clone(),
             };
-            let review_rx = crate::guardian::spawn_approval_request_review(
-                session,
-                turn,
-                review_id,
-                request,
-                /*retry_reason*/ None,
-                codex_analytics::GuardianApprovalRequestSource::MainTurn,
-                cancellation_token.clone(),
-            );
-            let decision = tokio::select! {
-                biased;
-                _ = cancellation_token.cancelled() => return None,
-                decision = review_rx => decision.unwrap_or(ReviewDecision::Denied),
-            };
+            let automated =
+                crate::tools::approval_dispatch::request_automated_approval_with_cancel(
+                    self,
+                    turn_context,
+                    crate::guardian::new_guardian_review_id(),
+                    request,
+                    turn_context.config.approvals_reviewer,
+                    /*retry_reason*/ None,
+                    codex_extension_api::ApprovalReviewSource::MainTurn,
+                    cancellation_token,
+                )
+                .await?;
+            let decision = automated
+                .map(|automated| automated.decision)
+                .unwrap_or(ReviewDecision::Denied);
             let response = match decision {
                 ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                     RequestPermissionsResponse {

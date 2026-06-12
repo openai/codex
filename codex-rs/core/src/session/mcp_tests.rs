@@ -1,4 +1,6 @@
 use super::*;
+use crate::tools::approval_dispatch::AutomatedApprovalDecision;
+use crate::tools::approval_dispatch::AutomatedApprovalSource;
 use rmcp::model::BooleanSchema;
 use rmcp::model::ElicitationSchema;
 use rmcp::model::PrimitiveSchema;
@@ -263,6 +265,28 @@ fn guardian_decisions_map_to_elicitation_responses_without_session_state() {
             content: None,
             meta: Some(json!({
                 "approvals_reviewer": ApprovalsReviewer::AutoReview,
+            })),
+        }
+    );
+}
+
+#[test]
+fn extension_denial_maps_to_mcp_elicitation_response() {
+    let rationale = "the browser origin is outside the user's request";
+    let response = mcp_elicitation_response_from_automated(&AutomatedApprovalDecision {
+        decision: ReviewDecision::Denied,
+        denial_message: Some(rationale.to_string()),
+        source: AutomatedApprovalSource::Extension,
+    });
+
+    assert_eq!(
+        response,
+        ElicitationResponse {
+            action: ElicitationAction::Decline,
+            content: None,
+            meta: Some(json!({
+                "approvals_reviewer": ApprovalsReviewer::AutoReview,
+                "message": rationale,
             })),
         }
     );
