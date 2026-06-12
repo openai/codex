@@ -2781,6 +2781,7 @@ dependencies = [
  "codex-model-provider",
  "codex-otel",
  "codex-protocol",
+ "codex-shell-command",
  "codex-skills",
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
