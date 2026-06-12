@@ -27,7 +27,6 @@ Workflow:
    - `action_type`: `install`
    - `suggest_reason`: concise one-line user-facing reason these tools can help with the current request
    - `entries`: a list of candidates, each with `id`, `tool_id`, `tool_name`, `tool_type`, and optional `description`
-   - or `categories`: grouped candidates, each with `id`, `title`, optional `required`, optional `min_installed`, and `entries`
 7. After the request flow completes:
    - if the user finished the install flow, continue by searching again or using the newly available plugin or connector
    - if the user did not finish, continue without that plugin or connector, and don't request it again unless the user explicitly asks for it.
