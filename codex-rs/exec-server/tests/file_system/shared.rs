@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::FileMetadata;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -65,18 +66,34 @@ async fn file_system_get_metadata_reports_files_and_directories(
         .get_metadata(&PathUri::from_path(&file_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
-    assert_eq!(file_metadata.is_directory, false);
-    assert_eq!(file_metadata.is_file, true);
-    assert_eq!(file_metadata.is_symlink, false);
+    assert_eq!(
+        file_metadata,
+        FileMetadata {
+            is_directory: false,
+            is_file: true,
+            is_symlink: false,
+            size: 5,
+            created_at_ms: file_metadata.created_at_ms,
+            modified_at_ms: file_metadata.modified_at_ms,
+        }
+    );
     assert!(file_metadata.modified_at_ms > 0);
 
     let directory_metadata = file_system
         .get_metadata(&PathUri::from_path(&directory_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
-    assert_eq!(directory_metadata.is_directory, true);
-    assert_eq!(directory_metadata.is_file, false);
-    assert_eq!(directory_metadata.is_symlink, false);
+    assert_eq!(
+        directory_metadata,
+        FileMetadata {
+            is_directory: true,
+            is_file: false,
+            is_symlink: false,
+            size: std::fs::metadata(&directory_path)?.len(),
+            created_at_ms: directory_metadata.created_at_ms,
+            modified_at_ms: directory_metadata.modified_at_ms,
+        }
+    );
     assert!(directory_metadata.modified_at_ms > 0);
 
     Ok(())
@@ -395,7 +412,7 @@ async fn file_system_copy_rejects_directory_without_recursive(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_sandboxed_read_allows_readable_root(
+async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
     let context = create_file_system_context(implementation).await?;
@@ -407,6 +424,22 @@ async fn file_system_sandboxed_read_allows_readable_root(
     std::fs::create_dir_all(&allowed_dir)?;
     std::fs::write(&file_path, "sandboxed hello")?;
     let sandbox = read_only_sandbox(allowed_dir);
+
+    let metadata = file_system
+        .get_metadata(&PathUri::from_path(&file_path)?, Some(&sandbox))
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(
+        metadata,
+        FileMetadata {
+            is_directory: false,
+            is_file: true,
+            is_symlink: false,
+            size: 15,
+            created_at_ms: metadata.created_at_ms,
+            modified_at_ms: metadata.modified_at_ms,
+        }
+    );
 
     let contents = file_system
         .read_file(&PathUri::from_path(&file_path)?, Some(&sandbox))
