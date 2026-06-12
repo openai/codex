@@ -37,7 +37,7 @@ async fn processor_exit_reports_closed_virtual_stream() -> Result<()> {
     let (closed_stream_tx, mut closed_stream_rx) = mpsc::channel(1);
     let mut stream = spawn_noise_virtual_stream(
         "stream-1".to_string(),
-        7,
+        /*instance_id*/ 7,
         ConnectionProcessor::new(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
