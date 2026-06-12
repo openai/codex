@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use codex_core::config::Config;
 use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
 use codex_extension_api::ApprovalReviewContributor;
@@ -53,14 +52,12 @@ impl GuardianThreadContext {
     }
 }
 
-impl<S> ThreadLifecycleContributor<Config> for GuardianExtension<S>
+impl<C, S> ThreadLifecycleContributor<C> for GuardianExtension<S>
 where
+    C: Sync,
     S: Send + Sync,
 {
-    fn on_thread_start<'a>(
-        &'a self,
-        input: ThreadStartInput<'a, Config>,
-    ) -> ExtensionFuture<'a, ()> {
+    fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let Ok(forked_from_thread_id) = ThreadId::from_string(input.thread_store.level_id())
             else {
@@ -97,8 +94,9 @@ where
 }
 
 /// Installs the guardian contributors into the extension registry.
-pub fn install<S>(registry: &mut ExtensionRegistryBuilder<Config>, agent_spawner: S)
+pub fn install<C, S>(registry: &mut ExtensionRegistryBuilder<C>, agent_spawner: S)
 where
+    C: Sync,
     S: Send + Sync + 'static,
 {
     let extension = Arc::new(GuardianExtension::new(agent_spawner));

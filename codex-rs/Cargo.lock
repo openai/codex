@@ -3069,7 +3069,6 @@ dependencies = [
 name = "codex-guardian"
 version = "0.0.0"
 dependencies = [
- "codex-core",
  "codex-extension-api",
  "codex-protocol",
 ]
