@@ -1,5 +1,8 @@
 use super::PluginLoadOutcome;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::capabilities::PluginCapabilities;
+use crate::capabilities::PluginCapabilityContext;
+use crate::capabilities::resolve_plugin_capabilities;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
@@ -210,23 +213,17 @@ fn project_plugin_load_outcome_for_auth(
     outcome: PluginLoadOutcome,
     auth_mode: Option<AuthMode>,
 ) -> PluginLoadOutcome {
-    let apps_route_available = auth_mode.is_some_and(AuthMode::uses_codex_backend);
     let mut plugins = outcome.plugins().to_vec();
     for plugin in &mut plugins {
-        if apps_route_available {
-            if plugin.is_active() && !plugin.apps.is_empty() {
-                let app_declaration_names = plugin
-                    .apps
-                    .iter()
-                    .map(|app| app.name.as_str())
-                    .collect::<HashSet<_>>();
-                plugin
-                    .mcp_servers
-                    .retain(|name, _| !app_declaration_names.contains(name.as_str()));
-            }
-        } else {
-            plugin.apps.clear();
-        }
+        let projected = resolve_plugin_capabilities(
+            PluginCapabilities::new(
+                std::mem::take(&mut plugin.apps),
+                std::mem::take(&mut plugin.mcp_servers),
+            ),
+            PluginCapabilityContext::new(auth_mode, plugin.is_active()),
+        );
+        plugin.apps = projected.apps;
+        plugin.mcp_servers = projected.mcp_servers;
     }
     PluginLoadOutcome::from_plugins(plugins)
 }

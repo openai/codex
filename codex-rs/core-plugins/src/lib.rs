@@ -1,3 +1,4 @@
+mod capabilities;
 mod discoverable;
 pub mod installed_marketplaces;
 pub mod loader;
