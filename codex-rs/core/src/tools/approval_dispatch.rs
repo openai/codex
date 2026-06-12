@@ -37,9 +37,11 @@ pub(crate) struct AutomatedApprovalDecision {
 
 impl AutomatedApprovalDecision {
     pub(crate) fn denial_message(&self) -> String {
-        self.denial_message
-            .clone()
-            .unwrap_or_else(|| match self.source {
+        self.denial_message.clone().unwrap_or_else(|| {
+            if self.decision == ReviewDecision::TimedOut {
+                return guardian_timeout_message();
+            }
+            match self.source {
                 AutomatedApprovalSource::Extension => {
                     "automatic approval reviewer denied the action".to_string()
                 }
@@ -47,7 +49,8 @@ impl AutomatedApprovalDecision {
                     "automatic approval review failed".to_string()
                 }
                 AutomatedApprovalSource::Guardian => "Guardian denied this request.".to_string(),
-            })
+            }
+        })
     }
 }
 

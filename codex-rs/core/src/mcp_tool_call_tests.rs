@@ -5,6 +5,8 @@ use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
+use crate::tools::approval_dispatch::AutomatedApprovalDecision;
+use crate::tools::approval_dispatch::AutomatedApprovalSource;
 use crate::tools::hook_names::HookToolName;
 use crate::turn_metadata::McpTurnMetadataContext;
 use codex_config::CONFIG_TOML_FILE;
@@ -16,6 +18,12 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
+use codex_extension_api::ApprovalReviewContributor;
+use codex_extension_api::ApprovalReviewError;
+use codex_extension_api::ApprovalReviewInput;
+use codex_extension_api::ApprovalReviewOutcome;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Features;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
@@ -51,6 +59,21 @@ use tracing::Instrument;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_test::internal::MockWriter;
+
+struct DenyingMcpApprovalReviewContributor {
+    rationale: String,
+    seen_reviewer: Arc<std::sync::Mutex<Option<ApprovalsReviewer>>>,
+}
+
+impl ApprovalReviewContributor for DenyingMcpApprovalReviewContributor {
+    fn review<'a>(
+        &'a self,
+        input: ApprovalReviewInput<'a>,
+    ) -> ExtensionFuture<'a, Result<ApprovalReviewOutcome, ApprovalReviewError>> {
+        *self.seen_reviewer.lock().expect("reviewer lock") = Some(input.reviewer);
+        Box::pin(async move { Ok(ApprovalReviewOutcome::denied(self.rationale.clone())) })
+    }
+}
 
 fn annotations(
     read_only: Option<bool>,
@@ -1654,62 +1677,42 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
     );
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn guardian_review_decision_maps_to_mcp_tool_decision() {
-    let (session, _) = make_session_and_context().await;
-    let session = Arc::new(session);
-
+#[test]
+fn automated_review_decision_maps_to_mcp_tool_decision() {
     assert_eq!(
-        mcp_tool_approval_decision_from_guardian(
-            session.as_ref(),
-            "review-id",
-            ReviewDecision::Approved
-        )
-        .await,
+        mcp_tool_approval_decision_from_automated(&AutomatedApprovalDecision {
+            decision: ReviewDecision::Approved,
+            denial_message: None,
+            source: AutomatedApprovalSource::Guardian,
+        }),
         McpToolApprovalDecision::Accept
     );
-    session.services.guardian_rejections.lock().await.insert(
-        "review-id".to_string(),
-        crate::guardian::GuardianRejection {
-            rationale: "too risky".to_string(),
-            source: codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
-        },
-    );
-    let denial = mcp_tool_approval_decision_from_guardian(
-        session.as_ref(),
-        "review-id",
-        ReviewDecision::Denied,
-    )
-    .await;
-    let McpToolApprovalDecision::Decline {
-        message: Some(message),
-    } = denial
-    else {
-        panic!("guardian denial should carry a rejection message");
-    };
-    assert!(message.contains("Reason: too risky"));
-    assert!(message.contains("The agent must not attempt to achieve the same outcome"));
-    let timeout = mcp_tool_approval_decision_from_guardian(
-        session.as_ref(),
-        "review-id",
-        ReviewDecision::TimedOut,
-    )
-    .await;
-    let McpToolApprovalDecision::Decline {
-        message: Some(message),
-    } = timeout
-    else {
-        panic!("guardian timeout should carry a timeout message");
-    };
-    assert!(message.contains("did not finish before its deadline"));
-    assert!(!message.contains("unacceptable risk"));
     assert_eq!(
-        mcp_tool_approval_decision_from_guardian(
-            session.as_ref(),
-            "review-id",
-            ReviewDecision::Abort
-        )
-        .await,
+        mcp_tool_approval_decision_from_automated(&AutomatedApprovalDecision {
+            decision: ReviewDecision::Denied,
+            denial_message: Some("extension denied this MCP tool".to_string()),
+            source: AutomatedApprovalSource::Extension,
+        }),
+        McpToolApprovalDecision::Decline {
+            message: Some("extension denied this MCP tool".to_string()),
+        }
+    );
+    assert_eq!(
+        mcp_tool_approval_decision_from_automated(&AutomatedApprovalDecision {
+            decision: ReviewDecision::TimedOut,
+            denial_message: None,
+            source: AutomatedApprovalSource::Extension,
+        }),
+        McpToolApprovalDecision::Decline {
+            message: Some(crate::guardian::guardian_timeout_message()),
+        }
+    );
+    assert_eq!(
+        mcp_tool_approval_decision_from_automated(&AutomatedApprovalDecision {
+            decision: ReviewDecision::Abort,
+            denial_message: Some("cancelled".to_string()),
+            source: AutomatedApprovalSource::Guardian,
+        }),
         McpToolApprovalDecision::Decline { message: None }
     );
 }
@@ -2672,6 +2675,69 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     assert_eq!(
         guardian_request_log.single_request().path(),
         "/v1/responses"
+    );
+}
+
+#[tokio::test]
+async fn approval_review_extension_denies_mcp_tool_with_effective_reviewer() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    turn_context
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("test setup should allow updating approval policy");
+    let mut config = (*turn_context.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    turn_context.config = Arc::new(config);
+
+    let rationale = "the connector request exceeds the user's authorization";
+    let seen_reviewer = Arc::new(std::sync::Mutex::new(None));
+    let mut extensions = ExtensionRegistryBuilder::<crate::config::Config>::new();
+    extensions.approval_review_contributor(Arc::new(DenyingMcpApprovalReviewContributor {
+        rationale: rationale.to_string(),
+        seen_reviewer: Arc::clone(&seen_reviewer),
+    }));
+    session.services.extensions = Arc::new(extensions.build());
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: "custom_server".to_string(),
+        tool: "dangerous_tool".to_string(),
+        arguments: Some(serde_json::json!({ "calendar_id": "primary" })),
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        plugin_id: None,
+        tool_title: Some("Dangerous Tool".to_string()),
+        tool_description: Some("Reads calendar data.".to_string()),
+        mcp_app_resource_uri: None,
+        codex_apps_meta: None,
+        openai_file_input_params: None,
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-extension-deny",
+        &invocation,
+        &HookToolName::new("mcp__test__tool"),
+        Some(&metadata),
+        AppToolApproval::Auto,
+    )
+    .await;
+
+    assert_eq!(
+        decision,
+        Some(McpToolApprovalDecision::Decline {
+            message: Some(rationale.to_string()),
+        })
+    );
+    assert_eq!(
+        *seen_reviewer.lock().expect("reviewer lock"),
+        Some(ApprovalsReviewer::AutoReview)
     );
 }
 

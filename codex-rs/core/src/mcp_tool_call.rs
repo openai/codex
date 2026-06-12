@@ -9,10 +9,7 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
-use crate::guardian::guardian_rejection_message;
-use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
-use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
@@ -20,6 +17,7 @@ use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::approval_dispatch::request_automated_approval;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::turn_metadata::McpTurnMetadataContext;
@@ -33,6 +31,7 @@ use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_extension_api::ApprovalReviewSource;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -1207,16 +1206,22 @@ async fn maybe_request_mcp_tool_approval(
         .enabled(Feature::ToolCallMcpElicitation);
 
     if routes_approval_to_guardian_with_reviewer(turn_context, approvals_reviewer) {
-        let review_id = new_guardian_review_id();
-        let decision = review_approval_request(
+        let automated = request_automated_approval(
             sess,
             turn_context,
-            review_id.clone(),
+            new_guardian_review_id(),
             build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
+            approvals_reviewer,
             /*retry_reason*/ None,
+            ApprovalReviewSource::MainTurn,
         )
         .await;
-        let decision = mcp_tool_approval_decision_from_guardian(sess, &review_id, decision).await;
+        let decision = match automated {
+            Ok(automated) => mcp_tool_approval_decision_from_automated(&automated),
+            Err(message) => McpToolApprovalDecision::Decline {
+                message: Some(message),
+            },
+        };
         apply_mcp_tool_approval_decision(
             sess,
             turn_context,
@@ -1382,21 +1387,19 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
     }
 }
 
-async fn mcp_tool_approval_decision_from_guardian(
-    sess: &Session,
-    review_id: &str,
-    decision: ReviewDecision,
+fn mcp_tool_approval_decision_from_automated(
+    automated: &crate::tools::approval_dispatch::AutomatedApprovalDecision,
 ) -> McpToolApprovalDecision {
-    match decision {
+    match automated.decision.clone() {
         ReviewDecision::Approved
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
         ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
         ReviewDecision::Denied => McpToolApprovalDecision::Decline {
-            message: Some(guardian_rejection_message(sess, review_id).await),
+            message: Some(automated.denial_message()),
         },
         ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
-            message: Some(guardian_timeout_message()),
+            message: Some(automated.denial_message()),
         },
         ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
     }
