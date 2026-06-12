@@ -210,12 +210,8 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
         "expected Apps -> Skills -> Plugins order: {developer_messages:?}"
     );
     assert!(
-        developer_text.contains("`sample`"),
-        "expected enabled plugin name in developer message: {developer_messages:?}"
-    );
-    assert!(
-        developer_text.contains("`sample`: inspect sample data"),
-        "expected plugin description in developer message: {developer_messages:?}"
+        !developer_text.contains("`sample`: inspect sample data"),
+        "did not expect plugin description in developer message: {developer_messages:?}"
     );
     assert!(
         developer_text.contains("skill entries are prefixed with `plugin_name:`"),
