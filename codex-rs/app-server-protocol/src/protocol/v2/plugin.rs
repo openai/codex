@@ -638,6 +638,7 @@ pub struct PluginDetail {
     pub marketplace_name: String,
     pub marketplace_path: Option<AbsolutePathBuf>,
     pub summary: PluginSummary,
+    pub share_url: Option<String>,
     pub description: Option<String>,
     pub skills: Vec<SkillSummary>,
     pub hooks: Vec<PluginHookSummary>,
