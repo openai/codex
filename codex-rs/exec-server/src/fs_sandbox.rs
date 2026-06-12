@@ -9,6 +9,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
@@ -112,18 +113,27 @@ impl FileSystemSandboxRunner {
             env: self.helper_env.clone(),
             additional_permissions: None,
         };
+        let workspace_roots = if sandbox_context.workspace_roots.is_empty() {
+            std::slice::from_ref(&cwd.native)
+        } else {
+            sandbox_context.workspace_roots.as_slice()
+        };
         sandbox_manager
-            .transform(SandboxTransformRequest {
-                command,
-                permissions: permission_profile,
-                sandbox,
-                enforce_managed_network: false,
-                network: None,
-                sandbox_policy_cwd: cwd,
-                codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
-                use_legacy_landlock: sandbox_context.use_legacy_landlock,
-                windows_sandbox_level: sandbox_context.windows_sandbox_level,
-                windows_sandbox_private_desktop: sandbox_context.windows_sandbox_private_desktop,
+            .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
+                workspace_roots,
+                transform: SandboxTransformRequest {
+                    command,
+                    permissions: permission_profile,
+                    sandbox,
+                    enforce_managed_network: false,
+                    network: None,
+                    sandbox_policy_cwd: cwd.as_path(),
+                    codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
+                    use_legacy_landlock: sandbox_context.use_legacy_landlock,
+                    windows_sandbox_level: sandbox_context.windows_sandbox_level,
+                    windows_sandbox_private_desktop: sandbox_context
+                        .windows_sandbox_private_desktop,
+                },
             })
             .map_err(|err| invalid_request(format!("failed to prepare fs sandbox: {err}")))
     }

@@ -11,6 +11,7 @@ pub use bwrap::find_system_bwrap_in_path;
 #[cfg(target_os = "linux")]
 pub use bwrap::system_bwrap_warning;
 pub use manager::SandboxCommand;
+pub use manager::SandboxDirectSpawnTransformRequest;
 pub use manager::SandboxExecRequest;
 pub use manager::SandboxManager;
 pub use manager::SandboxTransformError;
@@ -48,6 +49,10 @@ impl From<SandboxTransformError> for CodexErr {
             SandboxTransformError::SeatbeltUnavailable => CodexErr::UnsupportedOperation(
                 "seatbelt sandbox is only available on macOS".to_string(),
             ),
+            #[cfg(target_os = "windows")]
+            SandboxTransformError::WindowsSandboxPreparation(message) => {
+                CodexErr::UnsupportedOperation(message)
+            }
         }
     }
 }

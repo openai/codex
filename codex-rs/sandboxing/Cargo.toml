@@ -25,6 +25,10 @@ tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
 which = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+codex-utils-home-dir = { workspace = true }
+codex-windows-sandbox = { workspace = true }
+
 [dev-dependencies]
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }

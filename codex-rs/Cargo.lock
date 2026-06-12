@@ -2183,6 +2183,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
+ "codex-windows-sandbox",
  "dotenvy",
  "pretty_assertions",
  "tempfile",
@@ -3001,6 +3002,7 @@ name = "codex-file-system"
 version = "0.0.0"
 dependencies = [
  "codex-protocol",
+ "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "serde",
 ]
@@ -3747,7 +3749,9 @@ dependencies = [
  "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-home-dir",
  "codex-utils-path-uri",
+ "codex-windows-sandbox",
  "dunce",
  "libc",
  "pretty_assertions",
