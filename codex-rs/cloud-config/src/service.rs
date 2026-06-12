@@ -241,6 +241,9 @@ where
                 return Ok(loaded);
             }
 
+            // This is a cross-process single-flight lock, not a cache-file
+            // integrity lock. One process fetches while contenders wait and
+            // recheck the shared cache for its result.
             match self.cache.try_acquire_lock().await {
                 Ok(CacheLockAttempt::Acquired(_cache_lock)) => {
                     // Close the race between the cache read and lock acquisition.
