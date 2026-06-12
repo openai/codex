@@ -84,6 +84,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
     let session_meta_line = SessionMetaLine {
         meta: SessionMeta {
             id: thread_id,
+            segment_id: None,
             forked_from_id: None,
             parent_thread_id: None,
             timestamp: "2026-01-27T12:34:56Z".to_string(),
@@ -959,6 +960,72 @@ async fn list_threads_metadata_filter_overlays_state_db_list_metadata() -> std::
         page.items[0].git_origin_url.as_deref(),
         Some("https://example.com/repo.git")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn archived_search_preserves_state_db_only_matches() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let uuid = Uuid::from_u128(9016);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let active_path = write_session_file(home.path(), "2025-01-03T17-00-00", uuid)?;
+    let archived_path = home
+        .path()
+        .join("archived_sessions")
+        .join(active_path.file_name().expect("rollout file name"));
+    fs::create_dir_all(archived_path.parent().expect("archived parent"))?;
+    fs::rename(active_path, &archived_path)?;
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+    let created_at = chrono::Utc
+        .with_ymd_and_hms(2025, 1, 3, 17, 0, 0)
+        .single()
+        .expect("valid datetime");
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        archived_path.clone(),
+        created_at,
+        SessionSource::Cli,
+    );
+    builder.model_provider = Some(config.model_provider_id.clone());
+    builder.cwd = home.path().to_path_buf();
+    let mut metadata = builder.build(config.model_provider_id.as_str());
+    metadata.archived_at = Some(created_at);
+    metadata.preview = Some("SQLite-only archived match".to_string());
+    metadata.first_user_message = metadata.preview.clone();
+    runtime
+        .upsert_thread(&metadata)
+        .await
+        .expect("state db upsert should succeed");
+
+    let page = RolloutRecorder::list_archived_threads(
+        Some(runtime),
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        config.model_provider_id.as_str(),
+        Some("SQLite-only"),
+    )
+    .await?;
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].thread_id, Some(thread_id));
+    assert_eq!(page.items[0].path, archived_path);
     Ok(())
 }
 

@@ -280,6 +280,7 @@ fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
             }
         }
         RolloutItem::SessionMeta(_)
+        | RolloutItem::RolloutReference(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::ResponseItem(_)

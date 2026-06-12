@@ -23,7 +23,7 @@ pub fn apply_rollout_item(
         RolloutItem::EventMsg(event) => apply_event_msg(metadata, event),
         RolloutItem::ResponseItem(item) => apply_response_item(metadata, item),
         RolloutItem::InterAgentCommunication(_) => {}
-        RolloutItem::Compacted(_) => {}
+        RolloutItem::Compacted(_) | RolloutItem::RolloutReference(_) => {}
     }
     if metadata.model_provider.is_empty() {
         metadata.model_provider = default_provider.to_string();
@@ -40,6 +40,7 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         RolloutItem::EventMsg(_)
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::RolloutReference(_)
         | RolloutItem::Compacted(_) => false,
     }
 }
@@ -321,6 +322,7 @@ mod tests {
             &RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
                     id: thread_id,
+                    segment_id: None,
                     forked_from_id: Some(
                         ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id"),
                     ),
@@ -490,6 +492,7 @@ mod tests {
             &RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
                     id: thread_id,
+                    segment_id: None,
                     forked_from_id: None,
                     parent_thread_id: None,
                     timestamp: "2026-02-26T00:00:00.000Z".to_string(),

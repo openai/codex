@@ -16,12 +16,15 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
+use super::ROTATED_ROLLOUT_SEGMENTS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use super::compression;
 use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
+use codex_protocol::SegmentId;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
@@ -89,6 +92,7 @@ pub type ConversationsPage = ThreadsPage;
 #[derive(Default)]
 struct HeadTailSummary {
     saw_session_meta: bool,
+    saw_compacted_user_message: bool,
     thread_id: Option<ThreadId>,
     first_user_message: Option<String>,
     preview: Option<String>,
@@ -135,6 +139,12 @@ pub struct ThreadListConfig<'a> {
     pub cwd_filters: Option<&'a [PathBuf]>,
     pub default_provider: &'a str,
     pub layout: ThreadListLayout,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArchivedThreadRolloutDisposition {
+    CanonicalArchivedThread,
+    LegacyRotatedSegment { live_rollout_path: Option<PathBuf> },
 }
 
 /// Pagination cursor identifying the timestamp of the last item in a page.
@@ -767,8 +777,10 @@ async fn build_thread_item(
     {
         return None;
     }
-    // Apply filters: must have session meta and a discoverable preview.
-    if summary.saw_session_meta && summary.preview.is_some() {
+    // Apply filters: must have session meta and either a discoverable preview or compacted user
+    // history.
+    if summary.saw_session_meta && (summary.preview.is_some() || summary.saw_compacted_user_message)
+    {
         let HeadTailSummary {
             thread_id,
             first_user_message,
@@ -942,6 +954,19 @@ pub(crate) fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDa
     Some((ts, uuid))
 }
 
+fn parse_timestamp_string_uuid_from_filename(name: &str) -> Option<(&str, Uuid)> {
+    // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl
+    let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    core.match_indices('-')
+        .rev()
+        .find_map(|(index, _)| {
+            Uuid::parse_str(&core[index + 1..])
+                .ok()
+                .map(|uuid| (index, uuid))
+        })
+        .map(|(index, uuid)| (&core[..index], uuid))
+}
+
 struct ThreadCandidate {
     path: PathBuf,
     id: Uuid,
@@ -1070,8 +1095,93 @@ impl<'a> ProviderMatcher<'a> {
 }
 
 async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTailSummary> {
+    const MAX_SUMMARY_REFERENCE_DEPTH: usize = 8;
+
+    let (mut summary, mut reference) = read_head_summary_file(path, head_limit).await?;
+    let mut referenced_summaries = Vec::new();
+    let mut remaining_depth = MAX_SUMMARY_REFERENCE_DEPTH;
+    while remaining_depth > 0 {
+        let Some(next_reference) = reference.take() else {
+            break;
+        };
+        if next_reference.max_depth == 0 || next_reference.nth_user_message.is_some() {
+            break;
+        }
+        let reference_depth = next_reference.max_depth;
+        let reference_path = if let Some(codex_home) = codex_home_from_rollout_path(path) {
+            match Box::pin(resolve_rollout_reference_rollout_path(
+                codex_home,
+                &next_reference,
+            ))
+            .await
+            {
+                Ok(reference_path) => reference_path,
+                Err(_) => break,
+            }
+        } else if let Some(reference_path) =
+            compression::existing_rollout_path(next_reference.rollout_path.as_path()).await
+        {
+            reference_path
+        } else {
+            break;
+        };
+        let (referenced_summary, next_reference) =
+            read_head_summary_file(reference_path.as_path(), head_limit).await?;
+        referenced_summaries.push(referenced_summary);
+        reference = next_reference;
+        remaining_depth = remaining_depth
+            .saturating_sub(1)
+            .min(reference_depth.saturating_sub(1));
+    }
+
+    let mut referenced_preview = None;
+    let mut referenced_first_user_message = None;
+    for referenced_summary in referenced_summaries.into_iter().rev() {
+        if referenced_preview.is_none() {
+            referenced_preview = referenced_summary.preview;
+        }
+        if referenced_first_user_message.is_none() {
+            referenced_first_user_message = referenced_summary.first_user_message;
+        }
+        summary.saw_compacted_user_message |= referenced_summary.saw_compacted_user_message;
+    }
+    if let Some(preview) = referenced_preview {
+        summary.preview = Some(preview);
+    }
+    if let Some(first_user_message) = referenced_first_user_message {
+        summary.first_user_message = Some(first_user_message);
+    }
+    Ok(summary)
+}
+
+pub(crate) async fn read_preview_metadata(
+    path: &Path,
+) -> io::Result<(Option<String>, Option<String>)> {
+    let summary = read_head_summary(path, HEAD_RECORD_LIMIT).await?;
+    Ok((summary.first_user_message, summary.preview))
+}
+
+fn codex_home_from_rollout_path(path: &Path) -> Option<&Path> {
+    path.ancestors().find_map(|ancestor| {
+        matches!(
+            ancestor.file_name().and_then(|name| name.to_str()),
+            Some(SESSIONS_SUBDIR | ARCHIVED_SESSIONS_SUBDIR)
+        )
+        .then(|| ancestor.parent())
+        .flatten()
+    })
+}
+
+async fn read_head_summary_file(
+    path: &Path,
+    head_limit: usize,
+) -> io::Result<(
+    HeadTailSummary,
+    Option<codex_protocol::protocol::RolloutReferenceItem>,
+)> {
     let mut lines = compression::open_rollout_line_reader(path).await?;
     let mut summary = HeadTailSummary::default();
+    let mut reference = None;
     let mut lines_scanned = 0usize;
 
     while lines_scanned < head_limit
@@ -1117,6 +1227,11 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.saw_session_meta = true;
                 }
             }
+            RolloutItem::RolloutReference(item) => {
+                if reference.is_none() {
+                    reference = Some(item);
+                }
+            }
             RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
                 summary
                     .created_at
@@ -1125,8 +1240,14 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::TurnContext(_) => {
                 // Not included in `head`; skip.
             }
-            RolloutItem::Compacted(_) => {
-                // Not included in `head`; skip.
+            RolloutItem::Compacted(compacted) => {
+                if compacted
+                    .replacement_history
+                    .as_deref()
+                    .is_some_and(|history| history.iter().any(ResponseItem::is_user_message))
+                {
+                    summary.saw_compacted_user_message = true;
+                }
             }
             RolloutItem::EventMsg(ev) => {
                 if let Some(preview) = event_msg_preview(&ev) {
@@ -1150,7 +1271,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
         }
     }
 
-    Ok(summary)
+    Ok((summary, reference))
 }
 
 /// Read up to `HEAD_RECORD_LIMIT` records from the start of the rollout file at `path`.
@@ -1184,7 +1305,8 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                         head.push(value);
                     }
                 }
-                RolloutItem::Compacted(_)
+                RolloutItem::RolloutReference(_)
+                | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::EventMsg(_) => {}
             }
@@ -1260,6 +1382,38 @@ fn truncate_to_millis(dt: OffsetDateTime) -> Option<OffsetDateTime> {
 }
 
 async fn find_thread_path_by_id_str_in_subdir(
+    codex_home: &Path,
+    subdir: &str,
+    id_str: &str,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> io::Result<Option<PathBuf>> {
+    let found =
+        find_thread_path_by_id_str_in_subdir_unvalidated(codex_home, subdir, id_str, state_db_ctx)
+            .await?;
+    if subdir != ARCHIVED_SESSIONS_SUBDIR {
+        return Ok(found);
+    }
+    let Some(found_path) = found else {
+        return Ok(None);
+    };
+    match classify_archived_thread_rollout(codex_home, found_path.as_path(), state_db_ctx).await? {
+        ArchivedThreadRolloutDisposition::CanonicalArchivedThread => Ok(Some(found_path)),
+        ArchivedThreadRolloutDisposition::LegacyRotatedSegment { live_rollout_path } => {
+            if let Some(live_rollout_path) = live_rollout_path {
+                state_db::read_repair_rollout_path(
+                    state_db_ctx,
+                    ThreadId::from_string(id_str).ok(),
+                    Some(false),
+                    live_rollout_path.as_path(),
+                )
+                .await;
+            }
+            Ok(None)
+        }
+    }
+}
+
+async fn find_thread_path_by_id_str_in_subdir_unvalidated(
     codex_home: &Path,
     subdir: &str,
     id_str: &str,
@@ -1482,6 +1636,237 @@ pub async fn find_archived_thread_path_by_id_str(
 ) -> io::Result<Option<PathBuf>> {
     find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str, state_db_ctx)
         .await
+}
+
+pub async fn find_rollout_path_by_segment_id(
+    codex_home: &Path,
+    thread_id: ThreadId,
+    segment_id: SegmentId,
+) -> io::Result<Option<PathBuf>> {
+    if let Some(path) = find_rollout_path_by_segment_id_in_subdir(
+        codex_home,
+        SESSIONS_SUBDIR,
+        thread_id,
+        segment_id,
+    )
+    .await?
+    {
+        return Ok(Some(path));
+    }
+    if let Some(path) = find_rollout_path_by_segment_id_in_subdir(
+        codex_home,
+        ROTATED_ROLLOUT_SEGMENTS_SUBDIR,
+        thread_id,
+        segment_id,
+    )
+    .await?
+    {
+        return Ok(Some(path));
+    }
+    find_rollout_path_by_segment_id_in_subdir(
+        codex_home,
+        ARCHIVED_SESSIONS_SUBDIR,
+        thread_id,
+        segment_id,
+    )
+    .await
+}
+
+pub async fn classify_archived_thread_rollout(
+    codex_home: &Path,
+    rollout_path: &Path,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> io::Result<ArchivedThreadRolloutDisposition> {
+    let archived_root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+    let Ok(relative_path) = rollout_path.strip_prefix(archived_root.as_path()) else {
+        return Ok(ArchivedThreadRolloutDisposition::CanonicalArchivedThread);
+    };
+    if relative_path.components().count() != 1 {
+        return Ok(ArchivedThreadRolloutDisposition::CanonicalArchivedThread);
+    }
+
+    let live_rollout_path =
+        find_live_rollout_path_for_archived_candidate(codex_home, rollout_path, state_db_ctx)
+            .await?;
+    if live_rollout_path.is_some() {
+        return Ok(ArchivedThreadRolloutDisposition::LegacyRotatedSegment { live_rollout_path });
+    }
+    Ok(ArchivedThreadRolloutDisposition::CanonicalArchivedThread)
+}
+
+async fn find_live_rollout_path_for_archived_candidate(
+    codex_home: &Path,
+    rollout_path: &Path,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> io::Result<Option<PathBuf>> {
+    let meta_line = match read_session_meta_line(rollout_path).await {
+        Ok(meta_line) => meta_line,
+        Err(_) => return Ok(None),
+    };
+    let thread_id = meta_line.meta.id.to_string();
+    find_thread_path_by_id_str_in_subdir_unvalidated(
+        codex_home,
+        SESSIONS_SUBDIR,
+        thread_id.as_str(),
+        state_db_ctx,
+    )
+    .await
+}
+
+async fn find_rollout_path_by_segment_id_in_subdir(
+    codex_home: &Path,
+    subdir: &str,
+    thread_id: ThreadId,
+    segment_id: SegmentId,
+) -> io::Result<Option<PathBuf>> {
+    let root = codex_home.join(subdir);
+    if !tokio::fs::try_exists(&root).await.unwrap_or(false) {
+        return Ok(None);
+    }
+
+    let target_thread_id = thread_id.to_string();
+    let mut stack = vec![root];
+    let mut scanned_files = 0usize;
+    while let Some(dir) = stack.pop() {
+        let mut read_dir = match tokio::fs::read_dir(&dir).await {
+            Ok(read_dir) => read_dir,
+            Err(err) => {
+                tracing::warn!("failed to read rollout directory {}: {err}", dir.display());
+                continue;
+            }
+        };
+        while let Some(entry) = read_dir.next_entry().await? {
+            let path = entry.path();
+            let file_type = entry.file_type().await?;
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
+                continue;
+            };
+            let Some((_, uuid)) =
+                parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())
+            else {
+                continue;
+            };
+            if uuid.to_string() != target_thread_id {
+                continue;
+            }
+            scanned_files = scanned_files.saturating_add(1);
+            if scanned_files > MAX_SCAN_FILES {
+                return Ok(None);
+            }
+            let Ok(meta_line) = read_session_meta_line(rollout_file.path()).await else {
+                continue;
+            };
+            if meta_line.meta.id == thread_id && meta_line.meta.segment_id == Some(segment_id) {
+                return Ok(Some(rollout_file.into_path()));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+pub async fn resolve_rollout_reference_rollout_path(
+    codex_home: &Path,
+    reference: &codex_protocol::protocol::RolloutReferenceItem,
+) -> io::Result<PathBuf> {
+    // A compacted live thread can keep the same rollout path and timestamp while moving the
+    // referenced predecessor into archive storage, so segment identity must win before fallback
+    // lookup by mutable live-path metadata.
+    if let (Some(thread_id), Some(segment_id)) = (reference.thread_id, reference.segment_id)
+        && let Some(path) =
+            find_rollout_path_by_segment_id(codex_home, thread_id, segment_id).await?
+    {
+        return Ok(path);
+    }
+
+    let rollout_path = reference.rollout_path.as_path();
+    if tokio::fs::try_exists(rollout_path).await.unwrap_or(false) {
+        return Ok(rollout_path.to_path_buf());
+    }
+
+    if let (Some(thread_id), Some(rollout_timestamp)) =
+        (reference.thread_id, reference.rollout_timestamp.as_deref())
+    {
+        let file_name = format!("rollout-{rollout_timestamp}-{thread_id}.jsonl");
+        if let Some(active_path) =
+            rollout_path_for_timestamp_file(codex_home, rollout_timestamp, &file_name)
+            && tokio::fs::try_exists(active_path.as_path())
+                .await
+                .unwrap_or(false)
+        {
+            return Ok(active_path);
+        }
+        let archived_path = codex_home.join(ARCHIVED_SESSIONS_SUBDIR).join(&file_name);
+        if tokio::fs::try_exists(archived_path.as_path())
+            .await
+            .unwrap_or(false)
+        {
+            return Ok(archived_path);
+        }
+    }
+
+    let Some(file_name) = rollout_path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+    else {
+        return Ok(rollout_path.to_path_buf());
+    };
+    let Some((rollout_timestamp, uuid)) = parse_timestamp_string_uuid_from_filename(file_name)
+    else {
+        return Ok(rollout_path.to_path_buf());
+    };
+    let archived_path = codex_home.join(ARCHIVED_SESSIONS_SUBDIR).join(file_name);
+    if tokio::fs::try_exists(archived_path.as_path())
+        .await
+        .unwrap_or(false)
+    {
+        return Ok(archived_path);
+    }
+    if let Some(active_path) =
+        rollout_path_for_timestamp_file(codex_home, rollout_timestamp, file_name)
+        && tokio::fs::try_exists(active_path.as_path())
+            .await
+            .unwrap_or(false)
+    {
+        return Ok(active_path);
+    }
+    let id = uuid.to_string();
+    if let Some(path) =
+        find_thread_path_by_id_str(codex_home, id.as_str(), /*state_db_ctx*/ None).await?
+    {
+        return Ok(path);
+    }
+    if let Some(path) =
+        find_archived_thread_path_by_id_str(codex_home, id.as_str(), /*state_db_ctx*/ None).await?
+    {
+        return Ok(path);
+    }
+    Ok(rollout_path.to_path_buf())
+}
+
+fn rollout_path_for_timestamp_file(
+    codex_home: &Path,
+    rollout_timestamp: &str,
+    file_name: &str,
+) -> Option<PathBuf> {
+    let year = rollout_timestamp.get(0..4)?;
+    let month = rollout_timestamp.get(5..7)?;
+    let day = rollout_timestamp.get(8..10)?;
+    Some(
+        codex_home
+            .join(SESSIONS_SUBDIR)
+            .join(year)
+            .join(month)
+            .join(day)
+            .join(file_name),
+    )
 }
 
 /// Extract the `YYYY/MM/DD` directory components from a rollout filename.

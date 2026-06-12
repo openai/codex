@@ -2,6 +2,7 @@ use crate::ARCHIVED_SESSIONS_SUBDIR;
 use crate::SESSIONS_SUBDIR;
 use crate::compression;
 use crate::list::parse_timestamp_uuid_from_filename;
+use crate::list::read_preview_metadata;
 use crate::recorder::RolloutRecorder;
 use crate::state_db::normalize_cwd_for_state_db;
 use chrono::DateTime;
@@ -69,6 +70,7 @@ pub fn builder_from_items(
         RolloutItem::SessionMeta(meta_line) => Some(meta_line),
         RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::RolloutReference(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,
@@ -113,6 +115,22 @@ pub async fn extract_metadata_from_rollout(
     for item in &items {
         apply_rollout_item(&mut metadata, item, default_provider);
     }
+    let has_segment_reference = items.iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::RolloutReference(reference) if reference.nth_user_message.is_none()
+        )
+    });
+    if has_segment_reference
+        && let Ok((first_user_message, preview)) = read_preview_metadata(rollout_path).await
+    {
+        if first_user_message.is_some() {
+            metadata.first_user_message = first_user_message;
+        }
+        if preview.is_some() {
+            metadata.preview = preview;
+        }
+    }
     if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
         metadata.updated_at = updated_at;
     }
@@ -122,6 +140,7 @@ pub async fn extract_metadata_from_rollout(
             RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
             RolloutItem::ResponseItem(_)
             | RolloutItem::InterAgentCommunication(_)
+            | RolloutItem::RolloutReference(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::TurnContext(_)
             | RolloutItem::EventMsg(_) => None,
@@ -217,11 +236,26 @@ pub(crate) async fn backfill_sessions_with_lease(
         }
         match collect_rollout_paths(&root).await {
             Ok(paths) => {
-                rollout_paths.extend(paths.into_iter().map(|path| BackfillRolloutPath {
-                    watermark: backfill_watermark_for_path(codex_home, &path),
-                    path,
-                    archived,
-                }));
+                for path in paths {
+                    if archived
+                        && matches!(
+                            crate::list::classify_archived_thread_rollout(
+                                codex_home,
+                                path.as_path(),
+                                Some(runtime),
+                            )
+                            .await,
+                            Ok(crate::list::ArchivedThreadRolloutDisposition::LegacyRotatedSegment { .. })
+                        )
+                    {
+                        continue;
+                    }
+                    rollout_paths.push(BackfillRolloutPath {
+                        watermark: backfill_watermark_for_path(codex_home, &path),
+                        path,
+                        archived,
+                    });
+                }
             }
             Err(err) => {
                 warn!(

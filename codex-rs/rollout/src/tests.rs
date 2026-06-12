@@ -28,12 +28,14 @@ use crate::list::get_threads;
 use crate::list::read_head_for_summary;
 use crate::rollout_date_parts;
 use anyhow::Result;
+use codex_protocol::SegmentId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::RolloutReferenceItem;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -238,6 +240,264 @@ fn rollout_date_parts_extracts_directory_components() {
         parts,
         Some(("2025".to_string(), "03".to_string(), "01".to_string()))
     );
+}
+
+#[tokio::test]
+async fn rollout_reference_resolves_archived_file_by_stable_thread_and_timestamp() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path();
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let ts = "2025-01-03T13-00-00";
+    let active_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+    let archived_path = home.join(format!("archived_sessions/rollout-{ts}-{uuid}.jsonl"));
+    fs::create_dir_all(archived_path.parent().expect("archived parent")).unwrap();
+    fs::write(&archived_path, "").unwrap();
+
+    let resolved = crate::resolve_rollout_reference_rollout_path(
+        home,
+        &RolloutReferenceItem {
+            rollout_path: active_path,
+            thread_id: Some(thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: None,
+            max_depth: 2,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        },
+    )
+    .await
+    .expect("resolve rollout reference");
+
+    assert_eq!(resolved, archived_path);
+}
+
+#[tokio::test]
+async fn rollout_reference_prefers_segment_id_over_live_path_with_same_thread_timestamp() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path();
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let referenced_segment_id = SegmentId::new();
+    let live_segment_id = SegmentId::new();
+    let ts = "2025-01-03T13-00-00";
+    let file_name = format!("rollout-{ts}-{uuid}.jsonl");
+    let active_path = home.join(format!("sessions/2025/01/03/{file_name}"));
+    let archived_path = home
+        .join("archived_sessions")
+        .join(thread_id.to_string())
+        .join(referenced_segment_id.to_string())
+        .join(file_name);
+    write_session_meta(active_path.as_path(), thread_id, live_segment_id, ts);
+    write_session_meta(
+        archived_path.as_path(),
+        thread_id,
+        referenced_segment_id,
+        ts,
+    );
+
+    let resolved = crate::resolve_rollout_reference_rollout_path(
+        home,
+        &RolloutReferenceItem {
+            rollout_path: active_path,
+            thread_id: Some(thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: Some(referenced_segment_id),
+            max_depth: 2,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        },
+    )
+    .await
+    .expect("resolve rollout reference");
+
+    assert_eq!(resolved, archived_path);
+}
+
+#[tokio::test]
+async fn rollout_reference_prefers_existing_prior_segment_path_without_segment_id() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path();
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let live_segment_id = SegmentId::new();
+    let ts = "2025-01-03T13-00-00";
+    let file_name = format!("rollout-{ts}-{uuid}.jsonl");
+    let active_path = home.join(format!("sessions/2025/01/03/{file_name}"));
+    let legacy_rotated_path = home.join("archived_sessions").join(file_name);
+    write_session_meta(active_path.as_path(), thread_id, live_segment_id, ts);
+    write_session_meta(
+        legacy_rotated_path.as_path(),
+        thread_id,
+        SegmentId::new(),
+        ts,
+    );
+
+    let resolved = crate::resolve_rollout_reference_rollout_path(
+        home,
+        &RolloutReferenceItem {
+            rollout_path: legacy_rotated_path.clone(),
+            thread_id: Some(thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: None,
+            max_depth: 2,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        },
+    )
+    .await
+    .expect("resolve rollout reference");
+
+    assert_eq!(resolved, legacy_rotated_path);
+}
+
+#[tokio::test]
+async fn rollout_reference_resolves_rotated_segment_file_by_segment_id() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path();
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let referenced_segment_id = SegmentId::new();
+    let live_segment_id = SegmentId::new();
+    let ts = "2025-01-03T13-00-00";
+    let file_name = format!("rollout-{ts}-{uuid}.jsonl");
+    let active_path = home.join(format!("sessions/2025/01/03/{file_name}"));
+    let rotated_segment_path = home
+        .join(crate::ROTATED_ROLLOUT_SEGMENTS_SUBDIR)
+        .join(thread_id.to_string())
+        .join(referenced_segment_id.to_string())
+        .join(file_name);
+    write_session_meta(active_path.as_path(), thread_id, live_segment_id, ts);
+    write_session_meta(
+        rotated_segment_path.as_path(),
+        thread_id,
+        referenced_segment_id,
+        ts,
+    );
+
+    let resolved = crate::resolve_rollout_reference_rollout_path(
+        home,
+        &RolloutReferenceItem {
+            rollout_path: active_path,
+            thread_id: Some(thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: Some(referenced_segment_id),
+            max_depth: 2,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        },
+    )
+    .await
+    .expect("resolve rollout reference");
+
+    assert_eq!(resolved, rotated_segment_path);
+}
+
+#[tokio::test]
+async fn rollout_reference_resolves_compressed_segment_file_by_segment_id() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path();
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let referenced_segment_id = SegmentId::new();
+    let live_segment_id = SegmentId::new();
+    let ts = "2025-01-03T13-00-00";
+    let file_name = format!("rollout-{ts}-{uuid}.jsonl");
+    let active_path = home.join(format!("sessions/2025/01/03/{file_name}"));
+    let rotated_segment_path = home
+        .join(crate::ROTATED_ROLLOUT_SEGMENTS_SUBDIR)
+        .join(thread_id.to_string())
+        .join(referenced_segment_id.to_string())
+        .join(file_name);
+    write_session_meta(active_path.as_path(), thread_id, live_segment_id, ts);
+    write_session_meta(
+        rotated_segment_path.as_path(),
+        thread_id,
+        referenced_segment_id,
+        ts,
+    );
+    let compressed_segment_path = compress_rollout(rotated_segment_path.as_path());
+
+    let resolved = crate::resolve_rollout_reference_rollout_path(
+        home,
+        &RolloutReferenceItem {
+            rollout_path: active_path,
+            thread_id: Some(thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: Some(referenced_segment_id),
+            max_depth: 2,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        },
+    )
+    .await
+    .expect("resolve rollout reference");
+
+    assert_eq!(resolved, compressed_segment_path);
+}
+
+fn write_session_meta(path: &Path, thread_id: ThreadId, segment_id: SegmentId, timestamp: &str) {
+    fs::create_dir_all(path.parent().expect("rollout parent")).expect("create rollout parent");
+    let line = RolloutLine {
+        timestamp: timestamp.to_string(),
+        item: RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                segment_id: Some(segment_id),
+                forked_from_id: None,
+                parent_thread_id: None,
+                timestamp: timestamp.to_string(),
+                cwd: ".".into(),
+                originator: "test_originator".into(),
+                cli_version: "test_version".into(),
+                source: SessionSource::VSCode,
+                thread_source: None,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+                model_provider: Some("test-provider".into()),
+                base_instructions: None,
+                dynamic_tools: None,
+                memory_mode: None,
+                multi_agent_version: None,
+            },
+            git: None,
+        }),
+    };
+    fs::write(
+        path,
+        format!(
+            "{}\n",
+            serde_json::to_string(&line).expect("serialize meta")
+        ),
+    )
+    .expect("write rollout");
+}
+
+fn append_rollout_item(path: &Path, timestamp: &str, item: RolloutItem) {
+    let line = RolloutLine {
+        timestamp: timestamp.to_string(),
+        item,
+    };
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .expect("open rollout");
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&line).expect("serialize rollout line")
+    )
+    .expect("append rollout line");
+}
+
+fn compress_rollout(path: &Path) -> std::path::PathBuf {
+    let compressed_path = crate::compression::compressed_rollout_path(path);
+    let input = File::open(path).expect("open rollout");
+    let output = File::create(&compressed_path).expect("create compressed rollout");
+    zstd::stream::copy_encode(input, output, 0).expect("compress rollout");
+    fs::remove_file(path).expect("remove plain rollout");
+    compressed_path
 }
 
 async fn assert_state_db_rollout_path(
@@ -933,6 +1193,202 @@ async fn test_list_threads_scans_past_head_for_user_event() {
 }
 
 #[tokio::test]
+async fn test_list_threads_includes_compacted_replacement_history_with_user_message() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::from_u128(102);
+    let thread_id = thread_id_from_uuid(uuid);
+    let ts = "2025-05-03T10-30-00";
+    let path = home
+        .join("sessions/2025/05/03")
+        .join(format!("rollout-{ts}-{uuid}.jsonl"));
+    write_session_meta(path.as_path(), thread_id, SegmentId::new(), ts);
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    let compacted = serde_json::json!({
+        "timestamp": ts,
+        "type": "compacted",
+        "payload": {
+            "message": "summary",
+            "replacement_history": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "Hello from compacted history",
+                }],
+            }],
+        },
+    });
+    writeln!(file, "{compacted}").unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    let item = &page.items[0];
+    assert_eq!(item.thread_id, Some(thread_id));
+    assert_eq!(item.preview, None);
+    assert_eq!(item.first_user_message, None);
+}
+
+#[tokio::test]
+async fn test_list_threads_reads_preview_from_referenced_segment() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::from_u128(103);
+    let thread_id = thread_id_from_uuid(uuid);
+    let previous_segment_id = SegmentId::new();
+    let current_segment_id = SegmentId::new();
+    let ts = "2025-05-04T10-30-00";
+    let file_name = format!("rollout-{ts}-{uuid}.jsonl");
+    let previous_path = home
+        .join(crate::ROTATED_ROLLOUT_SEGMENTS_SUBDIR)
+        .join(thread_id.to_string())
+        .join(previous_segment_id.to_string())
+        .join(&file_name);
+    let current_path = home.join("sessions/2025/05/04").join(file_name);
+    write_session_meta(previous_path.as_path(), thread_id, previous_segment_id, ts);
+    append_rollout_item(
+        previous_path.as_path(),
+        ts,
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "Hello from the previous segment".to_string(),
+            ..Default::default()
+        })),
+    );
+    write_session_meta(current_path.as_path(), thread_id, current_segment_id, ts);
+    append_rollout_item(
+        current_path.as_path(),
+        ts,
+        RolloutItem::RolloutReference(RolloutReferenceItem {
+            rollout_path: current_path.clone(),
+            thread_id: Some(thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: Some(previous_segment_id),
+            max_depth: 2,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        }),
+    );
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(
+        page.items[0].preview.as_deref(),
+        Some("Hello from the previous segment")
+    );
+    assert_eq!(
+        page.items[0].first_user_message.as_deref(),
+        Some("Hello from the previous segment")
+    );
+}
+
+#[tokio::test]
+async fn test_list_threads_does_not_read_preview_from_fork_reference() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let parent_uuid = Uuid::from_u128(104);
+    let child_uuid = Uuid::from_u128(105);
+    let parent_thread_id = thread_id_from_uuid(parent_uuid);
+    let child_thread_id = thread_id_from_uuid(child_uuid);
+    let parent_segment_id = SegmentId::new();
+    let child_segment_id = SegmentId::new();
+    let ts = "2025-05-04T10-30-00";
+    let parent_path = home
+        .join(crate::ROTATED_ROLLOUT_SEGMENTS_SUBDIR)
+        .join(parent_thread_id.to_string())
+        .join(parent_segment_id.to_string())
+        .join(format!("rollout-{ts}-{parent_uuid}.jsonl"));
+    let child_path = home
+        .join("sessions/2025/05/04")
+        .join(format!("rollout-{ts}-{child_uuid}.jsonl"));
+    write_session_meta(
+        parent_path.as_path(),
+        parent_thread_id,
+        parent_segment_id,
+        ts,
+    );
+    append_rollout_item(
+        parent_path.as_path(),
+        ts,
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "Parent preview".to_string(),
+            ..Default::default()
+        })),
+    );
+    write_session_meta(child_path.as_path(), child_thread_id, child_segment_id, ts);
+    append_rollout_item(
+        child_path.as_path(),
+        ts,
+        RolloutItem::RolloutReference(RolloutReferenceItem {
+            rollout_path: parent_path,
+            thread_id: Some(parent_thread_id),
+            rollout_timestamp: Some(ts.to_string()),
+            segment_id: Some(parent_segment_id),
+            max_depth: 2,
+            nth_user_message: Some(usize::MAX),
+            compacted_replacement_history_filter_texts: None,
+        }),
+    );
+    append_rollout_item(
+        child_path.as_path(),
+        ts,
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "Child preview".to_string(),
+            ..Default::default()
+        })),
+    );
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].preview.as_deref(), Some("Child preview"));
+    assert_eq!(
+        page.items[0].first_user_message.as_deref(),
+        Some("Child preview")
+    );
+}
+
+#[tokio::test]
 async fn test_list_threads_uses_goal_objective_as_preview() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
@@ -1259,6 +1715,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
                 id: conversation_id,
+                segment_id: None,
                 forked_from_id: None,
                 parent_thread_id: None,
                 timestamp: ts.to_string(),
