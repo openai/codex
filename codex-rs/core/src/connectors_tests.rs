@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
+use crate::config::Config;
 use crate::config::ConfigBuilder;
 use codex_config::AppRequirementToml;
 use codex_config::AppToolRequirementToml;
@@ -10,10 +11,15 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::AppConfig;
+use codex_config::types::AppToolApproval;
 use codex_config::types::AppToolConfig;
 use codex_config::types::AppToolsConfig;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::AppsConfigToml;
 use codex_config::types::AppsDefaultConfig;
+use codex_connectors::AppToolPolicy;
+use codex_connectors::AppToolPolicyEvaluator;
+use codex_connectors::AppToolPolicyInput;
 use codex_connectors::merge::plugin_connector_to_app_info;
 use codex_connectors::metadata::connector_install_url;
 use codex_connectors::metadata::sanitize_name;
@@ -25,6 +31,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
 use rmcp::model::Tool;
+use rmcp::model::ToolAnnotations;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -39,6 +46,67 @@ fn annotations(destructive_hint: Option<bool>, open_world_hint: Option<bool>) ->
         /*idempotent_hint*/ None,
         open_world_hint,
     )
+}
+
+fn app_tool_policy_input<'a>(
+    connector_id: Option<&'a str>,
+    tool_name: &'a str,
+    tool_title: Option<&'a str>,
+    annotations: Option<&ToolAnnotations>,
+) -> AppToolPolicyInput<'a> {
+    AppToolPolicyInput {
+        connector_id,
+        tool_name,
+        tool_title,
+        destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
+        open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
+    }
+}
+
+fn app_tool_policy_from_apps_config(
+    apps_config: Option<&AppsConfigToml>,
+    connector_id: Option<&str>,
+    tool_name: &str,
+    tool_title: Option<&str>,
+    annotations: Option<&ToolAnnotations>,
+    managed_approval: Option<AppToolApproval>,
+) -> AppToolPolicy {
+    let requirements = managed_approval.map(|approval| {
+        app_tool_requirements(
+            connector_id.expect("managed approval requires a connector id"),
+            tool_name,
+            approval,
+        )
+    });
+    let evaluator = match (apps_config.cloned(), requirements.as_ref()) {
+        (Some(apps_config), Some(requirements)) => {
+            AppToolPolicyEvaluator::from_apps_config_and_requirements(apps_config, requirements)
+        }
+        (Some(apps_config), None) => AppToolPolicyEvaluator::from_apps_config(apps_config),
+        (None, Some(requirements)) => AppToolPolicyEvaluator::from_requirements(requirements),
+        (None, None) => AppToolPolicyEvaluator::default(),
+    };
+    evaluator.policy(app_tool_policy_input(
+        connector_id,
+        tool_name,
+        tool_title,
+        annotations,
+    ))
+}
+
+fn app_tool_policy(
+    config: &Config,
+    connector_id: Option<&str>,
+    tool_name: &str,
+    tool_title: Option<&str>,
+    annotations: Option<&ToolAnnotations>,
+) -> AppToolPolicy {
+    AppToolPolicyEvaluator::new(&config.config_layer_stack).policy(app_tool_policy_input(
+        connector_id,
+        tool_name,
+        tool_title,
+        annotations,
+    ))
 }
 
 fn app(id: &str) -> AppInfo {
@@ -524,7 +592,7 @@ approvals_reviewer = "user"
 
 #[test]
 fn requirements_disabled_connector_overrides_enabled_connector() {
-    let mut effective_apps = AppsConfigToml {
+    let effective_apps = AppsConfigToml {
         default: None,
         apps: HashMap::from([(
             "connector_123123".to_string(),
@@ -544,20 +612,27 @@ fn requirements_disabled_connector_overrides_enabled_connector() {
         )]),
     };
 
-    apply_requirements_apps_constraints(&mut effective_apps, Some(&requirements_apps));
-
     assert_eq!(
-        effective_apps
-            .apps
-            .get("connector_123123")
-            .map(|app| app.enabled),
-        Some(false)
+        AppToolPolicyEvaluator::from_apps_config_and_requirements(
+            effective_apps,
+            &requirements_apps,
+        )
+        .policy(app_tool_policy_input(
+            Some("connector_123123"),
+            "events/list",
+            /*tool_title*/ None,
+            /*annotations*/ None,
+        )),
+        AppToolPolicy {
+            enabled: false,
+            approval: AppToolApproval::Auto,
+        }
     );
 }
 
 #[test]
 fn requirements_enabled_does_not_override_disabled_connector() {
-    let mut effective_apps = AppsConfigToml {
+    let effective_apps = AppsConfigToml {
         default: None,
         apps: HashMap::from([(
             "connector_123123".to_string(),
@@ -577,14 +652,21 @@ fn requirements_enabled_does_not_override_disabled_connector() {
         )]),
     };
 
-    apply_requirements_apps_constraints(&mut effective_apps, Some(&requirements_apps));
-
     assert_eq!(
-        effective_apps
-            .apps
-            .get("connector_123123")
-            .map(|app| app.enabled),
-        Some(false)
+        AppToolPolicyEvaluator::from_apps_config_and_requirements(
+            effective_apps,
+            &requirements_apps,
+        )
+        .policy(app_tool_policy_input(
+            Some("connector_123123"),
+            "events/list",
+            /*tool_title*/ None,
+            /*annotations*/ None,
+        )),
+        AppToolPolicy {
+            enabled: false,
+            approval: AppToolApproval::Auto,
+        }
     );
 }
 
@@ -884,21 +966,30 @@ fn managed_app_tool_approval_uses_raw_tool_name() {
         AppToolApproval::Approve,
     );
 
+    let evaluator = AppToolPolicyEvaluator::from_requirements(&requirements_apps);
+
     assert_eq!(
-        managed_app_tool_approval(
-            Some(&requirements_apps),
-            Some("connector_123123"),
-            "calendar/list_events",
-        ),
-        Some(AppToolApproval::Approve)
-    );
-    assert_eq!(
-        managed_app_tool_approval(
-            Some(&requirements_apps),
-            Some("connector_123123"),
-            "calendar/create_event",
-        ),
-        None
+        [
+            evaluator.policy(app_tool_policy_input(
+                Some("connector_123123"),
+                "calendar/list_events",
+                /*tool_title*/ None,
+                /*annotations*/ None,
+            )),
+            evaluator.policy(app_tool_policy_input(
+                Some("connector_123123"),
+                "calendar/create_event",
+                /*tool_title*/ None,
+                /*annotations*/ None,
+            )),
+        ],
+        [
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Approve,
+            },
+            AppToolPolicy::default(),
+        ]
     );
 }
 
