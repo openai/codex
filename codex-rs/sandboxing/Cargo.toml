@@ -21,6 +21,7 @@ libc = { workspace = true }
 serde_json = { workspace = true }
 regex-lite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
+tokio = { workspace = true, features = ["io-util", "process", "rt", "time"] }
 url = { workspace = true }
 which = { workspace = true }
 
@@ -28,4 +29,4 @@ which = { workspace = true }
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros"] }

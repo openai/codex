@@ -5,6 +5,7 @@ mod manager;
 pub mod policy_transforms;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
+pub mod seatbelt_denials;
 
 #[cfg(target_os = "linux")]
 pub use bwrap::find_system_bwrap_in_path;

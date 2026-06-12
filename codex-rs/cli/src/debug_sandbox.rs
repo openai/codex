@@ -1,8 +1,3 @@
-#[cfg(target_os = "macos")]
-mod pid_tracker;
-#[cfg(target_os = "macos")]
-mod seatbelt;
-
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -23,6 +18,10 @@ use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission
 use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::create_seatbelt_command_args;
+#[cfg(target_os = "macos")]
+use codex_sandboxing::seatbelt_denials::DenialLogger;
+#[cfg(target_os = "macos")]
+use codex_sandboxing::seatbelt_denials::SandboxDenial;
 use codex_sandboxing::with_managed_mitm_ca_readable_root;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
@@ -34,9 +33,6 @@ use crate::LandlockCommand;
 use crate::SeatbeltCommand;
 use crate::WindowsCommand;
 use crate::exit_status::handle_exit_status;
-
-#[cfg(target_os = "macos")]
-use seatbelt::DenialLogger;
 
 #[cfg(target_os = "macos")]
 pub async fn run_command_under_seatbelt(
@@ -234,7 +230,11 @@ async fn run_command_under_sandbox(
     }
 
     #[cfg(target_os = "macos")]
-    let mut denial_logger = log_denials.then(DenialLogger::new).flatten();
+    let mut denial_logger = if log_denials {
+        DenialLogger::new().await
+    } else {
+        None
+    };
     #[cfg(not(target_os = "macos"))]
     let _ = log_denials;
 
@@ -338,7 +338,7 @@ async fn run_command_under_sandbox(
 
     #[cfg(target_os = "macos")]
     if let Some(denial_logger) = &mut denial_logger {
-        denial_logger.on_child_spawn(&child);
+        denial_logger.on_child_pid(child.id());
     }
 
     let status = child.wait().await?;
@@ -350,7 +350,7 @@ async fn run_command_under_sandbox(
         if denials.is_empty() {
             eprintln!("None found.");
         } else {
-            for seatbelt::SandboxDenial { name, capability } in denials {
+            for SandboxDenial { name, capability } in denials {
                 eprintln!("({name}) {capability}");
             }
         }
