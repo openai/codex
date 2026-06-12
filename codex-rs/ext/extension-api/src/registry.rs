@@ -201,7 +201,7 @@ impl<C: Sync> ExtensionRegistry<C> {
         for contributor in &self.approval_review_contributors {
             match contributor.review(input).await? {
                 ApprovalReviewOutcome::Abstain => {}
-                outcome @ ApprovalReviewOutcome::Decision(_) => return Ok(outcome),
+                outcome @ ApprovalReviewOutcome::Decision { .. } => return Ok(outcome),
             }
         }
 

@@ -105,7 +105,7 @@ impl ApprovalReviewContributor for AllContributors {
     ) -> ExtensionFuture<'a, Result<ApprovalReviewOutcome, ApprovalReviewError>> {
         Box::pin(async move {
             let _self = self;
-            Ok(ApprovalReviewOutcome::Decision(
+            Ok(ApprovalReviewOutcome::decision(
                 ReviewDecision::ApprovedForSession,
             ))
         })
@@ -147,7 +147,7 @@ async fn build_round_trips_every_contributor_category() {
                 &AskForApproval::OnRequest,
             ))
             .await,
-        Ok(ApprovalReviewOutcome::Decision(
+        Ok(ApprovalReviewOutcome::decision(
             ReviewDecision::ApprovedForSession
         ))
     );
@@ -327,11 +327,11 @@ async fn approval_review_returns_first_claim_and_short_circuits() {
         ("first", Ok(ApprovalReviewOutcome::Abstain)),
         (
             "second",
-            Ok(ApprovalReviewOutcome::Decision(ReviewDecision::Approved)),
+            Ok(ApprovalReviewOutcome::decision(ReviewDecision::Approved)),
         ),
         (
             "third",
-            Ok(ApprovalReviewOutcome::Decision(ReviewDecision::Denied)),
+            Ok(ApprovalReviewOutcome::decision(ReviewDecision::Denied)),
         ),
     ] {
         builder.approval_review_contributor(Arc::new(RecordingApprovalContributor {
@@ -359,7 +359,7 @@ async fn approval_review_returns_first_claim_and_short_circuits() {
 
     assert_eq!(
         decision,
-        Ok(ApprovalReviewOutcome::Decision(ReviewDecision::Approved))
+        Ok(ApprovalReviewOutcome::decision(ReviewDecision::Approved))
     );
     let expected_call = |contributor| ApprovalCall {
         contributor,
@@ -391,7 +391,7 @@ async fn approval_review_error_stops_dispatch() {
         ("second", Err(ApprovalReviewError::new("review failed"))),
         (
             "third",
-            Ok(ApprovalReviewOutcome::Decision(ReviewDecision::Approved)),
+            Ok(ApprovalReviewOutcome::decision(ReviewDecision::Approved)),
         ),
     ] {
         builder.approval_review_contributor(Arc::new(RecordingApprovalContributor {

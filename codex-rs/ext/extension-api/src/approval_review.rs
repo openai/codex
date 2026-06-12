@@ -45,7 +45,29 @@ pub enum ApprovalReviewOutcome {
     /// The contributor does not own this request; dispatch should continue.
     Abstain,
     /// The contributor claims the request with an authoritative decision.
-    Decision(ReviewDecision),
+    Decision {
+        decision: ReviewDecision,
+        /// Contributor-owned rationale to return when the decision rejects the request.
+        denial_message: Option<String>,
+    },
+}
+
+impl ApprovalReviewOutcome {
+    /// Claims the request with a decision that does not need a denial rationale.
+    pub fn decision(decision: ReviewDecision) -> Self {
+        Self::Decision {
+            decision,
+            denial_message: None,
+        }
+    }
+
+    /// Denies the request with a contributor-owned rationale for the caller.
+    pub fn denied(message: impl Into<String>) -> Self {
+        Self::Decision {
+            decision: ReviewDecision::Denied,
+            denial_message: Some(message.into()),
+        }
+    }
 }
 
 /// Failure while an extension reviews an approval request.

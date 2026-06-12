@@ -1,8 +1,15 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Result;
+use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_extension_api::ApprovalReviewContributor;
+use codex_extension_api::ApprovalReviewError;
+use codex_extension_api::ApprovalReviewInput;
+use codex_extension_api::ApprovalReviewOutcome;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -27,8 +34,22 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+
+struct DenyingApprovalReviewContributor {
+    rationale: String,
+}
+
+impl ApprovalReviewContributor for DenyingApprovalReviewContributor {
+    fn review<'a>(
+        &'a self,
+        _input: ApprovalReviewInput<'a>,
+    ) -> ExtensionFuture<'a, std::result::Result<ApprovalReviewOutcome, ApprovalReviewError>> {
+        Box::pin(async move { Ok(ApprovalReviewOutcome::denied(self.rationale.clone())) })
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_review_session_does_not_inherit_legacy_notify() -> Result<()> {
@@ -258,6 +279,85 @@ async fn auto_review_denial_blocks_escalated_command_and_returns_rationale() -> 
         !output_file.exists(),
         "auto-review denial should prevent command execution"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_review_extension_denial_precedes_core_guardian_and_preserves_rationale()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let output_dir = TempDir::new()?;
+    let output_file = output_dir.path().join("extension-review-denied.txt");
+    let command = format!("printf denied > {}", output_file.display());
+    let call_id = "extension-review-denied-command";
+    let rationale = "The installed approval reviewer denied this exact command.";
+    let tool_args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": "Exercise extension approval review.",
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parent-tool"),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&tool_args)?),
+                ev_completed("resp-parent-tool"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-done"),
+                ev_assistant_message("msg-parent-done", "done"),
+                ev_completed("resp-parent-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
+    extension_builder.approval_review_contributor(Arc::new(DenyingApprovalReviewContributor {
+        rationale: rationale.to_string(),
+    }));
+    let mut builder = test_codex().with_extensions(Arc::new(extension_builder.build()));
+    let test = builder.build(&server).await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run a command that the extension reviewer should deny".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(AskForApproval::OnRequest),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                sandbox_policy: Some(SandboxPolicy::WorkspaceWrite {
+                    writable_roots: vec![],
+                    network_access: false,
+                    exclude_tmpdir_env_var: true,
+                    exclude_slash_tmp: true,
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2, "core Guardian should not run");
+    let output = requests[1]
+        .function_call_output_text(call_id)
+        .expect("parent continuation should receive the denied tool output");
+    assert!(output.contains(rationale));
+    assert!(!output_file.exists());
 
     Ok(())
 }

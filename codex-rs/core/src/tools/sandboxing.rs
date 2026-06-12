@@ -351,6 +351,16 @@ pub(crate) trait Approvable<Req> {
         None
     }
 
+    /// Builds the legacy core Guardian request while auto-review migrates to
+    /// an extension-owned implementation.
+    fn guardian_approval_request(
+        &self,
+        _req: &Req,
+        _call_id: &str,
+    ) -> Option<crate::guardian::GuardianApprovalRequest> {
+        None
+    }
+
     /// Decide we can request an approval for no-sandbox execution.
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {
