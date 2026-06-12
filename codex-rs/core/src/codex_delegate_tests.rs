@@ -433,6 +433,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
                 is_secret: false,
                 options: None,
             }],
+            auto_resolution_ms: None,
         },
         &cancel_token,
     )
@@ -476,6 +477,7 @@ async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
             is_secret: false,
             options: None,
         }],
+        auto_resolution_ms: None,
     };
     let response = maybe_auto_review_mcp_request_user_input(
         &parent_session,

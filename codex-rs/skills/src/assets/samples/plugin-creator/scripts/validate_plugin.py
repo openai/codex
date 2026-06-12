@@ -307,10 +307,17 @@ def validate_app_manifest(path: Path, errors: list[str]) -> None:
         if not isinstance(value, dict):
             errors.append(f"`.app.json` app `{key}` must be an object")
             continue
-        reject_companion_unknown_fields(value, {"id"}, f"`.app.json` app `{key}`", errors)
+        reject_companion_unknown_fields(
+            value, {"id", "category"}, f"`.app.json` app `{key}`", errors
+        )
         app_id = value.get("id")
         if not isinstance(app_id, str) or not app_id.strip():
             errors.append(f"`.app.json` app `{key}` field `id` must be a non-empty string")
+        category = value.get("category")
+        if category is not None and (not isinstance(category, str) or not category.strip()):
+            errors.append(
+                f"`.app.json` app `{key}` field `category` must be a non-empty string"
+            )
 
 
 def validate_mcp_manifest(path: Path, errors: list[str]) -> None:

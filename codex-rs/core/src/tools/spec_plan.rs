@@ -388,15 +388,6 @@ fn wait_agent_timeout_options(turn_context: &TurnContext) -> WaitAgentTimeoutOpt
     }
 }
 
-fn max_concurrent_threads_per_session(turn_context: &TurnContext) -> Option<usize> {
-    multi_agent_v2_enabled(turn_context).then_some(
-        turn_context
-            .config
-            .multi_agent_v2
-            .max_concurrent_threads_per_session,
-    )
-}
-
 fn agent_type_description(
     turn_context: &TurnContext,
     default_agent_type_description: &str,
@@ -652,9 +643,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     planned_tools.add(PlanHandler);
 
     if turn_context.config.experimental_request_user_input_enabled {
-        planned_tools.add(RequestUserInputHandler {
-            available_modes: request_user_input_available_modes(features),
-        });
+        planned_tools.add_with_exposure(
+            RequestUserInputHandler {
+                available_modes: request_user_input_available_modes(features),
+            },
+            ToolExposure::DirectModelOnly,
+        );
     }
 
     if features.enabled(Feature::RequestPermissionsTool) {
@@ -663,7 +657,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 
     if features.enabled(Feature::TokenBudget) {
         planned_tools.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
-        planned_tools.add_with_exposure(GetContextRemainingHandler, ToolExposure::DirectModelOnly);
+        planned_tools.add(GetContextRemainingHandler);
     }
 
     if tool_suggest_enabled(turn_context)
@@ -729,9 +723,6 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
                             .hide_spawn_agent_metadata,
                         include_usage_hint: turn_context.config.multi_agent_v2.usage_hint_enabled,
                         usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
-                        max_concurrent_threads_per_session: max_concurrent_threads_per_session(
-                            turn_context,
-                        ),
                     }),
                     tool_namespace,
                 ),
@@ -776,9 +767,6 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
                     hide_agent_type_model_reasoning: false,
                     include_usage_hint: turn_context.config.multi_agent_v2.usage_hint_enabled,
                     usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
-                    max_concurrent_threads_per_session: max_concurrent_threads_per_session(
-                        turn_context,
-                    ),
                 }),
                 exposure,
             );

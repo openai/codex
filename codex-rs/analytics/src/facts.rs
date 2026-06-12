@@ -137,7 +137,7 @@ impl TurnCodexErrorFact {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum CodexErrKind {
+pub enum CodexErrKind {
     TurnAborted,
     Stream,
     ContextWindowExceeded,
@@ -408,11 +408,13 @@ pub struct CodexCompactionEvent {
     pub phase: CompactionPhase,
     pub strategy: CompactionStrategy,
     pub status: CompactionStatus,
-    pub error: Option<String>,
+    pub codex_error_kind: Option<CodexErrKind>,
+    pub codex_error_http_status_code: Option<u16>,
     pub active_context_tokens_before: i64,
     pub active_context_tokens_after: i64,
     pub retained_image_count: Option<usize>,
     pub compaction_summary_tokens: Option<i64>,
+    pub cached_input_tokens: Option<i64>,
     pub started_at: u64,
     pub completed_at: u64,
     pub duration_ms: Option<u64>,

@@ -19,7 +19,6 @@ pub(super) async fn test_config() -> Config {
     config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
     config.config_layer_stack = ConfigLayerStack::default();
     config.startup_warnings.clear();
-    config.user_instructions = None;
     config
 }
 
@@ -1208,7 +1207,7 @@ pub(super) fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     String::new()
 }
 
-pub(super) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
+pub(crate) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
@@ -1455,6 +1454,7 @@ pub(super) fn plugins_test_detail(
                 name: (*name).to_string(),
                 description: Some(format!("{name} app")),
                 install_url: Some(format!("https://example.test/{name}")),
+                category: None,
             })
             .collect(),
         app_templates: Vec::new(),

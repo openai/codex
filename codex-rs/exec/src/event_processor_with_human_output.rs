@@ -239,6 +239,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 CodexStatus::Running
             }
+            ServerNotification::Warning(notification) => self.process_warning(notification.message),
             ServerNotification::Error(notification) => {
                 eprintln!(
                     "{} {}",

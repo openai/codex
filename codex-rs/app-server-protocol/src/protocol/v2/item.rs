@@ -1464,6 +1464,9 @@ pub struct ToolRequestUserInputParams {
     pub turn_id: String,
     pub item_id: String,
     pub questions: Vec<ToolRequestUserInputQuestion>,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub auto_resolution_ms: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

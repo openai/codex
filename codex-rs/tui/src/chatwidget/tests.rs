@@ -227,7 +227,7 @@ mod exec_flow;
 mod goal_menu;
 mod goal_validation;
 mod guardian;
-mod helpers;
+pub(crate) mod helpers;
 mod history_replay;
 mod mcp_startup;
 mod permissions;

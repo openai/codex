@@ -1538,6 +1538,7 @@ mod tests {
             item_id: "call-1".to_string(),
             turn_id: turn_id.to_string(),
             questions,
+            auto_resolution_ms: None,
         }
     }
 
@@ -1600,12 +1601,14 @@ mod tests {
             item_id: "call-2".to_string(),
             turn_id: "turn-2".to_string(),
             questions: vec![question_with_options("q2", "Second")],
+            auto_resolution_ms: None,
         });
         overlay.try_consume_user_input_request(ToolRequestUserInputParams {
             thread_id: "thread-1".to_string(),
             item_id: "call-3".to_string(),
             turn_id: "turn-3".to_string(),
             questions: vec![question_with_options("q3", "Third")],
+            auto_resolution_ms: None,
         });
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
@@ -1623,6 +1626,7 @@ mod tests {
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
+                auto_resolution_ms: None,
             },
             tx,
             /*has_input_focus*/ true,
@@ -1651,6 +1655,7 @@ mod tests {
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
+                auto_resolution_ms: None,
             },
             tx,
             /*has_input_focus*/ true,
@@ -1662,6 +1667,7 @@ mod tests {
             item_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q2", "Second")],
+            auto_resolution_ms: None,
         });
 
         assert!(
@@ -1689,6 +1695,7 @@ mod tests {
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
+                auto_resolution_ms: None,
             },
             tx,
             /*has_input_focus*/ true,
@@ -1700,12 +1707,14 @@ mod tests {
             item_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q2", "Second")],
+            auto_resolution_ms: None,
         });
         overlay.try_consume_user_input_request(ToolRequestUserInputParams {
             thread_id: "thread-1".to_string(),
             item_id: "call-3".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q3", "Third")],
+            auto_resolution_ms: None,
         });
 
         assert!(

@@ -43,6 +43,7 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexErrKind;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
@@ -1278,11 +1279,13 @@ fn compaction_event_serializes_expected_shape() {
                 phase: CompactionPhase::MidTurn,
                 strategy: CompactionStrategy::Memento,
                 status: CompactionStatus::Completed,
-                error: None,
+                codex_error_kind: None,
+                codex_error_http_status_code: None,
                 active_context_tokens_before: 120_000,
                 active_context_tokens_after: 18_000,
                 retained_image_count: None,
                 compaction_summary_tokens: None,
+                cached_input_tokens: None,
                 started_at: 100,
                 completed_at: 106,
                 duration_ms: Some(6543),
@@ -1328,11 +1331,13 @@ fn compaction_event_serializes_expected_shape() {
                 "phase": "mid_turn",
                 "strategy": "memento",
                 "status": "completed",
-                "error": null,
+                "codex_error_kind": null,
+                "codex_error_http_status_code": null,
                 "active_context_tokens_before": 120000,
                 "active_context_tokens_after": 18000,
                 "retained_image_count": null,
                 "compaction_summary_tokens": null,
+                "cached_input_tokens": null,
                 "started_at": 100,
                 "completed_at": 106,
                 "duration_ms": 6543
@@ -1850,11 +1855,13 @@ async fn compaction_event_ingests_custom_fact() {
                     phase: CompactionPhase::StandaloneTurn,
                     strategy: CompactionStrategy::Memento,
                     status: CompactionStatus::Failed,
-                    error: Some("context limit exceeded".to_string()),
+                    codex_error_kind: Some(CodexErrKind::ContextWindowExceeded),
+                    codex_error_http_status_code: None,
                     active_context_tokens_before: 131_000,
                     active_context_tokens_after: 131_000,
                     retained_image_count: None,
                     compaction_summary_tokens: None,
+                    cached_input_tokens: None,
                     started_at: 100,
                     completed_at: 101,
                     duration_ms: Some(1200),
@@ -1870,6 +1877,14 @@ async fn compaction_event_ingests_custom_fact() {
     assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
     assert_eq!(payload[0]["event_params"]["turn_id"], "turn-compact");
+    assert_eq!(
+        payload[0]["event_params"]["codex_error_kind"],
+        json!("context_window_exceeded")
+    );
+    assert_eq!(
+        payload[0]["event_params"]["codex_error_http_status_code"],
+        json!(null)
+    );
     assert_eq!(
         payload[0]["event_params"]["app_server_client"]["product_client_id"],
         DEFAULT_ORIGINATOR
@@ -2776,11 +2791,13 @@ async fn subagent_events_use_inherited_connection_unless_turn_connection_is_expl
                     phase: CompactionPhase::StandaloneTurn,
                     strategy: CompactionStrategy::Memento,
                     status: CompactionStatus::Completed,
-                    error: None,
+                    codex_error_kind: None,
+                    codex_error_http_status_code: None,
                     active_context_tokens_before: 131_000,
                     active_context_tokens_after: 64_000,
                     retained_image_count: None,
                     compaction_summary_tokens: None,
+                    cached_input_tokens: None,
                     started_at: 100,
                     completed_at: 101,
                     duration_ms: Some(1200),
@@ -3846,6 +3863,32 @@ async fn turn_event_counts_completed_tool_items() {
     )
     .await;
 
+    let mcp_tool_call_item = |status, duration_ms| ThreadItem::McpToolCall {
+        id: "mcp-1".to_string(),
+        server: "server".to_string(),
+        tool: "search".to_string(),
+        status,
+        arguments: json!({}),
+        mcp_app_resource_uri: None,
+        plugin_id: Some("sample@test".to_string()),
+        result: None,
+        error: None,
+        duration_ms,
+    };
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
+                ItemStartedNotification {
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    started_at_ms: 998,
+                    item: mcp_tool_call_item(McpToolCallStatus::InProgress, None),
+                },
+            ))),
+            &mut out,
+        )
+        .await;
+
     let completed_tool_items = vec![
         sample_command_execution_item(CommandExecutionStatus::Completed, Some(0), Some(1)),
         ThreadItem::FileChange {
@@ -3853,18 +3896,7 @@ async fn turn_event_counts_completed_tool_items() {
             changes: Vec::new(),
             status: PatchApplyStatus::Completed,
         },
-        ThreadItem::McpToolCall {
-            id: "mcp-1".to_string(),
-            server: "server".to_string(),
-            tool: "search".to_string(),
-            status: McpToolCallStatus::Completed,
-            arguments: json!({}),
-            mcp_app_resource_uri: None,
-            plugin_id: None,
-            result: None,
-            error: None,
-            duration_ms: Some(2),
-        },
+        mcp_tool_call_item(McpToolCallStatus::Completed, Some(2)),
         ThreadItem::DynamicToolCall {
             id: "dynamic-1".to_string(),
             namespace: None,
@@ -3921,6 +3953,13 @@ async fn turn_event_counts_completed_tool_items() {
             )
             .await;
     }
+
+    let mcp_tool_call_event = out
+        .iter()
+        .find(|event| matches!(event, TrackEventRequest::McpToolCall(_)))
+        .expect("MCP tool call event should be emitted");
+    let payload = serde_json::to_value(mcp_tool_call_event).expect("serialize MCP tool call event");
+    assert_eq!(payload["event_params"]["plugin_id"], json!("sample@test"));
 
     reducer
         .ingest(

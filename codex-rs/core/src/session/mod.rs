@@ -14,6 +14,7 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::agents_md::LoadedAgentsMd;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
@@ -54,6 +55,7 @@ use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::ExtensionDataInit;
+use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::PromptSlot;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -65,6 +67,7 @@ use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
+use codex_mcp::McpResourceClient;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_models_manager::manager::RefreshStrategy;
@@ -290,8 +293,7 @@ use crate::SkillLoadOutcome;
 #[cfg(test)]
 use crate::SkillMetadata;
 use crate::SkillsManager;
-use crate::agents_md::AgentsMdManager;
-use crate::context::UserInstructions;
+use crate::agents_md::load_project_instructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpManager;
@@ -321,6 +323,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core_plugins::PluginsManager;
 use codex_git_utils::get_git_repo_root;
+use codex_mcp::McpConfig;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::effective_mcp_servers_from_configured;
 use codex_mcp::host_owned_codex_apps_enabled;
@@ -398,6 +401,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) user_instructions: LoadedUserInstructions,
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
@@ -483,6 +487,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            user_instructions,
             installation_id,
             auth_manager,
             models_manager,
@@ -514,16 +519,17 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let primary_environment = environment_selections.primary_environment();
-        let mut user_instruction_warnings = Vec::new();
-        let user_instructions = if let Some(primary_environment) = primary_environment {
-            AgentsMdManager::new(&config)
-                .user_instructions(primary_environment.as_ref(), &mut user_instruction_warnings)
-                .await
-        } else {
-            None
-        };
-        config.startup_warnings.extend(user_instruction_warnings);
+        let LoadedUserInstructions {
+            instructions: user_instructions,
+            warnings: user_instruction_provider_warnings,
+        } = user_instructions;
+        // TODO(anp) pull startup_warnings out of Config
+        config
+            .startup_warnings
+            .extend(user_instruction_provider_warnings);
+        let loaded_agents_md =
+            load_project_instructions(&mut config, user_instructions, &environment_selections)
+                .await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -603,7 +609,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
-            user_instructions,
+            loaded_agents_md,
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
@@ -817,7 +823,7 @@ impl Codex {
         let state = self.session.state.lock().await;
         state
             .session_configuration
-            .user_instructions
+            .loaded_agents_md
             .as_ref()
             .map_or_else(Vec::new, |instructions| {
                 instructions.sources().cloned().collect()
@@ -1096,6 +1102,7 @@ impl Session {
     }
 
     /// Flush rollout writes and return the final durability-barrier result.
+    #[instrument(name = "session.flush_rollout", level = "trace", skip_all)]
     pub(crate) async fn flush_rollout(&self) -> std::io::Result<()> {
         if let Some(live_thread) = self.live_thread() {
             live_thread.flush().await.map_err(std::io::Error::other)
@@ -1504,6 +1511,16 @@ impl Session {
             .session_configuration
             .original_config_do_not_use
             .clone()
+    }
+
+    pub(crate) async fn user_instructions(&self) -> Option<codex_extension_api::UserInstructions> {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .loaded_agents_md
+            .as_ref()
+            .and_then(LoadedAgentsMd::user_instructions)
+            .cloned()
     }
 
     pub(crate) async fn provider(&self) -> ModelProviderInfo {
@@ -2370,6 +2387,7 @@ impl Session {
             call_id,
             turn_id: turn_context.sub_id.clone(),
             questions: args.questions,
+            auto_resolution_ms: args.auto_resolution_ms,
         });
         turn_context
             .turn_metadata_state
@@ -2956,14 +2974,7 @@ impl Session {
             }
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            contextual_user_sections.push(
-                UserInstructions {
-                    text: user_instructions.to_string(),
-                    #[allow(deprecated)]
-                    directory: turn_context.cwd.to_string_lossy().into_owned(),
-                }
-                .render(),
-            );
+            contextual_user_sections.push(user_instructions.to_string());
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
         if turn_context.features.enabled(Feature::TokenBudget)
@@ -2971,6 +2982,7 @@ impl Session {
         {
             developer_sections.push(
                 crate::context::TokenBudgetContext::new(
+                    self.thread_id(),
                     auto_compact_window_id,
                     model_context_window,
                 )

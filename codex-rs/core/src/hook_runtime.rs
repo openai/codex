@@ -385,9 +385,7 @@ pub(crate) async fn run_pre_compact_hooks(
     let outcome = sess.hooks().run_pre_compact(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
     if outcome.should_stop {
-        PreCompactHookOutcome::Stopped {
-            reason: outcome.stop_reason,
-        }
+        PreCompactHookOutcome::Stopped
     } else {
         PreCompactHookOutcome::Continue
     }
@@ -395,7 +393,7 @@ pub(crate) async fn run_pre_compact_hooks(
 
 pub(crate) enum PreCompactHookOutcome {
     Continue,
-    Stopped { reason: Option<String> },
+    Stopped,
 }
 
 pub(crate) enum PostCompactHookOutcome {
