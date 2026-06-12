@@ -20,6 +20,8 @@ use windows::Win32::Security::Cryptography::CERT_CHAIN_CONTEXT;
 use windows::Win32::Security::Cryptography::CERT_CHAIN_DISABLE_AIA;
 use windows::Win32::Security::Cryptography::CERT_CHAIN_DISABLE_AUTH_ROOT_AUTO_UPDATE;
 use windows::Win32::Security::Cryptography::CERT_CHAIN_PARA;
+use windows::Win32::Security::Cryptography::CERT_CHAIN_REVOCATION_CHECK_CACHE_ONLY;
+use windows::Win32::Security::Cryptography::CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT;
 use windows::Win32::Security::Cryptography::CERT_CONTEXT;
 use windows::Win32::Security::Cryptography::CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG;
 use windows::Win32::Security::Cryptography::CERT_FIND_SUBJECT_CERT;
@@ -55,8 +57,8 @@ use windows::Win32::Security::WinTrust::WINTRUST_DATA;
 use windows::Win32::Security::WinTrust::WINTRUST_DATA_0;
 use windows::Win32::Security::WinTrust::WTD_CACHE_ONLY_URL_RETRIEVAL;
 use windows::Win32::Security::WinTrust::WTD_CHOICE_BLOB;
-use windows::Win32::Security::WinTrust::WTD_REVOCATION_CHECK_NONE;
-use windows::Win32::Security::WinTrust::WTD_REVOKE_NONE;
+use windows::Win32::Security::WinTrust::WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT;
+use windows::Win32::Security::WinTrust::WTD_REVOKE_WHOLECHAIN;
 use windows::Win32::Security::WinTrust::WTD_STATEACTION_CLOSE;
 use windows::Win32::Security::WinTrust::WTD_STATEACTION_VERIFY;
 use windows::Win32::Security::WinTrust::WTD_UI_NONE;
@@ -612,11 +614,13 @@ fn verify_appx_authenticode(signature: &[u8]) -> Result<(), DesktopDistributionE
     let mut trust_data = WINTRUST_DATA {
         cbStruct: size_of::<WINTRUST_DATA>() as u32,
         dwUIChoice: WTD_UI_NONE,
-        fdwRevocationChecks: WTD_REVOKE_NONE,
+        fdwRevocationChecks: WTD_REVOKE_WHOLECHAIN,
         dwUnionChoice: WTD_CHOICE_BLOB,
         Anonymous: WINTRUST_DATA_0 { pBlob: &mut blob },
         dwStateAction: WTD_STATEACTION_VERIFY,
-        dwProvFlags: WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_NONE,
+        // Do not let hook loading initiate network retrieval, but fail closed when Windows has no
+        // cached revocation status or reports a revoked leaf/intermediate.
+        dwProvFlags: WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT,
         ..Default::default()
     };
     let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
@@ -735,6 +739,9 @@ fn verify_direct_pkcs7_signer(pkcs7: &[u8]) -> Result<(), DesktopDistributionErr
         ..Default::default()
     };
     let mut chain = ptr::null_mut();
+    // A missing or stale cached revocation result intentionally fails this trust check. Internal
+    // hooks fail closed, while every cache-backed plugin capability remains available; never make
+    // plugin loading depend on a live CRL/OCSP network request.
     unsafe {
         CertGetCertificateChain(
             LOCAL_MACHINE_CHAIN_ENGINE,
@@ -744,7 +751,9 @@ fn verify_direct_pkcs7_signer(pkcs7: &[u8]) -> Result<(), DesktopDistributionErr
             &mut chain_parameters,
             CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL
                 | CERT_CHAIN_DISABLE_AIA
-                | CERT_CHAIN_DISABLE_AUTH_ROOT_AUTO_UPDATE,
+                | CERT_CHAIN_DISABLE_AUTH_ROOT_AUTO_UPDATE
+                | CERT_CHAIN_REVOCATION_CHECK_CACHE_ONLY
+                | CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT,
             None,
             &mut chain,
         )

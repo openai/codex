@@ -94,6 +94,11 @@ pub(crate) fn reverify(
     identity: &PlatformIdentity,
     app_root: &Path,
 ) -> Result<(), DesktopDistributionError> {
+    // This detects static mutation and ordinary update races for the path-backed app bundle. It
+    // is not a transaction against an already-running hostile same-UID process racing a
+    // user-writable installation; enforcing that stronger boundary requires an immutable install
+    // root or an OS-authenticated launch broker. Hook execution separately authenticates the live,
+    // suspended child before it can run user-space code.
     verify_app(app_root, Some(&identity.identifier)).map(|_| ())
 }
 
