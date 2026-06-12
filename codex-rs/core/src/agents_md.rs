@@ -19,7 +19,6 @@ use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::context::UserInstructions as ContextUserInstructions;
 use crate::environment_selection::ResolvedTurnEnvironments;
-use crate::util::error_or_panic;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
@@ -52,15 +51,6 @@ pub(crate) async fn load_project_instructions(
     environments: &ResolvedTurnEnvironments,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
-    if let Some(primary_environment) = environments.primary()
-        && primary_environment.cwd != config.cwd
-    {
-        error_or_panic(format!(
-            "primary environment cwd `{}` does not match config cwd `{}`",
-            primary_environment.cwd.display(),
-            config.cwd.display()
-        ));
-    }
     for turn_environment in &environments.turn_environments {
         let filesystem = turn_environment.environment.get_filesystem();
         match read_agents_md(
