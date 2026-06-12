@@ -152,6 +152,7 @@ mod tests {
             item_id: call_id.to_string(),
             turn_id: turn_id.to_string(),
             questions: Vec::new(),
+            auto_resolution_ms: None,
         }
     }
 
