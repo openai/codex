@@ -33,6 +33,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::login_with_api_key;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -198,6 +199,7 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         codex_home.path(),
         "sk-test-key",
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )?;
     assert!(codex_home.path().join("auth.json").exists());
 

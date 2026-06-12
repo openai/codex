@@ -25,6 +25,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::auth::AuthDotJson;
+use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
 use crate::default_client::originator;
 use crate::pkce::PkceCodes;
@@ -69,6 +70,7 @@ pub struct ServerOptions {
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub codex_streamlined_login: bool,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    pub auth_keyring_backend_kind: AuthKeyringBackendKind,
 }
 
 impl ServerOptions {
@@ -78,6 +80,7 @@ impl ServerOptions {
         client_id: String,
         forced_chatgpt_workspace_id: Option<Vec<String>>,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+        auth_keyring_backend_kind: AuthKeyringBackendKind,
     ) -> Self {
         Self {
             codex_home,
@@ -89,6 +92,7 @@ impl ServerOptions {
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
             cli_auth_credentials_store_mode,
+            auth_keyring_backend_kind,
         }
     }
 }
@@ -359,6 +363,7 @@ async fn process_request(
                         tokens.access_token.clone(),
                         tokens.refresh_token.clone(),
                         opts.cli_auth_credentials_store_mode,
+                        opts.auth_keyring_backend_kind,
                     )
                     .await
                     {
@@ -789,6 +794,7 @@ pub(crate) async fn persist_tokens_async(
     access_token: String,
     refresh_token: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
@@ -814,7 +820,12 @@ pub(crate) async fn persist_tokens_async(
             personal_access_token: None,
             bedrock_api_key: None,
         };
-        save_auth(&codex_home, &auth, auth_credentials_store_mode)
+        save_auth(
+            &codex_home,
+            &auth,
+            auth_credentials_store_mode,
+            keyring_backend_kind,
+        )
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?

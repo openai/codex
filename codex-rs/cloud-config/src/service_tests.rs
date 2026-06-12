@@ -16,6 +16,7 @@ use codex_config::CloudConfigTomlBundle;
 use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AuthKeyringBackendKind;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::VecDeque;
@@ -48,6 +49,7 @@ async fn auth_manager_with_api_key() -> Arc<AuthManager> {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
         )
         .await,
     )
@@ -76,6 +78,7 @@ async fn auth_manager_with_plan_and_identity(
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
         )
         .await,
     )
@@ -633,6 +636,7 @@ async fn get_bundle_recovers_after_unauthorized_reload() {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
         )
         .await,
     );
@@ -687,6 +691,7 @@ async fn get_bundle_recovers_after_unauthorized_reload_updates_cache_identity() 
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
         )
         .await,
     );
@@ -749,6 +754,7 @@ async fn get_bundle_surfaces_auth_recovery_message() {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
         )
         .await,
     );
@@ -813,6 +819,7 @@ async fn get_bundle_unauthorized_without_recovery_uses_generic_message() {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
         )
         .await,
     );
