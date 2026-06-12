@@ -503,6 +503,7 @@ async fn get_raw_output_result(
             windows_sandbox_policy_cwd,
             windows_sandbox_workspace_roots,
             windows_sandbox_filesystem_overrides,
+            after_spawn,
         )
         .await;
     }
@@ -583,6 +584,7 @@ async fn exec_windows_sandbox(
     windows_sandbox_policy_cwd: &AbsolutePathBuf,
     windows_sandbox_workspace_roots: &[AbsolutePathBuf],
     windows_sandbox_filesystem_overrides: Option<&WindowsSandboxFilesystemOverrides>,
+    after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
     use codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated;
@@ -662,6 +664,7 @@ async fn exec_windows_sandbox(
                     write_roots_override: elevated_write_roots_override.as_deref(),
                     deny_read_paths_override: &additional_deny_read_paths,
                     deny_write_paths_override: &additional_deny_write_paths,
+                    after_spawn,
                 },
             )
         } else {
@@ -677,6 +680,7 @@ async fn exec_windows_sandbox(
                 &additional_deny_read_paths,
                 &additional_deny_write_paths,
                 windows_sandbox_private_desktop,
+                after_spawn,
             )
         }
     })

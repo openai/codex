@@ -475,6 +475,7 @@ mod windows_impl {
             &[],
             &[],
             use_private_desktop,
+            /*after_spawn*/ None,
         )
     }
 
@@ -491,6 +492,7 @@ mod windows_impl {
         additional_deny_read_paths: &[AbsolutePathBuf],
         additional_deny_write_paths: &[AbsolutePathBuf],
         use_private_desktop: bool,
+        after_spawn: Option<Box<dyn FnOnce() + Send>>,
     ) -> Result<CaptureResult> {
         let additional_deny_read_paths = additional_deny_read_paths
             .iter()
@@ -576,6 +578,9 @@ mod windows_impl {
                 return Err(err);
             }
         };
+        if let Some(after_spawn) = after_spawn {
+            after_spawn();
+        }
         let pi = created.process_info;
         let _desktop = created;
 

@@ -1,3 +1,5 @@
+use super::process::NoopSpawnLifecycle;
+use super::process::SpawnLifecycle;
 use super::process::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecError;
 use codex_exec_server::ExecProcess;
@@ -14,9 +16,41 @@ use codex_sandboxing::SandboxType;
 use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tokio::time::Duration;
+
+#[derive(Debug, Default)]
+struct RecordingLifecycleState {
+    cancelled: AtomicBool,
+    finishes: std::sync::Mutex<Vec<(Option<i32>, bool)>>,
+}
+
+#[derive(Debug)]
+struct RecordingLifecycle {
+    state: Arc<RecordingLifecycleState>,
+}
+
+impl SpawnLifecycle for RecordingLifecycle {
+    fn mark_cancelled(&self) {
+        self.state.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    fn finish(&self, exit_code: Option<i32>, failed: bool) {
+        self.state
+            .finishes
+            .lock()
+            .expect("finish state")
+            .push((exit_code, failed));
+    }
+}
+
+fn recording_lifecycle() -> (Arc<RecordingLifecycleState>, Box<RecordingLifecycle>) {
+    let state = Arc::new(RecordingLifecycleState::default());
+    (Arc::clone(&state), Box::new(RecordingLifecycle { state }))
+}
 
 struct MockExecProcess {
     process_id: ProcessId,
@@ -86,9 +120,10 @@ impl ExecProcess for MockExecProcess {
     }
 }
 
-async fn remote_process(
+async fn remote_process_with_lifecycle(
     write_status: WriteStatus,
     terminate_error: Option<String>,
+    spawn_lifecycle: Box<dyn SpawnLifecycle>,
 ) -> UnifiedExecProcess {
     let (wake_tx, _wake_rx) = watch::channel(0);
     let started = StartedExecProcess {
@@ -103,9 +138,16 @@ async fn remote_process(
         }),
     };
 
-    UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
+    UnifiedExecProcess::from_exec_server_started(started, SandboxType::None, spawn_lifecycle)
         .await
         .expect("remote process should start")
+}
+
+async fn remote_process(
+    write_status: WriteStatus,
+    terminate_error: Option<String>,
+) -> UnifiedExecProcess {
+    remote_process_with_lifecycle(write_status, terminate_error, Box::new(NoopSpawnLifecycle)).await
 }
 
 #[tokio::test]
@@ -142,6 +184,59 @@ async fn fail_and_terminate_preserves_failure_message() {
     process.fail_and_terminate("second failure".to_string());
 
     assert!(process.has_exited());
+    assert_eq!(
+        process.failure_message(),
+        Some("network denied".to_string())
+    );
+}
+
+#[tokio::test]
+async fn fail_and_terminate_forwards_terminal_failure() {
+    let (state, lifecycle) = recording_lifecycle();
+    let process = remote_process_with_lifecycle(WriteStatus::Accepted, None, lifecycle).await;
+
+    process.fail_and_terminate("network denied".to_string());
+
+    assert_eq!(
+        *state.finishes.lock().expect("finish state"),
+        vec![(None, true)]
+    );
+}
+
+#[tokio::test]
+async fn dropping_live_process_marks_cancelled_and_failed() {
+    let (state, lifecycle) = recording_lifecycle();
+    let process = remote_process_with_lifecycle(WriteStatus::Accepted, None, lifecycle).await;
+
+    drop(process);
+
+    assert!(state.cancelled.load(Ordering::SeqCst));
+    assert_eq!(
+        *state.finishes.lock().expect("finish state"),
+        vec![(None, true)]
+    );
+}
+
+#[tokio::test]
+async fn dropping_exited_process_does_not_mark_cancelled() {
+    let (state, lifecycle) = recording_lifecycle();
+    let process = remote_process_with_lifecycle(WriteStatus::UnknownProcess, None, lifecycle).await;
+    process
+        .write(b"hello")
+        .await
+        .expect_err("expected write failure");
+
+    drop(process);
+
+    assert!(!state.cancelled.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn noop_spawn_lifecycle_preserves_process_behavior() {
+    let process = remote_process(WriteStatus::Accepted, None).await;
+
+    process.fail_and_terminate("network denied".to_string());
+
     assert_eq!(
         process.failure_message(),
         Some("network denied".to_string())
@@ -201,9 +296,13 @@ async fn remote_process_waits_for_early_exit_event() {
         let _ = wake_tx.send(1);
     });
 
-    let process = UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
-        .await
-        .expect("remote process should observe early exit");
+    let process = UnifiedExecProcess::from_exec_server_started(
+        started,
+        SandboxType::None,
+        Box::new(NoopSpawnLifecycle),
+    )
+    .await
+    .expect("remote process should observe early exit");
 
     assert!(process.has_exited());
     assert_eq!(process.exit_code(), Some(17));

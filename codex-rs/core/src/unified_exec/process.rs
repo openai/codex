@@ -33,6 +33,11 @@ use super::head_tail_buffer::HeadTailBuffer;
 use super::process_state::ProcessState;
 
 const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(150);
+/// Process lifecycle hooks for successful spawn and terminal observation.
+///
+/// Default methods are no-op. `after_spawn` runs only after child creation
+/// succeeds. The manager, watcher, and `Drop` can all observe terminal state,
+/// so implementations must make terminal emission idempotent.
 pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
     /// Returns file descriptors that must stay open across the child `exec()`.
     ///
@@ -43,7 +48,14 @@ pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
         Vec::new()
     }
 
+    /// Releases parent-only spawn resources after successful child creation.
     fn after_spawn(&mut self) {}
+
+    /// Records cancellation when orchestration stops a still-live process.
+    fn mark_cancelled(&self) {}
+
+    /// Records the process terminal state; implementations must be idempotent.
+    fn finish(&self, _exit_code: Option<i32>, _failed: bool) {}
 }
 
 pub(crate) type SpawnLifecycleHandle = Box<dyn SpawnLifecycle>;
@@ -85,7 +97,7 @@ pub(crate) struct UnifiedExecProcess {
     state_rx: watch::Receiver<ProcessState>,
     output_task: Option<JoinHandle<()>>,
     sandbox_type: SandboxType,
-    _spawn_lifecycle: Option<SpawnLifecycleHandle>,
+    spawn_lifecycle: Option<SpawnLifecycleHandle>,
 }
 
 impl std::fmt::Debug for UnifiedExecProcess {
@@ -126,7 +138,19 @@ impl UnifiedExecProcess {
             state_rx,
             output_task: None,
             sandbox_type,
-            _spawn_lifecycle: spawn_lifecycle,
+            spawn_lifecycle,
+        }
+    }
+
+    pub(super) fn notify_lifecycle_cancelled(&self) {
+        if let Some(spawn_lifecycle) = self.spawn_lifecycle.as_ref() {
+            spawn_lifecycle.mark_cancelled();
+        }
+    }
+
+    pub(super) fn notify_lifecycle_finished(&self, exit_code: Option<i32>, failed: bool) {
+        if let Some(spawn_lifecycle) = self.spawn_lifecycle.as_ref() {
+            spawn_lifecycle.finish(exit_code, failed);
         }
     }
 
@@ -249,6 +273,7 @@ impl UnifiedExecProcess {
         if state.failure_message.is_none() {
             let _ = self.state_tx.send_replace(state.failed(message));
         }
+        self.notify_lifecycle_finished(/*exit_code*/ None, /*failed*/ true);
         self.terminate();
     }
 
@@ -375,9 +400,10 @@ impl UnifiedExecProcess {
     pub(super) async fn from_exec_server_started(
         started: StartedExecProcess,
         sandbox_type: SandboxType,
+        spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<Self, UnifiedExecError> {
         let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
-        let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
+        let mut managed = Self::new(process_handle, sandbox_type, Some(spawn_lifecycle));
         let output_handles = managed.output_handles();
         managed.output_task = Some(Self::spawn_exec_server_output_task(
             started,
@@ -534,6 +560,12 @@ impl UnifiedExecProcess {
 
 impl Drop for UnifiedExecProcess {
     fn drop(&mut self) {
+        let has_exited = self.has_exited();
+        if !has_exited {
+            self.notify_lifecycle_cancelled();
+        }
+        let failed = self.state_rx.borrow().failure_message.is_some();
+        self.notify_lifecycle_finished(self.exit_code(), failed || !has_exited);
         self.terminate();
     }
 }

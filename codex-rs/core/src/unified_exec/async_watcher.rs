@@ -124,6 +124,7 @@ pub(crate) fn spawn_exit_watcher(
 
         let duration = Instant::now().saturating_duration_since(started_at);
         if let Some(message) = process.failure_message() {
+            process.notify_lifecycle_finished(/*exit_code*/ None, /*failed*/ true);
             emit_failed_exec_end_for_unified_exec(
                 session_ref,
                 turn_ref,
@@ -139,6 +140,7 @@ pub(crate) fn spawn_exit_watcher(
             .await;
         } else {
             let exit_code = process.exit_code().unwrap_or(-1);
+            process.notify_lifecycle_finished(Some(exit_code), /*failed*/ false);
             emit_exec_end_for_unified_exec(
                 session_ref,
                 turn_ref,

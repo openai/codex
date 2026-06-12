@@ -30,6 +30,8 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::Notify;
 use tokio::sync::watch;
 use tokio::time::Duration;
@@ -203,11 +205,16 @@ async fn exec_command_with_tty(
 #[derive(Debug)]
 struct TestSpawnLifecycle {
     inherited_fds: Vec<i32>,
+    after_spawn: Arc<AtomicBool>,
 }
 
 impl SpawnLifecycle for TestSpawnLifecycle {
     fn inherited_fds(&self) -> Vec<i32> {
         self.inherited_fds.clone()
+    }
+
+    fn after_spawn(&mut self) {
+        self.after_spawn.store(true, Ordering::SeqCst);
     }
 }
 
@@ -295,6 +302,7 @@ async fn blocking_terminate_unified_process(
                 }),
             },
             SandboxType::None,
+            Box::new(NoopSpawnLifecycle),
         )
         .await?,
     ))
@@ -797,6 +805,54 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_spawn_lifecycle_runs_only_after_successful_creation() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
+    let environment = codex_exec_server::Environment::default_for_tests();
+    let manager = UnifiedExecProcessManager::default();
+
+    let after_spawn = Arc::new(AtomicBool::new(false));
+    let request = test_exec_request(
+        &turn,
+        vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
+        cwd.clone(),
+        shell_env(),
+    );
+    manager
+        .open_session_with_exec_env(
+            /*process_id*/ 1234,
+            &request,
+            /*tty*/ false,
+            Box::new(TestSpawnLifecycle {
+                inherited_fds: Vec::new(),
+                after_spawn: Arc::clone(&after_spawn),
+            }),
+            &environment,
+        )
+        .await?;
+    assert!(after_spawn.load(Ordering::SeqCst));
+
+    let after_failed_spawn = Arc::new(AtomicBool::new(false));
+    let request = test_exec_request(&turn, Vec::new(), cwd, shell_env());
+    manager
+        .open_session_with_exec_env(
+            /*process_id*/ 1235,
+            &request,
+            /*tty*/ false,
+            Box::new(TestSpawnLifecycle {
+                inherited_fds: Vec::new(),
+                after_spawn: Arc::clone(&after_failed_spawn),
+            }),
+            &environment,
+        )
+        .await
+        .expect_err("missing command should fail before spawn");
+    assert!(!after_failed_spawn.load(Ordering::SeqCst));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     #[allow(deprecated)]
@@ -908,6 +964,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
     );
 
     let manager = UnifiedExecProcessManager::default();
+    let after_spawn = Arc::new(AtomicBool::new(false));
     let err = manager
         .open_session_with_exec_env(
             /*process_id*/ 1234,
@@ -915,6 +972,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
             /*tty*/ true,
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],
+                after_spawn: Arc::clone(&after_spawn),
             }),
             turn.environments
                 .primary()
@@ -929,5 +987,6 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
         err.to_string(),
         "Failed to create unified exec process: remote exec-server does not support inherited file descriptors"
     );
+    assert!(!after_spawn.load(Ordering::SeqCst));
     Ok(())
 }
