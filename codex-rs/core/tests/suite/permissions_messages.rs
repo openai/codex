@@ -510,7 +510,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn permissions_message_includes_writable_roots() -> Result<()> {
+async fn permissions_message_references_environment_context_for_writable_roots() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -576,6 +576,10 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
         .map(|s| normalize_line_endings(s))
         .collect();
     assert_eq!(actual_normalized, vec![expected_normalized]);
+    assert!(permissions[0].contains(
+        "Filesystem access is specified by `<entry>` rules in the `<filesystem>` section of `<environment_context>`. An entry's `access` attribute indicates whether its path is readable, writable, or denied. More-specific rules may restrict access within broader paths."
+    ));
+    assert!(!permissions[0].contains(writable_root.to_string_lossy().as_ref()));
 
     Ok(())
 }
