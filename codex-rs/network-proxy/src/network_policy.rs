@@ -22,6 +22,7 @@ const DEFAULT_CLIENT_ADDRESS: &str = "unknown";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetworkProtocol {
     Http,
+    Https,
     HttpsConnect,
     Socks5Tcp,
     Socks5Udp,
@@ -31,6 +32,7 @@ impl NetworkProtocol {
     pub const fn as_policy_protocol(self) -> &'static str {
         match self {
             Self::Http => "http",
+            Self::Https => "https",
             Self::HttpsConnect => "https_connect",
             Self::Socks5Tcp => "socks5_tcp",
             Self::Socks5Udp => "socks5_udp",
@@ -81,6 +83,7 @@ pub struct NetworkPolicyRequest {
     pub port: u16,
     pub client_addr: Option<String>,
     pub method: Option<String>,
+    pub url: Option<String>,
     pub command: Option<String>,
     pub exec_policy_hint: Option<String>,
 }
@@ -91,6 +94,7 @@ pub struct NetworkPolicyRequestArgs {
     pub port: u16,
     pub client_addr: Option<String>,
     pub method: Option<String>,
+    pub url: Option<String>,
     pub command: Option<String>,
     pub exec_policy_hint: Option<String>,
 }
@@ -103,6 +107,7 @@ impl NetworkPolicyRequest {
             port,
             client_addr,
             method,
+            url,
             command,
             exec_policy_hint,
         } = args;
@@ -112,6 +117,7 @@ impl NetworkPolicyRequest {
             port,
             client_addr,
             method,
+            url,
             command,
             exec_policy_hint,
         }
@@ -627,6 +633,7 @@ mod tests {
             port: 80,
             client_addr: None,
             method: None,
+            url: None,
             command: None,
             exec_policy_hint: None,
         });
@@ -688,6 +695,7 @@ mod tests {
             port: 80,
             client_addr: Some("127.0.0.1:1234".to_string()),
             method: Some("GET".to_string()),
+            url: None,
             command: None,
             exec_policy_hint: None,
         });
@@ -731,6 +739,7 @@ mod tests {
             port: 80,
             client_addr: None,
             method: Some("GET".to_string()),
+            url: None,
             command: None,
             exec_policy_hint: None,
         });
@@ -781,6 +790,7 @@ mod tests {
             port: 80,
             client_addr: None,
             method: Some("GET".to_string()),
+            url: None,
             command: None,
             exec_policy_hint: None,
         });
@@ -867,6 +877,7 @@ mod tests {
             port: 80,
             client_addr: None,
             method: Some("GET".to_string()),
+            url: None,
             command: None,
             exec_policy_hint: None,
         });

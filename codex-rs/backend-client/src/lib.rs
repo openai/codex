@@ -12,6 +12,7 @@ pub use types::ConfigBundleResponse;
 pub use types::DeliveredConfigToml;
 pub use types::DeliveredRequirementsToml;
 pub use types::DeliveredTomlFragment;
+pub use types::DeterministicGuardianReviewResponse;
 pub use types::PaginatedListTaskListItem;
 pub use types::TaskListItem;
 pub use types::TokenUsageProfile;

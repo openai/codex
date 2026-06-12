@@ -270,6 +270,7 @@ async fn handle_socks5_tcp(
         port,
         client_addr: client.clone(),
         method: None,
+        url: None,
         command: None,
         exec_policy_hint: None,
     });
@@ -626,6 +627,7 @@ async fn inspect_socks5_udp(
         port,
         client_addr: client.clone(),
         method: None,
+        url: None,
         command: None,
         exec_policy_hint: None,
     });

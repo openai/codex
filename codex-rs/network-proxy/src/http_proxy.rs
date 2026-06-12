@@ -202,6 +202,7 @@ async fn http_connect_accept(
         port: authority.port,
         client_addr: client.clone(),
         method: Some("CONNECT".to_string()),
+        url: None,
         command: None,
         exec_policy_hint: None,
     });
@@ -685,6 +686,7 @@ async fn http_plain_proxy(
         port,
         client_addr: client.clone(),
         method: Some(req.method().as_str().to_string()),
+        url: Some(req.uri().to_string()),
         command: None,
         exec_policy_hint: None,
     });

@@ -1,6 +1,8 @@
 use crate::types::AccountsCheckResponse;
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::ConfigBundleResponse;
+use crate::types::DeterministicGuardianReviewRequest;
+use crate::types::DeterministicGuardianReviewResponse;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitReachedKind as BackendRateLimitReachedKind;
 use crate::types::RateLimitStatusPayload;
@@ -312,6 +314,31 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json(&url, &ct, &body)
+    }
+
+    pub async fn deterministic_guardian_review_network_access(
+        &self,
+        url: &str,
+        method: &str,
+    ) -> Result<DeterministicGuardianReviewResponse> {
+        let endpoint_url = match self.path_style {
+            PathStyle::CodexApi => {
+                format!("{}/api/codex/guardian/deterministic-review", self.base_url)
+            }
+            PathStyle::ChatGptApi => {
+                format!("{}/wham/guardian/deterministic-review", self.base_url)
+            }
+        };
+        let req = self
+            .http
+            .post(&endpoint_url)
+            .headers(self.headers())
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(&DeterministicGuardianReviewRequest::network_access(
+                url, method,
+            ));
+        let (body, ct) = self.exec_request(req, "POST", &endpoint_url).await?;
+        self.decode_json(&endpoint_url, &ct, &body)
     }
 
     pub async fn get_token_usage_profile(&self) -> Result<TokenUsageProfile> {

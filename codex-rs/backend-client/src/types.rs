@@ -13,6 +13,7 @@ pub use codex_backend_openapi_models::models::SpendControlLimitDetails;
 pub use codex_backend_openapi_models::models::TaskListItem;
 
 use serde::Deserialize;
+use serde::Serialize;
 use serde::de::Deserializer;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -22,6 +23,32 @@ pub struct AccountsCheckResponse {
     pub accounts: Vec<AccountEntry>,
     pub account_ordering: Vec<String>,
     pub default_account_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DeterministicGuardianReviewRequest<'a> {
+    pub action: DeterministicGuardianReviewAction<'a>,
+}
+
+impl<'a> DeterministicGuardianReviewRequest<'a> {
+    pub fn network_access(url: &'a str, method: &'a str) -> Self {
+        Self {
+            action: DeterministicGuardianReviewAction::NetworkAccess { url, method },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum DeterministicGuardianReviewAction<'a> {
+    NetworkAccess { url: &'a str, method: &'a str },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DeterministicGuardianReviewResponse {
+    pub safe: bool,
+    #[serde(default)]
+    pub rationale: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
