@@ -751,7 +751,7 @@ async fn run_guardian_review_session_before_deadline(
         guardian_model.as_str(),
         guardian_reasoning_effort.clone(),
     );
-    let guardian_config = match guardian_config {
+    let mut guardian_config = match guardian_config {
         Ok(config) => config,
         Err(err) => {
             return (
@@ -760,6 +760,9 @@ async fn run_guardian_review_session_before_deadline(
             );
         }
     };
+    if let Some(primary_environment) = turn.environments.primary() {
+        guardian_config.cwd = primary_environment.cwd.clone();
+    }
 
     let (session_outcome, session_analytics_result) = Box::pin(
         session

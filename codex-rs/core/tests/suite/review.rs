@@ -796,6 +796,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     run_git(repo_path, &["config", "user.email", "test@example.com"]);
     run_git(repo_path, &["config", "user.name", "Test User"]);
     std::fs::write(repo_path.join("file.txt"), "hello\n").unwrap();
+    std::fs::write(repo_path.join("AGENTS.md"), "review repo instructions").unwrap();
     run_git(repo_path, &["add", "."]);
     run_git(repo_path, &["commit", "-m", "initial"]);
 
@@ -858,6 +859,13 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     assert!(
         saw_merge_base_sha,
         "expected review prompt to include merge-base sha {head_sha}"
+    );
+    assert!(
+        input
+            .iter()
+            .filter_map(|msg| msg["content"][0]["text"].as_str())
+            .any(|text| text.contains("review repo instructions")),
+        "expected review child to load instructions from its overridden cwd"
     );
 
     let _codex_home_guard = codex_home;

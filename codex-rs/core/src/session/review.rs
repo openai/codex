@@ -45,6 +45,9 @@ pub(super) async fn spawn_review_thread(
 
     // Build per‑turn client with the requested model/family.
     let mut per_turn_config = (*config).clone();
+    if let Some(primary_environment) = parent_turn_context.environments.primary() {
+        per_turn_config.cwd = primary_environment.cwd.clone();
+    }
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
     let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
