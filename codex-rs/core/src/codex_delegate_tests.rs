@@ -2,6 +2,12 @@ use super::*;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
 use async_channel::bounded;
+use codex_extension_api::ApprovalReviewContributor;
+use codex_extension_api::ApprovalReviewError;
+use codex_extension_api::ApprovalReviewInput;
+use codex_extension_api::ApprovalReviewOutcome;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::NetworkPermissions;
@@ -32,6 +38,20 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tokio::time::timeout;
+
+struct ApprovingDelegatedReviewContributor {
+    source: Arc<std::sync::Mutex<Option<ApprovalReviewSource>>>,
+}
+
+impl ApprovalReviewContributor for ApprovingDelegatedReviewContributor {
+    fn review<'a>(
+        &'a self,
+        input: ApprovalReviewInput<'a>,
+    ) -> ExtensionFuture<'a, Result<ApprovalReviewOutcome, ApprovalReviewError>> {
+        *self.source.lock().expect("source lock") = Some(input.source);
+        Box::pin(async { Ok(ApprovalReviewOutcome::decision(ReviewDecision::Approved)) })
+    }
+}
 
 #[tokio::test]
 async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
@@ -277,6 +297,54 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
             id: call_id,
             response: expected_response,
         }
+    );
+}
+
+#[tokio::test]
+async fn delegated_automated_approval_uses_extension_with_delegated_source() {
+    let (mut session, mut parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let parent_ctx_mut = Arc::get_mut(&mut parent_ctx).expect("single turn context ref");
+    parent_ctx_mut
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set on-request policy");
+    let mut config = (*parent_ctx_mut.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    parent_ctx_mut.config = Arc::new(config);
+
+    let source = Arc::new(std::sync::Mutex::new(None));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.approval_review_contributor(Arc::new(ApprovingDelegatedReviewContributor {
+        source: Arc::clone(&source),
+    }));
+    Arc::get_mut(&mut session)
+        .expect("single session ref")
+        .services
+        .extensions = Arc::new(extensions.build());
+
+    let decision = request_delegated_automated_approval(
+        &session,
+        &parent_ctx,
+        "callback-approval-1",
+        GuardianApprovalRequest::Shell {
+            id: "command-item-1".to_string(),
+            command: vec!["echo".to_string(), "hello".to_string()],
+            cwd: test_path_buf("/tmp").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+        },
+        /*retry_reason*/ None,
+        ApprovalsReviewer::AutoReview,
+        &CancellationToken::new(),
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Approved);
+    assert_eq!(
+        *source.lock().expect("source lock"),
+        Some(ApprovalReviewSource::DelegatedSubagent)
     );
 }
 

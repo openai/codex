@@ -7,13 +7,13 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
-use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::approval_dispatch::request_automated_approval;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::prepend_zsh_fork_bin_to_path;
@@ -29,6 +29,7 @@ use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
+use codex_extension_api::ApprovalReviewSource;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -460,10 +461,10 @@ impl CoreShellActionProvider {
 
                 // 2) Route to Guardian if configured
                 if let Some(review_id) = guardian_review_id.clone() {
-                    let decision = review_approval_request(
+                    let automated = request_automated_approval(
                         &session,
                         &turn,
-                        review_id.clone(),
+                        review_id,
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),
                             source,
@@ -472,13 +473,26 @@ impl CoreShellActionProvider {
                             cwd: workdir.clone(),
                             additional_permissions,
                         },
+                        turn.config.approvals_reviewer,
                         /*retry_reason*/ None,
+                        ApprovalReviewSource::MainTurn,
                     )
                     .await;
+                    let (decision, rejection_message) = match automated {
+                        Ok(automated) => {
+                            let rejection_message = matches!(
+                                &automated.decision,
+                                ReviewDecision::Denied | ReviewDecision::TimedOut
+                            )
+                            .then(|| automated.denial_message());
+                            (automated.decision, rejection_message)
+                        }
+                        Err(message) => (ReviewDecision::Denied, Some(message)),
+                    };
                     return PromptDecision {
                         decision,
                         guardian_review_id,
-                        rejection_message: None,
+                        rejection_message,
                     };
                 }
 
