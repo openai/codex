@@ -441,6 +441,35 @@ pub struct CodexGoalEvent {
     pub cumulative_time_accounted_seconds: Option<i64>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginScriptLifecycleStatus {
+    Started,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug)]
+pub struct PluginScriptSkill {
+    pub skill_name: String,
+    pub skill_path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub struct CodexPluginScriptLifecycleEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub plugin_id: String,
+    pub execution_id: String,
+    pub script_path: String,
+    pub timestamp: String,
+    pub status: PluginScriptLifecycleStatus,
+    pub duration_ms: Option<u64>,
+    pub exit_code: Option<i32>,
+    pub skill: Option<PluginScriptSkill>,
+}
+
 #[allow(dead_code)]
 pub(crate) enum AnalyticsFact {
     Initialize {
@@ -493,6 +522,7 @@ pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     Compaction(Box<CodexCompactionEvent>),
     Goal(Box<CodexGoalEvent>),
+    PluginScriptLifecycle(Box<CodexPluginScriptLifecycleEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),

@@ -313,6 +313,15 @@ impl AnalyticsEventsClient {
         ))));
     }
 
+    pub fn track_plugin_script_lifecycle(
+        &self,
+        event: crate::facts::CodexPluginScriptLifecycleEvent,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginScriptLifecycle(Box::new(event)),
+        ));
+    }
+
     pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::TurnResolvedConfig(Box::new(fact)),
