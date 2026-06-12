@@ -161,7 +161,8 @@ pub(super) fn server_notification_thread_target(
                 None => return ServerNotificationThreadTarget::AppScoped,
             }
         }
-        ServerNotification::SkillsChanged(_)
+        ServerNotification::ThreadCatalogChanged(_)
+        | ServerNotification::SkillsChanged(_)
         | ServerNotification::McpServerOauthLoginCompleted(_)
         | ServerNotification::AccountUpdated(_)
         | ServerNotification::AccountRateLimitsUpdated(_)
