@@ -16,7 +16,7 @@ use crate::parser::UpdateFileChunk;
 use Hunk::*;
 use ParseError::*;
 
-const ENVIRONMENT_ID_MARKER: &str = "*** Environment ID: ";
+const ENVIRONMENT_ID_MARKER: &str = "*** Environment ID:";
 
 #[derive(Debug, Default, Clone)]
 pub struct StreamingPatchParser {
@@ -81,9 +81,10 @@ impl StreamingPatchParser {
         Ok(())
     }
 
-    fn handle_hunk_headers_and_end_patch(&mut self, line: &str) -> Result<bool, ParseError> {
-        if self.line_number == 2
-            && let Some(environment_id) = line.trim_start().strip_prefix(ENVIRONMENT_ID_MARKER)
+    fn handle_hunk_headers_and_end_patch(&mut self, trimmed: &str) -> Result<bool, ParseError> {
+        if matches!(self.state.mode, StreamingParserMode::StartedPatch)
+            && self.state.environment_id.is_none()
+            && let Some(environment_id) = trimmed.strip_prefix(ENVIRONMENT_ID_MARKER)
         {
             let environment_id = environment_id.trim();
             if environment_id.is_empty() {
@@ -94,11 +95,6 @@ impl StreamingPatchParser {
             self.state.environment_id = Some(environment_id.to_string());
             return Ok(true);
         }
-        let trimmed = if matches!(self.state.mode, StreamingParserMode::StartedPatch) {
-            line.trim()
-        } else {
-            line
-        };
         if trimmed == END_PATCH_MARKER {
             self.ensure_update_hunk_is_not_empty(trimmed)?;
             self.state.mode = StreamingParserMode::EndedPatch;
@@ -185,7 +181,7 @@ impl StreamingPatchParser {
                 ))
             }
             StreamingParserMode::StartedPatch => {
-                if self.handle_hunk_headers_and_end_patch(line)? {
+                if self.handle_hunk_headers_and_end_patch(trimmed)? {
                     return Ok(());
                 }
                 Err(InvalidHunkError {
