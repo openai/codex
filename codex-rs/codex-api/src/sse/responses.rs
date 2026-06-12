@@ -23,6 +23,7 @@ use tracing::debug;
 use tracing::trace;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
+const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
@@ -53,15 +54,8 @@ pub fn spawn_response_stream(
         .get(REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    if let Some(turn_state) = turn_state.as_ref()
-        && let Some(header_value) = stream_response
-            .headers
-            .get("x-codex-turn-state")
-            .and_then(|v| v.to_str().ok())
-    {
-        *turn_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = header_value.to_string();
+    if let Some(turn_state) = turn_state.as_deref() {
+        capture_turn_state(&stream_response.headers, turn_state);
     }
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
@@ -85,6 +79,17 @@ pub fn spawn_response_stream(
     ResponseStream {
         rx_event,
         upstream_request_id,
+    }
+}
+
+pub(crate) fn capture_turn_state(headers: &http::HeaderMap, turn_state: &Mutex<String>) {
+    if let Some(header_value) = headers
+        .get(X_CODEX_TURN_STATE_HEADER)
+        .and_then(|value| value.to_str().ok())
+    {
+        *turn_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = header_value.to_string();
     }
 }
 

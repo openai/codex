@@ -422,6 +422,7 @@ impl ModelClient {
         &self,
         prompt: &Prompt,
         model_info: &ModelInfo,
+        turn_state: Option<Arc<StdMutex<String>>>,
         settings: CompactConversationRequestSettings,
         session_telemetry: &SessionTelemetry,
         compaction_trace: &CompactionTraceContext,
@@ -481,7 +482,7 @@ impl ModelClient {
         }
         extra_headers.extend(build_responses_headers(
             self.state.beta_features_header.as_deref(),
-            /*turn_state*/ None,
+            turn_state.as_ref(),
         ));
         extra_headers.extend(self.build_responses_compatibility_headers(responses_metadata));
         extra_headers.extend(build_session_headers(
@@ -501,7 +502,12 @@ impl ModelClient {
                 .with_telemetry(Some(request_telemetry));
         let trace_attempt = compaction_trace.start_attempt(&payload);
         let result = client
-            .compact_input(&payload, extra_headers, compact_request_timeout)
+            .compact_input(
+                &payload,
+                extra_headers,
+                compact_request_timeout,
+                turn_state.as_deref(),
+            )
             .await
             .map_err(map_api_error);
         trace_attempt.record_result(result.as_deref());
@@ -919,6 +925,10 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn turn_state(&self) -> Arc<StdMutex<String>> {
+        Arc::clone(&self.turn_state)
+    }
+
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
