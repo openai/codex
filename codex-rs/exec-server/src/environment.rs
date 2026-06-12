@@ -31,7 +31,7 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
 /// Owns the execution/filesystem environments available to the Codex runtime.
 ///
-/// `EnvironmentManager` is a shared registry for concrete environments. Its
+/// `EnvironmentManager` is a shared registry for environments. Its
 /// default constructor preserves the legacy `CODEX_EXEC_SERVER_URL` behavior
 /// while configured construction accepts a provider-supplied snapshot.
 ///
@@ -251,6 +251,25 @@ impl EnvironmentManager {
             .cloned()
     }
 
+    /// Registers a named remote environment before its exec-server endpoint is available.
+    pub fn register_pending_environment(
+        &self,
+        environment_id: String,
+    ) -> Result<Arc<Environment>, ExecServerError> {
+        validate_environment_id(&environment_id)?;
+        let mut environments = self
+            .environments
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(Arc::clone(
+            environments.entry(environment_id).or_insert_with(|| {
+                Arc::new(Environment::pending_remote(
+                    self.local_runtime_paths.clone(),
+                ))
+            }),
+        ))
+    }
+
     /// Adds or replaces a named remote environment without changing the
     /// manager's default environment selection.
     pub fn upsert_environment(
@@ -258,11 +277,7 @@ impl EnvironmentManager {
         environment_id: String,
         exec_server_url: String,
     ) -> Result<(), ExecServerError> {
-        if environment_id.is_empty() {
-            return Err(ExecServerError::Protocol(
-                "environment id cannot be empty".to_string(),
-            ));
-        }
+        validate_environment_id(&environment_id)?;
         let (exec_server_url, disabled) = normalize_exec_server_url(Some(exec_server_url));
         if disabled {
             return Err(ExecServerError::Protocol(
@@ -274,24 +289,47 @@ impl EnvironmentManager {
                 "remote environment requires an exec-server url".to_string(),
             ));
         };
-        let environment =
-            Environment::remote_inner(exec_server_url, self.local_runtime_paths.clone());
-        self.environments
+        let mut environments = self
+            .environments
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, Arc::new(environment));
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match environments.get(&environment_id) {
+            Some(existing) if existing.is_remote() => existing
+                .set_remote_transport(ExecServerTransportParams::websocket_url(exec_server_url)),
+            _ => {
+                environments.insert(
+                    environment_id,
+                    Arc::new(Environment::remote_inner(
+                        exec_server_url,
+                        self.local_runtime_paths.clone(),
+                    )),
+                );
+            }
+        }
         Ok(())
     }
 }
 
-/// Concrete execution/filesystem environment selected for a session.
+fn validate_environment_id(environment_id: &str) -> Result<(), ExecServerError> {
+    if environment_id.is_empty() {
+        return Err(ExecServerError::Protocol(
+            "environment id cannot be empty".to_string(),
+        ));
+    }
+    if environment_id == LOCAL_ENVIRONMENT_ID {
+        return Err(ExecServerError::Protocol(format!(
+            "environment id `{LOCAL_ENVIRONMENT_ID}` is reserved for EnvironmentManager"
+        )));
+    }
+    Ok(())
+}
+
+/// Execution/filesystem environment selected for a session.
 ///
-/// This bundles the selected backend metadata together with the local runtime
-/// paths used by filesystem helpers.
+/// The handle remains stable while its concrete backend is supplied or replaced.
 #[derive(Clone)]
 pub struct Environment {
-    exec_server_url: Option<String>,
-    remote_transport: Option<ExecServerTransportParams>,
+    remote_client: Option<LazyRemoteExecServerClient>,
     info_provider: Arc<dyn EnvironmentInfoProvider>,
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
@@ -332,8 +370,7 @@ impl Environment {
     /// Builds a test-only local environment without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
         Self {
-            exec_server_url: None,
-            remote_transport: None,
+            remote_client: None,
             info_provider: Arc::new(LocalEnvironmentInfoProvider),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
@@ -346,7 +383,9 @@ impl Environment {
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Environment")
-            .field("exec_server_url", &self.exec_server_url)
+            .field("is_remote", &self.is_remote())
+            .field("is_ready", &self.is_ready())
+            .field("exec_server_url", &self.exec_server_url())
             .finish_non_exhaustive()
     }
 }
@@ -389,8 +428,7 @@ impl Environment {
 
     pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
-            exec_server_url: None,
-            remote_transport: None,
+            remote_client: None,
             info_provider: Arc::new(LocalEnvironmentInfoProvider),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
@@ -399,6 +437,10 @@ impl Environment {
             http_client: Arc::new(ReqwestHttpClient),
             local_runtime_paths: Some(local_runtime_paths),
         }
+    }
+
+    fn pending_remote(local_runtime_paths: Option<ExecServerRuntimePaths>) -> Self {
+        Self::remote_with_client(LazyRemoteExecServerClient::pending(), local_runtime_paths)
     }
 
     pub(crate) fn remote_inner(
@@ -415,21 +457,22 @@ impl Environment {
         remote_transport: ExecServerTransportParams,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        let exec_server_url = match &remote_transport {
-            ExecServerTransportParams::WebSocketUrl {
-                websocket_url: exec_server_url,
-                ..
-            } => Some(exec_server_url.clone()),
-            ExecServerTransportParams::StdioCommand { .. } => None,
-        };
-        let client = LazyRemoteExecServerClient::new(remote_transport.clone());
+        Self::remote_with_client(
+            LazyRemoteExecServerClient::new(remote_transport),
+            local_runtime_paths,
+        )
+    }
+
+    fn remote_with_client(
+        client: LazyRemoteExecServerClient,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Self {
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem: Arc<dyn ExecutorFileSystem> =
             Arc::new(RemoteFileSystem::new(client.clone()));
 
         Self {
-            exec_server_url,
-            remote_transport: Some(remote_transport),
+            remote_client: Some(client.clone()),
             info_provider: Arc::new(RemoteEnvironmentInfoProvider::new(client.clone())),
             exec_backend,
             filesystem,
@@ -439,12 +482,26 @@ impl Environment {
     }
 
     pub fn is_remote(&self) -> bool {
-        self.remote_transport.is_some()
+        self.remote_client.is_some()
     }
 
-    /// Returns the remote exec-server URL when this environment is remote.
-    pub fn exec_server_url(&self) -> Option<&str> {
-        self.exec_server_url.as_deref()
+    pub fn is_ready(&self) -> bool {
+        self.remote_client
+            .as_ref()
+            .is_none_or(|client| client.transport_params().is_some())
+    }
+
+    /// Returns the currently configured remote exec-server URL.
+    pub fn exec_server_url(&self) -> Option<String> {
+        self.remote_client
+            .as_ref()?
+            .transport_params()
+            .and_then(|transport_params| match transport_params.as_ref() {
+                ExecServerTransportParams::WebSocketUrl { websocket_url, .. } => {
+                    Some(websocket_url.clone())
+                }
+                ExecServerTransportParams::StdioCommand { .. } => None,
+            })
     }
 
     pub fn local_runtime_paths(&self) -> Option<&ExecServerRuntimePaths> {
@@ -466,6 +523,20 @@ impl Environment {
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         Arc::clone(&self.filesystem)
+    }
+
+    fn set_remote_transport(&self, remote_transport: ExecServerTransportParams) {
+        if let Some(client) = &self.remote_client {
+            client.set_transport(remote_transport);
+        }
+    }
+
+    #[cfg(test)]
+    async fn wait_until_ready(&self) -> Result<(), ExecServerError> {
+        if let Some(client) = &self.remote_client {
+            client.wait_for_transport().await?;
+        }
+        Ok(())
     }
 }
 
@@ -489,6 +560,7 @@ impl From<DetectedShell> for ShellInfo {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use super::Environment;
     use super::EnvironmentManager;
@@ -570,7 +642,10 @@ mod tests {
             Some(REMOTE_ENVIRONMENT_ID)
         );
         assert!(environment.is_remote());
-        assert_eq!(environment.exec_server_url(), Some("ws://127.0.0.1:8765"));
+        assert_eq!(
+            environment.exec_server_url().as_deref(),
+            Some("ws://127.0.0.1:8765")
+        );
         assert!(Arc::ptr_eq(
             &environment,
             &manager
@@ -760,7 +835,7 @@ mod tests {
 
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
         let manager = EnvironmentManager::create_for_tests(
-            environment.exec_server_url().map(str::to_owned),
+            environment.exec_server_url(),
             Some(
                 environment
                     .local_runtime_paths()
@@ -816,16 +891,96 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_upserts_named_remote_environment() {
+        let reserved_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test exec-server port should bind");
+        let exec_server_address = reserved_listener
+            .local_addr()
+            .expect("test exec-server should have an address");
+        drop(reserved_listener);
+        let exec_server_url = format!("ws://{exec_server_address}");
+        let exec_server_url_for_task = exec_server_url.clone();
+        let exec_server_task = tokio::spawn(async move {
+            crate::run_main(&exec_server_url_for_task, test_runtime_paths()).await
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if tokio::net::TcpStream::connect(exec_server_address)
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("test exec-server should start");
+
         let manager = EnvironmentManager::without_environments();
 
+        let pending = manager
+            .register_pending_environment("executor-a".to_string())
+            .expect("pending environment");
+        assert!(pending.is_remote() && !pending.is_ready());
+        let exec_backend = pending.get_exec_backend();
+        let http_client = pending.get_http_client();
+        let filesystem = pending.get_filesystem();
+        let waiting_exec_backend = Arc::clone(&exec_backend);
+        let exec_waiter = tokio::spawn(async move {
+            waiting_exec_backend
+                .start(crate::ExecParams {
+                    process_id: ProcessId::from("pending-environment-proc"),
+                    argv: vec!["true".to_string()],
+                    cwd: std::env::current_dir().expect("read current dir"),
+                    env_policy: None,
+                    env: Default::default(),
+                    tty: false,
+                    pipe_stdin: false,
+                    arg0: None,
+                })
+                .await
+        });
+        let waiting_environment = Arc::clone(&pending);
+        let ready_waiter = tokio::spawn(async move {
+            waiting_environment
+                .wait_until_ready()
+                .await
+                .map(|()| waiting_environment.exec_server_url())
+        });
+        tokio::task::yield_now().await;
+        assert!(!exec_waiter.is_finished());
+
         manager
-            .upsert_environment("executor-a".to_string(), "ws://127.0.0.1:8765".to_string())
+            .upsert_environment("executor-a".to_string(), exec_server_url.clone())
             .expect("remote environment");
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), ready_waiter)
+                .await
+                .expect("ready waiter should be notified")
+                .expect("ready waiter should not panic")
+                .expect("environment should become ready")
+                .as_deref(),
+            Some(exec_server_url.as_str())
+        );
+        let started = tokio::time::timeout(Duration::from_secs(2), exec_waiter)
+            .await
+            .expect("pending capability should wake")
+            .expect("pending capability task should not panic")
+            .expect("pending capability should execute");
+        assert_eq!(
+            started.process.process_id().as_str(),
+            "pending-environment-proc"
+        );
         let first = manager
             .get_environment("executor-a")
             .expect("first remote environment");
+        assert!(Arc::ptr_eq(&pending, &first) && first.is_ready());
         assert!(first.is_remote());
-        assert_eq!(first.exec_server_url(), Some("ws://127.0.0.1:8765"));
+        assert_eq!(
+            first.exec_server_url().as_deref(),
+            Some(exec_server_url.as_str())
+        );
         assert_eq!(manager.default_environment_id(), None);
 
         manager
@@ -835,8 +990,44 @@ mod tests {
             .get_environment("executor-a")
             .expect("second remote environment");
         assert!(second.is_remote());
-        assert_eq!(second.exec_server_url(), Some("ws://127.0.0.1:9876"));
-        assert!(!Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            second.exec_server_url().as_deref(),
+            Some("ws://127.0.0.1:9876")
+        );
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(Arc::ptr_eq(&exec_backend, &second.get_exec_backend()));
+        assert!(Arc::ptr_eq(&http_client, &second.get_http_client()));
+        assert!(Arc::ptr_eq(&filesystem, &second.get_filesystem()));
+
+        exec_server_task.abort();
+        let _ = exec_server_task.await;
+    }
+
+    #[tokio::test]
+    async fn environment_manager_rejects_reserved_dynamic_environment_id() {
+        let manager = EnvironmentManager::default_for_tests();
+
+        let errors = vec![
+            manager
+                .register_pending_environment(LOCAL_ENVIRONMENT_ID.to_string())
+                .expect_err("pending local environment should fail")
+                .to_string(),
+            manager
+                .upsert_environment(
+                    LOCAL_ENVIRONMENT_ID.to_string(),
+                    "ws://127.0.0.1:8765".to_string(),
+                )
+                .expect_err("remote local environment should fail")
+                .to_string(),
+        ];
+
+        assert_eq!(
+            errors,
+            vec![
+                "exec-server protocol error: environment id `local` is reserved for EnvironmentManager",
+                "exec-server protocol error: environment id `local` is reserved for EnvironmentManager",
+            ]
+        );
     }
 
     #[tokio::test]

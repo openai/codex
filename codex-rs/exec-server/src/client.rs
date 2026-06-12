@@ -200,51 +200,141 @@ pub struct ExecServerClient {
 
 #[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
-    transport_params: ExecServerTransportParams,
-    client: Arc<StdMutex<Option<ExecServerClient>>>,
+    state: Arc<StdMutex<LazyRemoteExecServerClientState>>,
+    transport_revision_tx: watch::Sender<u64>,
     connect_lock: Arc<Semaphore>,
+}
+
+struct LazyRemoteExecServerClientState {
+    transport_params: Option<Arc<ExecServerTransportParams>>,
+    client: Option<ExecServerClient>,
 }
 
 impl LazyRemoteExecServerClient {
     pub(crate) fn new(transport_params: ExecServerTransportParams) -> Self {
+        Self::with_transport(Some(transport_params))
+    }
+
+    pub(crate) fn pending() -> Self {
+        Self::with_transport(/*transport_params*/ None)
+    }
+
+    fn with_transport(transport_params: Option<ExecServerTransportParams>) -> Self {
+        let (transport_revision_tx, _transport_revision_rx) = watch::channel(0);
         Self {
-            transport_params,
-            client: Arc::new(StdMutex::new(None)),
+            state: Arc::new(StdMutex::new(LazyRemoteExecServerClientState {
+                transport_params: transport_params.map(Arc::new),
+                client: None,
+            })),
+            transport_revision_tx,
             connect_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
     }
 
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
-        if let Some(client) = self.connected_client() {
-            return Ok(client);
-        }
-
-        let _connect_permit = self.connect_lock.acquire().await.map_err(|_| {
-            ExecServerError::Protocol("exec-server connect lock closed".to_string())
-        })?;
-        if let Some(client) = self.connected_client() {
-            return Ok(client);
-        }
-
-        let next_client = match self.cached_client() {
-            Some(_client)
-                if matches!(
-                    &self.transport_params,
-                    ExecServerTransportParams::WebSocketUrl { .. }
-                ) =>
-            {
-                ExecServerClient::connect_for_transport(self.transport_params.clone()).await?
+        loop {
+            if let Some(client) = self.connected_client() {
+                return Ok(client);
             }
-            Some(client) => return Ok(client),
-            None => ExecServerClient::connect_for_transport(self.transport_params.clone()).await?,
-        };
 
-        let mut cached_client = self
-            .client
+            let _connect_permit = self.connect_lock.acquire().await.map_err(|_| {
+                ExecServerError::Protocol("exec-server connect lock closed".to_string())
+            })?;
+            if let Some(client) = self.connected_client() {
+                return Ok(client);
+            }
+
+            let transport_params = self.wait_for_transport().await?;
+            if let Some(client) = self.cached_client()
+                && matches!(
+                    transport_params.as_ref(),
+                    ExecServerTransportParams::StdioCommand { .. }
+                )
+            {
+                return Ok(client);
+            }
+            let mut transport_revision_rx = self.transport_revision_tx.subscribe();
+            if !self.is_current_transport(&transport_params) {
+                continue;
+            }
+            let next_client = tokio::select! {
+                result = ExecServerClient::connect_for_transport(transport_params.as_ref().clone()) => {
+                    match result {
+                        Ok(client) => client,
+                        Err(_err) if !self.is_current_transport(&transport_params) => continue,
+                        Err(err) => return Err(err),
+                    }
+                }
+                changed = transport_revision_rx.changed() => {
+                    changed.map_err(|_| ExecServerError::Closed)?;
+                    continue;
+                }
+            };
+
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state
+                .transport_params
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &transport_params))
+            {
+                state.client = Some(next_client.clone());
+                return Ok(next_client);
+            }
+        }
+    }
+
+    pub(crate) fn set_transport(&self, transport_params: ExecServerTransportParams) {
+        let mut state = self
+            .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *cached_client = Some(next_client.clone());
-        Ok(next_client)
+        if state
+            .transport_params
+            .as_deref()
+            .is_some_and(|current| current == &transport_params)
+        {
+            return;
+        }
+        state.transport_params = Some(Arc::new(transport_params));
+        state.client = None;
+        drop(state);
+        self.transport_revision_tx
+            .send_modify(|revision| *revision += 1);
+    }
+
+    pub(crate) fn transport_params(&self) -> Option<Arc<ExecServerTransportParams>> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .transport_params
+            .clone()
+    }
+
+    pub(crate) async fn wait_for_transport(
+        &self,
+    ) -> Result<Arc<ExecServerTransportParams>, ExecServerError> {
+        let mut transport_revision_rx = self.transport_revision_tx.subscribe();
+        loop {
+            if let Some(transport_params) = self.transport_params() {
+                return Ok(transport_params);
+            }
+            transport_revision_rx
+                .changed()
+                .await
+                .map_err(|_| ExecServerError::Closed)?;
+        }
+    }
+
+    fn is_current_transport(&self, transport_params: &Arc<ExecServerTransportParams>) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .transport_params
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, transport_params))
     }
 
     fn connected_client(&self) -> Option<ExecServerClient> {
@@ -253,9 +343,10 @@ impl LazyRemoteExecServerClient {
     }
 
     fn cached_client(&self) -> Option<ExecServerClient> {
-        self.client
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .client
             .clone()
     }
 }
@@ -1587,6 +1678,77 @@ mod tests {
         assert!(Arc::ptr_eq(&replacement_a.inner, &replacement_b.inner));
 
         server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn remote_websocket_client_cancels_stale_connection_after_transport_update() {
+        let stale_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("stale listener should bind");
+        let stale_websocket_url = format!(
+            "ws://{}",
+            stale_listener
+                .local_addr()
+                .expect("stale listener should have address")
+        );
+        let (stale_accepted_tx, stale_accepted_rx) = oneshot::channel();
+        let (release_stale_tx, release_stale_rx) = oneshot::channel();
+        let stale_server = tokio::spawn(async move {
+            let _stale_websocket = accept_websocket(&stale_listener).await;
+            stale_accepted_tx
+                .send(())
+                .expect("stale connection should signal");
+            let _ = release_stale_rx.await;
+        });
+
+        let ready_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("ready listener should bind");
+        let ready_websocket_url = format!(
+            "ws://{}",
+            ready_listener
+                .local_addr()
+                .expect("ready listener should have address")
+        );
+        let ready_server = tokio::spawn(async move {
+            let mut websocket = accept_websocket(&ready_listener).await;
+            complete_websocket_initialize(
+                &mut websocket,
+                "ready-session",
+                /*expected_resume_session_id*/ None,
+            )
+            .await;
+        });
+
+        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
+            websocket_url: stale_websocket_url,
+            connect_timeout: Duration::from_secs(1),
+            initialize_timeout: Duration::from_secs(60),
+        });
+        let connecting_client = client.clone();
+        let connect_task = tokio::spawn(async move { connecting_client.get().await });
+        stale_accepted_rx
+            .await
+            .expect("stale connection should be accepted");
+
+        client.set_transport(ExecServerTransportParams::WebSocketUrl {
+            websocket_url: ready_websocket_url,
+            connect_timeout: Duration::from_secs(1),
+            initialize_timeout: Duration::from_secs(1),
+        });
+
+        let connected = timeout(Duration::from_secs(1), connect_task)
+            .await
+            .expect("updated transport should not wait for the stale timeout")
+            .expect("connection task should not panic")
+            .expect("updated transport should connect");
+        assert_eq!(connected.session_id().as_deref(), Some("ready-session"));
+
+        release_stale_tx
+            .send(())
+            .expect("stale server should be released");
+        stale_server.await.expect("stale server should finish");
+        ready_server.await.expect("ready server should finish");
     }
 
     #[tokio::test]

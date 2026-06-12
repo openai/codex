@@ -178,7 +178,7 @@ mod tests {
         let remote_environment = &environments[REMOTE_ENVIRONMENT_ID];
         assert!(remote_environment.is_remote());
         assert_eq!(
-            remote_environment.exec_server_url(),
+            remote_environment.exec_server_url().as_deref(),
             Some("ws://127.0.0.1:8765")
         );
         assert_eq!(
@@ -194,7 +194,9 @@ mod tests {
         let environments: HashMap<_, _> = snapshot.environments.into_iter().collect();
 
         assert_eq!(
-            environments[REMOTE_ENVIRONMENT_ID].exec_server_url(),
+            environments[REMOTE_ENVIRONMENT_ID]
+                .exec_server_url()
+                .as_deref(),
             Some("ws://127.0.0.1:8765")
         );
     }
