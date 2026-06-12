@@ -850,6 +850,10 @@ fn build_payload_roots(
     read_roots = filter_user_profile_root(read_roots);
     read_roots = filter_user_profile_root_exclusions(read_roots);
     read_roots = filter_ssh_config_dependency_roots(read_roots);
+    // MSIX/Windows Store package installs live under WindowsApps with protected ACLs.
+    // Helper binaries are already copied into CODEX_HOME/.sandbox-bin, so setup
+    // should not attempt to project sandbox-user read ACEs onto the packaged app tree.
+    read_roots = filter_windowsapps_package_roots(read_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
@@ -948,6 +952,15 @@ fn filter_ssh_config_dependency_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
     let dependency_paths = ssh_config_dependency_paths(user_profile);
     roots.retain(|root| !is_ssh_config_dependency_root(root, user_profile, &dependency_paths));
     roots
+}
+
+fn filter_windowsapps_package_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    roots.retain(|root| !is_windowsapps_package_root(root));
+    roots
+}
+
+fn is_windowsapps_package_root(root: &Path) -> bool {
+    canonical_path_key(root).starts_with("c:/program files/windowsapps/")
 }
 
 fn is_ssh_config_dependency_root(
@@ -1364,6 +1377,34 @@ mod tests {
             &user_profile,
             &dependency_paths
         ));
+    }
+
+    #[test]
+    fn is_windowsapps_package_root_matches_packaged_install_paths() {
+        assert!(super::is_windowsapps_package_root(PathBuf::from(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.609.3341.0_x64__2p2nqsd0c76g0\app"
+        )
+        .as_path()));
+        assert!(super::is_windowsapps_package_root(PathBuf::from(
+            "c:/program files/windowsapps/openai.codex_26.609.3341.0_x64__2p2nqsd0c76g0/app/resources"
+        )
+        .as_path()));
+        assert!(!super::is_windowsapps_package_root(
+            PathBuf::from(r"C:\Program Files\OpenAI\Codex\app").as_path()
+        ));
+    }
+
+    #[test]
+    fn filter_windowsapps_package_roots_drops_packaged_app_paths() {
+        let safe_root = PathBuf::from(r"C:\Users\zzy\.codex\.sandbox-bin");
+        let filtered = super::filter_windowsapps_package_roots(vec![
+            PathBuf::from(
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.609.3341.0_x64__2p2nqsd0c76g0\app",
+            ),
+            safe_root.clone(),
+        ]);
+
+        assert_eq!(vec![safe_root], filtered);
     }
 
     #[test]
