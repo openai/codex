@@ -526,7 +526,7 @@ pub enum Op {
         thread_settings: ThreadSettingsOverrides,
     },
 
-    /// Inter-agent communication that should be recorded as assistant history
+    /// Inter-agent communication that should be recorded as agent-message history
     /// while still using the normal thread submission lifecycle.
     InterAgentCommunication {
         communication: InterAgentCommunication,
@@ -2792,6 +2792,7 @@ fn multi_agent_version_from_items(
             RolloutItem::TurnContext(turn_context) => turn_context.multi_agent_version,
             RolloutItem::SessionMeta(_)
             | RolloutItem::ResponseItem(_)
+            | RolloutItem::InterAgentCommunication(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::EventMsg(_) => None,
         })
@@ -2887,6 +2888,8 @@ pub struct SessionMetaLine {
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
+    /// Durable delivery metadata reconstructed as a model-visible `agent_message`.
+    InterAgentCommunication(InterAgentCommunication),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
     EventMsg(EventMsg),

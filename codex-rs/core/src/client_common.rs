@@ -1,5 +1,3 @@
-use crate::context::ContextualUserFragment;
-use crate::context::SubagentNotification;
 pub use codex_api::ResponseEvent;
 use codex_config::types::Personality;
 use codex_protocol::error::Result;
@@ -7,7 +5,6 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::InterAgentCommunication;
 use codex_tools::ToolSpec;
 use futures::Stream;
 use serde_json::Value;
@@ -58,30 +55,7 @@ impl Default for Prompt {
 
 impl Prompt {
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
-        let (subagent_notification_start, subagent_notification_end) =
-            SubagentNotification::type_markers();
-        self.input
-            .iter()
-            .cloned()
-            .map(|item| {
-                let ResponseItem::Message { role, content, .. } = &item else {
-                    return item;
-                };
-                if role != "assistant" {
-                    return item;
-                }
-                InterAgentCommunication::from_message_content(content)
-                    .filter(|communication| {
-                        communication.encrypted_content.is_some()
-                            || communication
-                                .content
-                                .starts_with(subagent_notification_start)
-                                && communication.content.ends_with(subagent_notification_end)
-                    })
-                    .map(|communication| communication.to_model_input_item())
-                    .unwrap_or(item)
-            })
-            .collect()
+        self.input.clone()
     }
 
     pub(crate) fn get_formatted_input_for_request(

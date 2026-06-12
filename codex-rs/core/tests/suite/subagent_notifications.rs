@@ -3,14 +3,13 @@ use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::config::AgentRoleConfig;
 use codex_features::Feature;
-use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -21,7 +20,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
-use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_response_once_match;
@@ -32,7 +30,6 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -1107,8 +1104,74 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plaintext_multi_agent_v2_subagent_notification_sends_agent_message() -> Result<()> {
+async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()> {
     let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": "opaque-encrypted-message",
+        "task_name": "worker",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-parent-1"),
+        ]),
+    )
+    .await;
+    let child_request = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, "\"type\":\"agent_message\""),
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_assistant_message("msg-child-1", "child done"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "<subagent_notification>")
+        },
+        sse(vec![
+            ev_response_created("resp-parent-2"),
+            ev_assistant_message("msg-parent-2", "parent done"),
+            ev_completed("resp-parent-2"),
+        ]),
+    )
+    .await;
+    let notification = "<subagent_notification>\n{\"agent_path\":\"/root/worker\",\"status\":{\"completed\":\"child done\"}}\n</subagent_notification>";
+    // Keep the parent turn active if it starts before the completion arrives. The follow-up
+    // request then proves that live mailbox delivery records the typed agent message.
+    mount_response_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, TURN_2_NO_WAIT_PROMPT)
+                && !body_contains(req, "<subagent_notification>")
+        },
+        sse_response(sse(vec![
+            ev_response_created("resp-parent-3"),
+            ev_function_call("list-agents-call", "list_agents", "{}"),
+            ev_completed("resp-parent-3"),
+        ]))
+        .set_delay(Duration::from_secs(1)),
+    )
+    .await;
+    let agent_request = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, TURN_2_NO_WAIT_PROMPT)
+                && body_contains(req, "<subagent_notification>")
+        },
+        sse(vec![
+            ev_response_created("resp-parent-4"),
+            ev_assistant_message("msg-parent-4", "done"),
+            ev_completed("resp-parent-4"),
+        ]),
+    )
+    .await;
     let test = test_codex()
         .with_model("koffing")
         .with_config(|config| {
@@ -1124,42 +1187,20 @@ async fn plaintext_multi_agent_v2_subagent_notification_sends_agent_message() ->
         .build(&server)
         .await?;
 
-    let notification = "<subagent_notification>\n{\"agent_path\":\"/root/worker\",\"status\":{\"completed\":\"child done\"}}\n</subagent_notification>";
-    test.codex
-        .submit(Op::InterAgentCommunication {
-            communication: InterAgentCommunication::new(
-                AgentPath::root()
-                    .join("worker")
-                    .expect("worker path should be valid"),
-                AgentPath::root(),
-                Vec::new(),
-                notification.to_string(),
-                /*trigger_turn*/ false,
-            ),
-        })
-        .await?;
-    submit_thread_settings(test.codex.as_ref(), Default::default()).await?;
-
-    mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, TURN_2_NO_WAIT_PROMPT),
-        sse(vec![
-            ev_response_created("resp-parent-1"),
-            ev_reasoning_item("reason-parent-1", &["thinking"], &[]),
-            ev_completed("resp-parent-1"),
-        ]),
-    )
-    .await;
-    let agent_request = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, "<subagent_notification>"),
-        sse(vec![
-            ev_response_created("resp-parent-2"),
-            ev_assistant_message("msg-parent-2", "done"),
-            ev_completed("resp-parent-2"),
-        ]),
-    )
-    .await;
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let _ = wait_for_requests(&child_request).await?;
+    let spawned_id = ThreadId::from_string(&wait_for_spawned_thread_id(&test).await?)?;
+    let child_thread = test.thread_manager.get_thread(spawned_id).await?;
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        if matches!(child_thread.agent_status().await, AgentStatus::Completed(_)) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for child completion");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
     test.submit_turn(TURN_2_NO_WAIT_PROMPT).await?;
 
     let request = wait_for_requests(&agent_request)

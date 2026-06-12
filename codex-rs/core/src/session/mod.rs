@@ -2659,6 +2659,26 @@ impl Session {
         self.send_raw_response_items(turn_context, items).await;
     }
 
+    pub(crate) async fn record_inter_agent_communication(
+        &self,
+        turn_context: &TurnContext,
+        communication: InterAgentCommunication,
+    ) {
+        let response_item = communication.to_model_input_item();
+        let items = self.prepare_conversation_items_for_history(
+            turn_context,
+            std::slice::from_ref(&response_item),
+        );
+        let items = items.as_ref();
+        {
+            let mut state = self.state.lock().await;
+            state.record_items(items.iter(), turn_context.truncation_policy);
+        }
+        self.persist_rollout_items(&[RolloutItem::InterAgentCommunication(communication)])
+            .await;
+        self.send_raw_response_items(turn_context, items).await;
+    }
+
     async fn maybe_warn_on_server_model_mismatch(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,

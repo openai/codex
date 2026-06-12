@@ -2,7 +2,6 @@ use codex_api::OpenAiVerbosity;
 use codex_api::ResponsesApiRequest;
 use codex_api::TextControls;
 use codex_api::create_text_param_for_request;
-use codex_protocol::AgentPath;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
@@ -90,48 +89,6 @@ fn responses_lite_request_copies_strip_image_details() {
     assert_eq!(
         prompt.get_formatted_input_for_request(/*use_responses_lite*/ false),
         original
-    );
-}
-
-#[test]
-fn formats_only_selected_plaintext_inter_agent_communications_as_agent_messages() {
-    let plaintext = InterAgentCommunication::new(
-        AgentPath::root().join("worker").expect("worker path"),
-        AgentPath::root(),
-        Vec::new(),
-        "progress update".to_string(),
-        /*trigger_turn*/ false,
-    );
-    let subagent_notification = InterAgentCommunication::new(
-        AgentPath::root().join("worker").expect("worker path"),
-        AgentPath::root(),
-        Vec::new(),
-        "<subagent_notification>\n{}\n</subagent_notification>".to_string(),
-        /*trigger_turn*/ false,
-    );
-    let encrypted = InterAgentCommunication::new_encrypted(
-        AgentPath::root(),
-        AgentPath::root().join("worker").expect("worker path"),
-        Vec::new(),
-        "encrypted task".to_string(),
-        /*trigger_turn*/ true,
-    );
-    let prompt = Prompt {
-        input: vec![
-            ResponseItem::from(plaintext.to_response_input_item()),
-            ResponseItem::from(subagent_notification.to_response_input_item()),
-            ResponseItem::from(encrypted.to_response_input_item()),
-        ],
-        ..Default::default()
-    };
-
-    assert_eq!(
-        prompt.get_formatted_input(),
-        vec![
-            ResponseItem::from(plaintext.to_response_input_item()),
-            subagent_notification.to_model_input_item(),
-            encrypted.to_model_input_item(),
-        ]
     );
 }
 
