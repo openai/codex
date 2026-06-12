@@ -1,7 +1,7 @@
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::app_bundled_internal::AppBundledInternalHookLoader;
 use crate::app_bundled_internal::DesktopAppBundledInternalHookLoader;
-use crate::app_bundled_internal::is_app_bundled_internal_plugin;
+use crate::app_bundled_internal::is_app_bundled_internal_candidate;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
@@ -726,7 +726,8 @@ async fn load_plugin(
     // TODO: Move skills, MCP configuration, apps, assets, and ordinary plugin metadata to
     // immutable app-bundle roots once Browser/Computer Use runtime SKILL variants can be
     // packaged or selected without rewriting plugin files.
-    let (hook_sources, hook_load_warnings) = if is_app_bundled_internal_plugin(&loaded_plugin_id) {
+    let (hook_sources, hook_load_warnings) = if is_app_bundled_internal_candidate(&loaded_plugin_id)
+    {
         match internal_hook_loader.load(&loaded_plugin_id, &plugin_data_root) {
             Ok(hook_sources) => (hook_sources, Vec::new()),
             Err(error) => {

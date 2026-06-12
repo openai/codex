@@ -1,6 +1,6 @@
 use super::PluginLoadOutcome;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
-use crate::app_bundled_internal::is_app_bundled_internal_plugin;
+use crate::app_bundled_internal::is_app_bundled_internal_candidate;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
@@ -1284,7 +1284,7 @@ impl PluginsManager {
         )
         .await;
         let plugin_data_root = self.store.plugin_data_root(&plugin_id);
-        let hooks = if is_app_bundled_internal_plugin(&plugin_id) {
+        let hooks = if is_app_bundled_internal_candidate(&plugin_id) {
             Vec::new()
         } else {
             let (hook_sources, _hook_load_warnings) =

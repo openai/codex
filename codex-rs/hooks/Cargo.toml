@@ -26,9 +26,12 @@ regex = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "time"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_System_SystemInformation"] }
@@ -36,4 +39,4 @@ windows = { version = "0.58", features = ["Win32_System_SystemInformation"] }
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

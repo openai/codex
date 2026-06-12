@@ -132,14 +132,19 @@ pub(crate) fn current_process_distribution()
             .Publisher()
             .map_err(windows_error("Windows current package identity"))?
             .to_string_lossy();
-        let expected = EXPECTED_PACKAGES
+        let Some(expected) = EXPECTED_PACKAGES
             .iter()
             .copied()
-            .find(|expected| expected.name == name && expected.publisher == publisher)
-            .ok_or_else(|| DesktopDistributionError::Verification {
+            .find(|expected| expected.name == name)
+        else {
+            return Ok(None);
+        };
+        if expected.publisher != publisher {
+            return Err(DesktopDistributionError::Verification {
                 stage: "Windows current package identity",
-                message: "current package is not an allowlisted Codex Desktop identity".to_string(),
-            })?;
+                message: "current package claims a Codex name with the wrong publisher".to_string(),
+            });
+        }
         let distribution = verify_package(&package, expected)?;
         let canonical_root = std::fs::canonicalize(&distribution.app_root).map_err(|source| {
             DesktopDistributionError::Filesystem {

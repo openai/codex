@@ -8,6 +8,7 @@ use codex_desktop_distribution::locate_current_or_installed_distribution;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginHookSourceKind;
 use codex_plugin::PluginId;
+use codex_protocol::protocol::HookEventName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 
@@ -19,6 +20,8 @@ use crate::manifest::load_plugin_manifest;
 const INTERNAL_HOOKS_REGISTRY_PATH: &str = "plugins/app-bundled-internal-hooks.json";
 const INTERNAL_HOOKS_REGISTRY_SCHEMA_VERSION: u32 = 1;
 const COMPUTER_USE_PLUGIN_NAME: &str = "computer-use";
+const COMPUTER_USE_EXECUTABLE: &str = "Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient";
+const COMPUTER_USE_STOP_SUFFIX: &str = " codex-stop-hook";
 
 pub(crate) trait AppBundledInternalHookLoader: Send + Sync {
     fn load(
@@ -57,7 +60,7 @@ impl AppBundledInternalHookError {
     }
 }
 
-pub(crate) fn is_app_bundled_internal_plugin(plugin_id: &PluginId) -> bool {
+pub(crate) fn is_app_bundled_internal_candidate(plugin_id: &PluginId) -> bool {
     plugin_id.plugin_name == COMPUTER_USE_PLUGIN_NAME
         && plugin_id.marketplace_name == crate::OPENAI_BUNDLED_MARKETPLACE_NAME
 }
@@ -122,7 +125,7 @@ fn load_from_authenticated_resources(
     plugin_id: &PluginId,
     plugin_data_root: &AbsolutePathBuf,
 ) -> Result<Vec<PluginHookSource>, AppBundledInternalHookError> {
-    if !is_app_bundled_internal_plugin(plugin_id) {
+    if !is_app_bundled_internal_candidate(plugin_id) {
         return Err(AppBundledInternalHookError::new(
             "opt-in",
             "plugin is not in the core app-bundled internal hook allowlist",
@@ -147,11 +150,20 @@ fn load_from_authenticated_resources(
         .into_iter()
         .filter(|entry| entry.plugin_id == plugin_id.as_key())
         .collect::<Vec<_>>();
-    let [entry] = matching_entries.as_slice() else {
-        return Err(AppBundledInternalHookError::new(
-            "registry identity",
-            "registry must contain exactly one entry for the allowlisted plugin",
-        ));
+    let entry = match matching_entries.as_slice() {
+        [] => {
+            resources.reverify().map_err(|error| {
+                AppBundledInternalHookError::new("distribution reverification", error)
+            })?;
+            return Ok(Vec::new());
+        }
+        [entry] => entry,
+        _ => {
+            return Err(AppBundledInternalHookError::new(
+                "registry identity",
+                "registry must not contain duplicate entries for the allowlisted plugin",
+            ));
+        }
     };
     require_unique_paths(&entry.hook_declarations, "hook declarations")?;
     require_unique_paths(&entry.referenced_files, "referenced files")?;
@@ -290,28 +302,74 @@ fn validate_hook_command_references(
         .iter()
         .map(String::as_str)
         .collect::<HashSet<_>>();
-    for handler in sources
-        .iter()
-        .flat_map(|source| source.hooks.clone().into_matcher_groups())
-        .flat_map(|(_, groups)| groups)
-        .flat_map(|group| group.hooks)
-    {
-        let HookHandlerConfig::Command {
-            command,
-            command_windows,
-            ..
-        } = handler
-        else {
-            continue;
-        };
-        validate_hook_command_reference(&command, "\"${PLUGIN_ROOT}/", &referenced_files)?;
-        if let Some(command_windows) = command_windows {
-            validate_hook_command_reference(
-                &command_windows,
-                "\"%PLUGIN_ROOT%\\",
-                &referenced_files,
-            )?;
+    let mut handler_count = 0;
+    for source in sources {
+        for (event_name, groups) in source.hooks.clone().into_matcher_groups() {
+            for group in groups {
+                if event_name != HookEventName::Stop || group.matcher.is_some() {
+                    return Err(AppBundledInternalHookError::new(
+                        "hook contract",
+                        "app-bundled Computer Use hooks must use an unfiltered Stop event",
+                    ));
+                }
+                for handler in group.hooks {
+                    handler_count += 1;
+                    let HookHandlerConfig::Command {
+                        command,
+                        command_windows,
+                        timeout_sec,
+                        r#async,
+                        status_message,
+                    } = handler
+                    else {
+                        return Err(AppBundledInternalHookError::new(
+                            "hook contract",
+                            "app-bundled Computer Use hooks must be command hooks",
+                        ));
+                    };
+                    if timeout_sec != Some(10) || r#async || status_message.is_some() {
+                        return Err(AppBundledInternalHookError::new(
+                            "hook contract",
+                            "app-bundled Computer Use hooks must use the exact synchronous 10s contract",
+                        ));
+                    }
+                    let (selected_command, prefix) = if cfg!(windows) {
+                        let command_windows = command_windows.as_deref().ok_or_else(|| {
+                            AppBundledInternalHookError::new(
+                                "hook contract",
+                                "app-bundled Computer Use hooks require an explicit Windows executable",
+                            )
+                        })?;
+                        (command_windows, "\"%PLUGIN_ROOT%\\")
+                    } else {
+                        (command.as_str(), "\"${PLUGIN_ROOT}/")
+                    };
+                    let executable = validate_hook_command_reference(
+                        selected_command,
+                        prefix,
+                        &referenced_files,
+                    )?;
+                    if cfg!(windows) && !executable.to_ascii_lowercase().ends_with(".exe") {
+                        return Err(AppBundledInternalHookError::new(
+                            "hook contract",
+                            "app-bundled Windows hooks must directly execute a bundled .exe",
+                        ));
+                    }
+                    if !cfg!(windows) && executable != COMPUTER_USE_EXECUTABLE {
+                        return Err(AppBundledInternalHookError::new(
+                            "hook contract",
+                            "app-bundled Computer Use hook executable identity changed",
+                        ));
+                    }
+                }
+            }
         }
+    }
+    if handler_count != 1 {
+        return Err(AppBundledInternalHookError::new(
+            "hook contract",
+            "app-bundled Computer Use hooks require exactly one handler",
+        ));
     }
     Ok(())
 }
@@ -320,7 +378,7 @@ fn validate_hook_command_reference(
     command: &str,
     prefix: &str,
     referenced_files: &HashSet<&str>,
-) -> Result<(), AppBundledInternalHookError> {
+) -> Result<String, AppBundledInternalHookError> {
     let Some(remainder) = command.strip_prefix(prefix) else {
         return Err(AppBundledInternalHookError::new(
             "hook command containment",
@@ -339,7 +397,7 @@ fn validate_hook_command_reference(
         || relative_path
             .split(['/', '\\'])
             .any(|component| component.is_empty() || component == "." || component == "..")
-        || (!suffix.is_empty() && suffix.trim_start().len() == suffix.len())
+        || suffix != COMPUTER_USE_STOP_SUFFIX
     {
         return Err(AppBundledInternalHookError::new(
             "hook command containment",
@@ -353,7 +411,7 @@ fn validate_hook_command_reference(
             "internal hook executable is not listed in the authenticated registry",
         ));
     }
-    Ok(())
+    Ok(relative_path)
 }
 
 fn require_unique_paths(
@@ -393,6 +451,9 @@ pub(crate) mod test_support {
 
     impl TestAuthenticatedResources {
         pub(crate) fn new(root: AbsolutePathBuf) -> Self {
+            let root =
+                std::fs::canonicalize(root.as_path()).expect("canonical test resources path");
+            let root = AbsolutePathBuf::try_from(root).expect("absolute test resources path");
             Self {
                 root,
                 reverify_succeeds: true,
@@ -413,28 +474,30 @@ pub(crate) mod test_support {
             let candidate = self.root.join(relative_path);
             let canonical =
                 std::fs::canonicalize(candidate.as_path()).map_err(|error| error.to_string())?;
-            if canonical == self.root.as_path() || !canonical.starts_with(self.root.as_path()) {
+            let canonical =
+                AbsolutePathBuf::try_from(canonical).map_err(|error| error.to_string())?;
+            if canonical == self.root || !canonical.as_path().starts_with(self.root.as_path()) {
                 return Err("path escaped test resources".to_string());
             }
-            let metadata =
-                std::fs::symlink_metadata(&canonical).map_err(|error| error.to_string())?;
+            let metadata = std::fs::symlink_metadata(canonical.as_path())
+                .map_err(|error| error.to_string())?;
             if metadata.file_type().is_symlink()
                 || (directory && !metadata.is_dir())
                 || (!directory && !metadata.is_file())
             {
                 return Err("unexpected test resource type".to_string());
             }
-            AbsolutePathBuf::try_from(canonical).map_err(|error| error.to_string())
+            Ok(canonical)
         }
     }
 
     impl AuthenticatedResources for TestAuthenticatedResources {
         fn directory(&self, relative_path: &Path) -> Result<AbsolutePathBuf, String> {
-            self.contained(relative_path, true)
+            self.contained(relative_path, /*directory*/ true)
         }
 
         fn file(&self, relative_path: &Path) -> Result<AbsolutePathBuf, String> {
-            self.contained(relative_path, false)
+            self.contained(relative_path, /*directory*/ false)
         }
 
         fn reverify(&self) -> Result<(), String> {

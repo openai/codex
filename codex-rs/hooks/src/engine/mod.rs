@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod app_bundled_internal_macos;
 pub(crate) mod command_runner;
 pub(crate) mod discovery;
 pub(crate) mod dispatcher;
@@ -116,9 +118,11 @@ impl ClaudeHooksEngine {
         plugin_hook_load_warnings: Vec<String>,
         shell: CommandShell,
     ) -> Self {
-        let plugin_hook_load_warnings = enabled
-            .then_some(plugin_hook_load_warnings)
-            .unwrap_or_default();
+        let plugin_hook_load_warnings = if enabled {
+            plugin_hook_load_warnings
+        } else {
+            Vec::new()
+        };
         let plugin_hook_sources = if enabled {
             plugin_hook_sources
         } else {

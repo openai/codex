@@ -28,6 +28,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
@@ -636,11 +637,13 @@ pub(crate) async fn emit_hook_completed_events(
         track_hook_completed_analytics(sess, turn_context, &completed);
         if completed.run.source == HookSource::AppBundledInternal {
             if completed.run.status != HookRunStatus::Completed {
+                let error_details = app_bundled_internal_error_details(&completed.run);
                 warn!(
                     diagnostic_code = "app_bundled_internal_hook_runtime_failed",
                     hook_event = ?completed.run.event_name,
                     status = ?completed.run.status,
                     source_path = %completed.run.source_path.display(),
+                    error_details = ?error_details,
                     "app-bundled internal hook did not complete successfully"
                 );
             }
@@ -649,6 +652,14 @@ pub(crate) async fn emit_hook_completed_events(
         sess.send_event(turn_context, EventMsg::HookCompleted(completed))
             .await;
     }
+}
+
+fn app_bundled_internal_error_details(run: &HookRunSummary) -> Vec<&str> {
+    run.entries
+        .iter()
+        .filter(|entry| entry.kind == HookOutputEntryKind::Error)
+        .map(|entry| entry.text.as_str())
+        .collect()
 }
 
 fn emit_hook_completed_metrics(turn_context: &TurnContext, completed: &HookCompletedEvent) {
@@ -788,12 +799,15 @@ mod tests {
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookExecutionMode;
     use codex_protocol::protocol::HookHandlerType;
+    use codex_protocol::protocol::HookOutputEntry;
+    use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
     use codex_protocol::protocol::HookScope;
     use codex_protocol::protocol::HookSource;
     use pretty_assertions::assert_eq;
 
     use super::additional_context_messages;
+    use super::app_bundled_internal_error_details;
     use super::emit_hook_completed_events;
     use super::emit_hook_started_events;
     use super::hook_run_analytics_payload;
@@ -898,6 +912,26 @@ mod tests {
         .await;
 
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn app_bundled_internal_diagnostics_only_include_error_entries() {
+        let mut run = sample_hook_run(HookRunStatus::Failed, HookSource::AppBundledInternal);
+        run.entries = vec![
+            HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "signature verification failed".to_string(),
+            },
+            HookOutputEntry {
+                kind: HookOutputEntryKind::Feedback,
+                text: "private continuation text".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            app_bundled_internal_error_details(&run),
+            vec!["signature verification failed"]
+        );
     }
 
     #[test]

@@ -2,6 +2,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use security_framework::os::macos::code_signing::Flags;
+use security_framework::os::macos::code_signing::GuestAttributes;
+use security_framework::os::macos::code_signing::SecCode;
+use security_framework::os::macos::code_signing::SecRequirement;
+
 use crate::DesktopDistributionError;
 
 const OPENAI_TEAM_ID: &str = "2DC432GLL2";
@@ -78,6 +83,9 @@ pub(crate) fn current_process_distribution()
     let Some(app_root) = enclosing_app(&current_exe) else {
         return Ok(None);
     };
+    if !app_claims_codex_identity(&app_root)? {
+        return Ok(None);
+    }
     let identity = verify_app(&app_root, None)?;
     Ok(Some(distribution(app_root, identity)))
 }
@@ -87,6 +95,76 @@ pub(crate) fn reverify(
     app_root: &Path,
 ) -> Result<(), DesktopDistributionError> {
     verify_app(app_root, Some(&identity.identifier)).map(|_| ())
+}
+
+pub(crate) fn authenticate_spawned_executable(
+    pid: i32,
+    expected_executable: &Path,
+    expected_identifier: &str,
+) -> Result<(), DesktopDistributionError> {
+    let mut attributes = GuestAttributes::new();
+    attributes.set_pid(pid);
+    let code =
+        SecCode::copy_guest_with_attribues(None, &attributes, Flags::NONE).map_err(|error| {
+            DesktopDistributionError::Verification {
+                stage: "macOS spawned code identity",
+                message: format!("failed to resolve suspended process code: {error}"),
+            }
+        })?;
+    let requirement: SecRequirement = format!(
+        "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"{OPENAI_TEAM_ID}\" and identifier \"{expected_identifier}\""
+    )
+    .parse()
+    .map_err(|error| DesktopDistributionError::Verification {
+        stage: "macOS spawned code requirement",
+        message: format!("failed to build spawned code requirement: {error}"),
+    })?;
+    code.check_validity(
+        Flags::STRICT_VALIDATE | Flags::NO_NETWORK_ACCESS,
+        &requirement,
+    )
+    .map_err(|error| DesktopDistributionError::Verification {
+        stage: "macOS spawned code signature",
+        message: format!("suspended process failed dynamic code validation: {error}"),
+    })?;
+
+    let code_path = code
+        .path(Flags::NONE)
+        .map_err(|error| DesktopDistributionError::Verification {
+            stage: "macOS spawned code path",
+            message: format!("failed to resolve suspended process path: {error}"),
+        })?
+        .to_path()
+        .ok_or_else(|| DesktopDistributionError::Verification {
+            stage: "macOS spawned code path",
+            message: "suspended process path was not a filesystem path".to_string(),
+        })?;
+    let code_path = std::fs::canonicalize(code_path).map_err(|source| {
+        DesktopDistributionError::Filesystem {
+            stage: "macOS spawned code path",
+            source,
+        }
+    })?;
+    let expected_executable = std::fs::canonicalize(expected_executable).map_err(|source| {
+        DesktopDistributionError::Filesystem {
+            stage: "macOS expected executable path",
+            source,
+        }
+    })?;
+    let expected_code_root = enclosing_app(&expected_executable).ok_or_else(|| {
+        DesktopDistributionError::Verification {
+            stage: "macOS spawned code path",
+            message: "expected executable is not enclosed by a nested application bundle"
+                .to_string(),
+        }
+    })?;
+    if code_path != expected_executable && code_path != expected_code_root {
+        return Err(DesktopDistributionError::Verification {
+            stage: "macOS spawned code path",
+            message: "suspended process does not match the expected bundled executable".to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn distribution(app_root: PathBuf, identity: PlatformIdentity) -> PlatformDistribution {
@@ -123,6 +201,39 @@ fn installed_app_candidates() -> Vec<PathBuf> {
         .collect()
 }
 
+fn app_claims_codex_identity(app_root: &Path) -> Result<bool, DesktopDistributionError> {
+    if displayed_identifier(app_root)?
+        .is_some_and(|identifier| CODEX_BUNDLE_IDENTIFIERS.contains(&identifier.as_str()))
+    {
+        return Ok(true);
+    }
+
+    Ok(app_root
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| PRODUCT_NAMES.contains(&name)))
+}
+
+fn displayed_identifier(app_root: &Path) -> Result<Option<String>, DesktopDistributionError> {
+    Ok(displayed_codesign_details(app_root)?
+        .and_then(|details| codesign_detail(&details, "Identifier=").map(str::to_string)))
+}
+
+fn displayed_codesign_details(app_root: &Path) -> Result<Option<String>, DesktopDistributionError> {
+    let details = Command::new("/usr/bin/codesign")
+        .args(["--display", "--verbose=4"])
+        .arg(app_root)
+        .output()
+        .map_err(|source| DesktopDistributionError::Filesystem {
+            stage: "macOS code signature identity",
+            source,
+        })?;
+    if !details.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&details.stderr).into_owned()))
+}
+
 fn verify_app(
     app_root: &Path,
     expected_identifier: Option<&str>,
@@ -155,24 +266,12 @@ fn verify_app(
             message: format!("codesign rejected the application ({})", output.status),
         });
     }
-    let details = Command::new("/usr/bin/codesign")
-        .args(["--display", "--verbose=4"])
-        .arg(app_root)
-        .output()
-        .map_err(|source| DesktopDistributionError::Filesystem {
+    let details = displayed_codesign_details(app_root)?.ok_or_else(|| {
+        DesktopDistributionError::Verification {
             stage: "macOS code signature identity",
-            source,
-        })?;
-    if !details.status.success() {
-        return Err(DesktopDistributionError::Verification {
-            stage: "macOS code signature identity",
-            message: format!(
-                "codesign could not read the application identity ({})",
-                details.status
-            ),
-        });
-    }
-    let details = String::from_utf8_lossy(&details.stderr);
+            message: "codesign output did not contain a bundle identifier".to_string(),
+        }
+    })?;
     let identifier = codesign_detail(&details, "Identifier=").ok_or_else(|| {
         DesktopDistributionError::Verification {
             stage: "macOS code signature identity",

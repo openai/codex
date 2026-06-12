@@ -2807,6 +2807,7 @@ name = "codex-desktop-distribution"
 version = "0.0.0"
 dependencies = [
  "codex-utils-absolute-path",
+ "security-framework 3.5.1",
  "tempfile",
  "thiserror 2.0.18",
  "windows 0.58.0",
@@ -3128,6 +3129,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
  "futures",
+ "libc",
  "pretty_assertions",
  "regex",
  "schemars 0.8.22",

@@ -85,6 +85,32 @@ impl VerifiedDesktopDistribution {
         platform::reverify(&self.identity, self.app_root.as_path())
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn authenticate_spawned_executable(
+        &self,
+        pid: i32,
+        expected_executable: &Path,
+        expected_identifier: &str,
+    ) -> Result<(), DesktopDistributionError> {
+        let relative_path = expected_executable
+            .strip_prefix(self.resources_root.as_path())
+            .map_err(|_| DesktopDistributionError::Containment {
+                message: "spawned executable escaped the authenticated resources root".to_string(),
+            })?;
+        let current_executable = self.contained_file(relative_path)?;
+        if current_executable.as_path() != expected_executable {
+            return Err(DesktopDistributionError::Containment {
+                message: "spawned executable path changed after verification".to_string(),
+            });
+        }
+        self.reverify()?;
+        platform::authenticate_spawned_executable(
+            pid,
+            current_executable.as_path(),
+            expected_identifier,
+        )
+    }
+
     fn from_platform(
         distribution: platform::PlatformDistribution,
     ) -> Result<Self, DesktopDistributionError> {

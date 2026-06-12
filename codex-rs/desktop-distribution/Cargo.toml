@@ -19,6 +19,9 @@ thiserror = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "ApplicationModel",

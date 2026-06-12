@@ -96,7 +96,7 @@ fn contained_resources_return_canonical_files() {
     .expect("contained file");
 
     assert_eq!(
-        resolved.as_path(),
-        fs::canonicalize(hook).expect("canonical hook")
+        resolved,
+        canonical_absolute(&hook, "test").expect("canonical hook")
     );
 }

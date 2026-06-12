@@ -896,7 +896,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
     let plugin_id = PluginId::parse("demo-plugin@test-marketplace").expect("plugin id");
     let plugin_hook_sources = vec![PluginHookSource {
         plugin_id,
-        plugin_root: plugin_root.clone(),
+        plugin_root,
         plugin_data_root,
         source_path,
         source_relative_path: "hooks/hooks.json".to_string(),
