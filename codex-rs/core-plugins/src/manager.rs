@@ -1,8 +1,5 @@
 use super::PluginLoadOutcome;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
-use crate::capabilities::PluginCapabilities;
-use crate::capabilities::PluginCapabilityContext;
-use crate::capabilities::resolve_plugin_capabilities;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
@@ -209,25 +206,6 @@ fn featured_plugin_ids_cache_key(
     }
 }
 
-fn project_plugin_load_outcome_for_auth(
-    outcome: PluginLoadOutcome,
-    auth_mode: Option<AuthMode>,
-) -> PluginLoadOutcome {
-    let mut plugins = outcome.plugins().to_vec();
-    for plugin in &mut plugins {
-        let projected = resolve_plugin_capabilities(
-            PluginCapabilities::new(
-                std::mem::take(&mut plugin.apps),
-                std::mem::take(&mut plugin.mcp_servers),
-            ),
-            PluginCapabilityContext::new(auth_mode, plugin.is_active()),
-        );
-        plugin.apps = projected.apps;
-        plugin.mcp_servers = projected.mcp_servers;
-    }
-    PluginLoadOutcome::from_plugins(plugins)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallRequest {
     pub plugin_name: String,
@@ -366,6 +344,7 @@ struct PluginLoadCacheKey {
     configured_plugins: HashMap<String, PluginConfig>,
     skill_config_rules: SkillConfigRules,
     remote_plugin_enabled: bool,
+    auth_mode: Option<AuthMode>,
 }
 
 impl PluginsManager {
@@ -464,13 +443,15 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         }
 
+        let auth_mode = self.auth_mode();
         let cache_key = PluginLoadCacheKey {
             configured_plugins: configured_plugins_from_stack(&config.config_layer_stack),
             skill_config_rules: skill_config_rules_from_stack(&config.config_layer_stack),
             remote_plugin_enabled: config.remote_plugin_enabled,
+            auth_mode,
         };
         if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&cache_key) {
-            return self.project_plugins_for_auth(outcome);
+            return outcome;
         }
 
         let Ok(_load_permit) = self.enabled_outcome_load_semaphore.acquire().await else {
@@ -478,7 +459,7 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         };
         if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&cache_key) {
-            return self.project_plugins_for_auth(outcome);
+            return outcome;
         }
         let cache_generation = self.enabled_outcome_cache_generation();
         let outcome = load_plugins_from_layer_stack(
@@ -486,16 +467,13 @@ impl PluginsManager {
             self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
+            auth_mode,
             config.remote_plugin_enabled,
         )
         .await;
         log_plugin_load_errors(&outcome);
         self.cache_enabled_outcome_if_current(cache_generation, cache_key, outcome.clone());
-        self.project_plugins_for_auth(outcome)
-    }
-
-    fn project_plugins_for_auth(&self, outcome: PluginLoadOutcome) -> PluginLoadOutcome {
-        project_plugin_load_outcome_for_auth(outcome, self.auth_mode())
+        outcome
     }
 
     pub fn clear_cache(&self) {
@@ -525,15 +503,15 @@ impl PluginsManager {
         if !config.plugins_enabled {
             return PluginLoadOutcome::default();
         }
-        let outcome = load_plugins_from_layer_stack(
+        load_plugins_from_layer_stack(
             config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
+            self.auth_mode(),
             config.remote_plugin_enabled,
         )
-        .await;
-        self.project_plugins_for_auth(outcome)
+        .await
     }
 
     /// Resolve plugin hooks for a config layer stack without loading other plugin capabilities.

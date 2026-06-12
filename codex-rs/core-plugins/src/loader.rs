@@ -73,6 +73,7 @@ enum PluginLoadScope<'a> {
     AllCapabilities {
         restriction_product: Option<Product>,
         skill_config_rules: &'a SkillConfigRules,
+        auth_mode: Option<AuthMode>,
     },
     HooksOnly,
 }
@@ -118,6 +119,7 @@ pub async fn load_plugins_from_layer_stack(
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     restriction_product: Option<Product>,
+    auth_mode: Option<AuthMode>,
     prefer_remote_curated_conflicts: bool,
 ) -> PluginLoadOutcome<McpServerConfig> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
@@ -129,6 +131,7 @@ pub async fn load_plugins_from_layer_stack(
         PluginLoadScope::AllCapabilities {
             restriction_product,
             skill_config_rules: &skill_config_rules,
+            auth_mode,
         },
     )
     .await
@@ -665,6 +668,7 @@ async fn load_plugin(
         PluginLoadScope::AllCapabilities {
             restriction_product,
             skill_config_rules,
+            auth_mode,
         } => {
             loaded_plugin.manifest_name = Some(manifest.display_name().to_string());
             loaded_plugin.manifest_description = manifest.description.clone();
@@ -700,6 +704,15 @@ async fn load_plugin(
             }
             loaded_plugin.mcp_servers = mcp_servers;
             loaded_plugin.apps = load_plugin_apps(plugin_root.as_path()).await;
+            let projected = resolve_plugin_capabilities(
+                PluginCapabilities::new(
+                    std::mem::take(&mut loaded_plugin.apps),
+                    std::mem::take(&mut loaded_plugin.mcp_servers),
+                ),
+                PluginCapabilityContext::new(*auth_mode, loaded_plugin.is_active()),
+            );
+            loaded_plugin.apps = projected.apps;
+            loaded_plugin.mcp_servers = projected.mcp_servers;
         }
         PluginLoadScope::HooksOnly => {}
     }

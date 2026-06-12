@@ -356,7 +356,7 @@ enabled = true
 }
 
 #[tokio::test]
-async fn plugin_auth_projection_reprojects_cached_outcome_when_auth_changes() {
+async fn plugin_auth_cache_key_reloads_when_auth_changes() {
     let codex_home = TempDir::new().unwrap();
     write_auth_projection_plugin(codex_home.path(), "sample", /*include_app*/ true);
     write_auth_projection_plugin(codex_home.path(), "docs", /*include_app*/ false);
@@ -377,12 +377,18 @@ async fn plugin_auth_projection_reprojects_cached_outcome_when_auth_changes() {
         vec![AppConnectorId("connector_sample".to_string())]
     );
 
+    std::fs::remove_file(
+        codex_home
+            .path()
+            .join("plugins/cache/test/sample/local/.mcp.json"),
+    )
+    .unwrap();
     assert!(manager.set_auth_mode(Some(AuthMode::ApiKey)));
     let api_key_outcome = manager.plugins_for_config(&config).await;
 
     assert_eq!(
         sorted_effective_mcp_server_names(&api_key_outcome),
-        vec!["docs".to_string(), "sample".to_string()]
+        vec!["docs".to_string()]
     );
     assert!(api_key_outcome.effective_apps().is_empty());
 }
@@ -1781,6 +1787,7 @@ fn plugin_cache_invalidation_rejects_stale_load_completion() {
         configured_plugins: HashMap::new(),
         skill_config_rules: SkillConfigRules::default(),
         remote_plugin_enabled: false,
+        auth_mode: None,
     };
     let stale_generation = manager.enabled_outcome_cache_generation();
 
@@ -4078,6 +4085,7 @@ async fn load_plugins_ignores_project_config_files() {
         std::collections::HashMap::new(),
         &PluginStore::new(codex_home.path().to_path_buf()),
         Some(Product::Codex),
+        /*auth_mode*/ None,
         /*prefer_remote_curated_conflicts*/ false,
     )
     .await;

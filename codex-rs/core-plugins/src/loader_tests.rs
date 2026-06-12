@@ -84,7 +84,7 @@ async fn hooks_only_scope_shares_plugin_resolution_without_loading_other_capabil
     );
     write_file(
         &plugin_root.join(".app.json"),
-        r#"{"apps":{"example":{"id":"connector_example"}}}"#,
+        r#"{"apps":{"example_app":{"id":"connector_example"}}}"#,
     );
     write_file(
         &plugin_root.join("hooks/hooks.json"),
@@ -161,6 +161,7 @@ enabled = true
         HashMap::new(),
         &store,
         Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
         /*prefer_remote_curated_conflicts*/ false,
     )
     .await;
