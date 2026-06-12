@@ -6594,6 +6594,16 @@
               }
             ]
           },
+          "default_tools_approval_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppToolApproval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "destructive_enabled": {
             "default": true,
             "type": "boolean"

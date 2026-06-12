@@ -218,6 +218,14 @@
           ],
           "description": "Reviewer for approval prompts unless overridden by per-app settings."
         },
+        "default_tools_approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Approval mode for tools unless overridden by per-app or per-tool settings."
+        },
         "destructive_enabled": {
           "description": "Whether tools with `destructive_hint = true` are allowed by default.",
           "type": "boolean"

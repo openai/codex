@@ -272,6 +272,7 @@ fn app_tool_policy_uses_global_defaults_for_destructive_hints() {
             approvals_reviewer: None,
             destructive_enabled: false,
             open_world_enabled: true,
+            default_tools_approval_mode: None,
         }),
         apps: HashMap::new(),
     };
@@ -302,6 +303,7 @@ fn app_tool_policy_defaults_missing_destructive_hint_to_true() {
             approvals_reviewer: None,
             destructive_enabled: false,
             open_world_enabled: true,
+            default_tools_approval_mode: None,
         }),
         apps: HashMap::new(),
     };
@@ -332,6 +334,7 @@ fn app_tool_policy_defaults_missing_open_world_hint_to_true() {
             approvals_reviewer: None,
             destructive_enabled: true,
             open_world_enabled: false,
+            default_tools_approval_mode: None,
         }),
         apps: HashMap::new(),
     };
@@ -362,6 +365,7 @@ fn app_is_enabled_uses_default_for_unconfigured_apps() {
             approvals_reviewer: None,
             destructive_enabled: true,
             open_world_enabled: true,
+            default_tools_approval_mode: None,
         }),
         apps: HashMap::new(),
     };
@@ -378,6 +382,7 @@ fn app_is_enabled_prefers_per_app_override_over_default() {
             approvals_reviewer: None,
             destructive_enabled: true,
             open_world_enabled: true,
+            default_tools_approval_mode: None,
         }),
         apps: HashMap::from([(
             "calendar".to_string(),
@@ -809,6 +814,7 @@ fn app_tool_policy_honors_default_app_enabled_false() {
             approvals_reviewer: None,
             destructive_enabled: true,
             open_world_enabled: true,
+            default_tools_approval_mode: None,
         }),
         apps: HashMap::new(),
     };
@@ -908,6 +914,9 @@ async fn cloud_config_bundle_tool_approval_overrides_user_apps_config() {
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"
+[apps._default]
+default_tools_approval_mode = "auto"
+
 [apps.connector_123123.tools."calendar/list_events"]
 approval_mode = "prompt"
 "#,
@@ -1041,6 +1050,7 @@ fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
             approvals_reviewer: None,
             destructive_enabled: true,
             open_world_enabled: true,
+            default_tools_approval_mode: None,
         }),
         apps: HashMap::from([(
             "calendar".to_string(),
@@ -1195,9 +1205,50 @@ fn app_tool_policy_default_tools_enabled_false_overrides_app_level_tool_hints() 
 }
 
 #[test]
-fn app_tool_policy_uses_default_tools_approval_mode() {
+fn app_tool_policy_uses_apps_default_tools_approval_mode() {
     let apps_config = AppsConfigToml {
-        default: None,
+        default: Some(AppsDefaultConfig {
+            enabled: true,
+            approvals_reviewer: None,
+            destructive_enabled: true,
+            open_world_enabled: true,
+            default_tools_approval_mode: Some(AppToolApproval::Prompt),
+        }),
+        apps: HashMap::new(),
+    };
+
+    for connector_id in [Some("calendar"), None] {
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            connector_id,
+            "events/list",
+            /*tool_title*/ None,
+            Some(&annotations(
+                /*destructive_hint*/ None, /*open_world_hint*/ None,
+            )),
+            /*managed_approval*/ None,
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Prompt,
+            }
+        );
+    }
+}
+
+#[test]
+fn app_tool_policy_prefers_app_default_tools_approval_mode_over_apps_default() {
+    let apps_config = AppsConfigToml {
+        default: Some(AppsDefaultConfig {
+            enabled: true,
+            approvals_reviewer: None,
+            destructive_enabled: true,
+            open_world_enabled: true,
+            default_tools_approval_mode: Some(AppToolApproval::Approve),
+        }),
         apps: HashMap::from([(
             "calendar".to_string(),
             AppConfig {
@@ -1237,7 +1288,13 @@ fn app_tool_policy_uses_default_tools_approval_mode() {
 #[test]
 fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
     let apps_config = AppsConfigToml {
-        default: None,
+        default: Some(AppsDefaultConfig {
+            enabled: true,
+            approvals_reviewer: None,
+            destructive_enabled: true,
+            open_world_enabled: true,
+            default_tools_approval_mode: Some(AppToolApproval::Prompt),
+        }),
         apps: HashMap::from([(
             "calendar".to_string(),
             AppConfig {

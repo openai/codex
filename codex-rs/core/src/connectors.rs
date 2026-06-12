@@ -721,6 +721,12 @@ fn app_tool_policy_from_apps_config(
     let approval = managed_approval
         .or_else(|| tool_config.and_then(|tool| tool.approval_mode))
         .or_else(|| app.and_then(|app| app.default_tools_approval_mode))
+        .or_else(|| {
+            apps_config
+                .default
+                .as_ref()
+                .and_then(|defaults| defaults.default_tools_approval_mode)
+        })
         .unwrap_or(AppToolApproval::Auto);
 
     if !app_is_enabled(apps_config, connector_id) {
