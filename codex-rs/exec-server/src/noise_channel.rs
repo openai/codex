@@ -47,16 +47,6 @@ impl std::fmt::Debug for NoiseChannelPublicKey {
     }
 }
 
-impl NoiseChannelPublicKey {
-    fn from_keypairs(dh: &DhKeyPair, kem: &KemKeyPair) -> Self {
-        Self {
-            suite: NOISE_CHANNEL_SUITE.to_string(),
-            x25519_public_key: STANDARD.encode(dh.public),
-            mlkem768_public_key: STANDARD.encode(kem.public.as_slice()),
-        }
-    }
-}
-
 /// Static Noise identity kept for the lifetime of an executor or harness process.
 #[derive(Clone)]
 pub struct NoiseChannelIdentity {
@@ -74,7 +64,11 @@ impl NoiseChannelIdentity {
     }
 
     pub fn public_key(&self) -> NoiseChannelPublicKey {
-        NoiseChannelPublicKey::from_keypairs(&self.dh, &self.kem)
+        NoiseChannelPublicKey {
+            suite: NOISE_CHANNEL_SUITE.to_string(),
+            x25519_public_key: STANDARD.encode(self.dh.public),
+            mlkem768_public_key: STANDARD.encode(self.kem.public.as_slice()),
+        }
     }
 }
 
