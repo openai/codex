@@ -45,26 +45,30 @@ impl SessionTask for RegularTask {
         let run_turn_span = trace_span!("run_turn");
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.
-        let event = EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: ctx.sub_id.clone(),
-            trace_id: ctx.trace_id.clone(),
-            started_at: ctx.turn_timing_state.started_at_unix_secs().await,
-            model_context_window: ctx.model_context_window(),
-            collaboration_mode_kind: ctx.collaboration_mode.mode,
-        });
-        sess.send_event(ctx.as_ref(), event).await;
-        sess.set_server_reasoning_included(/*included*/ false).await;
-        if crate::guardian::routes_approval_to_guardian(ctx.as_ref()) {
-            let prewarm_sess = Arc::clone(&sess);
-            let prewarm_ctx = Arc::clone(&ctx);
-            drop(tokio::spawn(async move {
-                crate::guardian::prewarm_guardian_review_session(prewarm_sess, prewarm_ctx).await;
-            }));
+        let prewarmed_client_session = async {
+            let event = EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: ctx.sub_id.clone(),
+                trace_id: ctx.trace_id.clone(),
+                started_at: ctx.turn_timing_state.started_at_unix_secs().await,
+                model_context_window: ctx.model_context_window(),
+                collaboration_mode_kind: ctx.collaboration_mode.mode,
+            });
+            sess.send_event(ctx.as_ref(), event).await;
+            sess.set_server_reasoning_included(/*included*/ false).await;
+            if crate::guardian::routes_approval_to_guardian(ctx.as_ref()) {
+                let prewarm_sess = Arc::clone(&sess);
+                let prewarm_ctx = Arc::clone(&ctx);
+                drop(tokio::spawn(async move {
+                    crate::guardian::prewarm_guardian_review_session(prewarm_sess, prewarm_ctx)
+                        .await;
+                }));
+            }
+            sess.consume_startup_prewarm_for_regular_turn(&cancellation_token)
+                .await
         }
-        let prewarmed_client_session = match sess
-            .consume_startup_prewarm_for_regular_turn(&cancellation_token)
-            .await
-        {
+        .instrument(trace_span!("regular_task.prepare_run_turn"))
+        .await;
+        let prewarmed_client_session = match prewarmed_client_session {
             SessionStartupPrewarmResolution::Cancelled => return None,
             SessionStartupPrewarmResolution::Unavailable { .. } => None,
             SessionStartupPrewarmResolution::Ready(prewarmed_client_session) => {
