@@ -317,7 +317,7 @@ impl BottomPane {
     fn desired_tab_status(&self) -> TabStatus {
         if self.terminal_title_requires_action() {
             TabStatus::Waiting
-        } else if self.is_task_running {
+        } else if self.is_task_running || !self.unified_exec_footer.is_empty() {
             TabStatus::Working
         } else {
             TabStatus::Idle
@@ -1254,6 +1254,7 @@ impl BottomPane {
     pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
         if self.unified_exec_footer.set_processes(processes) {
             self.sync_status_inline_message();
+            self.refresh_tab_status();
             self.request_redraw();
         }
     }
@@ -2029,6 +2030,55 @@ mod tests {
 
         pane.set_task_running(/*running*/ false);
         assert_eq!(pane.last_tab_status_for_test(), Some(TabStatus::Idle));
+    }
+
+    #[test]
+    fn tab_status_tracks_background_terminal_lifecycle() {
+        let features = Features::with_defaults();
+        let mut pane = fresh_pane();
+        let mut states = Vec::new();
+
+        pane.refresh_tab_status();
+        states.push(pane.last_tab_status_for_test());
+
+        pane.set_unified_exec_processes(vec!["sleep 30".to_string()]);
+        states.push(pane.last_tab_status_for_test());
+
+        pane.set_task_running(/*running*/ true);
+        pane.set_task_running(/*running*/ false);
+        states.push(pane.last_tab_status_for_test());
+
+        pane.push_approval_request(exec_request(), &features);
+        states.push(pane.last_tab_status_for_test());
+
+        let _ = pane.on_ctrl_c();
+        states.push(pane.last_tab_status_for_test());
+
+        pane.set_unified_exec_processes(Vec::new());
+        states.push(pane.last_tab_status_for_test());
+
+        assert_snapshot!(format!("{states:#?}"), @r###"
+        [
+            Some(
+                Idle,
+            ),
+            Some(
+                Working,
+            ),
+            Some(
+                Working,
+            ),
+            Some(
+                Waiting,
+            ),
+            Some(
+                Working,
+            ),
+            Some(
+                Idle,
+            ),
+        ]
+        "###);
     }
 
     #[test]
