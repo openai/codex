@@ -65,10 +65,6 @@ use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
-use codex_app_server_protocol::ToolRequestUserInputOption;
-use codex_app_server_protocol::ToolRequestUserInputParams;
-use codex_app_server_protocol::ToolRequestUserInputQuestion;
-use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
@@ -108,7 +104,6 @@ use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
-use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
@@ -658,51 +653,22 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             });
         }
-        EventMsg::RequestUserInput(request) => {
-            let user_input_guard = thread_watch_manager
+        EventMsg::RequestUserInput(_) => {
+            let _user_input_guard = thread_watch_manager
                 .note_user_input_requested(&conversation_id.to_string())
                 .await;
-            let questions = request
-                .questions
-                .into_iter()
-                .map(|question| ToolRequestUserInputQuestion {
-                    id: question.id,
-                    header: question.header,
-                    question: question.question,
-                    is_other: question.is_other,
-                    is_secret: question.is_secret,
-                    options: question.options.map(|options| {
-                        options
-                            .into_iter()
-                            .map(|option| ToolRequestUserInputOption {
-                                label: option.label,
-                                description: option.description,
-                            })
-                            .collect()
-                    }),
-                })
-                .collect();
-            let params = ToolRequestUserInputParams {
-                thread_id: conversation_id.to_string(),
-                turn_id: request.turn_id,
-                item_id: request.call_id,
-                questions,
-                auto_resolution_ms: request.auto_resolution_ms,
+            let response = CoreRequestUserInputResponse {
+                answers: HashMap::new(),
             };
-            let (pending_request_id, rx) = outgoing
-                .send_request(ServerRequestPayload::ToolRequestUserInput(params))
-                .await;
-            tokio::spawn(async move {
-                on_request_user_input_response(
-                    event_turn_id,
-                    pending_request_id,
-                    rx,
-                    conversation,
-                    thread_state,
-                    user_input_guard,
-                )
-                .await;
-            });
+            if let Err(err) = conversation
+                .submit(Op::UserInputAnswer {
+                    id: event_turn_id,
+                    response,
+                })
+                .await
+            {
+                error!("failed to submit UserInputAnswer: {err}");
+            }
         }
         EventMsg::ElicitationRequest(request) => {
             let permission_guard = thread_watch_manager
@@ -1639,87 +1605,6 @@ async fn handle_error(
 ) {
     let mut state = thread_state.lock().await;
     state.turn_summary.last_error = Some(error);
-}
-
-async fn on_request_user_input_response(
-    event_turn_id: String,
-    pending_request_id: RequestId,
-    receiver: oneshot::Receiver<ClientRequestResult>,
-    conversation: Arc<CodexThread>,
-    thread_state: Arc<Mutex<ThreadState>>,
-    user_input_guard: ThreadWatchActiveGuard,
-) {
-    let response = receiver.await;
-    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
-    drop(user_input_guard);
-    let value = match response {
-        Ok(Ok(value)) => value,
-        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
-        Ok(Err(err)) => {
-            error!("request failed with client error: {err:?}");
-            let empty = CoreRequestUserInputResponse {
-                answers: HashMap::new(),
-            };
-            if let Err(err) = conversation
-                .submit(Op::UserInputAnswer {
-                    id: event_turn_id,
-                    response: empty,
-                })
-                .await
-            {
-                error!("failed to submit UserInputAnswer: {err}");
-            }
-            return;
-        }
-        Err(err) => {
-            error!("request failed: {err:?}");
-            let empty = CoreRequestUserInputResponse {
-                answers: HashMap::new(),
-            };
-            if let Err(err) = conversation
-                .submit(Op::UserInputAnswer {
-                    id: event_turn_id,
-                    response: empty,
-                })
-                .await
-            {
-                error!("failed to submit UserInputAnswer: {err}");
-            }
-            return;
-        }
-    };
-
-    let response =
-        serde_json::from_value::<ToolRequestUserInputResponse>(value).unwrap_or_else(|err| {
-            error!("failed to deserialize ToolRequestUserInputResponse: {err}");
-            ToolRequestUserInputResponse {
-                answers: HashMap::new(),
-            }
-        });
-    let response = CoreRequestUserInputResponse {
-        answers: response
-            .answers
-            .into_iter()
-            .map(|(id, answer)| {
-                (
-                    id,
-                    CoreRequestUserInputAnswer {
-                        answers: answer.answers,
-                    },
-                )
-            })
-            .collect(),
-    };
-
-    if let Err(err) = conversation
-        .submit(Op::UserInputAnswer {
-            id: event_turn_id,
-            response,
-        })
-        .await
-    {
-        error!("failed to submit UserInputAnswer: {err}");
-    }
 }
 
 async fn on_mcp_server_elicitation_response(
