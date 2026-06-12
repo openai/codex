@@ -32,7 +32,6 @@ use serde_json::json;
 
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
-use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
@@ -174,15 +173,6 @@ async fn probe_with(
     configure_turn: impl FnOnce(&mut TurnContext),
     inputs: ToolPlanInputs,
 ) -> ToolPlanProbe {
-    let cache = ToolSearchHandlerCache::default();
-    probe_with_cache(configure_turn, inputs, &cache).await
-}
-
-async fn probe_with_cache(
-    configure_turn: impl FnOnce(&mut TurnContext),
-    inputs: ToolPlanInputs,
-    tool_search_handler_cache: &ToolSearchHandlerCache,
-) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
     configure_turn(&mut turn);
     let router = ToolRouter::from_turn_context(
@@ -194,7 +184,7 @@ async fn probe_with_cache(
             extension_tool_executors: inputs.extension_tool_executors,
             dynamic_tools: inputs.dynamic_tools.as_slice(),
         },
-        tool_search_handler_cache,
+        &Default::default(),
     );
     ToolPlanProbe::from_router(router)
 }
@@ -774,72 +764,6 @@ async fn deferred_extension_tools_are_discoverable_with_tool_search() {
     plan.assert_visible_lacks(&["extension_echo"]);
     plan.assert_registered_contains(&["extension_echo"]);
     assert_eq!(plan.exposure("extension_echo"), ToolExposure::Deferred);
-}
-
-#[tokio::test]
-async fn tool_search_handler_cache_reuses_identical_deferred_tools() {
-    let cache = ToolSearchHandlerCache::default();
-    let first = probe_with_cache(
-        |turn| {
-            turn.model_info.supports_search_tool = true;
-        },
-        ToolPlanInputs {
-            extension_tool_executors: vec![Arc::new(DeferredExtensionTool)],
-            ..ToolPlanInputs::default()
-        },
-        &cache,
-    )
-    .await;
-    first.assert_visible_contains(&["tool_search"]);
-    let first_ptr = cache
-        .cached_handler_ptr_for_test()
-        .expect("tool search handler should be cached");
-
-    let second = probe_with_cache(
-        |turn| {
-            turn.model_info.supports_search_tool = true;
-        },
-        ToolPlanInputs {
-            extension_tool_executors: vec![Arc::new(DeferredExtensionTool)],
-            ..ToolPlanInputs::default()
-        },
-        &cache,
-    )
-    .await;
-    assert_eq!(second.visible_specs, first.visible_specs);
-    assert_eq!(cache.cached_handler_ptr_for_test(), Some(first_ptr));
-
-    let changed = probe_with_cache(
-        |turn| {
-            turn.model_info.supports_search_tool = true;
-        },
-        ToolPlanInputs {
-            deferred_mcp_tools: Some(vec![mcp_tool("searchable", "mcp__searchable", "lookup")]),
-            ..ToolPlanInputs::default()
-        },
-        &cache,
-    )
-    .await;
-    changed.assert_visible_contains(&["tool_search"]);
-    let changed_ptr = cache
-        .cached_handler_ptr_for_test()
-        .expect("changed tool search handler should be cached");
-    assert_ne!(changed_ptr, first_ptr);
-
-    let cached_before_disabled = cache.cached_handler_ptr_for_test();
-    let disabled = probe_with_cache(
-        |turn| {
-            turn.model_info.supports_search_tool = false;
-        },
-        ToolPlanInputs {
-            extension_tool_executors: vec![Arc::new(DeferredExtensionTool)],
-            ..ToolPlanInputs::default()
-        },
-        &cache,
-    )
-    .await;
-    disabled.assert_visible_lacks(&["tool_search"]);
-    assert_eq!(cache.cached_handler_ptr_for_test(), cached_before_disabled);
 }
 
 #[tokio::test]
