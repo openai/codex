@@ -4035,15 +4035,12 @@ fn turn_environments_for_tests(
     cwd: &codex_utils_absolute_path::AbsolutePathBuf,
 ) -> crate::environment_selection::ResolvedTurnEnvironments {
     crate::environment_selection::ResolvedTurnEnvironments {
-        turn_environments: vec![
-            TurnEnvironment::new(
-                codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-                Arc::clone(environment),
-                cwd.clone(),
-                /*shell*/ None,
-            )
-            .expect("turn environment"),
-        ],
+        turn_environments: vec![TurnEnvironment::new(
+            codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            Arc::clone(environment),
+            cwd.clone(),
+            /*shell*/ None,
+        )],
     }
 }
 
@@ -5665,8 +5662,7 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
         current_environment.environment,
         environment_cwd.clone(),
         current_environment.shell,
-    )
-    .expect("environment cwd URI");
+    );
 
     let call_id = "call-1".to_string();
     let handler = RequestPermissionsHandler;
@@ -6255,15 +6251,15 @@ async fn primary_environment_uses_first_turn_environment() {
     let first_environment = turn_context.environments.turn_environments[0].clone();
     #[allow(deprecated)]
     let second_cwd = turn_context.cwd.join("second");
-    turn_context.environments.turn_environments.push(
-        TurnEnvironment::new(
+    turn_context
+        .environments
+        .turn_environments
+        .push(TurnEnvironment::new(
             "second".to_string(),
             Arc::clone(&first_environment.environment),
             second_cwd.clone(),
             /*shell*/ None,
-        )
-        .expect("turn environment"),
-    );
+        ));
 
     assert_eq!(
         turn_context

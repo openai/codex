@@ -4213,6 +4213,7 @@ dependencies = [
 name = "codex-utils-path-uri"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "codex-utils-absolute-path",
  "pretty_assertions",
  "schemars 0.8.22",

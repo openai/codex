@@ -240,11 +240,7 @@ impl ToolOrchestrator {
         let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
         #[allow(deprecated)]
         let sandbox_cwd = tool.sandbox_cwd(req).unwrap_or(&turn_ctx.cwd);
-        let sandbox_policy_cwd = PathUri::from_abs_path(sandbox_cwd).map_err(|_| {
-            ToolError::Codex(CodexErr::InvalidRequest(
-                "sandbox policy cwd cannot be represented as a file URI".to_string(),
-            ))
-        })?;
+        let sandbox_policy_cwd = PathUri::from_abs_path(sandbox_cwd);
         let workspace_roots = turn_ctx.config.effective_workspace_roots();
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,

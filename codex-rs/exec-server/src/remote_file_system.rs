@@ -404,6 +404,6 @@ mod tests {
     }
 
     fn path_uri(name: &str) -> PathUri {
-        PathUri::from_abs_path(&absolute_test_path(name)).expect("path URI")
+        PathUri::from_abs_path(&absolute_test_path(name))
     }
 }

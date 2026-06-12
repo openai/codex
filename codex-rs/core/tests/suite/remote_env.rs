@@ -583,7 +583,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
 
     test.fs()
         .remove(
-            &PathUri::from_abs_path(&remote_cwd)?,
+            &PathUri::from_abs_path(&remote_cwd),
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -1092,7 +1092,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
 
     let symlink_exists = file_system
         .get_metadata(
-            &PathUri::from_abs_path(&absolute_path(symlink_path))?,
+            &PathUri::from_abs_path(&absolute_path(symlink_path)),
             /*sandbox*/ None,
         )
         .await

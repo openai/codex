@@ -56,19 +56,15 @@ impl TurnEnvironment {
         environment: Arc<Environment>,
         cwd: AbsolutePathBuf,
         shell: Option<shell::Shell>,
-    ) -> CodexResult<Self> {
-        let cwd_uri = PathUri::from_abs_path(&cwd).map_err(|_| {
-            CodexErr::InvalidRequest(
-                "turn environment cwd cannot be represented as a file URI".to_string(),
-            )
-        })?;
-        Ok(Self {
+    ) -> Self {
+        let cwd_uri = PathUri::from_abs_path(&cwd);
+        Self {
             environment_id,
             environment,
             cwd,
             cwd_uri,
             shell,
-        })
+        }
     }
 
     pub(crate) fn cwd(&self) -> &AbsolutePathBuf {
