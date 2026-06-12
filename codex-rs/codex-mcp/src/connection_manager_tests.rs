@@ -13,6 +13,8 @@ use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
 use crate::server::McpServerOrigin;
+use crate::tools::MAX_MCP_NAMESPACE_DESCRIPTION_BYTES;
+use crate::tools::MCP_NAMESPACE_DESCRIPTION_TRUNCATION_SUFFIX;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
@@ -320,6 +322,32 @@ fn test_normalize_tools_short_non_duplicated_names() {
             ToolName::namespaced("mcp__server1", "tool1"),
             ToolName::namespaced("mcp__server1", "tool2")
         ])
+    );
+}
+
+#[test]
+fn test_normalize_tools_bounds_namespace_descriptions() {
+    let mut short = create_test_tool("short", "tool");
+    short.namespace_description = Some("brief guidance".to_string());
+    let mut long = create_test_tool("long", "tool");
+    long.namespace_description = Some("é".repeat(MAX_MCP_NAMESPACE_DESCRIPTION_BYTES));
+
+    let model_tools =
+        normalize_tools_for_model_with_prefix([short, long], /*prefix_mcp_tool_names*/ true);
+    let expected_prefix_bytes =
+        MAX_MCP_NAMESPACE_DESCRIPTION_BYTES - MCP_NAMESPACE_DESCRIPTION_TRUNCATION_SUFFIX.len();
+    let expected_long = format!(
+        "{}{}",
+        "é".repeat(expected_prefix_bytes / "é".len()),
+        MCP_NAMESPACE_DESCRIPTION_TRUNCATION_SUFFIX
+    );
+
+    assert_eq!(
+        model_tools
+            .iter()
+            .map(|tool| tool.namespace_description.clone())
+            .collect::<Vec<_>>(),
+        vec![Some(expected_long), Some("brief guidance".to_string())]
     );
 }
 

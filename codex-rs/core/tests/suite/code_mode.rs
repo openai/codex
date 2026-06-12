@@ -3329,7 +3329,7 @@ text(JSON.stringify(tool));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_appends_server_instructions_to_deferred_mcp_tool_descriptions() -> Result<()> {
+async fn code_mode_appends_namespace_description_to_deferred_tool_descriptions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;

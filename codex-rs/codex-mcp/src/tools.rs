@@ -155,7 +155,10 @@ where
 {
     let mut seen_raw_names = HashSet::new();
     let mut candidates = Vec::new();
-    for tool in tools {
+    for mut tool in tools {
+        if let Some(description) = tool.namespace_description.take() {
+            tool.namespace_description = Some(truncate_namespace_description(description));
+        }
         let raw_namespace_identity = format!(
             "{}\0{}\0{}",
             tool.server_name,
@@ -259,6 +262,8 @@ struct CallableToolCandidate {
 
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
+pub(crate) const MAX_MCP_NAMESPACE_DESCRIPTION_BYTES: usize = 4 * 1024;
+pub(crate) const MCP_NAMESPACE_DESCRIPTION_TRUNCATION_SUFFIX: &str = "\n[truncated]";
 const CALLABLE_NAME_HASH_LEN: usize = 12;
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
 
@@ -347,6 +352,21 @@ fn append_namespace_hash_suffix(namespace: &str, raw_identity: &str) -> String {
 
 fn truncate_name(value: &str, max_len: usize) -> String {
     value.chars().take(max_len).collect()
+}
+
+fn truncate_namespace_description(mut description: String) -> String {
+    if description.len() <= MAX_MCP_NAMESPACE_DESCRIPTION_BYTES {
+        return description;
+    }
+
+    let mut end = MAX_MCP_NAMESPACE_DESCRIPTION_BYTES
+        .saturating_sub(MCP_NAMESPACE_DESCRIPTION_TRUNCATION_SUFFIX.len());
+    while !description.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    description.truncate(end);
+    description.push_str(MCP_NAMESPACE_DESCRIPTION_TRUNCATION_SUFFIX);
+    description
 }
 
 fn fit_callable_parts_with_hash(
