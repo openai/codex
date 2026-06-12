@@ -145,9 +145,8 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "--frozen",
         "--project",
         "sdk/python",
-        "--no-sync",
-        "--with",
-        "ruff",
+        "--only-group",
+        "format",
     )
     scripts_uv_run_args = (
         "uv",
@@ -155,9 +154,6 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "--frozen",
         "--project",
         "scripts",
-        "--no-sync",
-        "--with",
-        "ruff",
     )
     assert all(
         command.args[: len(sdk_uv_run_args)] == sdk_uv_run_args

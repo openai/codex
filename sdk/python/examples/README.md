@@ -31,7 +31,7 @@ Contributors using these checked-in scripts should install development
 dependencies from `sdk/python`:
 
 ```bash
-uv sync --extra dev
+uv sync --group dev
 source .venv/bin/activate
 ```
 

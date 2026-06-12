@@ -37,17 +37,15 @@ class FormatterResult:
 def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
     just_args = ["just", "--unstable", "--fmt"]
     cargo_args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
-    # Use an unpinned overlay so Ruff is available without syncing project
-    # dependencies. Each `--project` still retains its local configuration context.
+    # Each `--project` retains its local dependency and Ruff configuration context.
     sdk_uv_run_args = [
         "uv",
         "run",
         "--frozen",
         "--project",
         "sdk/python",
-        "--no-sync",
-        "--with",
-        "ruff",
+        "--only-group",
+        "format",
     ]
     scripts_uv_run_args = [
         "uv",
@@ -55,9 +53,6 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
         "--frozen",
         "--project",
         "scripts",
-        "--no-sync",
-        "--with",
-        "ruff",
     ]
     sdk_format_args = [
         *sdk_uv_run_args,
