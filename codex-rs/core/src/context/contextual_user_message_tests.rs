@@ -48,6 +48,43 @@ fn detects_internal_model_context_fragment() {
 }
 
 #[test]
+fn parses_canonical_internal_model_context_fragment() {
+    for (source, body) in [
+        ("goal", "Keep working toward the user-provided objective."),
+        ("extension", "\nPreserve body whitespace exactly.\n"),
+    ] {
+        let rendered =
+            InternalModelContextFragment::new(InternalContextSource::from_static(source), body)
+                .render();
+
+        let parsed = InternalModelContextFragment::parse_canonical(&rendered)
+            .expect("canonical internal context should parse");
+
+        assert_eq!(parsed.source().as_str(), source);
+        assert_eq!(parsed.body(), body);
+    }
+
+    assert_eq!(
+        InternalModelContextFragment::parse_canonical(
+            "<codex_internal_context source=\"Goal\">\nbody\n</codex_internal_context>"
+        ),
+        None
+    );
+    assert_eq!(
+        InternalModelContextFragment::parse_canonical(
+            "<codex_internal_context source=\"goal\">\nbody\n"
+        ),
+        None
+    );
+    assert_eq!(
+        InternalModelContextFragment::parse_canonical(
+            "<goal_context>\nContinue working toward the active thread goal.\n</goal_context>"
+        ),
+        None
+    );
+}
+
+#[test]
 fn detects_legacy_goal_context_fragment() {
     assert!(is_contextual_user_fragment(&ContentItem::InputText {
         text: "<goal_context>\nContinue working toward the active thread goal.\n</goal_context>"

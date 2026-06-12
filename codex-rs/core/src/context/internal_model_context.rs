@@ -73,6 +73,32 @@ impl InternalModelContextFragment {
             body: body.into(),
         }
     }
+
+    pub(crate) fn parse_canonical(text: &str) -> Option<Self> {
+        let rest = text.strip_prefix(CONTEXT_START_MARKER)?;
+        let rest = rest.strip_prefix(SOURCE_ATTR_START)?;
+        let (source, body_and_close) = rest.split_once(SOURCE_ATTR_END)?;
+        if !is_valid_source(source) {
+            return None;
+        }
+
+        let body = body_and_close.strip_suffix(CONTEXT_END_MARKER)?;
+        let body = body.strip_prefix('\n').unwrap_or(body);
+        let body = body.strip_suffix('\n').unwrap_or(body);
+
+        Some(Self::new(
+            InternalContextSource(source.to_string()),
+            body.to_string(),
+        ))
+    }
+
+    pub(crate) fn source(&self) -> &InternalContextSource {
+        &self.source
+    }
+
+    pub(crate) fn body(&self) -> &str {
+        &self.body
+    }
 }
 
 impl ContextualUserFragment for InternalModelContextFragment {
@@ -94,22 +120,12 @@ impl ContextualUserFragment for InternalModelContextFragment {
             return true;
         }
 
-        let Some(rest) = trimmed.strip_prefix(CONTEXT_START_MARKER) else {
-            return false;
-        };
-        let Some(rest) = rest.strip_prefix(SOURCE_ATTR_START) else {
-            return false;
-        };
-        let Some((source, body_and_close)) = rest.split_once(SOURCE_ATTR_END) else {
-            return false;
-        };
-
-        is_valid_source(source) && body_and_close.ends_with(CONTEXT_END_MARKER)
+        Self::parse_canonical(trimmed).is_some()
     }
 
     fn body(&self) -> String {
-        let source = self.source.as_str();
-        let body = &self.body;
+        let source = self.source().as_str();
+        let body = self.body();
         format!(" source=\"{source}\">\n{body}\n")
     }
 }
