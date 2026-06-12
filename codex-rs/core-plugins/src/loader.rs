@@ -738,13 +738,10 @@ async fn load_plugin(
                     error = %error.message,
                     "app-bundled internal hooks failed closed"
                 );
-                (
-                    Vec::new(),
-                    vec![format!(
-                        "app-bundled internal hooks failed closed during {}: {}",
-                        error.stage, error.message
-                    )],
-                )
+                // App-bundled internal hooks are intentionally absent from ordinary hook review
+                // UI. Keep their fail-closed diagnostics in structured logs/telemetry rather than
+                // surfacing implementation details through generic plugin hook warnings.
+                (Vec::new(), Vec::new())
             }
         }
     } else {

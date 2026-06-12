@@ -347,8 +347,7 @@ async fn computer_use_keeps_cache_skills_but_never_cache_hooks() {
     assert_eq!(failed_closed.skill_roots, loaded.skill_roots);
     assert!(failed_closed.has_enabled_skills);
     assert!(failed_closed.hook_sources.is_empty());
-    assert_eq!(failed_closed.hook_load_warnings.len(), 1);
-    assert!(failed_closed.hook_load_warnings[0].contains("failed closed"));
+    assert!(failed_closed.hook_load_warnings.is_empty());
 }
 
 #[test]
