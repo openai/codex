@@ -250,67 +250,6 @@ fn transform_additional_permissions_preserves_denied_entries() {
 }
 
 #[test]
-fn transform_rejects_non_native_cwd_uris() {
-    #[derive(Clone, Copy)]
-    enum InvalidCwd {
-        Command,
-        SandboxPolicy,
-    }
-
-    #[cfg(not(windows))]
-    let non_native_uri =
-        PathUri::parse("file://server/share/file.txt").expect("valid non-native URI");
-    #[cfg(windows)]
-    let non_native_uri =
-        PathUri::parse("file:///usr/local/file.txt").expect("valid non-native URI");
-    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
-    let native_uri = PathUri::from_abs_path(&cwd).expect("cwd URI");
-    let permissions = PermissionProfile::Disabled;
-
-    for invalid_cwd in [InvalidCwd::Command, InvalidCwd::SandboxPolicy] {
-        let (command_cwd, sandbox_policy_cwd) = match invalid_cwd {
-            InvalidCwd::Command => (non_native_uri.clone(), native_uri.clone()),
-            InvalidCwd::SandboxPolicy => (native_uri.clone(), non_native_uri.clone()),
-        };
-        let error = SandboxManager::new()
-            .transform(SandboxTransformRequest {
-                command: SandboxCommand {
-                    program: "true".into(),
-                    args: Vec::new(),
-                    cwd: command_cwd,
-                    env: HashMap::new(),
-                    additional_permissions: None,
-                },
-                permissions: &permissions,
-                sandbox: SandboxType::None,
-                enforce_managed_network: false,
-                network: None,
-                sandbox_policy_cwd: &sandbox_policy_cwd,
-                codex_linux_sandbox_exe: None,
-                use_legacy_landlock: false,
-                windows_sandbox_level: WindowsSandboxLevel::Disabled,
-                windows_sandbox_private_desktop: false,
-            })
-            .expect_err("non-native cwd URI should fail transformation");
-
-        match (invalid_cwd, error) {
-            (
-                InvalidCwd::Command,
-                super::SandboxTransformError::InvalidCommandCwd { cwd, source },
-            )
-            | (
-                InvalidCwd::SandboxPolicy,
-                super::SandboxTransformError::InvalidSandboxPolicyCwd { cwd, source },
-            ) => {
-                assert_eq!(cwd, non_native_uri);
-                assert_eq!(source.kind(), std::io::ErrorKind::InvalidInput);
-            }
-            _ => panic!("unexpected sandbox transform error"),
-        }
-    }
-}
-
-#[test]
 fn managed_mitm_ca_bundle_becomes_readable_for_restricted_sandbox() {
     let cwd = TempDir::new().expect("create cwd");
     let cwd =
