@@ -338,6 +338,10 @@ impl Drop for CodeModeService {
 }
 
 impl CodeModeSession for CodeModeService {
+    fn is_alive(&self) -> bool {
+        !self.inner.shutting_down.load(Ordering::Acquire)
+    }
+
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,

@@ -114,9 +114,7 @@ pub trait CodeModeSession: Send + Sync {
     ///
     /// Remote implementations should return `false` after their underlying
     /// connection fails so callers can create a fresh session for later work.
-    fn is_alive(&self) -> bool {
-        true
-    }
+    fn is_alive(&self) -> bool;
 
     fn execute<'a>(
         &'a self,
