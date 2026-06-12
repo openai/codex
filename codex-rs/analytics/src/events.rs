@@ -1100,6 +1100,7 @@ fn analytics_hook_source(source: HookSource) -> &'static str {
         HookSource::CloudManagedConfig => "cloud_managed_config",
         HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
         HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
+        HookSource::AppBundledInternal => "app_bundled_internal",
         HookSource::Unknown => "unknown",
     }
 }

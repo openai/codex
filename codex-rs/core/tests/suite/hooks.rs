@@ -2916,6 +2916,7 @@ print(json.dumps({{
         hooks: serde_json::from_str::<codex_config::HooksFile>(plugin_hooks_json)
             .context("parse plugin hooks")?
             .hooks,
+        kind: Default::default(),
     }];
 
     let mut builder = test_codex()

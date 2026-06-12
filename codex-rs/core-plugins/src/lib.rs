@@ -1,3 +1,4 @@
+mod app_bundled_internal;
 mod discoverable;
 pub mod installed_marketplaces;
 pub mod loader;
@@ -17,6 +18,9 @@ pub mod store;
 #[cfg(test)]
 mod test_support;
 pub mod toggles;
+
+#[cfg(test)]
+mod app_bundled_internal_tests;
 
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_BUNDLED_MARKETPLACE_NAME: &str = "openai-bundled";

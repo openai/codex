@@ -1,10 +1,14 @@
 use super::*;
+use crate::app_bundled_internal::AppBundledInternalHookError;
+use crate::app_bundled_internal::AppBundledInternalHookLoader;
 use crate::manifest::load_plugin_manifest;
 use crate::test_support::write_file;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_plugin::PluginHookSource;
+use codex_plugin::PluginHookSourceKind;
 use codex_plugin::PluginId;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -216,6 +220,135 @@ enabled = true
     assert!(hooks_only_valid.skill_roots.is_empty());
     assert!(hooks_only_valid.mcp_servers.is_empty());
     assert!(hooks_only_valid.apps.is_empty());
+}
+
+enum TestInternalHookResult {
+    Sources(Vec<PluginHookSource>),
+    Failure,
+}
+
+struct TestInternalHookLoader(TestInternalHookResult);
+
+impl AppBundledInternalHookLoader for TestInternalHookLoader {
+    fn load(
+        &self,
+        _plugin_id: &PluginId,
+        _plugin_data_root: &AbsolutePathBuf,
+    ) -> Result<Vec<PluginHookSource>, AppBundledInternalHookError> {
+        match &self.0 {
+            TestInternalHookResult::Sources(sources) => Ok(sources.clone()),
+            TestInternalHookResult::Failure => Err(AppBundledInternalHookError {
+                stage: "test verification",
+                message: "test distribution verification failed".to_string(),
+            }),
+        }
+    }
+}
+
+#[tokio::test]
+async fn computer_use_keeps_cache_skills_but_never_cache_hooks() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let cache_root = temp_dir
+        .path()
+        .join("plugins/cache/openai-bundled/computer-use/local");
+    write_file(
+        &cache_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"computer-use"}"#,
+    );
+    write_file(
+        &cache_root.join("skills/computer-use/SKILL.md"),
+        "---\nname: computer-use\ndescription: cached runtime variant\n---\n",
+    );
+    write_file(
+        &cache_root.join("hooks/hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"${PLUGIN_ROOT}/hooks/cached-malicious.sh"}]}]}}"#,
+    );
+    write_file(&cache_root.join("hooks/cached-malicious.sh"), "malicious");
+
+    let bundle_root = AbsolutePathBuf::from_absolute_path(
+        temp_dir
+            .path()
+            .join("Codex.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use"),
+    )
+    .expect("bundle plugin root should be absolute");
+    let declaration_path = bundle_root.join("hooks/hooks.json");
+    write_file(
+        declaration_path.as_path(),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"${PLUGIN_ROOT}/hooks/bundled-internal.sh"}]}]}}"#,
+    );
+    write_file(
+        bundle_root.join("hooks/bundled-internal.sh").as_path(),
+        "trusted",
+    );
+    let hooks = serde_json::from_str::<HooksFile>(
+        &std::fs::read_to_string(declaration_path.as_path()).expect("read hook declaration"),
+    )
+    .expect("parse hook declaration")
+    .hooks;
+    let plugin_id = PluginId::parse("computer-use@openai-bundled").expect("plugin id");
+    let plugin_data_root = AbsolutePathBuf::from_absolute_path(
+        temp_dir
+            .path()
+            .join("plugins/data/computer-use-openai-bundled"),
+    )
+    .expect("plugin data root should be absolute");
+    let bundle_source = PluginHookSource {
+        plugin_id: plugin_id.clone(),
+        plugin_root: bundle_root.clone(),
+        plugin_data_root: plugin_data_root.clone(),
+        source_path: declaration_path.clone(),
+        source_relative_path: "hooks/hooks.json".to_string(),
+        hooks,
+        kind: PluginHookSourceKind::AppBundledInternal,
+    };
+    let store = PluginStore::new(temp_dir.path().to_path_buf());
+    let plugin = PluginConfig {
+        enabled: true,
+        mcp_servers: HashMap::new(),
+    };
+    let skill_config_rules = SkillConfigRules::default();
+    let scope = PluginLoadScope::AllCapabilities {
+        restriction_product: Some(Product::Codex),
+        skill_config_rules: &skill_config_rules,
+    };
+
+    let loaded = load_plugin(
+        plugin_id.as_key(),
+        &plugin,
+        &store,
+        &scope,
+        &TestInternalHookLoader(TestInternalHookResult::Sources(vec![bundle_source])),
+    )
+    .await;
+
+    assert_eq!(
+        loaded.skill_roots,
+        vec![cache_root.join("skills").try_into().expect("skill root")]
+    );
+    assert!(loaded.has_enabled_skills);
+    assert_eq!(loaded.hook_sources.len(), 1);
+    assert_eq!(loaded.hook_sources[0].plugin_root, bundle_root);
+    assert_eq!(loaded.hook_sources[0].source_path, declaration_path);
+    assert_eq!(loaded.hook_sources[0].plugin_data_root, plugin_data_root);
+    let serialized_hooks =
+        serde_json::to_string(&loaded.hook_sources[0].hooks).expect("serialize loaded hooks");
+    assert!(serialized_hooks.contains("bundled-internal.sh"));
+    assert!(!serialized_hooks.contains("cached-malicious.sh"));
+
+    let failed_closed = load_plugin(
+        plugin_id.as_key(),
+        &plugin,
+        &store,
+        &scope,
+        &TestInternalHookLoader(TestInternalHookResult::Failure),
+    )
+    .await;
+
+    assert_eq!(failed_closed.skill_roots, loaded.skill_roots);
+    assert!(failed_closed.has_enabled_skills);
+    assert!(failed_closed.hook_sources.is_empty());
+    assert_eq!(failed_closed.hook_load_warnings.len(), 1);
+    assert!(failed_closed.hook_load_warnings[0].contains("failed closed"));
 }
 
 #[test]

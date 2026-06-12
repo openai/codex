@@ -768,6 +768,9 @@ fn hook_source_summary(hook: &HookMetadata) -> String {
             .as_deref()
             .map(|plugin_id| format!("Plugin - {plugin_id}"))
             .unwrap_or_else(|| "Plugin".to_string()),
+        HookSource::AppBundledInternal => {
+            unreachable!("app-bundled internal hooks are hidden from the hooks browser")
+        }
         _ => config_source_label(hook.source).to_string(),
     }
 }
@@ -775,6 +778,9 @@ fn hook_source_summary(hook: &HookMetadata) -> String {
 fn detail_source_value(hook: &HookMetadata) -> String {
     match hook.source {
         HookSource::Plugin => hook_source_summary(hook),
+        HookSource::AppBundledInternal => {
+            unreachable!("app-bundled internal hooks are hidden from the hooks browser")
+        }
         HookSource::System
         | HookSource::Mdm
         | HookSource::CloudRequirements
@@ -797,6 +803,9 @@ fn config_source_label(source: HookSource) -> &'static str {
         HookSource::Mdm => "Admin config",
         HookSource::SessionFlags => "Session flags",
         HookSource::Plugin => unreachable!("plugin hooks are handled by summary_source"),
+        HookSource::AppBundledInternal => {
+            unreachable!("app-bundled internal hooks are hidden from the hooks browser")
+        }
         HookSource::CloudRequirements => "Admin config",
         HookSource::CloudManagedConfig => "Cloud-managed config",
         HookSource::LegacyManagedConfigFile => "Admin config",

@@ -37,6 +37,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_thread_store::ReadThreadParams;
 use serde_json::Value;
 use tracing::instrument;
+use tracing::warn;
 
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
@@ -611,6 +612,9 @@ async fn emit_hook_started_events(
     preview_runs: Vec<HookRunSummary>,
 ) {
     for run in preview_runs {
+        if run.source == HookSource::AppBundledInternal {
+            continue;
+        }
         sess.send_event(
             turn_context,
             EventMsg::HookStarted(HookStartedEvent {
@@ -630,6 +634,18 @@ pub(crate) async fn emit_hook_completed_events(
     for completed in completed_events {
         emit_hook_completed_metrics(turn_context, &completed);
         track_hook_completed_analytics(sess, turn_context, &completed);
+        if completed.run.source == HookSource::AppBundledInternal {
+            if completed.run.status != HookRunStatus::Completed {
+                warn!(
+                    diagnostic_code = "app_bundled_internal_hook_runtime_failed",
+                    hook_event = ?completed.run.event_name,
+                    status = ?completed.run.status,
+                    source_path = %completed.run.source_path.display(),
+                    "app-bundled internal hook did not complete successfully"
+                );
+            }
+            continue;
+        }
         sess.send_event(turn_context, EventMsg::HookCompleted(completed))
             .await;
     }
@@ -709,6 +725,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookSource::CloudManagedConfig => "cloud_managed_config",
         HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
         HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
+        HookSource::AppBundledInternal => "app_bundled_internal",
         HookSource::Unknown => "unknown",
     };
     let status = match run.status {
@@ -777,9 +794,12 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::additional_context_messages;
+    use super::emit_hook_completed_events;
+    use super::emit_hook_started_events;
     use super::hook_run_analytics_payload;
     use super::hook_run_metric_tags;
     use crate::session::tests::make_session_and_context;
+    use crate::session::tests::make_session_and_context_with_rx;
     use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookRunSummary;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -854,6 +874,32 @@ mod tests {
         assert_eq!(hook.status, HookRunStatus::Failed);
     }
 
+    #[tokio::test]
+    async fn app_bundled_internal_hook_notifications_are_suppressed() {
+        let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+
+        emit_hook_started_events(
+            &session,
+            &turn_context,
+            vec![sample_hook_run(
+                HookRunStatus::Running,
+                HookSource::AppBundledInternal,
+            )],
+        )
+        .await;
+        emit_hook_completed_events(
+            &session,
+            &turn_context,
+            vec![HookCompletedEvent {
+                turn_id: None,
+                run: sample_hook_run(HookRunStatus::Completed, HookSource::AppBundledInternal),
+            }],
+        )
+        .await;
+
+        assert!(rx.try_recv().is_err());
+    }
+
     #[test]
     fn hook_run_metric_tags_match_analytics_shape() {
         let run = sample_hook_run(HookRunStatus::Blocked, HookSource::Project);
@@ -889,6 +935,16 @@ mod tests {
             [
                 ("hook_name", "Stop"),
                 ("source", "legacy_managed_config_mdm"),
+                ("status", "completed"),
+            ]
+        );
+
+        let internal = sample_hook_run(HookRunStatus::Completed, HookSource::AppBundledInternal);
+        assert_eq!(
+            hook_run_metric_tags(&internal),
+            [
+                ("hook_name", "Stop"),
+                ("source", "app_bundled_internal"),
                 ("status", "completed"),
             ]
         );

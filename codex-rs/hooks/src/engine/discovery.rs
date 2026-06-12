@@ -18,6 +18,7 @@ use codex_config::RequirementSource;
 use codex_config::TomlValue;
 use codex_config::version_for_toml;
 use codex_plugin::PluginHookSource;
+use codex_plugin::PluginHookSourceKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -46,6 +47,8 @@ struct HookHandlerSource<'a> {
     hook_states: &'a HashMap<String, HookStateToml>,
     env: HashMap<String, String>,
     plugin_id: Option<String>,
+    app_bundled_internal_plugin_root: Option<AbsolutePathBuf>,
+    app_bundled_internal_source_hooks: Option<HookEventsToml>,
 }
 
 #[derive(Clone, Copy)]
@@ -109,6 +112,8 @@ pub(crate) fn discover_handlers(
                 hook_states: &hook_states,
                 env: HashMap::new(),
                 plugin_id: None,
+                app_bundled_internal_plugin_root: None,
+                app_bundled_internal_source_hooks: None,
             };
             if !policy.allows(&policy_source) {
                 continue;
@@ -148,6 +153,8 @@ pub(crate) fn discover_handlers(
                         hook_states: &hook_states,
                         env: HashMap::new(),
                         plugin_id: None,
+                        app_bundled_internal_plugin_root: None,
+                        app_bundled_internal_source_hooks: None,
                     },
                     hook_events,
                     policy,
@@ -200,6 +207,8 @@ fn append_managed_requirement_handlers(
             hook_states,
             env: HashMap::new(),
             plugin_id: None,
+            app_bundled_internal_plugin_root: None,
+            app_bundled_internal_source_hooks: None,
         },
         managed_hooks.get().hooks.clone(),
         policy,
@@ -223,7 +232,16 @@ fn append_plugin_hook_sources(
             source_path,
             source_relative_path,
             hooks,
+            kind,
         } = source;
+        let (hook_source, is_managed) = match kind {
+            PluginHookSourceKind::UserReviewed => (HookSource::Plugin, false),
+            PluginHookSourceKind::AppBundledInternal => (HookSource::AppBundledInternal, true),
+        };
+        let app_bundled_internal_plugin_root =
+            (kind == PluginHookSourceKind::AppBundledInternal).then(|| plugin_root.clone());
+        let app_bundled_internal_source_hooks =
+            (kind == PluginHookSourceKind::AppBundledInternal).then(|| hooks.clone());
         let mut env = HashMap::new();
         let plugin_root_value = plugin_root.display().to_string();
         let plugin_data_root_value = plugin_data_root.display().to_string();
@@ -245,12 +263,14 @@ fn append_plugin_hook_sources(
                     plugin_id.as_str(),
                     source_relative_path.as_str(),
                 ),
-                source: HookSource::Plugin,
-                is_managed: false,
+                source: hook_source,
+                is_managed,
                 bypass_hook_trust: policy.bypass_hook_trust,
                 hook_states,
                 env,
                 plugin_id: Some(plugin_id),
+                app_bundled_internal_plugin_root,
+                app_bundled_internal_source_hooks,
             },
             hooks,
             policy,
@@ -496,34 +516,44 @@ fn append_matcher_groups(
                     };
                     let current_hash =
                         command_hook_hash(event_name, matcher, &group, normalized_handler);
-                    let command = source.env.iter().fold(command, |command, (key, value)| {
-                        command.replace(&format!("${{{key}}}"), value)
-                    });
+                    let command = if source.source == HookSource::AppBundledInternal {
+                        command
+                    } else {
+                        source.env.iter().fold(command, |command, (key, value)| {
+                            command.replace(&format!("${{{key}}}"), value)
+                        })
+                    };
                     // TODO(abhinav): replace this positional suffix with a durable hook id.
                     let key =
                         crate::hook_key(&source.key_source, event_name, group_index, handler_index);
-                    let state = source.hook_states.get(&key);
+                    let state = if source.source == HookSource::AppBundledInternal {
+                        None
+                    } else {
+                        source.hook_states.get(&key)
+                    };
                     let enabled = hook_enabled(source.is_managed, state);
                     let trusted_hash = hook_trusted_hash(source.is_managed, state);
                     let trust_status =
                         hook_trust_status(source.is_managed, &current_hash, trusted_hash);
-                    hook_entries.push(HookListEntry {
-                        key,
-                        event_name,
-                        handler_type: HookHandlerType::Command,
-                        matcher: matcher.map(ToOwned::to_owned),
-                        command: Some(command.clone()),
-                        timeout_sec,
-                        status_message: status_message.clone(),
-                        source_path: source.path.clone(),
-                        source: source.source,
-                        plugin_id: source.plugin_id.clone(),
-                        display_order: *display_order,
-                        enabled,
-                        is_managed: source.is_managed,
-                        current_hash,
-                        trust_status,
-                    });
+                    if source.source != HookSource::AppBundledInternal {
+                        hook_entries.push(HookListEntry {
+                            key,
+                            event_name,
+                            handler_type: HookHandlerType::Command,
+                            matcher: matcher.map(ToOwned::to_owned),
+                            command: Some(command.clone()),
+                            timeout_sec,
+                            status_message: status_message.clone(),
+                            source_path: source.path.clone(),
+                            source: source.source,
+                            plugin_id: source.plugin_id.clone(),
+                            display_order: *display_order,
+                            enabled,
+                            is_managed: source.is_managed,
+                            current_hash,
+                            trust_status,
+                        });
+                    }
                     if enabled
                         && (source.bypass_hook_trust
                             || matches!(
@@ -539,6 +569,12 @@ fn append_matcher_groups(
                             status_message,
                             source_path: source.path.clone(),
                             source: source.source,
+                            app_bundled_internal_plugin_root: source
+                                .app_bundled_internal_plugin_root
+                                .clone(),
+                            app_bundled_internal_source_hooks: source
+                                .app_bundled_internal_source_hooks
+                                .clone(),
                             display_order: *display_order,
                             env: source.env.clone(),
                         });
@@ -693,6 +729,8 @@ mod tests {
             hook_states,
             env: std::collections::HashMap::new(),
             plugin_id: None,
+            app_bundled_internal_plugin_root: None,
+            app_bundled_internal_source_hooks: None,
         }
     }
 
@@ -710,6 +748,8 @@ mod tests {
             hook_states,
             env: std::collections::HashMap::new(),
             plugin_id: None,
+            app_bundled_internal_plugin_root: None,
+            app_bundled_internal_source_hooks: None,
         }
     }
 
@@ -790,6 +830,8 @@ mod tests {
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
+                app_bundled_internal_plugin_root: None,
+                app_bundled_internal_source_hooks: None,
                 display_order: 0,
                 env: std::collections::HashMap::new(),
             }]
@@ -825,6 +867,8 @@ mod tests {
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
+                app_bundled_internal_plugin_root: None,
+                app_bundled_internal_source_hooks: None,
                 display_order: 0,
                 env: std::collections::HashMap::new(),
             }]

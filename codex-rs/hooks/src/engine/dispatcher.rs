@@ -178,6 +178,8 @@ mod tests {
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: HookSource::User,
+            app_bundled_internal_plugin_root: None,
+            app_bundled_internal_source_hooks: None,
             display_order,
             env: std::collections::HashMap::new(),
         }
