@@ -98,6 +98,7 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
             "isFile".to_string(),
             "isSymlink".to_string(),
             "modifiedAtMs".to_string(),
+            "size".to_string(),
         ]
     );
 
@@ -108,6 +109,7 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
             is_directory: false,
             is_file: true,
             is_symlink: false,
+            size: 5,
             created_at_ms: stat.created_at_ms,
             modified_at_ms: stat.modified_at_ms,
         }
@@ -164,9 +166,17 @@ async fn fs_get_metadata_reports_symlink() -> Result<()> {
     .await??;
 
     let stat: FsGetMetadataResponse = to_response(response)?;
-    assert_eq!(stat.is_directory, false);
-    assert_eq!(stat.is_file, true);
-    assert_eq!(stat.is_symlink, true);
+    assert_eq!(
+        stat,
+        FsGetMetadataResponse {
+            is_directory: false,
+            is_file: true,
+            is_symlink: true,
+            size: 5,
+            created_at_ms: stat.created_at_ms,
+            modified_at_ms: stat.modified_at_ms,
+        }
+    );
 
     Ok(())
 }

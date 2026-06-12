@@ -132,6 +132,7 @@ impl RemoteFileSystem {
             is_directory: response.is_directory,
             is_file: response.is_file,
             is_symlink: response.is_symlink,
+            size: response.size,
             created_at_ms: response.created_at_ms,
             modified_at_ms: response.modified_at_ms,
         })

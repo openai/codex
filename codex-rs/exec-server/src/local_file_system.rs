@@ -483,6 +483,7 @@ impl DirectFileSystem {
             is_directory: metadata.is_dir(),
             is_file: metadata.is_file(),
             is_symlink: symlink_metadata.file_type().is_symlink(),
+            size: metadata.len(),
             created_at_ms: metadata.created().ok().map_or(0, system_time_to_unix_ms),
             modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
         })

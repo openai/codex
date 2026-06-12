@@ -184,7 +184,7 @@ Example with notification opt-out:
 - `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
 - `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
 - `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
-- `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `isSymlink`, `createdAtMs`, and `modifiedAtMs`.
+- `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `isSymlink`, `size`, `createdAtMs`, and `modifiedAtMs`.
 - `fs/readDirectory` — list direct child entries for an absolute directory path; each entry contains `fileName`, `isDirectory`, and `isFile`, and `fileName` is just the child name, not a path.
 - `fs/remove` — remove an absolute file or directory tree; `recursive` and `force` default to `true`.
 - `fs/copy` — copy between absolute paths; directory copies require `recursive: true`.
@@ -1196,6 +1196,7 @@ All filesystem paths in this section must be absolute.
     "isDirectory": false,
     "isFile": true,
     "isSymlink": false,
+    "size": 5,
     "createdAtMs": 1730910000000,
     "modifiedAtMs": 1730910000000
 } }
@@ -1207,7 +1208,7 @@ All filesystem paths in this section must be absolute.
 } }
 ```
 
-- `fs/getMetadata` returns whether the path resolves to a directory or regular file, whether the path itself is a symlink, plus `createdAtMs` and `modifiedAtMs` in Unix milliseconds. If a timestamp is unavailable on the current platform, that field is `0`.
+- `fs/getMetadata` returns whether the path resolves to a directory or regular file, whether the path itself is a symlink, its `size` in bytes, plus `createdAtMs` and `modifiedAtMs` in Unix milliseconds. If a timestamp is unavailable on the current platform, that field is `0`.
 - `fs/createDirectory` defaults `recursive` to `true` when omitted.
 - `fs/remove` defaults both `recursive` and `force` to `true` when omitted.
 - `fs/readFile` always returns base64 bytes via `dataBase64`, and `fs/writeFile` always expects base64 bytes in `dataBase64`.
