@@ -21,3 +21,4 @@ tokio-util = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
