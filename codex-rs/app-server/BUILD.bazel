@@ -16,6 +16,7 @@ codex_rust_crate(
     },
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
+        "//codex-rs/code-mode-host:codex-code-mode-host",
     ],
     test_tags = ["no-sandbox"],
 )

@@ -3,6 +3,17 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeModeSession;
+use codex_code_mode_protocol::CodeModeSessionDelegate;
+use codex_code_mode_protocol::CodeModeSessionProvider;
+use codex_code_mode_protocol::CodeModeSessionProviderFuture;
+use codex_code_mode_protocol::CodeModeSessionResultFuture;
+use codex_code_mode_protocol::ExecuteRequest;
+use codex_code_mode_protocol::RuntimeResponse;
+use codex_code_mode_protocol::StartedCell;
+use codex_code_mode_protocol::WaitOutcome;
+use codex_code_mode_protocol::WaitRequest;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
@@ -57,6 +68,51 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
 }
 
 impl CoreToolRuntime for TestHandler {}
+
+struct MissingCellSessionProvider;
+
+impl CodeModeSessionProvider for MissingCellSessionProvider {
+    fn create_session<'a>(
+        &'a self,
+        _delegate: Arc<dyn CodeModeSessionDelegate>,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        Box::pin(async {
+            let session: Arc<dyn CodeModeSession> = Arc::new(MissingCellSession);
+            Ok(session)
+        })
+    }
+}
+
+struct MissingCellSession;
+
+impl CodeModeSession for MissingCellSession {
+    fn execute<'a>(
+        &'a self,
+        _request: ExecuteRequest,
+    ) -> CodeModeSessionResultFuture<'a, StartedCell> {
+        Box::pin(async { Err("execute is not supported by this test session".to_string()) })
+    }
+
+    fn wait<'a>(&'a self, request: WaitRequest) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
+        Box::pin(async move { Ok(missing_cell_outcome(request.cell_id)) })
+    }
+
+    fn terminate<'a>(&'a self, cell_id: CellId) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
+        Box::pin(async move { Ok(missing_cell_outcome(cell_id)) })
+    }
+
+    fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn missing_cell_outcome(cell_id: CellId) -> WaitOutcome {
+    WaitOutcome::MissingCell(RuntimeResponse::Result {
+        error_text: Some(format!("exec cell {cell_id} not found")),
+        cell_id,
+        content_items: Vec::new(),
+    })
+}
 
 #[tokio::test]
 async fn dispatch_lifecycle_trace_records_direct_and_code_mode_requesters() -> anyhow::Result<()> {
@@ -213,6 +269,26 @@ async fn dispatch_lifecycle_trace_records_incompatible_payload_failures() -> any
 async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let (mut session, turn) = make_session_and_context().await;
+    let provider: Arc<dyn CodeModeSessionProvider> = Arc::new(MissingCellSessionProvider);
+    session.services.code_mode_service =
+        crate::tools::code_mode::CodeModeService::new(Arc::clone(&provider));
+    session.services.code_mode_session_provider = provider;
+    assert_eq!(
+        session
+            .services
+            .code_mode_service
+            .execute(ExecuteRequest {
+                tool_call_id: "setup-call".to_string(),
+                enabled_tools: Vec::new(),
+                source: String::new(),
+                yield_time_ms: None,
+                max_output_tokens: None,
+            })
+            .await
+            .err()
+            .as_deref(),
+        Some("execute is not supported by this test session")
+    );
     attach_test_trace(&mut session, &turn, temp.path())?;
 
     let registry = ToolRegistry::with_handler_for_test(Arc::new(CodeModeWaitHandler));

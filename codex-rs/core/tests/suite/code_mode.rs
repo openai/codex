@@ -1921,7 +1921,7 @@ text("after terminate");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_wait_returns_error_for_unknown_session() -> Result<()> {
+async fn code_mode_wait_returns_error_without_a_session() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1964,17 +1964,10 @@ async fn code_mode_wait_returns_error_for_unknown_session() -> Result<()> {
     assert_ne!(success, Some(true));
 
     let items = function_tool_output_items(&request, "call-1");
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script failed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
-    );
+    assert_eq!(items.len(), 1);
     assert_eq!(
-        text_item(&items, /*index*/ 1),
-        "Script error:\nexec cell 999999 not found"
+        text_item(&items, /*index*/ 0),
+        "code mode session is unavailable"
     );
 
     Ok(())

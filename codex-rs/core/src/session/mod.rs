@@ -432,6 +432,8 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    pub(crate) code_mode_session_provider:
+        Arc<dyn codex_code_mode_protocol::CodeModeSessionProvider>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
 }
 
@@ -514,6 +516,7 @@ impl Codex {
             analytics_events_client,
             thread_store,
             attestation_provider,
+            code_mode_session_provider,
             inherited_multi_agent_version,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -667,6 +670,7 @@ impl Codex {
             thread_store,
             parent_rollout_thread_trace,
             attestation_provider,
+            code_mode_session_provider,
             multi_agent_version,
         ))
         .await

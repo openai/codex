@@ -8,13 +8,18 @@ pub(crate) mod wait_spec;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_code_mode::CellId;
-use codex_code_mode::CodeModeNestedToolCall;
-use codex_code_mode::CodeModeSession;
-use codex_code_mode::CodeModeToolKind;
-use codex_code_mode::RuntimeResponse;
+use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeModeNestedToolCall;
+use codex_code_mode_protocol::CodeModeSession;
+use codex_code_mode_protocol::CodeModeSessionProvider;
+use codex_code_mode_protocol::CodeModeToolKind;
+use codex_code_mode_protocol::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
@@ -42,9 +47,10 @@ pub(crate) use execute_handler::CodeModeExecuteHandler;
 use response_adapter::into_function_call_output_content_items;
 pub(crate) use wait_handler::CodeModeWaitHandler;
 
-pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
-pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode::WAIT_TOOL_NAME;
-pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = codex_code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
+pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode_protocol::PUBLIC_TOOL_NAME;
+pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode_protocol::WAIT_TOOL_NAME;
+pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 =
+    codex_code_mode_protocol::DEFAULT_WAIT_YIELD_TIME_MS;
 
 /// Returns true for the un-namespaced code-mode `exec` tool.
 pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
@@ -58,50 +64,69 @@ pub(crate) struct ExecContext {
 }
 
 pub(crate) struct CodeModeService {
-    session: Option<Arc<dyn CodeModeSession>>,
+    session: Mutex<Option<Arc<dyn CodeModeSession>>>,
+    provider: Arc<dyn CodeModeSessionProvider>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
+    session_init_permit: Semaphore,
+    shutting_down: AtomicBool,
 }
 
 impl CodeModeService {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(provider: Arc<dyn CodeModeSessionProvider>) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: Some(Arc::new(codex_code_mode::CodeModeService::with_delegate(
-                dispatch_broker.clone(),
-            ))),
+            session: Mutex::new(None),
+            provider,
             dispatch_broker,
+            session_init_permit: Semaphore::new(/*permits*/ 1),
+            shutting_down: AtomicBool::new(false),
         }
     }
 
     pub(crate) async fn execute(
         &self,
-        request: codex_code_mode::ExecuteRequest,
-    ) -> Result<codex_code_mode::StartedCell, String> {
-        self.session()?.execute(request).await
+        request: codex_code_mode_protocol::ExecuteRequest,
+    ) -> Result<codex_code_mode_protocol::StartedCell, String> {
+        self.session_for_execute().await?.execute(request).await
     }
 
     pub(crate) async fn wait(
         &self,
-        request: codex_code_mode::WaitRequest,
-    ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session()?.wait(request).await
+        request: codex_code_mode_protocol::WaitRequest,
+    ) -> Result<codex_code_mode_protocol::WaitOutcome, String> {
+        self.current_session()
+            .await
+            .ok_or_else(|| "code mode session is unavailable".to_string())?
+            .wait(request)
+            .await
     }
 
     pub(crate) async fn terminate(
         &self,
         cell_id: CellId,
-    ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session()?.terminate(cell_id).await
+    ) -> Result<codex_code_mode_protocol::WaitOutcome, String> {
+        self.current_session()
+            .await
+            .ok_or_else(|| "code mode session is unavailable".to_string())?
+            .terminate(cell_id)
+            .await
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
-        match &self.session {
+        self.shutting_down.store(true, Ordering::Release);
+        let _permit = self
+            .session_init_permit
+            .acquire()
+            .await
+            .map_err(|_| "code mode session initializer closed".to_string())?;
+        let session = self.session.lock().await.clone();
+        match session {
             Some(session) => session.shutdown().await,
             None => Ok(()),
         }
     }
 
-    pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode::CellId) {
+    pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode_protocol::CellId) {
         self.dispatch_broker.mark_cell_ready_for_dispatch(cell_id);
     }
 
@@ -116,9 +141,7 @@ impl CodeModeService {
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeDispatchWorker> {
-        if !matches!(turn.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
-            || self.session.is_none()
-        {
+        if !matches!(turn.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
             return None;
         }
 
@@ -132,10 +155,43 @@ impl CodeModeService {
         )
     }
 
-    fn session(&self) -> Result<&Arc<dyn CodeModeSession>, String> {
+    async fn session_for_execute(&self) -> Result<Arc<dyn CodeModeSession>, String> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("code mode session is shutting down".to_string());
+        }
+        if let Some(session) = self.current_session().await {
+            return Ok(session);
+        }
+        let _permit = self
+            .session_init_permit
+            .acquire()
+            .await
+            .map_err(|_| "code mode session initializer closed".to_string())?;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("code mode session is shutting down".to_string());
+        }
+        if let Some(session) = self.current_session().await {
+            return Ok(session);
+        }
+        let session = self
+            .provider
+            .create_session(self.dispatch_broker.clone())
+            .await?;
+        if self.shutting_down.load(Ordering::Acquire) {
+            let _ = session.shutdown().await;
+            return Err("code mode session is shutting down".to_string());
+        }
+        *self.session.lock().await = Some(Arc::clone(&session));
+        Ok(session)
+    }
+
+    async fn current_session(&self) -> Option<Arc<dyn CodeModeSession>> {
         self.session
+            .lock()
+            .await
             .as_ref()
-            .ok_or_else(|| "code mode is unavailable".to_string())
+            .filter(|session| session.is_alive())
+            .cloned()
     }
 }
 
@@ -320,11 +376,30 @@ fn build_freeform_tool_payload(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    use super::CodeModeService;
     use super::build_nested_tool_payload;
     use crate::tools::context::ToolPayload;
-    use codex_code_mode::CodeModeToolKind;
+    use codex_code_mode_protocol::CellId;
+    use codex_code_mode_protocol::CodeModeSession;
+    use codex_code_mode_protocol::CodeModeSessionDelegate;
+    use codex_code_mode_protocol::CodeModeSessionProvider;
+    use codex_code_mode_protocol::CodeModeSessionProviderFuture;
+    use codex_code_mode_protocol::CodeModeSessionResultFuture;
+    use codex_code_mode_protocol::CodeModeToolKind;
+    use codex_code_mode_protocol::ExecuteRequest;
+    use codex_code_mode_protocol::RuntimeResponse;
+    use codex_code_mode_protocol::StartedCell;
+    use codex_code_mode_protocol::WaitOutcome;
+    use codex_code_mode_protocol::WaitRequest;
     use codex_tools::ToolName;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
+    use tokio::sync::oneshot;
 
     #[test]
     fn build_nested_tool_payload_uses_function_kind() {
@@ -358,5 +433,128 @@ mod tests {
             }
             other => panic!("expected freeform payload, got {other:?}"),
         }
+    }
+
+    struct RecoveringSessionProvider {
+        sessions_created: AtomicUsize,
+    }
+
+    impl CodeModeSessionProvider for RecoveringSessionProvider {
+        fn create_session<'a>(
+            &'a self,
+            _delegate: Arc<dyn CodeModeSessionDelegate>,
+        ) -> CodeModeSessionProviderFuture<'a> {
+            let generation = self.sessions_created.fetch_add(1, Ordering::Relaxed) + 1;
+            Box::pin(async move {
+                let session: Arc<dyn CodeModeSession> = Arc::new(RecoveringSession {
+                    generation,
+                    alive: AtomicBool::new(true),
+                });
+                Ok(session)
+            })
+        }
+    }
+
+    struct RecoveringSession {
+        generation: usize,
+        alive: AtomicBool,
+    }
+
+    impl CodeModeSession for RecoveringSession {
+        fn is_alive(&self) -> bool {
+            self.alive.load(Ordering::Acquire)
+        }
+
+        fn execute<'a>(
+            &'a self,
+            _request: ExecuteRequest,
+        ) -> CodeModeSessionResultFuture<'a, StartedCell> {
+            Box::pin(async move {
+                if self.generation == 1 {
+                    self.alive.store(false, Ordering::Release);
+                    return Err("host crashed".to_string());
+                }
+                let cell_id = CellId::new(format!("host{}_1", self.generation));
+                let (response_tx, response_rx) = oneshot::channel();
+                response_tx
+                    .send(RuntimeResponse::Result {
+                        cell_id: cell_id.clone(),
+                        content_items: Vec::new(),
+                        error_text: None,
+                    })
+                    .expect("test response receiver should be live");
+                Ok(StartedCell::new(cell_id, response_rx))
+            })
+        }
+
+        fn wait<'a>(
+            &'a self,
+            _request: WaitRequest,
+        ) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
+            Box::pin(async { panic!("wait should not be sent to a failed session") })
+        }
+
+        fn terminate<'a>(
+            &'a self,
+            _cell_id: CellId,
+        ) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
+            Box::pin(async { panic!("terminate should not be sent to a failed session") })
+        }
+
+        fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn execute_request() -> ExecuteRequest {
+        ExecuteRequest {
+            tool_call_id: "call-1".to_string(),
+            enabled_tools: Vec::new(),
+            source: "text('hello')".to_string(),
+            yield_time_ms: None,
+            max_output_tokens: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn exec_replaces_failed_session_but_wait_does_not() {
+        let provider = Arc::new(RecoveringSessionProvider {
+            sessions_created: AtomicUsize::new(0),
+        });
+        let provider_trait: Arc<dyn CodeModeSessionProvider> = provider.clone();
+        let service = CodeModeService::new(provider_trait);
+
+        assert_eq!(
+            service.execute(execute_request()).await.err().as_deref(),
+            Some("host crashed")
+        );
+        assert_eq!(provider.sessions_created.load(Ordering::Relaxed), 1);
+
+        assert_eq!(
+            service
+                .wait(WaitRequest {
+                    cell_id: CellId::new("host1_1".to_string()),
+                    yield_time_ms: 1,
+                })
+                .await
+                .err()
+                .as_deref(),
+            Some("code mode session is unavailable")
+        );
+        assert_eq!(provider.sessions_created.load(Ordering::Relaxed), 1);
+
+        assert_eq!(
+            service
+                .terminate(CellId::new("host1_1".to_string()))
+                .await
+                .err()
+                .as_deref(),
+            Some("code mode session is unavailable")
+        );
+        assert_eq!(provider.sessions_created.load(Ordering::Relaxed), 1);
+
+        let started = service.execute(execute_request()).await.unwrap();
+        assert_eq!(started.cell_id, CellId::new("host2_1".to_string()));
+        assert_eq!(provider.sessions_created.load(Ordering::Relaxed), 2);
     }
 }

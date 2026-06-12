@@ -78,7 +78,7 @@ impl CodeModeWaitHandler {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
-                let cell_id = codex_code_mode::CellId::new(args.cell_id);
+                let cell_id = codex_code_mode_protocol::CellId::new(args.cell_id);
                 let wait_response = if args.terminate {
                     exec.session
                         .services
@@ -89,23 +89,30 @@ impl CodeModeWaitHandler {
                     exec.session
                         .services
                         .code_mode_service
-                        .wait(codex_code_mode::WaitRequest {
+                        .wait(codex_code_mode_protocol::WaitRequest {
                             cell_id,
                             yield_time_ms: args.yield_time_ms,
                         })
                         .await
                 }
                 .map_err(FunctionCallError::RespondToModel)?;
-                if let codex_code_mode::WaitOutcome::LiveCell(response) = &wait_response
-                    && !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. })
+                if let codex_code_mode_protocol::WaitOutcome::LiveCell(response) = &wait_response
+                    && !matches!(
+                        response,
+                        codex_code_mode_protocol::RuntimeResponse::Yielded { .. }
+                    )
                 {
                     // Only a live-cell wait can close a CodeCell. A missing
                     // cell is still an ordinary `wait` tool result, but there
                     // is no runtime object for the reducer to complete.
                     let runtime_cell_id = match response {
-                        codex_code_mode::RuntimeResponse::Yielded { cell_id, .. }
-                        | codex_code_mode::RuntimeResponse::Terminated { cell_id, .. }
-                        | codex_code_mode::RuntimeResponse::Result { cell_id, .. } => cell_id,
+                        codex_code_mode_protocol::RuntimeResponse::Yielded { cell_id, .. }
+                        | codex_code_mode_protocol::RuntimeResponse::Terminated {
+                            cell_id, ..
+                        }
+                        | codex_code_mode_protocol::RuntimeResponse::Result { cell_id, .. } => {
+                            cell_id
+                        }
                     };
                     exec.session
                         .services

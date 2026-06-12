@@ -19,6 +19,8 @@ use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
+use codex_code_mode::InProcessCodeModeSessionProvider;
+use codex_code_mode_protocol::CodeModeSessionProvider;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
@@ -218,6 +220,7 @@ pub(crate) struct ThreadManagerState {
     installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
     state_db: Option<StateDbHandle>,
+    code_mode_session_provider: Arc<dyn CodeModeSessionProvider>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -304,6 +307,7 @@ impl ThreadManager {
                 installation_id,
                 analytics_events_client,
                 state_db,
+                code_mode_session_provider: Arc::new(InProcessCodeModeSessionProvider),
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -409,6 +413,7 @@ impl ThreadManager {
                 installation_id,
                 analytics_events_client: None,
                 state_db,
+                code_mode_session_provider: Arc::new(InProcessCodeModeSessionProvider),
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -418,6 +423,18 @@ impl ThreadManager {
 
     pub fn session_source(&self) -> SessionSource {
         self.state.session_source.clone()
+    }
+
+    #[doc(hidden)]
+    pub fn with_code_mode_session_provider(
+        mut self,
+        provider: Arc<dyn CodeModeSessionProvider>,
+    ) -> Self {
+        let Some(state) = Arc::get_mut(&mut self.state) else {
+            panic!("code-mode provider must be configured before sharing the thread manager");
+        };
+        state.code_mode_session_provider = provider;
+        self
     }
 
     pub fn auth_manager(&self) -> Arc<AuthManager> {
@@ -1430,6 +1447,7 @@ impl ThreadManagerState {
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
+            code_mode_session_provider: Arc::clone(&self.code_mode_session_provider),
             inherited_multi_agent_version: multi_agent_version,
         }))
         .await?;
