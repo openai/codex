@@ -189,6 +189,7 @@ use super::mentions_v2::MentionV2Popup;
 use super::mentions_v2::MentionV2Selection;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use super::prompt_args::parse_slash_name;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use super::slash_commands::BuiltinCommandFlags;
@@ -279,6 +280,7 @@ pub enum InputResult {
         text: String,
         text_elements: Vec<TextElement>,
         action: QueuedInputAction,
+        pending_pastes: Vec<(String, String)>,
     },
     /// A bare slash command parsed by the composer.
     ///
@@ -301,6 +303,12 @@ pub enum QueuedInputAction {
     Plain,
     ParseSlash,
     RunShell,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingPasteHandling {
+    Expand,
+    Preserve,
 }
 
 /// Feature flags for reusing the chat composer in other bottom-pane surfaces.
@@ -2611,13 +2619,18 @@ impl ChatComposer {
         &mut self,
         record_history: bool,
     ) -> Option<(String, Vec<TextElement>)> {
-        self.prepare_submission_text_with_options(record_history, SlashValidation::Immediate)
+        self.prepare_submission_text_with_options(
+            record_history,
+            SlashValidation::Immediate,
+            PendingPasteHandling::Expand,
+        )
     }
 
     fn prepare_submission_text_with_options(
         &mut self,
         record_history: bool,
         slash_validation: SlashValidation,
+        pending_paste_handling: PendingPasteHandling,
     ) -> Option<(String, Vec<TextElement>)> {
         let mut text = self.current_text();
         let original_input = text.clone();
@@ -2631,7 +2644,9 @@ impl ChatComposer {
         self.draft.textarea.set_text_clearing_elements("");
         self.draft.is_bash_mode = false;
 
-        if !self.draft.pending_pastes.is_empty() {
+        if pending_paste_handling == PendingPasteHandling::Expand
+            && !self.draft.pending_pastes.is_empty()
+        {
             // Expand placeholders so element byte ranges stay aligned.
             let (expanded, expanded_elements) =
                 Self::expand_pending_pastes(&text, text_elements, &self.draft.pending_pastes);
@@ -2700,7 +2715,11 @@ impl ChatComposer {
                 local_image_paths: self.attachments.local_image_paths(),
                 remote_image_urls: self.attachments.remote_image_urls(),
                 mention_bindings: original_mention_bindings,
-                pending_pastes: Vec::new(),
+                pending_pastes: if pending_paste_handling == PendingPasteHandling::Preserve {
+                    original_pending_pastes.clone()
+                } else {
+                    Vec::new()
+                },
             });
         }
         self.draft.pending_pastes.clear();
@@ -2739,12 +2758,26 @@ impl ChatComposer {
             }
             let raw_text = self.draft.textarea.text();
             let defer_slash_validation = self.slash_input().should_parse_on_dequeue(raw_text);
+            let preserve_pending_pastes = defer_slash_validation
+                && !self.draft.pending_pastes.is_empty()
+                && parse_slash_name(raw_text)
+                    .is_some_and(|(name, _, _)| name == SlashCommand::Goal.command());
+            let pending_pastes = if preserve_pending_pastes {
+                self.draft.pending_pastes.clone()
+            } else {
+                Vec::new()
+            };
             if let Some((text, text_elements)) = self.prepare_submission_text_with_options(
                 /*record_history*/ true,
                 if defer_slash_validation {
                     SlashValidation::Deferred
                 } else {
                     SlashValidation::Immediate
+                },
+                if preserve_pending_pastes {
+                    PendingPasteHandling::Preserve
+                } else {
+                    PendingPasteHandling::Expand
                 },
             ) {
                 let action = slash_input::queued_input_action(&text, defer_slash_validation);
@@ -2753,6 +2786,7 @@ impl ChatComposer {
                         text,
                         text_elements,
                         action,
+                        pending_pastes,
                     },
                     true,
                 );
@@ -2824,6 +2858,7 @@ impl ChatComposer {
                         text,
                         text_elements,
                         action: QueuedInputAction::Plain,
+                        pending_pastes: Vec::new(),
                     },
                     true,
                 )
@@ -7279,6 +7314,7 @@ mod tests {
                 text: "hi".to_string(),
                 text_elements: Vec::new(),
                 action: QueuedInputAction::Plain,
+                pending_pastes: Vec::new(),
             }
         );
         assert!(composer.draft.textarea.text().is_empty());
@@ -8306,6 +8342,7 @@ mod tests {
                 text: "queued before session".to_string(),
                 text_elements: Vec::new(),
                 action: QueuedInputAction::Plain,
+                pending_pastes: Vec::new(),
             }
         );
     }
@@ -8337,6 +8374,7 @@ mod tests {
                     text,
                     text_elements,
                     action,
+                    ..
                 } => {
                     assert_eq!(text, input);
                     assert!(text_elements.is_empty());
@@ -8514,6 +8552,7 @@ mod tests {
                     text,
                     text_elements,
                     action,
+                    ..
                 } => {
                     assert_eq!(text, expected_text);
                     assert!(text_elements.is_empty());

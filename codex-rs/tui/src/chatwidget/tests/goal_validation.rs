@@ -38,14 +38,12 @@ fn next_goal_objective(
 ) -> String {
     loop {
         let event = rx.try_recv().expect("expected goal objective event");
-        if let AppEvent::SetThreadGoalObjective {
-            thread_id,
-            objective,
-            ..
+        if let AppEvent::SetThreadGoalDraft {
+            thread_id, draft, ..
         } = event
         {
             assert_eq!(thread_id, expected_thread_id);
-            return objective;
+            return draft.objective;
         }
     }
 }
@@ -62,16 +60,16 @@ async fn goal_slash_command_accepts_objective_at_limit() {
     submit_composer_text(&mut chat, &command);
 
     let event = rx.try_recv().expect("expected goal objective event");
-    let AppEvent::SetThreadGoalObjective {
+    let AppEvent::SetThreadGoalDraft {
         thread_id: actual_thread_id,
-        objective: actual_objective,
+        draft,
         ..
     } = event
     else {
-        panic!("expected SetThreadGoalObjective, got {event:?}");
+        panic!("expected SetThreadGoalDraft, got {event:?}");
     };
     assert_eq!(actual_thread_id, thread_id);
-    assert_eq!(actual_objective, objective);
+    assert_eq!(draft.objective, objective);
     assert_no_submit_op(&mut op_rx);
 }
 
@@ -86,16 +84,16 @@ async fn goal_slash_command_accepts_multiline_objective_after_blank_first_line()
     submit_composer_text(&mut chat, &format!("/goal \n\n{objective}"));
 
     let event = rx.try_recv().expect("expected goal objective event");
-    let AppEvent::SetThreadGoalObjective {
+    let AppEvent::SetThreadGoalDraft {
         thread_id: actual_thread_id,
-        objective: actual_objective,
+        draft,
         ..
     } = event
     else {
-        panic!("expected SetThreadGoalObjective, got {event:?}");
+        panic!("expected SetThreadGoalDraft, got {event:?}");
     };
     assert_eq!(actual_thread_id, thread_id);
-    assert_eq!(actual_objective, objective);
+    assert_eq!(draft.objective, objective);
     assert_no_submit_op(&mut op_rx);
 }
 
@@ -114,7 +112,7 @@ async fn goal_slash_command_emits_oversized_objective() {
 }
 
 #[tokio::test]
-async fn goal_slash_command_expands_large_pasted_objective() {
+async fn goal_slash_command_preserves_large_pasted_objective() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     let thread_id = ThreadId::new();
@@ -130,7 +128,8 @@ async fn goal_slash_command_expands_large_pasted_objective() {
     );
     submit_current_composer(&mut chat);
 
-    assert_eq!(next_goal_objective(&mut rx, thread_id), objective);
+    let draft = next_goal_draft(&mut rx, thread_id);
+    assert_eq!(draft.pending_pastes[0].1, objective);
     assert_no_submit_op(&mut op_rx);
 }
 
@@ -151,5 +150,35 @@ async fn queued_goal_slash_command_emits_oversized_objective_and_stops_queue() {
 
     assert_eq!(next_goal_objective(&mut rx, thread_id), objective);
     assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn goal_slash_command_emits_only_inserted_paste_text_element() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let paste = "x".repeat(1_001);
+    let placeholder = format!("[Pasted Content {} chars]", paste.chars().count());
+    chat.bottom_pane.set_composer_text(
+        format!("/goal keep literal {placeholder} and "),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_paste(paste.clone());
+
+    submit_current_composer(&mut chat);
+
+    let draft = next_goal_draft(&mut rx, thread_id);
+    assert!(
+        draft
+            .objective
+            .contains(&format!("keep literal {placeholder} and {placeholder}")),
+        "expected literal placeholder and inserted paste placeholder, got {:?}",
+        draft.objective
+    );
+    assert_eq!(draft.pending_pastes, vec![(placeholder, paste)]);
+    assert!(chat.bottom_pane.composer_pending_pastes().is_empty());
     assert_no_submit_op(&mut op_rx);
 }

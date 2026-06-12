@@ -125,11 +125,11 @@ impl App {
         self.chat_widget.show_goal_edit_prompt(thread_id, goal);
     }
 
-    pub(super) async fn set_thread_goal_objective(
+    pub(super) async fn set_thread_goal_draft(
         &mut self,
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
-        objective: String,
+        draft: goal_files::GoalDraft,
         mode: ThreadGoalSetMode,
     ) {
         let codex_home = app_server.codex_home_path(&self.config.codex_home);
@@ -142,7 +142,7 @@ impl App {
             match result {
                 Ok(response) => match response.goal.as_ref() {
                     Some(goal) if should_confirm_before_replacing_goal(goal) => {
-                        self.show_replace_thread_goal_confirmation(thread_id, objective);
+                        self.show_replace_thread_goal_confirmation(thread_id, draft);
                         return;
                     }
                     Some(_) => ThreadGoalSetMode::ReplaceExisting,
@@ -158,14 +158,14 @@ impl App {
             mode
         };
 
-        let (objective, output_dir) = match goal_files::materialize_goal_objective(
+        let (objective, output_dir) = match goal_files::materialize_goal_draft(
             app_server,
             codex_home.as_ref(),
-            objective,
+            draft,
         )
         .await
         {
-            Ok(objective) => objective,
+            Ok(materialized) => materialized,
             Err(err) => {
                 if self.current_displayed_thread_id() == Some(thread_id) {
                     self.chat_widget.add_error_message(err.to_string());
@@ -286,13 +286,14 @@ impl App {
     pub(super) fn show_replace_thread_goal_confirmation(
         &mut self,
         thread_id: ThreadId,
-        objective: String,
+        draft: goal_files::GoalDraft,
     ) {
-        let replace_objective = objective.clone();
+        let objective = draft.objective.clone();
+        let replace_draft = draft;
         let replace_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::SetThreadGoalObjective {
+            tx.send(AppEvent::SetThreadGoalDraft {
                 thread_id,
-                objective: replace_objective.clone(),
+                draft: replace_draft.clone(),
                 mode: ThreadGoalSetMode::ReplaceExisting,
             });
         })];
