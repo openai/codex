@@ -11,8 +11,6 @@ use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::legacy_core::format_exec_policy_error_with_source;
-#[cfg(target_os = "windows")]
-use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::session_resume::ResolveCwdOutcome;
 use crate::session_resume::resolve_cwd_for_resume_or_fork;
 pub use crate::startup_error::LocalStateDbStartupError;
@@ -64,6 +62,7 @@ use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
+pub use session_archive_commands::DeleteConfirmation;
 pub use session_archive_commands::SessionArchiveAction;
 pub use session_archive_commands::SessionArchiveCommandOptions;
 pub use session_archive_commands::run_session_archive_command;
@@ -130,14 +129,16 @@ mod diff_model;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
-#[allow(dead_code)]
 mod external_agent_config_migration;
+mod external_agent_config_migration_flow;
+mod external_agent_config_migration_model;
 mod external_editor;
 mod file_search;
 mod frames;
 mod get_git_diff;
 mod git_action_directives;
 mod goal_display;
+mod goal_files;
 mod history_cell;
 mod hooks_rpc;
 mod ide_context;
@@ -206,10 +207,14 @@ mod update_prompt;
 #[cfg(any(not(debug_assertions), test))]
 mod update_versions;
 mod updates;
+#[cfg(any(not(debug_assertions), test))]
+mod updates_cache;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
 mod width;
+#[cfg(any(target_os = "windows", test))]
+mod windows_sandbox;
 mod workspace_command;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
@@ -1123,7 +1128,7 @@ pub async fn run_main(
 
     let otel_originator = originator().value;
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::legacy_core::otel_init::build_provider(
+        codex_app_server_client::build_otel_provider(
             &config,
             env!("CARGO_PKG_VERSION"),
             /*service_name_override*/ None,
@@ -1146,26 +1151,25 @@ pub async fn run_main(
             None
         }
     };
-    crate::legacy_core::otel_init::record_process_start(otel.as_ref(), otel_originator.as_str());
-    crate::legacy_core::otel_init::install_sqlite_telemetry(
-        otel.as_ref(),
-        otel_originator.as_str(),
-    );
+    if let Some(metrics) = otel.as_ref().and_then(codex_otel::OtelProvider::metrics) {
+        let _ = codex_otel::record_process_start_once(metrics, otel_originator.as_str());
+        let telemetry =
+            codex_rollout::sqlite_telemetry_recorder(metrics.clone(), otel_originator.as_str());
+        let _ = codex_state::install_process_db_telemetry(telemetry);
+    }
     let state_db = init_state_db_for_app_server_target(&config, &app_server_target).await?;
 
     let effective_toml = config.config_layer_stack.effective_config();
     match effective_toml.try_into() {
         Ok(config_toml) => {
-            match crate::legacy_core::personality_migration::maybe_migrate_personality(
+            match codex_app_server_client::migrate_personality_if_needed(
                 &config.codex_home,
                 &config_toml,
                 state_db.clone(),
             )
             .await
             {
-                Ok(
-                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::Applied,
-                ) => {
+                Ok(true) => {
                     config = load_config_or_exit(
                         cli_kv_overrides.clone(),
                         overrides.clone(),
@@ -1175,11 +1179,7 @@ pub async fn run_main(
                     )
                     .await;
                 }
-                Ok(
-                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
-                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
-                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
-                ) => {}
+                Ok(false) => {}
                 Err(err) => {
                     tracing::warn!(error = %err, "failed to run personality migration");
                 }
@@ -1384,7 +1384,7 @@ async fn run_ratatui_app(
                     return Ok(AppExitInfo {
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
-                        thread_name: None,
+                        resume_hint: None,
                         update_action: Some(action),
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -1477,7 +1477,7 @@ async fn run_ratatui_app(
             return Ok(AppExitInfo {
                 token_usage: crate::token_usage::TokenUsage::default(),
                 thread_id: None,
-                thread_name: None,
+                resume_hint: None,
                 update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });
@@ -1527,7 +1527,7 @@ async fn run_ratatui_app(
         Ok(AppExitInfo {
             token_usage: crate::token_usage::TokenUsage::default(),
             thread_id: None,
-            thread_name: None,
+            resume_hint: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(format!(
                 "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
@@ -1584,7 +1584,7 @@ async fn run_ratatui_app(
                     return Ok(AppExitInfo {
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
-                        thread_name: None,
+                        resume_hint: None,
                         update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -1645,7 +1645,7 @@ async fn run_ratatui_app(
                 return Ok(AppExitInfo {
                     token_usage: crate::token_usage::TokenUsage::default(),
                     thread_id: None,
-                    thread_name: None,
+                    resume_hint: None,
                     update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
@@ -1690,7 +1690,7 @@ async fn run_ratatui_app(
                         return Ok(AppExitInfo {
                             token_usage: crate::token_usage::TokenUsage::default(),
                             thread_id: None,
-                            thread_name: None,
+                            resume_hint: None,
                             update_action: None,
                             exit_reason: ExitReason::UserRequested,
                         });
@@ -1744,7 +1744,7 @@ async fn run_ratatui_app(
     set_default_client_residency_requirement(config.enforce_residency.value());
     let should_show_trust_screen = should_show_trust_screen(&config);
     #[cfg(target_os = "windows")]
-    let windows_sandbox_level = WindowsSandboxLevel::from_config(&config);
+    let windows_sandbox_level = crate::windows_sandbox::level_from_config(&config);
     #[cfg(target_os = "windows")]
     let required_elevated_sandbox_needs_setup = windows_sandbox_level
         == WindowsSandboxLevel::Elevated
@@ -1754,9 +1754,7 @@ async fn run_ratatui_app(
             .windows_sandbox_mode
             .source
             .is_some()
-        && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
-            config.codex_home.as_path(),
-        );
+        && !crate::windows_sandbox::sandbox_setup_is_complete(config.codex_home.as_path());
     #[cfg(target_os = "windows")]
     let should_prompt_windows_sandbox_nux_at_startup = (trust_decision_was_made
         && windows_sandbox_level == WindowsSandboxLevel::Disabled)

@@ -1497,17 +1497,23 @@ impl AnalyticsReducer {
         let Some(thread_id) = turn_state.thread_id.as_ref() else {
             return;
         };
-        let Some(connection_id) = turn_state.connection_id else {
+        let drop_site = AnalyticsDropSite::turn(thread_id, turn_id);
+        let connection_id = turn_state.connection_id.or_else(|| {
+            self.threads
+                .get(drop_site.thread_id)
+                .and_then(|thread| thread.connection_id)
+        });
+        let Some(connection_id) = connection_id else {
+            warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadConnection);
             return;
         };
         let Some(connection_state) = self.connections.get(&connection_id) else {
             warn_missing_analytics_context(
-                &AnalyticsDropSite::turn(thread_id, turn_id),
+                &drop_site,
                 MissingAnalyticsContext::Connection { connection_id },
             );
             return;
         };
-        let drop_site = AnalyticsDropSite::turn(thread_id, turn_id);
         let Some(thread_metadata) = self
             .threads
             .get(drop_site.thread_id)
@@ -1745,6 +1751,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
             status,
             error,
             duration_ms,
+            plugin_id,
             ..
         } => {
             let (terminal_status, failure_kind) = mcp_tool_call_outcome(status)?;
@@ -1774,6 +1781,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                         mcp_server_name: server.clone(),
                         mcp_tool_name: tool.clone(),
                         mcp_error_present: error.is_some(),
+                        plugin_id: plugin_id.clone(),
                     },
                 },
             ))

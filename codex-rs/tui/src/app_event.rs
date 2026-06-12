@@ -221,11 +221,17 @@ pub(crate) enum AppEvent {
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
+    /// Open the Claude Code migration picker inside the running TUI session.
+    OpenExternalAgentConfigMigration,
+
     /// Resume a thread by UUID or thread name inside the running TUI session.
     ResumeSessionByIdOrName(String),
 
     /// Archive the current active main thread and exit after it succeeds.
     ArchiveCurrentThread,
+
+    /// Permanently delete the current active main thread and exit after it succeeds.
+    DeleteCurrentThread,
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,

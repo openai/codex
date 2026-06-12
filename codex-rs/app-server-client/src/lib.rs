@@ -15,6 +15,7 @@
 //! bridging async `mpsc` channels on both sides. Queues are bounded so overload
 //! surfaces as channel-full errors rather than unbounded memory growth.
 
+mod path;
 mod remote;
 
 use std::error::Error;
@@ -22,6 +23,7 @@ use std::fmt;
 use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,11 +50,16 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
+use codex_config::config_toml::ConfigToml;
 use codex_core::config::Config;
+pub use codex_core::otel_init::build_provider as build_otel_provider;
+use codex_core::personality_migration::PersonalityMigrationStatus;
+use codex_core::personality_migration::maybe_migrate_personality;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -60,6 +67,7 @@ use tokio::time::timeout;
 use toml::Value as TomlValue;
 use tracing::warn;
 
+pub use crate::path::AppServerPath;
 pub use crate::remote::RemoteAppServerClient;
 pub use crate::remote::RemoteAppServerConnectArgs;
 pub use crate::remote::RemoteAppServerEndpoint;
@@ -72,7 +80,6 @@ pub use crate::remote::RemoteAppServerEndpoint;
 pub mod legacy_core {
     pub use codex_core::check_execpolicy_for_warnings;
     pub use codex_core::format_exec_policy_error_with_source;
-    pub use codex_core::grant_read_root_non_elevated;
 
     pub mod config {
         pub use codex_core::config::*;
@@ -81,25 +88,26 @@ pub mod legacy_core {
             pub use codex_core::config::edit::*;
         }
     }
-
-    pub mod otel_init {
-        pub use codex_core::otel_init::*;
-    }
-
-    pub mod personality_migration {
-        pub use codex_core::personality_migration::*;
-    }
-
-    pub mod test_support {
-        pub use codex_core::test_support::*;
-    }
-
-    pub mod windows_sandbox {
-        pub use codex_core::windows_sandbox::*;
-    }
 }
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Runs the embedded app-server personality migration.
+///
+/// Returns `true` when the migration changed config and the caller should reload it.
+pub async fn migrate_personality_if_needed(
+    codex_home: &Path,
+    config_toml: &ConfigToml,
+    state_db: Option<StateDbHandle>,
+) -> IoResult<bool> {
+    let status = maybe_migrate_personality(codex_home, config_toml, state_db).await?;
+    match status {
+        PersonalityMigrationStatus::Applied => Ok(true),
+        PersonalityMigrationStatus::SkippedMarker
+        | PersonalityMigrationStatus::SkippedExplicitPersonality
+        | PersonalityMigrationStatus::SkippedNoSessions => Ok(false),
+    }
+}
 
 /// Raw app-server request result for typed in-process requests.
 ///
@@ -158,6 +166,7 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
         ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ItemCompleted(_)
+            | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::AgentMessageDelta(_)
             | ServerNotification::PlanDelta(_)
             | ServerNotification::ReasoningSummaryTextDelta(_)
@@ -839,6 +848,15 @@ impl AppServerRequestHandle {
 }
 
 impl AppServerClient {
+    pub fn codex_home(&self, local_codex_home: &AbsolutePathBuf) -> Option<AppServerPath> {
+        match self {
+            Self::InProcess(_) => Some(AppServerPath::from_app_server(
+                local_codex_home.display().to_string(),
+            )),
+            Self::Remote(client) => client.codex_home().map(AppServerPath::from_app_server),
+        }
+    }
+
     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
         match self {
             Self::InProcess(client) => client.request(request).await,
@@ -1104,6 +1122,7 @@ mod tests {
                 id: request.id,
                 result: serde_json::json!({
                     "userAgent": "codex_cli_rs/9.8.7-test (Test OS; x86_64) rust",
+                    "codexHome": "/server/.codex",
                 }),
             }),
         )
@@ -1440,6 +1459,7 @@ mod tests {
             .expect("remote client should connect");
 
         assert_eq!(client.server_version(), Some("9.8.7-test"));
+        assert_eq!(client.codex_home(), Some("/server/.codex"));
         let response: GetAccountResponse = client
             .request_typed(ClientRequest::GetAccount {
                 request_id: RequestId::Integer(1),
@@ -1868,6 +1888,7 @@ mod tests {
                             is_secret: false,
                             options: Some(vec![]),
                         }],
+                        auto_resolution_ms: None,
                     })
                     .expect("params should serialize"),
                 ),
@@ -1929,6 +1950,7 @@ mod tests {
                                 is_secret: false,
                                 options: Some(vec![]),
                             }],
+                            auto_resolution_ms: None,
                         })
                         .expect("params should serialize"),
                     ),
@@ -2136,6 +2158,13 @@ mod tests {
                             memory_citation: None,
                         },
                     }
+                )
+            )
+        ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::ExternalAgentConfigImportCompleted(
+                    codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {},
                 )
             )
         ));

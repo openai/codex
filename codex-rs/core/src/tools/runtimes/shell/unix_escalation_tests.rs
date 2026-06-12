@@ -45,7 +45,6 @@ use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::ResolvedPermissionProfile;
-use codex_shell_escalation::ShellCommandExecutor;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;

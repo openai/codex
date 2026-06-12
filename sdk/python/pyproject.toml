@@ -24,8 +24,17 @@ Repository = "https://github.com/openai/codex"
 Issues = "https://github.com/openai/codex/issues"
 Documentation = "https://github.com/openai/codex/tree/main/sdk/python/docs"
 
-[project.optional-dependencies]
-dev = ["pytest>=8.0", "datamodel-code-generator==0.31.2", "ruff>=0.15.8"]
+[dependency-groups]
+format = ["ruff>=0.15.8"]
+test = [
+  "pytest>=8.0",
+  "datamodel-code-generator==0.31.2",
+  { include-group = "format" },
+]
+dev = [
+  { include-group = "test" },
+  { include-group = "format" },
+]
 
 [tool.hatch.build]
 exclude = [
