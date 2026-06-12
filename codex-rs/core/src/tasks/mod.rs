@@ -304,6 +304,30 @@ where
 }
 
 impl Session {
+    fn spawn_guardian_prewarm_for_turn(self: &Arc<Self>, turn_context: Arc<TurnContext>) {
+        if !crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
+            return;
+        }
+        let session = Arc::clone(self);
+        drop(tokio::spawn(async move {
+            crate::guardian::prewarm_guardian_review_session(session, turn_context).await;
+        }));
+    }
+
+    pub(crate) async fn prewarm_guardian_for_active_regular_turn(self: &Arc<Self>) {
+        let turn_context = {
+            let active = self.active_turn.lock().await;
+            active
+                .as_ref()
+                .and_then(|active_turn| active_turn.task.as_ref())
+                .filter(|task| task.kind == TaskKind::Regular)
+                .map(|task| Arc::clone(&task.turn_context))
+        };
+        if let Some(turn_context) = turn_context {
+            self.spawn_guardian_prewarm_for_turn(turn_context);
+        }
+    }
+
     pub async fn spawn_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -356,6 +380,9 @@ impl Session {
             .await;
         self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
             .await;
+        if task_kind == TaskKind::Regular {
+            self.spawn_guardian_prewarm_for_turn(Arc::clone(&turn_context));
+        }
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;

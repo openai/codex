@@ -55,14 +55,6 @@ impl SessionTask for RegularTask {
             });
             sess.send_event(ctx.as_ref(), event).await;
             sess.set_server_reasoning_included(/*included*/ false).await;
-            if crate::guardian::routes_approval_to_guardian(ctx.as_ref()) {
-                let prewarm_sess = Arc::clone(&sess);
-                let prewarm_ctx = Arc::clone(&ctx);
-                drop(tokio::spawn(async move {
-                    crate::guardian::prewarm_guardian_review_session(prewarm_sess, prewarm_ctx)
-                        .await;
-                }));
-            }
             sess.consume_startup_prewarm_for_regular_turn(&cancellation_token)
                 .await
         }

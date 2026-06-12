@@ -1958,7 +1958,7 @@ impl Session {
     }
 
     pub(crate) async fn persist_network_policy_amendment(
-        &self,
+        self: &Arc<Self>,
         amendment: &NetworkPolicyAmendment,
         network_approval_context: &NetworkApprovalContext,
     ) -> anyhow::Result<()> {
@@ -2006,6 +2006,8 @@ impl Session {
             .map_err(|err| {
                 anyhow::anyhow!("failed to persist network policy amendment to execpolicy: {err}")
             })?;
+
+        self.prewarm_guardian_for_active_regular_turn().await;
 
         Ok(())
     }
