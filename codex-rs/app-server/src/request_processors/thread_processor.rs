@@ -1094,6 +1094,7 @@ impl ThreadRequestProcessor {
         let mut thread_extension_init = ExtensionDataInit::new();
         if !selected_capability_roots.is_empty() {
             thread_extension_init.insert(selected_capability_roots);
+            codex_mcp_extension::initialize_executor_plugin_thread_data(&mut thread_extension_init);
         }
         let create_thread_started_at = std::time::Instant::now();
         let NewThread {
