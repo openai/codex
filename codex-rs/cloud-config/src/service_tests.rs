@@ -200,7 +200,7 @@ fn test_bundle() -> CloudConfigBundle {
 
 fn pending_loader() -> (CloudConfigBundleLoader, CloudConfigBundlePublisher) {
     let (loader, publisher) = CloudConfigBundleLoader::pending();
-    assert!(publisher.publish(Ok(None)));
+    publisher.publish(Ok(None));
     (loader, publisher)
 }
 

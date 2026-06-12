@@ -34,9 +34,7 @@ pub fn cloud_config_bundle_loader(
                 Some(CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_RETRY_INTERVAL),
             ),
         };
-        if !publisher.publish(initial_bundle) {
-            return;
-        }
+        publisher.publish(initial_bundle);
         if let Some(refresh_in) = refresh_in {
             service
                 .refresh_cache_in_background(refresh_in, publisher)

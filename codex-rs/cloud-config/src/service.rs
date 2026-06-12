@@ -550,9 +550,7 @@ where
         match self.load_bundle(auth, "refresh").await {
             Ok(loaded) => {
                 emit_load_metric("refresh", "success", loaded.bundle.as_ref());
-                if !publisher.publish(Ok(loaded.bundle)) {
-                    return CacheRefreshSchedule::Stop;
-                }
+                publisher.publish(Ok(loaded.bundle));
                 CacheRefreshSchedule::ContinueAfter(loaded.refresh_in)
             }
             Err(err) => {

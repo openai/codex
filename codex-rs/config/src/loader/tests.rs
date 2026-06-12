@@ -119,7 +119,7 @@ async fn refreshed_cloud_bundle_applies_to_future_layer_loads() {
     let initial_bundle = bundle("initial", "initial-model", "never");
     let refreshed_bundle = bundle("refreshed", "refreshed-model", "on-request");
     let (loader, publisher) = CloudConfigBundleLoader::pending();
-    assert!(publisher.publish(Ok(Some(initial_bundle))));
+    publisher.publish(Ok(Some(initial_bundle)));
     let mut loader_overrides = LoaderOverrides::without_managed_config_for_tests();
     loader_overrides.managed_config_path = Some(tmp.path().join("managed_config.toml"));
     loader_overrides.system_config_path = Some(tmp.path().join("system-config.toml"));
@@ -152,7 +152,7 @@ async fn refreshed_cloud_bundle_applies_to_future_layer_loads() {
         }
     );
 
-    assert!(publisher.publish(Ok(Some(refreshed_bundle))));
+    publisher.publish(Ok(Some(refreshed_bundle)));
 
     let refreshed_layers = load_layers().await.expect("load refreshed layers");
     assert_eq!(

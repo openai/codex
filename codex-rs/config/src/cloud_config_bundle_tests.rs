@@ -27,7 +27,7 @@ async fn pending_loader_receives_initial_result() {
     let load_task = tokio::spawn(async move { tokio::join!(loader.get(), cloned_loader.get()) });
     tokio::task::yield_now().await;
 
-    assert!(publisher.publish(Ok(Some(bundle.clone()))));
+    publisher.publish(Ok(Some(bundle.clone())));
 
     assert_eq!(
         tokio::time::timeout(std::time::Duration::from_secs(1), load_task)
@@ -48,17 +48,17 @@ async fn successful_result_replaces_error_and_later_error_is_ignored() {
     );
     let (loader, publisher) = CloudConfigBundleLoader::pending();
 
-    assert!(publisher.publish(Err(initial_error.clone())));
+    publisher.publish(Err(initial_error.clone()));
     assert_eq!(loader.get().await, Err(initial_error));
 
-    assert!(publisher.publish(Ok(Some(bundle.clone()))));
+    publisher.publish(Ok(Some(bundle.clone())));
     assert_eq!(loader.get().await, Ok(Some(bundle.clone())));
 
-    assert!(publisher.publish(Err(CloudConfigBundleLoadError::new(
+    publisher.publish(Err(CloudConfigBundleLoadError::new(
         CloudConfigBundleLoadErrorCode::RequestFailed,
         /*status_code*/ None,
         "refresh failed",
-    ))));
+    )));
     assert_eq!(loader.get().await, Ok(Some(bundle)));
 }
 
@@ -70,22 +70,18 @@ async fn refresh_updates_only_loader_and_its_clones() {
     let (loader, publisher) = CloudConfigBundleLoader::pending();
     let cloned_loader = loader.clone();
 
-    assert!(publisher.publish(Ok(Some(initial_bundle.clone()))));
+    publisher.publish(Ok(Some(initial_bundle.clone())));
     assert_eq!(loader.get().await, Ok(Some(initial_bundle)));
 
-    assert!(publisher.publish(Ok(Some(refreshed_bundle.clone()))));
+    publisher.publish(Ok(Some(refreshed_bundle.clone())));
 
     assert_eq!(loader.get().await, Ok(Some(refreshed_bundle.clone())));
     assert_eq!(cloned_loader.get().await, Ok(Some(refreshed_bundle)));
     assert_eq!(independent_loader.get().await, Ok(None));
 
-    assert!(publisher.publish(Ok(None)));
+    publisher.publish(Ok(None));
 
     assert_eq!(loader.get().await, Ok(None));
-
-    drop(cloned_loader);
-    drop(loader);
-    assert!(!publisher.publish(Ok(Some(CloudConfigBundle::default()))));
 }
 
 #[tokio::test]
