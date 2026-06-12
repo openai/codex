@@ -44,6 +44,7 @@ import type { ServerRequestResolvedNotification } from "./v2/ServerRequestResolv
 import type { SkillsChangedNotification } from "./v2/SkillsChangedNotification";
 import type { TerminalInteractionNotification } from "./v2/TerminalInteractionNotification";
 import type { ThreadArchivedNotification } from "./v2/ThreadArchivedNotification";
+import type { ThreadCatalogChangedNotification } from "./v2/ThreadCatalogChangedNotification";
 import type { ThreadClosedNotification } from "./v2/ThreadClosedNotification";
 import type { ThreadDeletedNotification } from "./v2/ThreadDeletedNotification";
 import type { ThreadGoalClearedNotification } from "./v2/ThreadGoalClearedNotification";

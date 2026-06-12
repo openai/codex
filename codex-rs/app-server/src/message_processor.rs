@@ -395,6 +395,8 @@ impl MessageProcessor {
         let pending_thread_unloads = Arc::new(Mutex::new(HashSet::new()));
         let thread_watch_manager =
             crate::thread_status::ThreadWatchManager::new_with_outgoing(outgoing.clone());
+        let thread_catalog_subscriptions =
+            crate::request_processors::ThreadCatalogSubscriptions::new(outgoing.clone());
         let thread_list_state_permit = Arc::new(Semaphore::new(/*permits*/ 1));
         let workspace_settings_cache =
             Arc::new(workspace_settings::WorkspaceSettingsCache::default());
@@ -490,6 +492,7 @@ impl MessageProcessor {
             Arc::clone(&pending_thread_unloads),
             thread_state_manager.clone(),
             thread_watch_manager.clone(),
+            thread_catalog_subscriptions.clone(),
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
             state_db.clone(),
@@ -505,8 +508,10 @@ impl MessageProcessor {
             Arc::clone(&config),
             config_manager.clone(),
             pending_thread_unloads,
+            Arc::clone(&thread_store),
             thread_state_manager,
             thread_watch_manager,
+            thread_catalog_subscriptions,
             thread_list_state_permit,
             Arc::clone(&skills_watcher),
         );
@@ -1210,6 +1215,16 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadList { params, .. } => {
                 self.thread_processor.thread_list(params).await
+            }
+            ClientRequest::ThreadCatalogSubscribe { .. } => {
+                self.thread_processor
+                    .thread_catalog_subscribe(connection_id)
+                    .await
+            }
+            ClientRequest::ThreadCatalogUnsubscribe { .. } => {
+                self.thread_processor
+                    .thread_catalog_unsubscribe(connection_id)
+                    .await
             }
             ClientRequest::ThreadSearch { params, .. } => {
                 self.thread_processor.thread_search(params).await

@@ -8,9 +8,12 @@ pub(super) struct ListenerTaskContext {
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     pub(super) pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+    pub(super) thread_store: Arc<dyn ThreadStore>,
     pub(super) thread_watch_manager: ThreadWatchManager,
+    pub(super) thread_catalog_subscriptions: ThreadCatalogSubscriptions,
     pub(super) thread_list_state_permit: Arc<Semaphore>,
     pub(super) fallback_model_provider: String,
+    pub(super) fallback_cwd: AbsolutePathBuf,
     pub(super) codex_home: PathBuf,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
 }
@@ -117,6 +120,17 @@ impl UnloadingState {
             }
         }
     }
+}
+
+fn catalog_worthy_event(event: &EventMsg) -> bool {
+    matches!(
+        event,
+        EventMsg::TurnStarted(_)
+            | EventMsg::TurnComplete(_)
+            | EventMsg::TurnAborted(_)
+            | EventMsg::ThreadSettingsApplied(_)
+            | EventMsg::ThreadRolledBack(_)
+    )
 }
 
 pub(super) enum ThreadShutdownResult {
@@ -266,9 +280,12 @@ pub(super) async fn ensure_listener_task_running(
         thread_manager,
         thread_state_manager,
         pending_thread_unloads,
+        thread_store,
         thread_watch_manager,
+        thread_catalog_subscriptions,
         thread_list_state_permit,
         fallback_model_provider,
+        fallback_cwd,
         codex_home,
         ..
     } = listener_task_context;
@@ -349,6 +366,16 @@ pub(super) async fn ensure_listener_task_running(
                         fallback_model_provider.clone(),
                     )
                     .await;
+                    if catalog_worthy_event(&event.msg) {
+                        thread_catalog_subscriptions
+                            .publish_thread_change(
+                                &thread_store,
+                                conversation_id,
+                                fallback_model_provider.as_str(),
+                                &fallback_cwd,
+                            )
+                            .await;
+                    }
                 }
                 unloading_watchers_open = unloading_state.wait_for_unloading_trigger() => {
                     if !unloading_watchers_open {

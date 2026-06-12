@@ -6,6 +6,7 @@ use super::SandboxPolicy;
 use super::Thread;
 use super::ThreadItem;
 use super::ThreadSource;
+use super::ThreadSummary;
 use super::Turn;
 use super::TurnEnvironmentParams;
 use super::TurnItemsView;
@@ -1097,6 +1098,16 @@ pub struct ThreadListParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadCatalogSubscribeResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCatalogUnsubscribeResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadSearchParams {
     /// Opaque pagination cursor returned by a previous call.
     #[ts(optional = nullable)]
@@ -1417,6 +1428,13 @@ pub struct ThreadStartedNotification {
 pub struct ThreadStatusChangedNotification {
     pub thread_id: String,
     pub status: ThreadStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCatalogChangedNotification {
+    pub thread: ThreadSummary,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -5204,6 +5204,52 @@
         },
         "method": {
           "enum": [
+            "thread/catalog/subscribe"
+          ],
+          "title": "Thread/catalog/subscribeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Thread/catalog/subscribeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/catalog/unsubscribe"
+          ],
+          "title": "Thread/catalog/unsubscribeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Thread/catalog/unsubscribeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/loaded/list"
           ],
           "title": "Thread/loaded/listRequestMethod",

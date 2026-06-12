@@ -275,6 +275,36 @@ pub(super) fn thread_started_notification(mut thread: Thread) -> ThreadStartedNo
     ThreadStartedNotification { thread }
 }
 
+pub(super) fn thread_summary_from_stored_thread(
+    thread: StoredThread,
+    fallback_provider: &str,
+    fallback_cwd: &AbsolutePathBuf,
+) -> ThreadSummary {
+    let archived_at = thread.archived_at.map(|dt| dt.timestamp());
+    let (thread, _) = thread_from_stored_thread(thread, fallback_provider, fallback_cwd);
+    ThreadSummary {
+        id: thread.id,
+        session_id: thread.session_id,
+        forked_from_id: thread.forked_from_id,
+        parent_thread_id: thread.parent_thread_id,
+        preview: thread.preview,
+        ephemeral: thread.ephemeral,
+        model_provider: thread.model_provider,
+        created_at: thread.created_at,
+        updated_at: thread.updated_at,
+        archived_at,
+        path: thread.path,
+        cwd: thread.cwd,
+        cli_version: thread.cli_version,
+        source: thread.source,
+        thread_source: thread.thread_source,
+        agent_nickname: thread.agent_nickname,
+        agent_role: thread.agent_role,
+        git_info: thread.git_info,
+        name: thread.name,
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn summary_to_thread(
     summary: ConversationSummary,

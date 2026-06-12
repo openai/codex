@@ -1655,6 +1655,52 @@
             },
             "method": {
               "enum": [
+                "thread/catalog/subscribe"
+              ],
+              "title": "Thread/catalog/subscribeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Thread/catalog/subscribeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/catalog/unsubscribe"
+              ],
+              "title": "Thread/catalog/unsubscribeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Thread/catalog/unsubscribeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/loaded/list"
               ],
               "title": "Thread/loaded/listRequestMethod",
@@ -12580,6 +12626,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/catalog/changed"
+              ],
+              "title": "Thread/catalog/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadCatalogChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/catalog/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/archived"
               ],
               "title": "Thread/archivedNotificationMethod",
@@ -14787,6 +14853,29 @@
         "threadId"
       ],
       "title": "ThreadArchivedNotification",
+      "type": "object"
+    },
+    "ThreadCatalogChangedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "thread": {
+          "$ref": "#/definitions/ThreadSummary"
+        }
+      },
+      "required": [
+        "thread"
+      ],
+      "title": "ThreadCatalogChangedNotification",
+      "type": "object"
+    },
+    "ThreadCatalogSubscribeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadCatalogSubscribeResponse",
+      "type": "object"
+    },
+    "ThreadCatalogUnsubscribeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadCatalogUnsubscribeResponse",
       "type": "object"
     },
     "ThreadClosedNotification": {
@@ -17271,6 +17360,118 @@
         "threadId"
       ],
       "title": "ThreadStatusChangedNotification",
+      "type": "object"
+    },
+    "ThreadSummary": {
+      "properties": {
+        "agentNickname": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agentRole": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "archivedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cliVersion": {
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "cwd": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "ephemeral": {
+          "type": "boolean"
+        },
+        "forkedFromId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gitInfo": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GitInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "modelProvider": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parentThreadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "preview": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/SessionSource"
+        },
+        "threadSource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cliVersion",
+        "createdAt",
+        "cwd",
+        "ephemeral",
+        "id",
+        "modelProvider",
+        "preview",
+        "sessionId",
+        "source",
+        "updatedAt"
+      ],
       "type": "object"
     },
     "ThreadTokenUsage": {
