@@ -283,6 +283,25 @@ impl ClaudeHooksEngine {
         outcome
     }
 
+    pub(crate) async fn run_app_bundled_internal_stop(
+        &self,
+        request: StopRequest,
+    ) -> Vec<codex_protocol::protocol::HookCompletedEvent> {
+        // Internal cleanup is a terminal side effect. Reuse Stop's direct execution and completion
+        // telemetry, but exclude every ordinary handler and ignore all control flow.
+        crate::events::stop::run_app_bundled_internal(&self.handlers, &self.shell, request).await
+    }
+
+    pub(crate) fn has_app_bundled_internal_stop_hooks(&self) -> bool {
+        self.handlers.iter().any(|handler| {
+            handler.source == HookSource::AppBundledInternal
+                && matches!(
+                    handler.event_name,
+                    HookEventName::Stop | HookEventName::SubagentStop
+                )
+        })
+    }
+
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {
         self.output_spiller
             .maybe_spill_texts(session_id, texts)

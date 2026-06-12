@@ -324,12 +324,15 @@ pub(crate) async fn run_app_bundled_internal_turn_stop_hooks(
     turn_context: &Arc<TurnContext>,
     last_assistant_message: Option<String>,
 ) {
+    let hooks = sess.hooks();
+    if !hooks.has_app_bundled_internal_stop_hooks() {
+        return;
+    }
     let Some(request) =
         build_turn_stop_request(sess, turn_context, false, last_assistant_message).await
     else {
         return;
     };
-    let hooks = sess.hooks();
     let completed_events = hooks.run_app_bundled_internal_stop(request).await;
     emit_hook_completed_events(sess, turn_context, completed_events).await;
 }

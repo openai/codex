@@ -210,6 +210,10 @@ impl Hooks {
     ) -> Vec<codex_protocol::protocol::HookCompletedEvent> {
         self.engine.run_app_bundled_internal_stop(request).await
     }
+
+    pub fn has_app_bundled_internal_stop_hooks(&self) -> bool {
+        self.engine.has_app_bundled_internal_stop_hooks()
+    }
 }
 
 pub fn list_hooks(config: HooksConfig) -> HookListOutcome {

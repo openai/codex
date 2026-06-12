@@ -73,6 +73,22 @@ fn pre_tool_use_hook_events(command: impl Into<String>) -> HookEventsToml {
     }
 }
 
+fn stop_hook_events(command: impl Into<String>) -> HookEventsToml {
+    HookEventsToml {
+        stop: vec![MatcherGroup {
+            matcher: None,
+            hooks: vec![HookHandlerConfig::Command {
+                command: command.into(),
+                command_windows: None,
+                timeout_sec: Some(10),
+                r#async: false,
+                status_message: None,
+            }],
+        }],
+        ..Default::default()
+    }
+}
+
 fn config_toml_with_pre_tool_use(command: &str) -> TomlValue {
     let mut config_toml = TomlValue::Table(Default::default());
     let TomlValue::Table(config_table) = &mut config_toml else {
@@ -976,6 +992,7 @@ fn app_bundled_internal_plugin_hooks_are_forced_and_hidden() {
     assert!(engine.warnings().is_empty());
     assert_eq!(engine.handlers.len(), 1);
     assert_eq!(engine.handlers[0].source, HookSource::AppBundledInternal);
+    assert!(!engine.has_app_bundled_internal_stop_hooks());
     assert_eq!(
         engine.handlers[0].command,
         r#""${PLUGIN_ROOT}/hooks/internal-plugin-hook.sh""#
@@ -1012,6 +1029,36 @@ fn app_bundled_internal_plugin_hooks_are_forced_and_hidden() {
     });
     assert!(listed.hooks.is_empty());
     assert!(listed.warnings.is_empty());
+}
+
+#[test]
+fn detects_app_bundled_internal_stop_hooks_without_running_them() {
+    let temp = tempdir().expect("create temp dir");
+    let plugin_root =
+        AbsolutePathBuf::try_from(temp.path().join("computer-use")).expect("plugin root");
+    let plugin_hook_sources = vec![PluginHookSource {
+        plugin_id: PluginId::parse("computer-use@openai-bundled").expect("plugin id"),
+        plugin_data_root: AbsolutePathBuf::try_from(temp.path().join("plugin-data"))
+            .expect("plugin data root"),
+        source_path: plugin_root.join("hooks/hooks.json"),
+        source_relative_path: "hooks/hooks.json".to_string(),
+        hooks: stop_hook_events(r#""${PLUGIN_ROOT}/hooks/internal-plugin-hook.sh""#),
+        plugin_root,
+        kind: PluginHookSourceKind::AppBundledInternal,
+    }];
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ false,
+        /*bypass_hook_trust*/ false,
+        None,
+        plugin_hook_sources,
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+
+    assert!(engine.has_app_bundled_internal_stop_hooks());
 }
 
 #[test]
