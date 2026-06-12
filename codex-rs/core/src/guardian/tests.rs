@@ -829,7 +829,7 @@ async fn build_guardian_prompt_keeps_goal_and_action_as_distinct_evidence_across
         let transcript = guardian_transcript_section(&prompt);
         let goal_evidence = format!("user-provided goal: {}", case.objective);
 
-        assert!(transcript.contains(&goal_evidence));
+        assert_eq!(transcript, format!("[1] {goal_evidence}"));
         assert!(!transcript.contains(case.action_needle));
         assert!(!transcript.contains("Goal continuation marker"));
         assert!(!transcript.contains("Budget marker"));
