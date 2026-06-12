@@ -1,7 +1,7 @@
-diff --git a/build.rs b/build.rs
+diff --git a/webrtc-sys/build.rs b/webrtc-sys/build.rs
 index 3b4a24a..6aa06ff 100644
---- a/build.rs
-+++ b/build.rs
+--- a/webrtc-sys/build.rs
++++ b/webrtc-sys/build.rs
 @@ -15,1 +15,2 @@
 -use std::path::Path;
 +use std::fs;
