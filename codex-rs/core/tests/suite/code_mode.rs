@@ -330,8 +330,13 @@ async fn run_code_mode_turn_with_rmcp_model(
     model: &'static str,
 ) -> Result<(TestCodex, ResponseMock)> {
     run_code_mode_turn_with_rmcp_config(
-        server, prompt, code, model, /*code_mode_only*/ false,
+        server,
+        prompt,
+        code,
+        model,
+        /*code_mode_only*/ false,
         /*non_prefixed_mcp_tool_names*/ false,
+        McpToolLoading::Direct,
     )
     .await
 }
@@ -349,8 +354,15 @@ async fn run_code_mode_turn_with_rmcp_mode(
         "test-gpt-5.1-codex",
         code_mode_only,
         /*non_prefixed_mcp_tool_names*/ false,
+        McpToolLoading::Direct,
     )
     .await
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum McpToolLoading {
+    Direct,
+    Deferred,
 }
 
 async fn run_code_mode_turn_with_rmcp_config(
@@ -360,6 +372,7 @@ async fn run_code_mode_turn_with_rmcp_config(
     model: &'static str,
     code_mode_only: bool,
     non_prefixed_mcp_tool_names: bool,
+    tool_loading: McpToolLoading,
 ) -> Result<(TestCodex, ResponseMock)> {
     let rmcp_test_server_bin = stdio_server_bin()?;
     let mut builder = test_codex().with_model(model).with_config(move |config| {
@@ -370,6 +383,21 @@ async fn run_code_mode_turn_with_rmcp_config(
         };
         if non_prefixed_mcp_tool_names {
             let _ = config.features.enable(Feature::NonPrefixedMcpToolNames);
+        }
+        if tool_loading == McpToolLoading::Deferred {
+            config
+                .features
+                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
+                .expect("test config should allow feature update");
+            let mut model_catalog = bundled_models_response()
+                .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+            let model = model_catalog
+                .models
+                .iter_mut()
+                .find(|model_info| model_info.slug == model)
+                .unwrap_or_else(|| panic!("{model} exists in bundled models.json"));
+            model.supports_search_tool = true;
+            config.model_catalog = Some(model_catalog);
         }
 
         let mut servers = config.mcp_servers.get().clone();
@@ -3019,6 +3047,7 @@ text(JSON.stringify({
         "test-gpt-5.1-codex",
         /*code_mode_only*/ false,
         /*non_prefixed_mcp_tool_names*/ true,
+        McpToolLoading::Direct,
     )
     .await?;
 
@@ -3287,6 +3316,60 @@ text(JSON.stringify(tool));
             "name": "mcp__rmcp__echo",
             "description": concat!(
                 "Echo back the provided message and include environment data.\n\n",
+                "exec tool declaration:\n",
+                "```ts\n",
+                "declare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): ",
+                "Promise<CallToolResult<{ echo: string; env: string | null; }>>; };\n",
+                "```",
+            ),
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_appends_server_instructions_to_deferred_mcp_tool_descriptions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+const tool = ALL_TOOLS.find(
+  ({ name }) => name === "mcp__rmcp__echo"
+);
+text(JSON.stringify(tool));
+"#;
+
+    let (_test, second_mock) = run_code_mode_turn_with_rmcp_config(
+        &server,
+        "use exec to inspect ALL_TOOLS",
+        code,
+        "gpt-5.4",
+        /*code_mode_only*/ true,
+        /*non_prefixed_mcp_tool_names*/ false,
+        McpToolLoading::Deferred,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec ALL_TOOLS MCP lookup failed unexpectedly: {output}"
+    );
+
+    let parsed: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&req, "call-1")
+            .expect("exec ALL_TOOLS lookup should emit JSON"),
+    )?;
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "name": "mcp__rmcp__echo",
+            "description": concat!(
+                "Echo back the provided message and include environment data.\n\n",
+                "Use these tools to exercise the rmcp test server.\n\n",
                 "exec tool declaration:\n",
                 "```ts\n",
                 "declare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): ",

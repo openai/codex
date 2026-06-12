@@ -85,6 +85,7 @@ use codex_tools::request_user_input_available_modes;
 use codex_tools::shell_command_backend_for_features;
 use codex_tools::shell_type_for_model_and_features;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::instrument;
@@ -426,6 +427,7 @@ fn is_excluded_from_code_mode(turn_context: &TurnContext, tool_name: &ToolName) 
 fn build_code_mode_executors(
     turn_context: &TurnContext,
     executors: &[Arc<dyn CoreToolRuntime>],
+    deferred_mcp_tools: Option<&[ToolInfo]>,
 ) -> Vec<Arc<dyn CoreToolRuntime>> {
     if !matches!(
         turn_context.tool_mode,
@@ -438,6 +440,17 @@ fn build_code_mode_executors(
     let mut exec_prompt_tool_specs = Vec::new();
     let mut deferred_tools_available = false;
     let deferred_tools_guidance_enabled = search_tool_enabled(turn_context);
+    let deferred_mcp_instructions = deferred_mcp_tools
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|tool| {
+            tool.namespace_description
+                .as_deref()
+                .map(str::trim)
+                .filter(|instructions| !instructions.is_empty())
+                .map(|instructions| (tool.canonical_tool_name(), instructions))
+        })
+        .collect::<HashMap<_, _>>();
     for executor in executors {
         let exposure = executor.exposure();
         if exposure == ToolExposure::DirectModelOnly {
@@ -452,9 +465,22 @@ fn build_code_mode_executors(
             continue;
         }
 
-        let spec = executor.spec();
+        let mut spec = executor.spec();
 
         if exposure == ToolExposure::Deferred {
+            if let Some(instructions) = deferred_mcp_instructions.get(&executor.tool_name())
+                && let ToolSpec::Namespace(namespace) = &mut spec
+            {
+                for tool in &mut namespace.tools {
+                    let ResponsesApiNamespaceTool::Function(tool) = tool;
+                    if tool.description.trim().is_empty() {
+                        tool.description = (*instructions).to_string();
+                    } else {
+                        tool.description =
+                            format!("{}\n\n{instructions}", tool.description.trim_end());
+                    }
+                }
+            }
             // Only show deferred-tool guidance when supported and an included spec is usable by code mode.
             deferred_tools_available |= deferred_tools_guidance_enabled
                 && !collect_code_mode_exec_prompt_tool_definitions(std::iter::once(&spec))
@@ -864,7 +890,11 @@ fn prepend_code_mode_executors(
     planned_tools: &mut PlannedTools,
 ) {
     let turn_context = context.turn_context;
-    let code_mode_executors = build_code_mode_executors(turn_context, planned_tools.runtimes());
+    let code_mode_executors = build_code_mode_executors(
+        turn_context,
+        planned_tools.runtimes(),
+        context.deferred_mcp_tools,
+    );
     planned_tools.runtimes.splice(0..0, code_mode_executors);
 }
 
