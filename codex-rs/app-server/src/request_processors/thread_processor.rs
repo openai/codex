@@ -3683,11 +3683,15 @@ fn thread_backwards_cursor_for_sort_key(
     sort_direction: SortDirection,
 ) -> Option<String> {
     let timestamp = match sort_key {
-        StoreThreadSortKey::CreatedAt => thread.created_at,
+        StoreThreadSortKey::CreatedAt => thread
+            .rollout_path
+            .as_deref()
+            .and_then(codex_rollout::rollout_filename_timestamp)
+            .unwrap_or(thread.created_at),
         StoreThreadSortKey::UpdatedAt => thread.updated_at,
     };
-    // The state DB stores unique millisecond timestamps. Offset the reverse cursor by one
-    // millisecond so the opposite-direction query includes the page anchor.
+    // Offset the reverse cursor by one millisecond so the opposite-direction query includes every
+    // row that shares the page anchor's timestamp.
     let timestamp = match sort_direction {
         SortDirection::Asc => timestamp.checked_add_signed(ChronoDuration::milliseconds(1))?,
         SortDirection::Desc => timestamp.checked_sub_signed(ChronoDuration::milliseconds(1))?,

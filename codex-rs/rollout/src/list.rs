@@ -1,5 +1,7 @@
 #![allow(warnings, clippy::all)]
 
+use chrono::DateTime;
+use chrono::Utc;
 use codex_utils_path as path_utils;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
@@ -969,6 +971,13 @@ pub(crate) fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDa
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let ts = PrimitiveDateTime::parse(ts_str, format).ok()?.assume_utc();
     Some((ts, uuid))
+}
+
+/// Returns the creation timestamp encoded in a rollout filename.
+pub fn rollout_filename_timestamp(path: &Path) -> Option<DateTime<Utc>> {
+    let rollout_file = compression::RolloutFile::from_path(path.to_path_buf())?;
+    let (timestamp, _) = parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())?;
+    DateTime::from_timestamp(timestamp.unix_timestamp(), timestamp.nanosecond())
 }
 
 struct ThreadCandidate {

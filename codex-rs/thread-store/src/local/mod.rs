@@ -317,7 +317,6 @@ mod tests {
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::SubAgentSource;
     use codex_protocol::protocol::ThreadMemoryMode;
     use codex_protocol::protocol::UserMessageEvent;
     use tempfile::TempDir;
@@ -375,54 +374,6 @@ mod tests {
             .expect_err("shutdown should remove the live thread writer");
         assert!(
             matches!(err, ThreadStoreError::ThreadNotFound { thread_id: missing } if missing == thread_id)
-        );
-    }
-
-    #[tokio::test]
-    async fn create_thread_persists_explicit_parent_edges_for_subagent_sources() {
-        let home = TempDir::new().expect("temp dir");
-        let config = test_config(home.path());
-        let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
-        )
-        .await
-        .expect("state db should initialize");
-        let store = LocalThreadStore::new(config, Some(runtime.clone()));
-        let parent_thread_id = ThreadId::default();
-        let review_thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread id");
-        let guardian_thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread id");
-
-        for (thread_id, source) in [
-            (
-                review_thread_id,
-                SessionSource::SubAgent(SubAgentSource::Review),
-            ),
-            (
-                guardian_thread_id,
-                SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
-            ),
-        ] {
-            let mut params = create_thread_params(thread_id);
-            params.parent_thread_id = Some(parent_thread_id);
-            params.source = source;
-            store
-                .create_thread(params)
-                .await
-                .expect("create child thread");
-        }
-
-        assert_eq!(
-            runtime
-                .list_thread_spawn_children_with_status(
-                    parent_thread_id,
-                    codex_state::DirectionalThreadSpawnEdgeStatus::Open,
-                )
-                .await
-                .expect("list child edges"),
-            vec![review_thread_id, guardian_thread_id]
         );
     }
 

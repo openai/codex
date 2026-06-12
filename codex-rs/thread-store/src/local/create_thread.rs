@@ -11,8 +11,6 @@ pub(super) async fn create_thread(
     store: &LocalThreadStore,
     params: CreateThreadParams,
 ) -> ThreadStoreResult<RolloutRecorder> {
-    let thread_id = params.thread_id;
-    let parent_thread_id = params.parent_thread_id;
     let cwd = params
         .metadata
         .cwd
@@ -27,7 +25,7 @@ pub(super) async fn create_thread(
         model_provider_id: params.metadata.model_provider.clone(),
         generate_memories: matches!(params.metadata.memory_mode, ThreadMemoryMode::Enabled),
     };
-    let recorder = RolloutRecorder::new(
+    RolloutRecorder::new(
         &config,
         RolloutRecorderParams::new(
             params.thread_id,
@@ -43,20 +41,5 @@ pub(super) async fn create_thread(
     .await
     .map_err(|err| ThreadStoreError::Internal {
         message: format!("failed to initialize local thread recorder: {err}"),
-    })?;
-
-    if let (Some(parent_thread_id), Some(state_db)) = (parent_thread_id, store.state_db().await) {
-        state_db
-            .upsert_thread_spawn_edge(
-                parent_thread_id,
-                thread_id,
-                codex_state::DirectionalThreadSpawnEdgeStatus::Open,
-            )
-            .await
-            .map_err(|err| ThreadStoreError::Internal {
-                message: format!("failed to persist thread-spawn edge: {err}"),
-            })?;
-    }
-
-    Ok(recorder)
+    })
 }

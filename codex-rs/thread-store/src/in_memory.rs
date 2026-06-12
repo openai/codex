@@ -146,7 +146,7 @@ mod tests {
             },
         )
         .await
-            .expect("list child threads");
+        .expect("list child threads");
 
         assert_eq!(
             page.items
