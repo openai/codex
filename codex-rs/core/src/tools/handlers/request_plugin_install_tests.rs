@@ -106,68 +106,62 @@ fn request_plugin_install_response_persists_only_decline_always_mode() {
 
 #[test]
 fn validate_request_plugin_install_picker_args_supports_categories() {
-    let args = RequestPluginInstallPickerArgs {
+    let args = RequestPluginInstallArgs {
         action_type: DiscoverableToolAction::Install,
-        suggest_reason: "Connect tools for better results".to_string(),
-        title: Some("Connect tools".to_string()),
         entries: None,
         categories: Some(vec![RequestPluginInstallPickerCategory {
-            id: "calendar".to_string(),
             title: "Calendar".to_string(),
-            required: Some(true),
-            min_installed: Some(1),
             entries: vec![RequestPluginInstallPickerEntry {
-                id: "calendar".to_string(),
                 tool_id: "connector_calendar".to_string(),
-                tool_name: "Google Calendar".to_string(),
                 tool_type: DiscoverableToolType::Connector,
-                description: None,
             }],
         }]),
     };
     let discoverable_tools = vec![connector_tool("connector_calendar", "Google Calendar")];
 
     let resolved_entries =
-        validate_request_plugin_install_picker_args(&args, &discoverable_tools, None)
+        validate_request_plugin_install_picker_args(
+            &args,
+            &discoverable_tools,
+            /*app_server_client_name*/ None,
+            ToolSuggestPresentation::ListTool,
+        )
             .expect("categorized picker args");
 
     assert_eq!(resolved_entries.len(), 1);
-    assert_eq!(resolved_entries[0].category_id, Some("calendar"));
-    assert_eq!(resolved_entries[0].entry_id, "calendar");
+    assert_eq!(
+        resolved_entries[0].category_id,
+        Some("category-0".to_string())
+    );
+    assert_eq!(resolved_entries[0].entry_id, "connector_calendar");
 }
 
 #[test]
 fn validate_request_plugin_install_picker_args_rejects_mixed_sources() {
     let entry = RequestPluginInstallPickerEntry {
-        id: "calendar".to_string(),
         tool_id: "connector_calendar".to_string(),
-        tool_name: "Google Calendar".to_string(),
         tool_type: DiscoverableToolType::Connector,
-        description: None,
     };
-    let args = RequestPluginInstallPickerArgs {
+    let args = RequestPluginInstallArgs {
         action_type: DiscoverableToolAction::Install,
-        suggest_reason: "Connect tools for better results".to_string(),
-        title: Some("Connect tools".to_string()),
         entries: Some(vec![entry]),
         categories: Some(vec![RequestPluginInstallPickerCategory {
-            id: "calendar".to_string(),
             title: "Calendar".to_string(),
-            required: Some(true),
-            min_installed: Some(1),
             entries: vec![RequestPluginInstallPickerEntry {
-                id: "calendar".to_string(),
                 tool_id: "connector_calendar".to_string(),
-                tool_name: "Google Calendar".to_string(),
                 tool_type: DiscoverableToolType::Connector,
-                description: None,
             }],
         }]),
     };
     let discoverable_tools = vec![connector_tool("connector_calendar", "Google Calendar")];
 
     assert_eq!(
-        validate_request_plugin_install_picker_args(&args, &discoverable_tools, None)
+        validate_request_plugin_install_picker_args(
+            &args,
+            &discoverable_tools,
+            /*app_server_client_name*/ None,
+            ToolSuggestPresentation::ListTool,
+        )
             .expect_err("mixed picker args"),
         FunctionCallError::RespondToModel(
             "picker install requests must include exactly one of entries or categories".to_string(),
@@ -176,47 +170,54 @@ fn validate_request_plugin_install_picker_args_rejects_mixed_sources() {
 }
 
 #[test]
-fn categorized_picker_completion_uses_required_category_minimums() {
-    let args = RequestPluginInstallPickerArgs {
+fn validate_request_plugin_install_picker_args_rejects_multi_tool_tui_requests() {
+    let args = RequestPluginInstallArgs {
         action_type: DiscoverableToolAction::Install,
-        suggest_reason: "Connect tools for better results".to_string(),
-        title: Some("Connect tools".to_string()),
-        entries: None,
-        categories: Some(vec![RequestPluginInstallPickerCategory {
-            id: "crm".to_string(),
-            title: "CRM".to_string(),
-            required: Some(true),
-            min_installed: Some(1),
-            entries: vec![
-                RequestPluginInstallPickerEntry {
-                    id: "salesforce".to_string(),
-                    tool_id: "connector_salesforce".to_string(),
-                    tool_name: "Salesforce".to_string(),
-                    tool_type: DiscoverableToolType::Connector,
-                    description: None,
-                },
-                RequestPluginInstallPickerEntry {
-                    id: "hubspot".to_string(),
-                    tool_id: "connector_hubspot".to_string(),
-                    tool_name: "HubSpot".to_string(),
-                    tool_type: DiscoverableToolType::Connector,
-                    description: None,
-                },
-            ],
-        }]),
+        entries: Some(vec![
+            RequestPluginInstallPickerEntry {
+                tool_id: "connector_calendar".to_string(),
+                tool_type: DiscoverableToolType::Connector,
+            },
+            RequestPluginInstallPickerEntry {
+                tool_id: "connector_gmail".to_string(),
+                tool_type: DiscoverableToolType::Connector,
+            },
+        ]),
+        categories: None,
     };
+    let discoverable_tools = vec![
+        connector_tool("connector_calendar", "Google Calendar"),
+        connector_tool("connector_gmail", "Gmail"),
+    ];
+
+    assert_eq!(
+        validate_request_plugin_install_picker_args(
+            &args,
+            &discoverable_tools,
+            Some("codex-tui"),
+            ToolSuggestPresentation::ListTool,
+        )
+            .expect_err("multi-tool TUI request"),
+        FunctionCallError::RespondToModel(
+            "multi-tool install requests are not available in codex-tui yet".to_string(),
+        ),
+    );
+}
+
+#[test]
+fn picker_completion_only_requires_one_completed_entry() {
     let entries = vec![
         RequestPluginInstallEntryResult {
-            category_id: Some("crm".to_string()),
-            entry_id: "salesforce".to_string(),
+            category_id: Some("category-0".to_string()),
+            entry_id: "connector_salesforce".to_string(),
             tool_type: DiscoverableToolType::Connector,
             tool_id: "connector_salesforce".to_string(),
             tool_name: "Salesforce".to_string(),
             completed: true,
         },
         RequestPluginInstallEntryResult {
-            category_id: Some("crm".to_string()),
-            entry_id: "hubspot".to_string(),
+            category_id: Some("category-0".to_string()),
+            entry_id: "connector_hubspot".to_string(),
             tool_type: DiscoverableToolType::Connector,
             tool_id: "connector_hubspot".to_string(),
             tool_name: "HubSpot".to_string(),
@@ -224,7 +225,7 @@ fn categorized_picker_completion_uses_required_category_minimums() {
         },
     ];
 
-    assert!(request_plugin_install_picker_completed(&args, &entries));
+    assert!(request_plugin_install_picker_completed(&entries));
 }
 
 #[tokio::test]
