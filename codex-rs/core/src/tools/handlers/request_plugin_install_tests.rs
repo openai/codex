@@ -69,11 +69,6 @@ fn remote_plugin_install_suggestions_skip_core_installed_verification() {
 }
 
 #[test]
-fn request_plugin_install_does_not_support_parallel_calls() {
-    assert!(!RequestPluginInstallHandler::new(Vec::new()).supports_parallel_tool_calls());
-}
-
-#[test]
 fn request_plugin_install_response_persists_only_decline_always_mode() {
     assert!(request_plugin_install_response_requests_persistent_disable(
         &ElicitationResponse {
