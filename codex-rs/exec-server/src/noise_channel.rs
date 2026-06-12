@@ -30,7 +30,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Identifies the handshake pattern and algorithms used by this channel.
-pub const NOISE_CHANNEL_SUITE: &str = "Noise_hybridIK_X25519+MLKEM768_AESGCM_SHA256";
+pub(crate) const NOISE_CHANNEL_SUITE: &str = "Noise_hybridIK_X25519+MLKEM768_AESGCM_SHA256";
 
 const X25519_PUBLIC_KEY_LEN: usize = 32;
 const PROLOGUE_DOMAIN: &[u8] = b"codex-exec-server-relay-noise/v1";
@@ -102,14 +102,6 @@ impl NoiseChannelPublicKey {
 pub struct NoiseChannelIdentity {
     dh: DhKeyPair,
     kem: KemKeyPair,
-}
-
-impl std::fmt::Debug for NoiseChannelIdentity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NoiseChannelIdentity")
-            .field("public_key", &self.public_key())
-            .finish_non_exhaustive()
-    }
 }
 
 impl NoiseChannelIdentity {
