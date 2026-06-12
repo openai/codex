@@ -7,6 +7,7 @@ use codex_app_server_protocol::AppConfig;
 use codex_app_server_protocol::AppToolApproval;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AppsConfig;
+use codex_app_server_protocol::AppsDefaultConfig;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
@@ -332,6 +333,9 @@ async fn config_read_includes_apps() -> Result<()> {
     write_config(
         &codex_home,
         r#"
+[apps._default]
+approvals_reviewer = "auto_review"
+
 [apps.app1]
 enabled = false
 approvals_reviewer = "user"
@@ -365,7 +369,12 @@ default_tools_approval_mode = "prompt"
     assert_eq!(
         config.apps,
         Some(AppsConfig {
-            default: None,
+            default: Some(AppsDefaultConfig {
+                enabled: true,
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                destructive_enabled: true,
+                open_world_enabled: true,
+            }),
             apps: std::collections::HashMap::from([(
                 "app1".to_string(),
                 AppConfig {
@@ -379,6 +388,16 @@ default_tools_approval_mode = "prompt"
                 },
             )]),
         })
+    );
+    assert_eq!(
+        origins
+            .get("apps._default.approvals_reviewer")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+            profile: None,
+        }
     );
     assert_eq!(
         origins.get("apps.app1.enabled").expect("origin").name,

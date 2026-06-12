@@ -11,6 +11,10 @@ impl GoalStore {
     pub(crate) fn new(pool: Arc<SqlitePool>) -> Self {
         Self { pool }
     }
+
+    pub(crate) async fn close(&self) {
+        self.pool.close().await;
+    }
 }
 
 pub struct GoalUpdate {

@@ -6,6 +6,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
+use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::logout_with_revoke;
 use codex_login::save_auth;
@@ -72,6 +73,42 @@ async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<
             "client_id": CLIENT_ID,
         })
     );
+    server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(logout_revoke)]
+#[tokio::test]
+async fn logout_with_revoke_uses_stored_auth_when_access_token_env_is_set() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let _revoke_env_guard = EnvGuard::set(
+        REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+        format!("{}/oauth/revoke", server.uri()),
+    );
+    let _access_token_env_guard = EnvGuard::set(
+        CODEX_ACCESS_TOKEN_ENV_VAR,
+        "at-environment-token".to_string(),
+    );
+
+    let codex_home = TempDir::new()?;
+    save_auth(
+        codex_home.path(),
+        &chatgpt_auth(),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let removed = logout_with_revoke(codex_home.path(), AuthCredentialsStoreMode::File).await?;
+
+    assert!(removed);
+    assert!(!codex_home.path().join("auth.json").exists());
     server.verify().await;
     Ok(())
 }
@@ -196,6 +233,7 @@ fn chatgpt_auth_with_refresh_token(refresh_token: &str) -> AuthDotJson {
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        bedrock_api_key: None,
     }
 }
 

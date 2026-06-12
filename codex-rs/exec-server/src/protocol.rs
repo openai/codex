@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,8 +26,6 @@ pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
-pub const FS_JOIN_METHOD: &str = "fs/join";
-pub const FS_PARENT_METHOD: &str = "fs/parent";
 pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
 pub const FS_REMOVE_METHOD: &str = "fs/remove";
 pub const FS_COPY_METHOD: &str = "fs/copy";
@@ -199,7 +197,7 @@ pub struct TerminateResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsReadFileParams {
-    pub path: AbsolutePathBuf,
+    pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
 
@@ -212,7 +210,7 @@ pub struct FsReadFileResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsWriteFileParams {
-    pub path: AbsolutePathBuf,
+    pub path: PathUri,
     pub data_base64: String,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
@@ -224,7 +222,7 @@ pub struct FsWriteFileResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsCreateDirectoryParams {
-    pub path: AbsolutePathBuf,
+    pub path: PathUri,
     pub recursive: Option<bool>,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
@@ -236,7 +234,7 @@ pub struct FsCreateDirectoryResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsGetMetadataParams {
-    pub path: AbsolutePathBuf,
+    pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
 
@@ -246,6 +244,7 @@ pub struct FsGetMetadataResponse {
     pub is_directory: bool,
     pub is_file: bool,
     pub is_symlink: bool,
+    pub size: u64,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
 }
@@ -253,45 +252,20 @@ pub struct FsGetMetadataResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsCanonicalizeParams {
-    pub path: AbsolutePathBuf,
+    pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsCanonicalizeResponse {
-    pub path: AbsolutePathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsJoinParams {
-    pub base_path: AbsolutePathBuf,
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsJoinResponse {
-    pub path: AbsolutePathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsParentParams {
-    pub path: AbsolutePathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsParentResponse {
-    pub path: Option<AbsolutePathBuf>,
+    pub path: PathUri,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsReadDirectoryParams {
-    pub path: AbsolutePathBuf,
+    pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
 
@@ -312,7 +286,7 @@ pub struct FsReadDirectoryResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsRemoveParams {
-    pub path: AbsolutePathBuf,
+    pub path: PathUri,
     pub recursive: Option<bool>,
     pub force: Option<bool>,
     pub sandbox: Option<FileSystemSandboxContext>,
@@ -325,8 +299,8 @@ pub struct FsRemoveResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsCopyParams {
-    pub source_path: AbsolutePathBuf,
-    pub destination_path: AbsolutePathBuf,
+    pub source_path: PathUri,
+    pub destination_path: PathUri,
     pub recursive: bool,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
@@ -475,8 +449,46 @@ mod base64_bytes {
 
 #[cfg(test)]
 mod tests {
+    use super::FsReadFileParams;
     use super::HttpRequestParams;
+    use crate::FileSystemSandboxContext;
+    use codex_protocol::models::PermissionProfile;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn filesystem_protocol_accepts_legacy_absolute_paths_and_serializes_path_uris() {
+        let legacy_path = std::env::current_dir()
+            .expect("current directory")
+            .join("legacy-file.txt");
+        let legacy_cwd = std::env::current_dir().expect("current directory");
+        let expected_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+            PermissionProfile::default(),
+            PathUri::from_path(&legacy_cwd).expect("cwd URI"),
+        );
+        let mut legacy_sandbox =
+            serde_json::to_value(&expected_sandbox).expect("sandbox should serialize");
+        legacy_sandbox["cwd"] = serde_json::json!(legacy_cwd.to_string_lossy());
+        let params: FsReadFileParams = serde_json::from_value(serde_json::json!({
+            "path": legacy_path.to_string_lossy(),
+            "sandbox": legacy_sandbox,
+        }))
+        .expect("legacy absolute path should deserialize");
+        let expected = FsReadFileParams {
+            path: PathUri::from_path(legacy_path).expect("path URI"),
+            sandbox: Some(expected_sandbox.clone()),
+        };
+
+        assert_eq!(params, expected);
+        assert_eq!(
+            serde_json::to_value(params).expect("params should serialize"),
+            serde_json::json!({
+                "path": expected.path.to_string(),
+                "sandbox": serde_json::to_value(expected_sandbox)
+                    .expect("sandbox should serialize"),
+            })
+        );
+    }
 
     #[test]
     fn http_request_timeout_treats_omitted_and_null_as_no_timeout() {

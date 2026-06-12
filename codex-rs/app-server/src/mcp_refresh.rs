@@ -1,7 +1,6 @@
 use crate::config_manager::ConfigManager;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
-use codex_core::config::Config;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -22,8 +21,7 @@ pub(crate) async fn queue_strict_refresh(
             .get_thread(thread_id)
             .await
             .map_err(|err| io::Error::other(format!("failed to load thread {thread_id}: {err}")))?;
-        let config =
-            build_refresh_config(thread_manager, config_manager, thread.config().await).await?;
+        let config = build_refresh_config(thread.as_ref(), config_manager).await?;
         refreshes.push((thread_id, thread, config));
     }
     for (thread_id, thread, config) in refreshes {
@@ -44,15 +42,13 @@ pub(crate) async fn queue_best_effort_refresh(
                 continue;
             }
         };
-        let config =
-            match build_refresh_config(thread_manager, config_manager, thread.config().await).await
-            {
-                Ok(config) => config,
-                Err(err) => {
-                    warn!("failed to build MCP refresh config for thread {thread_id}: {err}");
-                    continue;
-                }
-            };
+        let config = match build_refresh_config(thread.as_ref(), config_manager).await {
+            Ok(config) => config,
+            Err(err) => {
+                warn!("failed to build MCP refresh config for thread {thread_id}: {err}");
+                continue;
+            }
+        };
         if let Err(err) = queue_refresh(thread_id, thread, config).await {
             warn!("{err}");
         }
@@ -60,14 +56,15 @@ pub(crate) async fn queue_best_effort_refresh(
 }
 
 async fn build_refresh_config(
-    thread_manager: &ThreadManager,
+    thread: &CodexThread,
     config_manager: &ConfigManager,
-    thread_config: Arc<Config>,
 ) -> io::Result<McpServerRefreshConfig> {
+    let thread_config = thread.config().await;
     let config = config_manager
         .load_latest_config_for_thread(thread_config.as_ref())
         .await?;
-    let mcp_servers = thread_manager.mcp_manager().runtime_servers(&config).await;
+    let mcp_config = thread.runtime_mcp_config(&config).await;
+    let mcp_servers = codex_mcp::configured_mcp_servers(&mcp_config);
     Ok(McpServerRefreshConfig {
         mcp_servers: serde_json::to_value(mcp_servers).map_err(io::Error::other)?,
         mcp_oauth_credentials_store_mode: serde_json::to_value(
@@ -99,7 +96,6 @@ mod tests {
     use crate::extensions::ThreadExtensionDependencies;
     use crate::extensions::guardian_agent_spawner;
     use crate::extensions::thread_extensions;
-    use async_trait::async_trait;
     use codex_arg0::Arg0DispatchPaths;
     use codex_config::CloudConfigBundleLoader;
     use codex_config::LoaderOverrides;
@@ -113,6 +109,7 @@ mod tests {
     use codex_core::thread_store_from_config;
     use codex_exec_server::EnvironmentManager;
     use codex_extension_api::NoopExtensionEventSink;
+    use codex_home::CodexHomeUserInstructionsProvider;
     use codex_login::AuthManager;
     use codex_login::CodexAuth;
     use codex_protocol::protocol::SessionSource;
@@ -202,8 +199,12 @@ mod tests {
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::new(codex_goal_extension::GoalService::new()),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
+                        thread_store: Arc::clone(&thread_store),
                     },
                 ),
+                Arc::new(CodexHomeUserInstructionsProvider::new(
+                    good_config.codex_home.clone(),
+                )),
                 /*analytics_events_client*/ None,
                 Arc::clone(&thread_store),
                 Some(state_db.clone()),
@@ -240,8 +241,7 @@ mod tests {
         bad_loads: AtomicUsize,
     }
 
-    #[async_trait]
-    impl ThreadConfigLoader for CountingThreadConfigLoader {
+    impl CountingThreadConfigLoader {
         async fn load(
             &self,
             context: ThreadConfigContext,
@@ -258,6 +258,15 @@ mod tests {
                 ));
             }
             Ok(Vec::new())
+        }
+    }
+
+    impl ThreadConfigLoader for CountingThreadConfigLoader {
+        fn load(
+            &self,
+            context: ThreadConfigContext,
+        ) -> codex_config::ThreadConfigLoaderFuture<'_, Vec<ThreadConfigSource>> {
+            Box::pin(CountingThreadConfigLoader::load(self, context))
         }
     }
 }

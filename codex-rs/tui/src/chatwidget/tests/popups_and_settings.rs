@@ -69,7 +69,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         .build()
         .await
         .expect("config");
-    let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
+    let resolved_model = get_model_offline_for_tests(cfg.model.as_deref());
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
@@ -654,7 +654,7 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
                     (codex_app_server_protocol::HookEventName::PreToolUse, 1),
                     (codex_app_server_protocol::HookEventName::Stop, 2),
                 ],
-                &[("Figma", true), ("Slack", false)],
+                &["Figma", "Slack"],
                 &["figma-mcp", "docs-mcp"],
             ),
         }),
@@ -698,7 +698,7 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
                     (codex_app_server_protocol::HookEventName::PreToolUse, 1),
                     (codex_app_server_protocol::HookEventName::Stop, 2),
                 ],
-                &[("Figma", true), ("Slack", false)],
+                &["Figma", "Slack"],
                 &["figma-mcp", "docs-mcp"],
             ),
         }),
@@ -803,6 +803,7 @@ async fn plugin_detail_remote_install_uses_remote_location() {
                 marketplace_name: "workspace-shared-with-me-private".to_string(),
                 marketplace_path: None,
                 summary,
+                share_url: None,
                 description: Some("Install shared Linear plugin.".to_string()),
                 skills: Vec::new(),
                 hooks: Vec::new(),
@@ -877,6 +878,7 @@ async fn plugin_detail_remote_uninstall_uses_remote_plugin_id() {
                 marketplace_name: "workspace-shared-with-me-private".to_string(),
                 marketplace_path: None,
                 summary,
+                share_url: None,
                 description: Some("Installed shared Linear plugin.".to_string()),
                 skills: Vec::new(),
                 hooks: Vec::new(),
@@ -949,6 +951,7 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
                 marketplace_name: "workspace-shared-with-me-private".to_string(),
                 marketplace_path: None,
                 summary,
+                share_url: None,
                 description: Some("Installed shared Linear plugin.".to_string()),
                 skills: Vec::new(),
                 hooks: Vec::new(),

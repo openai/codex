@@ -56,14 +56,17 @@ use codex_shell_escalation::EscalationDecision;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::EscalationPolicy;
+use codex_shell_escalation::EscalationPolicyFuture;
 use codex_shell_escalation::EscalationSession;
 use codex_shell_escalation::ExecParams;
 use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::PreparedExec;
 use codex_shell_escalation::ResolvedPermissionProfile;
 use codex_shell_escalation::ShellCommandExecutor;
+use codex_shell_escalation::ShellCommandExecutorFuture;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -141,7 +144,7 @@ pub(super) async fn try_run_zsh_fork(
             options,
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions),
         )
-        .map_err(|err| ToolError::Codex(err.into()))?;
+        .map_err(ToolError::Codex)?;
     let crate::sandboxing::ExecRequest {
         command,
         cwd: sandbox_cwd,
@@ -597,8 +600,7 @@ impl CoreShellActionProvider {
 // execve interception.
 const ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING: bool = false;
 
-#[async_trait::async_trait]
-impl EscalationPolicy for CoreShellActionProvider {
+impl CoreShellActionProvider {
     async fn determine_action(
         &self,
         program: &AbsolutePathBuf,
@@ -662,6 +664,19 @@ impl EscalationPolicy for CoreShellActionProvider {
             decision_source,
         )
         .await
+    }
+}
+
+impl EscalationPolicy for CoreShellActionProvider {
+    fn determine_action<'a>(
+        &'a self,
+        program: &'a AbsolutePathBuf,
+        argv: &'a [String],
+        workdir: &'a AbsolutePathBuf,
+    ) -> EscalationPolicyFuture<'a> {
+        Box::pin(CoreShellActionProvider::determine_action(
+            self, program, argv, workdir,
+        ))
     }
 }
 
@@ -787,12 +802,40 @@ struct PrepareSandboxedExecParams<'a> {
     additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
-#[async_trait::async_trait]
 impl ShellCommandExecutor for CoreShellCommandExecutor {
-    async fn run(
+    fn run(
         &self,
         _command: Vec<String>,
         _cwd: PathBuf,
+        env_overlay: HashMap<String, String>,
+        cancel_rx: CancellationToken,
+        after_spawn: Option<Box<dyn FnOnce() + Send>>,
+    ) -> ShellCommandExecutorFuture<'_, ExecResult> {
+        Box::pin(CoreShellCommandExecutor::run(
+            self,
+            env_overlay,
+            cancel_rx,
+            after_spawn,
+        ))
+    }
+
+    fn prepare_escalated_exec<'a>(
+        &'a self,
+        program: &'a AbsolutePathBuf,
+        argv: &'a [String],
+        workdir: &'a AbsolutePathBuf,
+        env: HashMap<String, String>,
+        execution: EscalationExecution,
+    ) -> ShellCommandExecutorFuture<'a, PreparedExec> {
+        Box::pin(CoreShellCommandExecutor::prepare_escalated_exec(
+            self, program, argv, workdir, env, execution,
+        ))
+    }
+}
+
+impl CoreShellCommandExecutor {
+    async fn run(
+        &self,
         env_overlay: HashMap<String, String>,
         cancel_rx: CancellationToken,
         after_spawn: Option<Box<dyn FnOnce() + Send>>,
@@ -900,9 +943,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
 
         Ok(prepared)
     }
-}
 
-impl CoreShellCommandExecutor {
     #[allow(clippy::too_many_arguments)]
     fn prepare_sandboxed_exec(
         &self,
@@ -928,10 +969,19 @@ impl CoreShellCommandExecutor {
             self.windows_sandbox_level,
             self.network.is_some(),
         );
+        let cwd = PathUri::from_abs_path(workdir).map_err(|_| {
+            CodexErr::InvalidRequest("command cwd cannot be represented as a file URI".to_string())
+        })?;
+        let sandbox_policy_cwd =
+            PathUri::from_abs_path(&self.sandbox_policy_cwd).map_err(|_| {
+                CodexErr::InvalidRequest(
+                    "sandbox policy cwd cannot be represented as a file URI".to_string(),
+                )
+            })?;
         let command = SandboxCommand {
             program: program.clone().into(),
             args: args.to_vec(),
-            cwd: workdir.clone(),
+            cwd,
             env,
             additional_permissions,
         };
@@ -945,7 +995,7 @@ impl CoreShellCommandExecutor {
             sandbox,
             enforce_managed_network: self.network.is_some(),
             network: self.network.as_ref(),
-            sandbox_policy_cwd: &self.sandbox_policy_cwd,
+            sandbox_policy_cwd: &sandbox_policy_cwd,
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock: self.use_legacy_landlock,
             windows_sandbox_level: self.windows_sandbox_level,
@@ -954,7 +1004,6 @@ impl CoreShellCommandExecutor {
         let mut exec_request = crate::sandboxing::ExecRequest::from_sandbox_exec_request(
             exec_request,
             options,
-            self.sandbox_policy_cwd.clone(),
             self.windows_sandbox_workspace_roots.clone(),
         );
         if let Some(network) = exec_request.network.as_ref() {

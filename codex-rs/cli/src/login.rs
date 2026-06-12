@@ -23,6 +23,7 @@ use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
 use std::io::Read;
+use std::path::Path;
 use std::path::PathBuf;
 use tracing_appender::non_blocking;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -113,11 +114,22 @@ fn print_login_server_start(actual_port: u16, auth_url: &str) {
     );
 }
 
+async fn clear_existing_auth_before_login(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) {
+    if let Err(err) = logout_with_revoke(codex_home, auth_credentials_store_mode).await {
+        tracing::warn!("failed to clear existing auth before login: {err}");
+    }
+}
+
 pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<Vec<String>>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
+    clear_existing_auth_before_login(&codex_home, cli_auth_credentials_store_mode).await;
+
     let opts = ServerOptions::new(
         codex_home,
         CLIENT_ID.to_string(),
@@ -207,6 +219,7 @@ pub async fn run_login_with_access_token(
         &config.codex_home,
         &access_token,
         config.cli_auth_credentials_store_mode,
+        config.forced_chatgpt_workspace_id.as_deref(),
         Some(&config.chatgpt_base_url),
     )
     .await
@@ -276,6 +289,8 @@ pub async fn run_login_with_device_code(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
+    clear_existing_auth_before_login(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .await;
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
         config.codex_home.to_path_buf(),
@@ -314,6 +329,8 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
+    clear_existing_auth_before_login(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .await;
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
@@ -395,6 +412,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 eprintln!("Logged in using personal access token");
                 std::process::exit(0);
             }
+            AuthMode::BedrockApiKey => {
+                eprintln!("Logged in using Amazon Bedrock API key");
+                std::process::exit(0);
+            }
         },
         Ok(None) => {
             eprintln!("Not logged in");
@@ -455,7 +476,31 @@ fn safe_format_key(key: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use codex_config::types::AuthCredentialsStoreMode;
+    use codex_login::load_auth_dot_json;
+    use codex_login::login_with_api_key;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    use super::clear_existing_auth_before_login;
     use super::safe_format_key;
+
+    #[tokio::test]
+    async fn clears_existing_auth_before_login() {
+        let codex_home = tempdir().expect("create temporary Codex home");
+        login_with_api_key(
+            codex_home.path(),
+            "sk-existing",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("save existing auth");
+
+        clear_existing_auth_before_login(codex_home.path(), AuthCredentialsStoreMode::File).await;
+
+        let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
+            .expect("load auth after cleanup");
+        assert_eq!(auth, None);
+    }
 
     #[test]
     fn formats_long_key() {

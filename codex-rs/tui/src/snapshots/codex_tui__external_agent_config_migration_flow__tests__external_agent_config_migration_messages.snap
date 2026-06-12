@@ -1,0 +1,12 @@
+---
+source: tui/src/external_agent_config_migration_flow_tests.rs
+expression: messages
+---
+Claude Code import started. You can keep working while it finishes. Imported setup will apply to new chats.
+Claude Code import started. You can keep working while it finishes. Imported setup will apply to new chats. 1 additional item remains. After it finishes, run /import again to review it.
+Claude Code import started. You can keep working while it finishes. Imported setup will apply to new chats. 2 additional items remain. After it finishes, run /import again to review them.
+Claude Code import finished. Run /import again to check for additional items.
+No Claude Code setup was found to import.
+Import from Claude Code is unavailable in remote sessions. Start Codex locally and run /import.
+Import from Claude Code is unavailable while Codex is connected to the local app-server daemon. Stop the daemon, restart Codex, and run /import.
+A previous Claude Code import is still running. Wait for it to finish before importing again.

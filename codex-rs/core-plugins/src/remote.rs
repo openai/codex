@@ -163,6 +163,7 @@ pub struct RemotePluginDetail {
     pub marketplace_name: String,
     pub marketplace_display_name: String,
     pub summary: RemotePluginSummary,
+    pub share_url: Option<String>,
     pub description: Option<String>,
     pub release_version: Option<String>,
     pub bundle_download_url: Option<String>,
@@ -178,6 +179,7 @@ pub struct RemoteAppTemplate {
     pub template_id: String,
     pub name: String,
     pub description: Option<String>,
+    pub category: Option<String>,
     pub canonical_connector_id: Option<String>,
     pub logo_url: Option<String>,
     pub logo_url_dark: Option<String>,
@@ -457,6 +459,8 @@ struct RemoteAppTemplateResponse {
     name: String,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
     #[serde(default)]
     canonical_connector_id: Option<String>,
     #[serde(default)]
@@ -1045,6 +1049,7 @@ async fn build_remote_plugin_detail(
         marketplace_name,
         marketplace_display_name: scope.marketplace_display_name().to_string(),
         summary: build_remote_plugin_summary(&plugin, installed_plugin.as_ref())?,
+        share_url: plugin.share_url,
         description: non_empty_string(Some(&plugin.release.description)),
         release_version: plugin.release.version,
         bundle_download_url: plugin.release.bundle_download_url,
@@ -1059,6 +1064,7 @@ async fn build_remote_plugin_detail(
                 template_id: template.template_id,
                 name: template.name,
                 description: template.description,
+                category: template.category,
                 canonical_connector_id: template.canonical_connector_id,
                 logo_url: template.logo_url,
                 logo_url_dark: template.logo_url_dark,
