@@ -139,6 +139,12 @@ impl InitiatorHandshake {
             .with_rs(responder_dh)
             .with_rs_kem(responder_kem);
         let mut handshake = Handshake::new(params)?;
+        let overhead = handshake.get_next_message_overhead()?;
+        if payload.len() > MAX_MESSAGE_LEN - overhead {
+            return Err(NoiseChannelError::InvalidMessage(
+                "handshake payload is too large",
+            ));
+        }
         let mut output = [0u8; MAX_MESSAGE_LEN];
         let output_len = handshake.write_message(payload, &mut output)?;
         Ok((Self { handshake }, output[..output_len].to_vec()))
