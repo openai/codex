@@ -129,11 +129,8 @@ fn validate_request_plugin_install_picker_args_supports_categories() {
             .expect("categorized picker args");
 
     assert_eq!(resolved_entries.len(), 1);
-    assert_eq!(
-        resolved_entries[0].category_id,
-        Some("category-0".to_string())
-    );
-    assert_eq!(resolved_entries[0].entry_id, "connector_calendar");
+    assert_eq!(resolved_entries[0].category_index, Some(0));
+    assert_eq!(resolved_entries[0].tool.id(), "connector_calendar");
 }
 
 #[test]
@@ -165,6 +162,45 @@ fn validate_request_plugin_install_picker_args_rejects_mixed_sources() {
             .expect_err("mixed picker args"),
         FunctionCallError::RespondToModel(
             "picker install requests must include exactly one of entries or categories".to_string(),
+        ),
+    );
+}
+
+#[test]
+fn validate_request_plugin_install_picker_args_rejects_duplicate_tools() {
+    let entry = RequestPluginInstallPickerEntry {
+        tool_id: "connector_calendar".to_string(),
+        tool_type: DiscoverableToolType::Connector,
+    };
+    let args = RequestPluginInstallArgs {
+        action_type: DiscoverableToolAction::Install,
+        entries: None,
+        categories: Some(vec![
+            RequestPluginInstallPickerCategory {
+                title: "Calendar".to_string(),
+                entries: vec![entry],
+            },
+            RequestPluginInstallPickerCategory {
+                title: "Meetings".to_string(),
+                entries: vec![RequestPluginInstallPickerEntry {
+                    tool_id: "connector_calendar".to_string(),
+                    tool_type: DiscoverableToolType::Connector,
+                }],
+            },
+        ]),
+    };
+    let discoverable_tools = vec![connector_tool("connector_calendar", "Google Calendar")];
+
+    assert_eq!(
+        validate_request_plugin_install_picker_args(
+            &args,
+            &discoverable_tools,
+            /*app_server_client_name*/ None,
+            ToolSuggestPresentation::ListTool,
+        )
+        .expect_err("duplicate picker tool"),
+        FunctionCallError::RespondToModel(
+            "picker install requests must not repeat a tool_type/tool_id pair".to_string(),
         ),
     );
 }
@@ -208,16 +244,12 @@ fn validate_request_plugin_install_picker_args_rejects_multi_tool_tui_requests()
 fn picker_completion_only_requires_one_completed_entry() {
     let entries = vec![
         RequestPluginInstallEntryResult {
-            category_id: Some("category-0".to_string()),
-            entry_id: "connector_salesforce".to_string(),
             tool_type: DiscoverableToolType::Connector,
             tool_id: "connector_salesforce".to_string(),
             tool_name: "Salesforce".to_string(),
             completed: true,
         },
         RequestPluginInstallEntryResult {
-            category_id: Some("category-0".to_string()),
-            entry_id: "connector_hubspot".to_string(),
             tool_type: DiscoverableToolType::Connector,
             tool_id: "connector_hubspot".to_string(),
             tool_name: "HubSpot".to_string(),

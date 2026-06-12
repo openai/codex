@@ -4,6 +4,36 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
+fn request_plugin_install_result_keeps_model_response_minimal() {
+    assert_eq!(
+        json!(RequestPluginInstallResult {
+            completed: false,
+            user_confirmed: false,
+            action_type: DiscoverableToolAction::Install,
+            entries: vec![RequestPluginInstallEntryResult {
+                tool_type: DiscoverableToolType::Plugin,
+                tool_id: "apollo@openai-curated-remote".to_string(),
+                tool_name: "Apollo".to_string(),
+                completed: false,
+            }],
+        }),
+        json!({
+            "completed": false,
+            "user_confirmed": false,
+            "action_type": "install",
+            "entries": [
+                {
+                    "tool_type": "plugin",
+                    "tool_id": "apollo@openai-curated-remote",
+                    "tool_name": "Apollo",
+                    "completed": false,
+                },
+            ],
+        }),
+    );
+}
+
+#[test]
 fn build_request_plugin_install_elicitation_request_uses_flat_entries_shape() {
     let args = RequestPluginInstallArgs {
         action_type: DiscoverableToolAction::Install,
@@ -32,8 +62,7 @@ fn build_request_plugin_install_elicitation_request_uses_flat_entries_shape() {
         plugin_display_names: Vec::new(),
     }));
     let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
-        category_id: None,
-        entry_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+        category_index: None,
         tool: &connector,
     }];
 
@@ -57,7 +86,6 @@ fn build_request_plugin_install_elicitation_request_uses_flat_entries_shape() {
                     persist: Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE),
                     suggest_type: DiscoverableToolAction::Install,
                     entries: Some(vec![RequestPluginInstallEntryMeta {
-                        id: "connector_2128aebfecb84f64a069897515042a44",
                         tool_id: "connector_2128aebfecb84f64a069897515042a44",
                         tool_name: "Google Calendar",
                         tool_type: DiscoverableToolType::Connector,
@@ -102,8 +130,7 @@ fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
         app_connector_ids: vec!["connector_calendar".to_string()],
     }));
     let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
-        category_id: None,
-        entry_id: "sample@openai-curated-remote".to_string(),
+        category_index: None,
         tool: &plugin,
     }];
 
@@ -127,7 +154,6 @@ fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
                     persist: Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE),
                     suggest_type: DiscoverableToolAction::Install,
                     entries: Some(vec![RequestPluginInstallEntryMeta {
-                        id: "sample@openai-curated-remote",
                         tool_id: "sample@openai-curated-remote",
                         tool_name: "Sample Plugin",
                         tool_type: DiscoverableToolType::Plugin,
@@ -182,8 +208,7 @@ fn build_request_plugin_install_elicitation_request_uses_categories_shape() {
         plugin_display_names: Vec::new(),
     }));
     let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
-        category_id: Some("category-0".to_string()),
-        entry_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+        category_index: Some(0),
         tool: &connector,
     }];
 
@@ -208,10 +233,8 @@ fn build_request_plugin_install_elicitation_request_uses_categories_shape() {
                     suggest_type: DiscoverableToolAction::Install,
                     entries: None,
                     categories: Some(vec![RequestPluginInstallCategoryMeta {
-                        id: "category-0".to_string(),
                         title: "Calendar",
                         entries: vec![RequestPluginInstallEntryMeta {
-                            id: "connector_2128aebfecb84f64a069897515042a44",
                             tool_id: "connector_2128aebfecb84f64a069897515042a44",
                             tool_name: "Google Calendar",
                             tool_type: DiscoverableToolType::Connector,
