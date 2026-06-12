@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling>=1.27.0"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.11.19,<0.12"]
+build-backend = "uv_build"
 
 [project]
 name = "openai-codex"
@@ -36,26 +36,17 @@ dev = [
   { include-group = "format" },
 ]
 
-[tool.hatch.build]
-exclude = [
+[tool.uv.build-backend]
+module-name = "openai_codex"
+source-include = [
+  "examples/README.md",
+]
+source-exclude = [
   ".venv/**",
   ".venv2/**",
   ".pytest_cache/**",
   "dist/**",
   "build/**",
-]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/openai_codex"]
-include = [
-  "src/openai_codex/py.typed",
-]
-
-[tool.hatch.build.targets.sdist]
-include = [
-  "src/openai_codex/**",
-  "README.md",
-  "pyproject.toml",
 ]
 
 [tool.pytest.ini_options]
