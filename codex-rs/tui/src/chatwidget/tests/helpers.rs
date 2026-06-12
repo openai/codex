@@ -694,6 +694,7 @@ pub(super) fn handle_view_image_tool_call(
 pub(super) fn handle_image_generation_end(
     chat: &mut ChatWidget,
     call_id: impl Into<String>,
+    status: impl Into<String>,
     revised_prompt: Option<String>,
     saved_path: Option<AbsolutePathBuf>,
 ) {
@@ -704,7 +705,7 @@ pub(super) fn handle_image_generation_end(
             completed_at_ms: 0,
             item: AppServerThreadItem::ImageGeneration {
                 id: call_id.into(),
-                status: "completed".to_string(),
+                status: status.into(),
                 revised_prompt,
                 result: String::new(),
                 saved_path,

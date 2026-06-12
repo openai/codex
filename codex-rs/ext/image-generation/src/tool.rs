@@ -113,17 +113,33 @@ impl ImageGenerationTool {
                 saved_path: None,
             }))
             .await;
-        let response = match request {
+        let result = match request {
             ImageRequest::Generate(request) => self.backend.generate(request).await,
             ImageRequest::Edit(request) => self.backend.edit(request).await,
         }
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("image generation failed: {err}"))
-        })?;
-        let Some(result) = response.data.into_iter().next().map(|data| data.b64_json) else {
-            return Err(FunctionCallError::RespondToModel(
-                "image generation returned no image data".to_string(),
-            ));
+        .map_err(|err| format!("image generation failed: {err}"))
+        .and_then(|response| {
+            response
+                .data
+                .into_iter()
+                .next()
+                .map(|data| data.b64_json)
+                .ok_or_else(|| "image generation returned no image data".to_string())
+        });
+        let result = match result {
+            Ok(result) => result,
+            Err(message) => {
+                call.turn_item_emitter
+                    .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                        id: call.call_id.clone(),
+                        status: "failed".to_string(),
+                        revised_prompt: Some(args.prompt.clone()),
+                        result: String::new(),
+                        saved_path: None,
+                    }))
+                    .await;
+                return Err(FunctionCallError::RespondToModel(message));
+            }
         };
         call.turn_item_emitter
             .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {

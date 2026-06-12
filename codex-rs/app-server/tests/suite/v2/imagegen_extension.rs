@@ -147,6 +147,84 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
 }
 
 #[tokio::test]
+async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()> {
+    let call_id = "image-run-failed";
+    let server = responses::start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/images/generations"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("image backend failed"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    call_id,
+                    "image_gen",
+                    "imagegen",
+                    &json!({"prompt": "paint a blue whale"}).to_string(),
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "I could not generate the image."),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), ImagegenTestMode::Direct)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    start_image_generation_turn(&mut mcp).await?;
+
+    let completed = timeout(
+        DEFAULT_READ_TIMEOUT,
+        wait_for_image_generation_completed(&mut mcp),
+    )
+    .await??;
+    assert_eq!(
+        completed.item,
+        ThreadItem::ImageGeneration {
+            id: call_id.to_string(),
+            status: "failed".to_string(),
+            revised_prompt: Some("paint a blue whale".to_string()),
+            result: String::new(),
+            saved_path: None,
+        }
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let (output, _) = requests[1]
+        .function_call_output_content_and_success(call_id)
+        .context("image generation function output should be present")?;
+    assert!(
+        output
+            .as_deref()
+            .is_some_and(|text| text.contains("image generation failed"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()> {
     let edit_request = run_image_edit_test(|codex_home| {
         let image_path = codex_home.join("attached.png");
