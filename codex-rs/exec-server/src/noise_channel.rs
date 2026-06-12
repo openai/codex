@@ -18,8 +18,8 @@ use clatter::bytearray::ByteArray;
 use clatter::constants::MAX_MESSAGE_LEN;
 use clatter::crypto::cipher::AesGcm;
 use clatter::crypto::dh::X25519;
-use clatter::crypto::kem::rust_crypto_ml_kem::MlKem768;
 use clatter::crypto::hash::Sha256;
+use clatter::crypto::kem::rust_crypto_ml_kem::MlKem768;
 use clatter::handshakepattern::noise_hybrid_ik;
 use clatter::traits::Cipher;
 use clatter::traits::Dh;
@@ -73,9 +73,7 @@ impl NoiseChannelPublicKey {
     }
 
     /// Decode registry-provided key material before passing it to Clatter.
-    fn decode(
-        &self,
-    ) -> Result<(<X25519 as Dh>::PubKey, MlKem768PublicKey), NoiseChannelError> {
+    fn decode(&self) -> Result<(<X25519 as Dh>::PubKey, MlKem768PublicKey), NoiseChannelError> {
         if self.suite != NOISE_CHANNEL_SUITE {
             return Err(NoiseChannelError::InvalidPublicKey(
                 "unsupported Noise channel suite",
@@ -96,10 +94,7 @@ impl NoiseChannelPublicKey {
             ));
         }
 
-        Ok((
-            dh,
-            MlKem768PublicKey::from_slice(kem.as_slice()),
-        ))
+        Ok((dh, MlKem768PublicKey::from_slice(kem.as_slice())))
     }
 }
 

@@ -2902,6 +2902,7 @@ dependencies = [
  "tokio-util",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
+ "url",
  "uuid",
  "wiremock",
 ]
