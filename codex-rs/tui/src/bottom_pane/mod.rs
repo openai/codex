@@ -2056,23 +2056,23 @@ mod tests {
         let mut states = Vec::new();
 
         pane.refresh_tab_status();
-        states.push(pane.last_tab_status_for_test());
+        states.push(last_tab_class(&pane));
 
         pane.set_unified_exec_processes(vec!["sleep 30".to_string()]);
-        states.push(pane.last_tab_status_for_test());
+        states.push(last_tab_class(&pane));
 
         pane.set_task_running(/*running*/ true);
         pane.set_task_running(/*running*/ false);
-        states.push(pane.last_tab_status_for_test());
+        states.push(last_tab_class(&pane));
 
         pane.push_approval_request(exec_request(), &features);
-        states.push(pane.last_tab_status_for_test());
+        states.push(last_tab_class(&pane));
 
         let _ = pane.on_ctrl_c();
-        states.push(pane.last_tab_status_for_test());
+        states.push(last_tab_class(&pane));
 
         pane.set_unified_exec_processes(Vec::new());
-        states.push(pane.last_tab_status_for_test());
+        states.push(last_tab_class(&pane));
 
         assert_snapshot!(format!("{states:#?}"), @r###"
         [
@@ -2153,6 +2153,7 @@ mod tests {
     fn working_tab_status_combines_activity_and_status_detail() {
         let mut pane = fresh_pane();
         pane.set_task_running(/*running*/ true);
+        pane.set_unified_exec_processes(vec!["sleep 30".to_string()]);
         pane.tab_status
             .set_current_activity(Some("Run cargo test".to_string()));
         pane.update_status(
@@ -2168,6 +2169,23 @@ mod tests {
                 TabStatus::Working,
                 Some("Run cargo test • Thinking • checking results".to_string())
             )
+        );
+    }
+
+    #[test]
+    fn turn_finalize_ordering_emits_idle_with_last_activity_in_one_write() {
+        let mut pane = fresh_pane();
+        pane.is_task_running = true;
+        pane.set_current_activity(Some("Run cargo build".to_string()));
+        pane.refresh_tab_status();
+        assert_eq!(last_tab_class(&pane), Some(TabStatus::Working));
+
+        pane.set_current_activity(/*activity*/ None);
+        pane.set_task_running(/*running*/ false);
+
+        assert_eq!(
+            pane.last_tab_status_for_test(),
+            Some((TabStatus::Idle, Some("last: Run cargo build".to_string())))
         );
     }
 

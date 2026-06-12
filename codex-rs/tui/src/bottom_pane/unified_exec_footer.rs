@@ -12,6 +12,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::live_wrap::take_prefix_by_width;
 use crate::render::renderable::Renderable;
+use crate::tab_status::oneline_truncated;
 
 /// Tracks active unified-exec processes and renders a compact summary.
 pub(crate) struct UnifiedExecFooter {
@@ -35,6 +36,16 @@ impl UnifiedExecFooter {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.processes.is_empty()
+    }
+
+    pub(crate) fn tab_status_detail(&self) -> Option<String> {
+        let command = oneline_truncated(self.processes.last()?);
+        let count = self.processes.len();
+        if count == 1 {
+            Some(format!("Background: {command}"))
+        } else {
+            Some(format!("Background: {command} ({count} running)"))
+        }
     }
 
     /// Returns the unindented summary text used by both footer and status-row rendering.
@@ -91,6 +102,27 @@ mod tests {
     fn desired_height_empty() {
         let footer = UnifiedExecFooter::new();
         assert_eq!(footer.desired_height(/*width*/ 40), 0);
+    }
+
+    #[test]
+    fn tab_status_detail_tracks_newest_surviving_process() {
+        let mut footer = UnifiedExecFooter::new();
+        assert_eq!(footer.tab_status_detail(), None);
+
+        footer.set_processes(vec!["sleep 30".to_string()]);
+        assert_snapshot!(footer.tab_status_detail().expect("background detail"), @"Background: sleep 30");
+
+        footer.set_processes(vec!["sleep 30".to_string(), "cargo test".to_string()]);
+        assert_eq!(
+            footer.tab_status_detail(),
+            Some("Background: cargo test (2 running)".to_string())
+        );
+
+        footer.set_processes(vec!["sleep 30".to_string()]);
+        assert_eq!(
+            footer.tab_status_detail(),
+            Some("Background: sleep 30".to_string())
+        );
     }
 
     #[test]

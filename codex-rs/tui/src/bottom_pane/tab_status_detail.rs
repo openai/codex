@@ -46,6 +46,11 @@ impl BottomPane {
         if !parts.is_empty() {
             return Some(parts.join(" • "));
         }
+        if !self.is_task_running
+            && let Some(detail) = self.unified_exec_footer.tab_status_detail()
+        {
+            return Some(detail);
+        }
         self.tab_status
             .last_activity()
             .map(|activity| format!("after: {activity}"))
