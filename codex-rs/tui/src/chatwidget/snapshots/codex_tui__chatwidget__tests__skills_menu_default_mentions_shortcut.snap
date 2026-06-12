@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: popup
+---
+  Skills
+  Choose an action
+
+› 1. List skills            Tip: press @ to open this list directly.
+  2. Enable/Disable Skills  Enable or disable skills.
+
+  Press enter to confirm or esc to go back

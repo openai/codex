@@ -2576,6 +2576,15 @@ async fn personality_selection_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn skills_menu_default_mentions_shortcut_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_skills_menu();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("skills_menu_default_mentions_shortcut", popup);
+}
+
+#[tokio::test]
 async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
     chat.thread_id = Some(ThreadId::new());

@@ -33,10 +33,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_skills_menu(&mut self) {
+        let list_shortcut = if self.config.features.enabled(Feature::MentionsV2) {
+            '@'
+        } else {
+            '$'
+        };
         let items = vec![
             SelectionItem {
                 name: "List skills".to_string(),
-                description: Some("Tip: press $ to open this list directly.".to_string()),
+                description: Some(format!(
+                    "Tip: press {list_shortcut} to open this list directly."
+                )),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::OpenSkillsList);
                 })],

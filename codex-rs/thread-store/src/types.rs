@@ -56,13 +56,9 @@ pub struct ThreadPersistenceMetadata {
     pub memory_mode: MemoryMode,
 }
 
-// copybara:replace-for-public begin
-pub use codex_internal_extra_config::ExtraConfig;
-// copybara:replace-for-public with
-// copybara:public /// Extra configuration fields for a thread.
-// copybara:public #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-// copybara:public pub struct ExtraConfig {}
-// copybara:replace-for-public end
+/// Extra configuration fields for a thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtraConfig {}
 
 /// Parameters required to create a persisted thread.
 #[derive(Clone, Debug, Serialize, Deserialize)]
