@@ -3,8 +3,8 @@
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
 export type { AgentMessageInputContent } from "./AgentMessageInputContent";
 export type { AgentPath } from "./AgentPath";
-export type { ApiPathString } from "./ApiPathString";
 export type { AmazonBedrockCredentialSource } from "./AmazonBedrockCredentialSource";
+export type { ApiPathString } from "./ApiPathString";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
 export type { AuthMode } from "./AuthMode";

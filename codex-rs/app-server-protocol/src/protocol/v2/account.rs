@@ -1,6 +1,6 @@
 use crate::protocol::common::AuthMode;
 use codex_experimental_api_macros::ExperimentalApi;
-pub use codex_protocol::account::AmazonBedrockCredentialSource;
+use codex_protocol::account::AmazonBedrockCredentialSource;
 use codex_protocol::account::PlanType;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
@@ -30,8 +30,13 @@ pub enum Account {
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
     AmazonBedrock {
+        #[serde(default = "default_bedrock_credential_source")]
         credential_source: AmazonBedrockCredentialSource,
     },
+}
+
+fn default_bedrock_credential_source() -> AmazonBedrockCredentialSource {
+    AmazonBedrockCredentialSource::AwsManaged
 }
 
 impl From<ProviderAccount> for Account {

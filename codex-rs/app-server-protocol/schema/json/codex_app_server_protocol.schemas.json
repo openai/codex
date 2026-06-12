@@ -5805,7 +5805,12 @@
           {
             "properties": {
               "credentialSource": {
-                "$ref": "#/definitions/v2/AmazonBedrockCredentialSource"
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/AmazonBedrockCredentialSource"
+                  }
+                ],
+                "default": "awsManaged"
               },
               "type": {
                 "enum": [
@@ -5816,7 +5821,6 @@
               }
             },
             "required": [
-              "credentialSource",
               "type"
             ],
             "title": "AmazonBedrockAccount",

@@ -1668,6 +1668,7 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use codex_protocol::ThreadId;
+    use codex_protocol::account::AmazonBedrockCredentialSource;
     use codex_protocol::account::PlanType;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
@@ -2772,7 +2773,7 @@ mod tests {
         );
 
         let codex_managed_bedrock = v2::Account::AmazonBedrock {
-            credential_source: v2::AmazonBedrockCredentialSource::CodexManaged,
+            credential_source: AmazonBedrockCredentialSource::CodexManaged,
         };
         assert_eq!(
             json!({
@@ -2783,7 +2784,7 @@ mod tests {
         );
 
         let aws_managed_bedrock = v2::Account::AmazonBedrock {
-            credential_source: v2::AmazonBedrockCredentialSource::AwsManaged,
+            credential_source: AmazonBedrockCredentialSource::AwsManaged,
         };
         assert_eq!(
             json!({
@@ -2793,6 +2794,19 @@ mod tests {
             serde_json::to_value(&aws_managed_bedrock)?,
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn account_defaults_legacy_bedrock_credential_source() -> Result<()> {
+        assert_eq!(
+            v2::Account::AmazonBedrock {
+                credential_source: AmazonBedrockCredentialSource::AwsManaged,
+            },
+            serde_json::from_value(json!({
+                "type": "amazonBedrock",
+            }))?,
+        );
         Ok(())
     }
 

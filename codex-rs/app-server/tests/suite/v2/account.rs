@@ -11,7 +11,6 @@ use app_test_support::write_models_cache;
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use codex_app_server_protocol::Account;
-use codex_app_server_protocol::AmazonBedrockCredentialSource;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
@@ -39,6 +38,7 @@ use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::login_with_api_key;
 use codex_login::login_with_bedrock_api_key;
+use codex_protocol::account::AmazonBedrockCredentialSource;
 use codex_protocol::account::PlanType as AccountPlanType;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -1751,6 +1751,7 @@ async fn get_account_with_managed_bedrock_provider() -> Result<()> {
         "managed-bedrock-api-key",
         "us-west-2",
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
