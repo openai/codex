@@ -1,7 +1,10 @@
 //! Normalization from Responses-shaped JSON items into conversation item data.
 
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_protocol::models::AgentMessageInputContent;
+use codex_protocol::models::ResponseItem;
 use serde_json::Value;
 
 use crate::model::AgentMessageMetadata;
@@ -182,83 +185,40 @@ fn normalize_agent_message_item(
     item: &Value,
     raw_payload: &RawPayloadRef,
 ) -> Result<NormalizedConversationItem> {
-    let Some(author) = item.get("author").and_then(Value::as_str) else {
-        bail!(
-            "agent_message item in payload {} did not contain a string author",
-            raw_payload.raw_payload_id
-        );
+    let raw_payload_id = &raw_payload.raw_payload_id;
+    let response_item =
+        serde_json::from_value::<ResponseItem>(item.clone()).with_context(|| {
+            format!("failed to parse agent_message item in payload {raw_payload_id}")
+        })?;
+    let ResponseItem::AgentMessage {
+        author,
+        recipient,
+        content,
+    } = response_item
+    else {
+        bail!("item in payload {raw_payload_id} was not an agent_message");
     };
-    let Some(recipient) = item.get("recipient").and_then(Value::as_str) else {
-        bail!(
-            "agent_message item in payload {} did not contain a string recipient",
-            raw_payload.raw_payload_id
-        );
-    };
-    let Some(content) = item.get("content").and_then(Value::as_array) else {
-        bail!(
-            "agent_message item in payload {} did not contain array content",
-            raw_payload.raw_payload_id
-        );
-    };
-
-    let mut parts = Vec::with_capacity(content.len());
-    for content_item in content {
-        let Some(content_type) = content_item.get("type").and_then(Value::as_str) else {
-            bail!(
-                "agent_message item in payload {} had content without a string type",
-                raw_payload.raw_payload_id
-            );
-        };
-        match content_type {
-            "input_text" => {
-                let Some(text) = content_item.get("text").and_then(Value::as_str) else {
-                    bail!(
-                        "agent_message item in payload {} had input_text without string text",
-                        raw_payload.raw_payload_id
-                    );
-                };
-                parts.push(ConversationPart::Text {
-                    text: text.to_string(),
-                });
-            }
-            "encrypted_content" => {
-                let Some(encrypted_content) = content_item
-                    .get("encrypted_content")
-                    .and_then(Value::as_str)
-                else {
-                    bail!(
-                        "agent_message item in payload {} had encrypted_content without a string payload",
-                        raw_payload.raw_payload_id
-                    );
-                };
-                parts.push(ConversationPart::Encoded {
+    let parts = content
+        .into_iter()
+        .map(|content| match content {
+            AgentMessageInputContent::InputText { text } => ConversationPart::Text { text },
+            AgentMessageInputContent::EncryptedContent { encrypted_content } => {
+                ConversationPart::Encoded {
                     label: "encrypted_content".to_string(),
-                    value: encrypted_content.to_string(),
-                });
+                    value: encrypted_content,
+                }
             }
-            _ => {
-                bail!(
-                    "agent_message item in payload {} had unsupported content type {content_type}",
-                    raw_payload.raw_payload_id
-                );
-            }
-        }
-    }
+        })
+        .collect::<Vec<_>>();
     if parts.is_empty() {
-        bail!(
-            "agent_message item in payload {} contained no content",
-            raw_payload.raw_payload_id
-        );
+        bail!("agent_message item in payload {raw_payload_id} contained no content");
     }
 
     Ok(NormalizedConversationItem {
         role: ConversationRole::Assistant,
         channel: Some(ConversationChannel::Analysis),
         kind: ConversationItemKind::Message,
-        agent_message: Some(AgentMessageMetadata {
-            author: author.to_string(),
-            recipient: recipient.to_string(),
-        }),
+        agent_message: Some(AgentMessageMetadata { author, recipient }),
         body: ConversationBody { parts },
         call_id: None,
     })

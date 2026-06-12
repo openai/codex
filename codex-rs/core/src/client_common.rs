@@ -54,15 +54,11 @@ impl Default for Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
-        self.input.clone()
-    }
-
     pub(crate) fn get_formatted_input_for_request(
         &self,
         use_responses_lite: bool,
     ) -> Vec<ResponseItem> {
-        let mut input = self.get_formatted_input();
+        let mut input = self.input.clone();
         if use_responses_lite {
             strip_image_details(&mut input);
         }

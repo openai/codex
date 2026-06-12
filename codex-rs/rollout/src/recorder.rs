@@ -868,31 +868,17 @@ impl RolloutRecorder {
 
             // Parse the rollout line structure
             match serde_json::from_value::<RolloutLine>(v.clone()) {
-                Ok(rollout_line) => match rollout_line.item {
-                    RolloutItem::SessionMeta(session_meta_line) => {
-                        // Use the FIRST SessionMeta encountered in the file as the canonical
-                        // thread id and main session information. Keep all items intact.
-                        if thread_id.is_none() {
-                            thread_id = Some(session_meta_line.meta.id);
-                        }
-                        items.push(RolloutItem::SessionMeta(session_meta_line));
+                Ok(rollout_line) => {
+                    let item = rollout_line.item;
+                    // Use the FIRST SessionMeta encountered in the file as the canonical
+                    // thread id and main session information. Keep all items intact.
+                    if thread_id.is_none()
+                        && let RolloutItem::SessionMeta(session_meta_line) = &item
+                    {
+                        thread_id = Some(session_meta_line.meta.id);
                     }
-                    RolloutItem::ResponseItem(item) => {
-                        items.push(RolloutItem::ResponseItem(item));
-                    }
-                    RolloutItem::InterAgentCommunication(communication) => {
-                        items.push(RolloutItem::InterAgentCommunication(communication));
-                    }
-                    RolloutItem::Compacted(item) => {
-                        items.push(RolloutItem::Compacted(item));
-                    }
-                    RolloutItem::TurnContext(item) => {
-                        items.push(RolloutItem::TurnContext(item));
-                    }
-                    RolloutItem::EventMsg(_ev) => {
-                        items.push(RolloutItem::EventMsg(_ev));
-                    }
-                },
+                    items.push(item);
+                }
                 Err(e) => {
                     trace!("failed to parse rollout line: {e}");
                     parse_errors = parse_errors.saturating_add(1);

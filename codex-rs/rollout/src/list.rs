@@ -1117,17 +1117,10 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.saw_session_meta = true;
                 }
             }
-            RolloutItem::ResponseItem(_) => {
-                summary.created_at = summary
+            RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
+                summary
                     .created_at
-                    .clone()
-                    .or_else(|| Some(rollout_line.timestamp.clone()));
-            }
-            RolloutItem::InterAgentCommunication(_) => {
-                summary.created_at = summary
-                    .created_at
-                    .clone()
-                    .or_else(|| Some(rollout_line.timestamp.clone()));
+                    .get_or_insert_with(|| rollout_line.timestamp.clone());
             }
             RolloutItem::TurnContext(_) => {
                 // Not included in `head`; skip.
