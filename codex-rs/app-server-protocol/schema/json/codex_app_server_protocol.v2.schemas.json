@@ -3432,7 +3432,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/NativePathString"
             },
             "type": {
               "enum": [
@@ -8587,6 +8587,9 @@
       ],
       "title": "ModelVerificationNotification",
       "type": "object"
+    },
+    "NativePathString": {
+      "type": "string"
     },
     "NetworkAccess": {
       "enum": [

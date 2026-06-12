@@ -155,3 +155,114 @@ fn serializes_as_a_string() {
         r#""/workspace/src/lib.rs""#
     );
 }
+
+#[test]
+fn deserialized_posix_paths_round_trip_through_path_uri() {
+    for value in [
+        "/",
+        "/home/alice/a file.rs",
+        "/tmp/",
+        "/tmp/%A0.txt",
+        "/tmp/☃",
+        "/tmp/a\\b",
+    ] {
+        let native: NativePathString =
+            serde_json::from_value(serde_json::json!(value)).expect("native path string");
+        let path = native
+            .to_path_uri(PathConvention::Posix)
+            .expect("absolute POSIX path should parse");
+
+        assert_eq!(
+            NativePathString::from_path_uri(&path, PathConvention::Posix),
+            Ok(native),
+            "round-tripping {value}"
+        );
+    }
+}
+
+#[test]
+fn deserialized_windows_paths_round_trip_through_path_uri() {
+    for value in [
+        r"C:\",
+        r"C:\Users\Alice Smith\src\main.rs",
+        r"d:\snowman\☃",
+        r"C:\test with %25\c#code",
+        r"\\server\share\src\main.rs",
+        "\\\\server\\share\\",
+    ] {
+        let native: NativePathString =
+            serde_json::from_value(serde_json::json!(value)).expect("native path string");
+        let path = native
+            .to_path_uri(PathConvention::Windows)
+            .expect("absolute Windows path should parse");
+
+        assert_eq!(
+            NativePathString::from_path_uri(&path, PathConvention::Windows),
+            Ok(native),
+            "round-tripping {value}"
+        );
+    }
+}
+
+#[test]
+fn native_path_strings_normalize_navigation_components() {
+    for (value, convention, expected_uri, expected_native) in [
+        (
+            "/workspace/src/../README.md",
+            PathConvention::Posix,
+            "file:///workspace/README.md",
+            "/workspace/README.md",
+        ),
+        (
+            "/../../workspace/./README.md",
+            PathConvention::Posix,
+            "file:///workspace/README.md",
+            "/workspace/README.md",
+        ),
+        (
+            r"C:\workspace\src\..\README.md",
+            PathConvention::Windows,
+            "file:///C:/workspace/README.md",
+            r"C:\workspace\README.md",
+        ),
+        (
+            r"\\server\share\src\..\README.md",
+            PathConvention::Windows,
+            "file://server/share/README.md",
+            r"\\server\share\README.md",
+        ),
+    ] {
+        let native: NativePathString =
+            serde_json::from_value(serde_json::json!(value)).expect("native path string");
+        let path = native
+            .to_path_uri(convention)
+            .expect("absolute native path should parse");
+
+        assert_eq!(path.to_string(), expected_uri, "parsing {value}");
+        assert_eq!(
+            NativePathString::from_path_uri(&path, convention).map(NativePathString::into_string),
+            Ok(expected_native.to_string()),
+            "rendering normalized {value}"
+        );
+    }
+}
+
+#[test]
+fn native_path_string_rejects_invalid_native_paths() {
+    for (value, convention) in [
+        ("relative/path", PathConvention::Posix),
+        ("relative\\path", PathConvention::Windows),
+        (r"C:relative", PathConvention::Windows),
+        (r"\\server", PathConvention::Windows),
+        (r"C:\invalid?name", PathConvention::Windows),
+        (r"C:\workspace\D:\file.rs", PathConvention::Windows),
+    ] {
+        let native: NativePathString =
+            serde_json::from_value(serde_json::json!(value)).expect("native path string");
+
+        assert!(matches!(
+            native.to_path_uri(convention),
+            Err(NativePathStringError::InvalidNativePath { .. })
+        ));
+    }
+}

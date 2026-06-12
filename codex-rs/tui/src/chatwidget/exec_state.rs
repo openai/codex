@@ -77,7 +77,7 @@ pub(super) fn command_execution_command_and_parsed(
         command_actions
             .iter()
             .cloned()
-            .map(codex_app_server_protocol::CommandAction::into_core)
+            .map(codex_app_server_protocol::CommandAction::into_core_for_native_host)
             .collect(),
     )
 }

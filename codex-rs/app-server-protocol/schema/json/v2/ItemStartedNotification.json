@@ -82,7 +82,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/NativePathString"
             },
             "type": {
               "enum": [
@@ -393,6 +393,9 @@
           "type": "string"
         }
       ]
+    },
+    "NativePathString": {
+      "type": "string"
     },
     "PatchApplyStatus": {
       "enum": [

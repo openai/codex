@@ -31,13 +31,19 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SubAgentActivityKind as CoreSubAgentActivityKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::NativePathString;
+use codex_utils_path_uri::NativePathStringError;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_with::serde_as;
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
+use thiserror::Error;
 use ts_rs::TS;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -108,7 +114,7 @@ pub enum CommandAction {
     Read {
         command: String,
         name: String,
-        path: AbsolutePathBuf,
+        path: NativePathString,
     },
     ListFiles {
         command: String,
@@ -122,6 +128,35 @@ pub enum CommandAction {
     Unknown {
         command: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedCommandAction {
+    Read {
+        command: String,
+        name: String,
+        path: PathUri,
+    },
+    ListFiles {
+        command: String,
+        path: Option<String>,
+    },
+    Search {
+        command: String,
+        query: Option<String>,
+        path: Option<String>,
+    },
+    Unknown {
+        command: String,
+    },
+}
+
+#[derive(Debug, Error)]
+pub enum CommandActionPathError {
+    #[error(transparent)]
+    NativePath(#[from] NativePathStringError),
+    #[error(transparent)]
+    Io(#[from] io::Error),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -163,46 +198,127 @@ impl From<CoreMemoryCitationEntry> for MemoryCitationEntry {
 }
 
 impl CommandAction {
-    pub fn into_core(self) -> CoreParsedCommand {
+    pub fn resolve(
+        self,
+        convention: PathConvention,
+    ) -> Result<ResolvedCommandAction, NativePathStringError> {
         match self {
             CommandAction::Read {
                 command: cmd,
                 name,
                 path,
-            } => CoreParsedCommand::Read {
-                cmd,
+            } => Ok(ResolvedCommandAction::Read {
+                command: cmd,
                 name,
-                path: path.into_path_buf(),
-            },
+                path: path.to_path_uri(convention)?,
+            }),
             CommandAction::ListFiles { command: cmd, path } => {
-                CoreParsedCommand::ListFiles { cmd, path }
+                Ok(ResolvedCommandAction::ListFiles { command: cmd, path })
             }
             CommandAction::Search {
                 command: cmd,
                 query,
                 path,
-            } => CoreParsedCommand::Search { cmd, query, path },
-            CommandAction::Unknown { command: cmd } => CoreParsedCommand::Unknown { cmd },
-        }
-    }
-
-    pub fn from_core_with_cwd(value: CoreParsedCommand, cwd: &AbsolutePathBuf) -> Self {
-        match value {
-            CoreParsedCommand::Read { cmd, name, path } => CommandAction::Read {
-                command: cmd,
-                name,
-                path: cwd.join(path),
-            },
-            CoreParsedCommand::ListFiles { cmd, path } => {
-                CommandAction::ListFiles { command: cmd, path }
-            }
-            CoreParsedCommand::Search { cmd, query, path } => CommandAction::Search {
+            } => Ok(ResolvedCommandAction::Search {
                 command: cmd,
                 query,
                 path,
-            },
-            CoreParsedCommand::Unknown { cmd } => CommandAction::Unknown { command: cmd },
+            }),
+            CommandAction::Unknown { command: cmd } => {
+                Ok(ResolvedCommandAction::Unknown { command: cmd })
+            }
         }
+    }
+
+    pub fn into_core_for_native_host(self) -> CoreParsedCommand {
+        let command = self.command().to_string();
+        let Ok(action) = self.resolve(PathConvention::native()) else {
+            return CoreParsedCommand::Unknown { cmd: command };
+        };
+        action
+            .try_into_core_for_native_host()
+            .unwrap_or(CoreParsedCommand::Unknown { cmd: command })
+    }
+
+    pub fn from_core_with_cwd(
+        value: CoreParsedCommand,
+        cwd: &AbsolutePathBuf,
+        convention: PathConvention,
+    ) -> Self {
+        let command = core_parsed_command_text(&value).to_string();
+        Self::try_from_core_with_cwd(value, cwd, convention)
+            .unwrap_or(CommandAction::Unknown { command })
+    }
+
+    pub fn try_from_core_with_cwd(
+        value: CoreParsedCommand,
+        cwd: &AbsolutePathBuf,
+        convention: PathConvention,
+    ) -> Result<Self, CommandActionPathError> {
+        match value {
+            CoreParsedCommand::Read { cmd, name, path } => {
+                let path = cwd.join(path);
+                let path = PathUri::from_abs_path(&path)?;
+                let path = NativePathString::from_path_uri(&path, convention)?;
+                Ok(CommandAction::Read {
+                    command: cmd,
+                    name,
+                    path,
+                })
+            }
+            CoreParsedCommand::ListFiles { cmd, path } => {
+                Ok(CommandAction::ListFiles { command: cmd, path })
+            }
+            CoreParsedCommand::Search { cmd, query, path } => Ok(CommandAction::Search {
+                command: cmd,
+                query,
+                path,
+            }),
+            CoreParsedCommand::Unknown { cmd } => Ok(CommandAction::Unknown { command: cmd }),
+        }
+    }
+
+    fn command(&self) -> &str {
+        match self {
+            Self::Read { command, .. }
+            | Self::ListFiles { command, .. }
+            | Self::Search { command, .. }
+            | Self::Unknown { command } => command,
+        }
+    }
+}
+
+impl ResolvedCommandAction {
+    pub fn try_into_core_for_native_host(self) -> io::Result<CoreParsedCommand> {
+        match self {
+            Self::Read {
+                command: cmd,
+                name,
+                path,
+            } => Ok(CoreParsedCommand::Read {
+                cmd,
+                name,
+                path: path.to_abs_path()?.into_path_buf(),
+            }),
+            Self::ListFiles { command: cmd, path } => {
+                Ok(CoreParsedCommand::ListFiles { cmd, path })
+            }
+            Self::Search {
+                command: cmd,
+                query,
+                path,
+            } => Ok(CoreParsedCommand::Search { cmd, query, path }),
+            Self::Unknown { command: cmd } => Ok(CoreParsedCommand::Unknown { cmd }),
+        }
+    }
+}
+
+fn core_parsed_command_text(command: &CoreParsedCommand) -> &str {
+    match command {
+        CoreParsedCommand::Read { cmd, .. }
+        | CoreParsedCommand::ListFiles { cmd, .. }
+        | CoreParsedCommand::Search { cmd, .. }
+        | CoreParsedCommand::Unknown { cmd } => cmd,
     }
 }
 

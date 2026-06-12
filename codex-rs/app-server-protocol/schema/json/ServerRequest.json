@@ -164,7 +164,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/NativePathString"
             },
             "type": {
               "enum": [
@@ -1427,6 +1427,9 @@
         "threadId"
       ],
       "type": "object"
+    },
+    "NativePathString": {
+      "type": "string"
     },
     "NetworkApprovalContext": {
       "properties": {

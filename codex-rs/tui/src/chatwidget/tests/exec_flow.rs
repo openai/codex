@@ -350,7 +350,13 @@ async fn exec_end_without_begin_uses_event_command() {
     ];
     let command_actions = codex_shell_command::parse_command::parse_command(&command)
         .into_iter()
-        .map(|parsed| AppServerCommandAction::from_core_with_cwd(parsed, &chat.config.cwd))
+        .map(|parsed| {
+            AppServerCommandAction::from_core_with_cwd(
+                parsed,
+                &chat.config.cwd,
+                codex_utils_path_uri::PathConvention::native(),
+            )
+        })
         .collect();
     let cwd = chat.config.cwd.clone();
     handle_exec_end(

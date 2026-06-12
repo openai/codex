@@ -34,6 +34,7 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_shell_command::parse_command::parse_command;
 use codex_shell_command::parse_command::shlex_join;
+use codex_utils_path_uri::PathConvention;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -77,7 +78,9 @@ pub fn build_command_execution_approval_request_item(
             .parsed_cmd
             .iter()
             .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
+            .map(|parsed| {
+                CommandAction::from_core_with_cwd(parsed, &payload.cwd, PathConvention::native())
+            })
             .collect(),
         aggregated_output: None,
         exit_code: None,
@@ -97,7 +100,9 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
             .parsed_cmd
             .iter()
             .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
+            .map(|parsed| {
+                CommandAction::from_core_with_cwd(parsed, &payload.cwd, PathConvention::native())
+            })
             .collect(),
         aggregated_output: None,
         exit_code: None,
@@ -124,7 +129,9 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
             .parsed_cmd
             .iter()
             .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
+            .map(|parsed| {
+                CommandAction::from_core_with_cwd(parsed, &payload.cwd, PathConvention::native())
+            })
             .collect(),
         aggregated_output,
         exit_code: Some(payload.exit_code),
@@ -180,7 +187,9 @@ pub fn build_item_from_guardian_event(
             } else {
                 parsed_cmd
                     .into_iter()
-                    .map(|parsed| CommandAction::from_core_with_cwd(parsed, cwd))
+                    .map(|parsed| {
+                        CommandAction::from_core_with_cwd(parsed, cwd, PathConvention::native())
+                    })
                     .collect()
             };
             Some(ThreadItem::CommandExecution {

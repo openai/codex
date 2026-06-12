@@ -779,7 +779,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/NativePathString"
             },
             "type": {
               "enum": [
@@ -2446,6 +2446,9 @@
         "verifications"
       ],
       "type": "object"
+    },
+    "NativePathString": {
+      "type": "string"
     },
     "NetworkAccess": {
       "enum": [

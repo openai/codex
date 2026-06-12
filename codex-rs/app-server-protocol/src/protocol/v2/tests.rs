@@ -21,6 +21,7 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
+use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
@@ -55,6 +56,59 @@ fn absolute_path(path: &str) -> AbsolutePathBuf {
 
 fn test_absolute_path() -> AbsolutePathBuf {
     absolute_path("readable")
+}
+
+#[test]
+fn command_action_read_round_trips_as_a_native_path_string() {
+    let cwd = absolute_path("workspace");
+    let action = CommandAction::try_from_core_with_cwd(
+        CoreParsedCommand::Read {
+            cmd: "cat README.md".to_string(),
+            name: "README.md".to_string(),
+            path: PathBuf::from("README.md"),
+        },
+        &cwd,
+        codex_utils_path_uri::PathConvention::native(),
+    )
+    .expect("native command action path");
+    let value = serde_json::to_value(&action).expect("serialize command action");
+
+    assert_eq!(
+        value,
+        json!({
+            "type": "read",
+            "command": "cat README.md",
+            "name": "README.md",
+            "path": cwd.join("README.md").display().to_string(),
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<CommandAction>(value).expect("deserialize command action"),
+        action
+    );
+}
+
+#[test]
+fn command_action_read_resolves_foreign_native_path_to_path_uri() {
+    let action: CommandAction = serde_json::from_value(json!({
+        "type": "read",
+        "command": "type README.md",
+        "name": "README.md",
+        "path": "C:\\workspace\\README.md",
+    }))
+    .expect("deserialize Windows command action");
+
+    assert_eq!(
+        action
+            .resolve(codex_utils_path_uri::PathConvention::Windows)
+            .expect("resolve Windows command path"),
+        ResolvedCommandAction::Read {
+            command: "type README.md".to_string(),
+            name: "README.md".to_string(),
+            path: codex_utils_path_uri::PathUri::parse("file:///C:/workspace/README.md")
+                .expect("Windows path URI"),
+        }
+    );
 }
 
 #[test]

@@ -113,6 +113,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestU
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -564,7 +565,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             let command_actions = parsed_cmd
                 .iter()
                 .cloned()
-                .map(|parsed| V2ParsedCommand::from_core_with_cwd(parsed, &cwd))
+                .map(|parsed| {
+                    V2ParsedCommand::from_core_with_cwd(parsed, &cwd, PathConvention::native())
+                })
                 .collect::<Vec<_>>();
             let presentation = if let Some(network_approval_context) =
                 network_approval_context.map(V2NetworkApprovalContext::from)

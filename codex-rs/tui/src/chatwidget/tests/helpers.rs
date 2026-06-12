@@ -811,7 +811,13 @@ pub(super) fn begin_exec_with_source(
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
     let command_actions = codex_shell_command::parse_command::parse_command(&command)
         .into_iter()
-        .map(|parsed| AppServerCommandAction::from_core_with_cwd(parsed, &chat.config.cwd))
+        .map(|parsed| {
+            AppServerCommandAction::from_core_with_cwd(
+                parsed,
+                &chat.config.cwd,
+                codex_utils_path_uri::PathConvention::native(),
+            )
+        })
         .collect();
     let item = AppServerThreadItem::CommandExecution {
         id: call_id.to_string(),
