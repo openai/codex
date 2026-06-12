@@ -1,7 +1,5 @@
 #![allow(warnings, clippy::all)]
 
-use chrono::DateTime;
-use chrono::Utc;
 use codex_utils_path as path_utils;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
@@ -139,34 +137,19 @@ pub struct ThreadListConfig<'a> {
     pub layout: ThreadListLayout,
 }
 
-/// Pagination cursor identifying the last item in a page.
+/// Pagination cursor identifying the timestamp of the last item in a page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
     ts: OffsetDateTime,
-    thread_id: Option<ThreadId>,
 }
 
 impl Cursor {
     fn new(ts: OffsetDateTime) -> Self {
-        Self {
-            ts,
-            thread_id: None,
-        }
-    }
-
-    fn with_thread_id(ts: OffsetDateTime, thread_id: ThreadId) -> Self {
-        Self {
-            ts,
-            thread_id: Some(thread_id),
-        }
+        Self { ts }
     }
 
     pub(crate) fn timestamp(&self) -> OffsetDateTime {
         self.ts
-    }
-
-    pub(crate) fn thread_id(&self) -> Option<ThreadId> {
-        self.thread_id
     }
 }
 
@@ -304,10 +287,7 @@ impl serde::Serialize for Cursor {
             .ts
             .format(&Rfc3339)
             .map_err(|e| serde::ser::Error::custom(format!("format error: {e}")))?;
-        match self.thread_id {
-            Some(thread_id) => serializer.serialize_str(&format!("{ts_str}|{thread_id}")),
-            None => serializer.serialize_str(&ts_str),
-        }
+        serializer.serialize_str(&ts_str)
     }
 }
 
@@ -328,10 +308,7 @@ impl From<codex_state::Anchor> for Cursor {
             .timestamp_nanos_opt()
             .and_then(|nanos| OffsetDateTime::from_unix_timestamp_nanos(nanos as i128).ok())
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-        match anchor.thread_id {
-            Some(thread_id) => Self::with_thread_id(ts, thread_id),
-            None => Self::new(ts),
-        }
+        Self::new(ts)
     }
 }
 
@@ -725,29 +702,21 @@ async fn traverse_flat_paths_updated(
     })
 }
 
-/// Pagination cursor token format: an RFC3339 timestamp with an optional thread ID tie-breaker.
+/// Pagination cursor token format: an RFC3339 timestamp.
 pub fn parse_cursor(token: &str) -> Option<Cursor> {
-    let mut parts = token.split('|');
-    let timestamp = parts.next()?;
-    let thread_id = parts.next().map(ThreadId::from_string).transpose().ok()?;
-    if parts.next().is_some() {
+    if token.contains('|') {
         return None;
     }
 
-    let ts = OffsetDateTime::parse(timestamp, &Rfc3339)
-        .ok()
-        .or_else(|| {
-            let format: &[FormatItem] =
-                format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-            PrimitiveDateTime::parse(timestamp, format)
-                .ok()
-                .map(PrimitiveDateTime::assume_utc)
-        })?;
+    let ts = OffsetDateTime::parse(token, &Rfc3339).ok().or_else(|| {
+        let format: &[FormatItem] =
+            format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+        PrimitiveDateTime::parse(token, format)
+            .ok()
+            .map(PrimitiveDateTime::assume_utc)
+    })?;
 
-    Some(match thread_id {
-        Some(thread_id) => Cursor::with_thread_id(ts, thread_id),
-        None => Cursor::new(ts),
-    })
+    Some(Cursor::new(ts))
 }
 
 fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cursor> {
@@ -971,13 +940,6 @@ pub(crate) fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDa
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let ts = PrimitiveDateTime::parse(ts_str, format).ok()?.assume_utc();
     Some((ts, uuid))
-}
-
-/// Returns the creation timestamp encoded in a rollout filename.
-pub fn rollout_filename_timestamp(path: &Path) -> Option<DateTime<Utc>> {
-    let rollout_file = compression::RolloutFile::from_path(path.to_path_buf())?;
-    let (timestamp, _) = parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())?;
-    DateTime::from_timestamp(timestamp.unix_timestamp(), timestamp.nanosecond())
 }
 
 struct ThreadCandidate {

@@ -1207,17 +1207,6 @@ pub(super) fn push_thread_filters<'a>(
         builder.push(operator);
         builder.push(" ");
         builder.push_bind(anchor_ts);
-        if let Some(thread_id) = anchor.thread_id {
-            builder.push(" OR (");
-            builder.push(column);
-            builder.push(" = ");
-            builder.push_bind(anchor_ts);
-            builder.push(" AND threads.id ");
-            builder.push(operator);
-            builder.push(" ");
-            builder.push_bind(thread_id.to_string());
-            builder.push(")");
-        }
         builder.push(")");
     }
 }
@@ -1256,8 +1245,6 @@ pub(super) fn push_thread_order_and_limit(
     }
     builder.push(order_column);
     builder.push(" ");
-    builder.push(order_direction);
-    builder.push(", threads.id ");
     builder.push(order_direction);
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
@@ -1533,7 +1520,6 @@ mod tests {
 
         let anchor = Anchor {
             ts: older_updated_at,
-            thread_id: None,
         };
         let model_providers = ["test-provider".to_string()];
         let page = runtime
@@ -1560,7 +1546,6 @@ mod tests {
             Some(Anchor {
                 ts: DateTime::<Utc>::from_timestamp_millis(1_700_000_200_000)
                     .expect("valid timestamp"),
-                thread_id: Some(newer_id),
             })
         );
 
@@ -1645,7 +1630,6 @@ mod tests {
             Some(Anchor {
                 ts: DateTime::<Utc>::from_timestamp_millis(1_700_000_300_000)
                     .expect("valid timestamp"),
-                thread_id: Some(second_id),
             })
         );
 
@@ -1708,7 +1692,6 @@ mod tests {
         ];
         let anchor = Anchor {
             ts: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("valid timestamp"),
-            thread_id: None,
         };
         for (sort_key, visible_index, cwd_index) in [
             (
@@ -1790,7 +1773,7 @@ mod tests {
 
         for (thread_id, created_at) in [
             (first_child_id, 1_700_000_100),
-            (second_child_id, 1_700_000_100),
+            (second_child_id, 1_700_000_200),
             (grandchild_id, 1_700_000_300),
         ] {
             let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());

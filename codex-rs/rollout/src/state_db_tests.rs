@@ -27,31 +27,7 @@ fn cursor_to_anchor_normalizes_timestamp_format() {
         .with_nanosecond(0)
         .expect("nanosecond");
 
-    assert_eq!(
-        anchor,
-        codex_state::Anchor {
-            ts: expected_ts,
-            thread_id: None,
-        }
-    );
-}
-
-#[test]
-fn cursor_to_anchor_preserves_thread_id_tie_breaker() {
-    let thread_id =
-        ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread id");
-    let cursor =
-        parse_cursor(&format!("2026-01-27T12:34:56Z|{thread_id}")).expect("cursor should parse");
-
-    assert_eq!(
-        cursor_to_anchor(Some(&cursor)),
-        Some(codex_state::Anchor {
-            ts: DateTime::parse_from_rfc3339("2026-01-27T12:34:56Z")
-                .expect("valid timestamp")
-                .with_timezone(&Utc),
-            thread_id: Some(thread_id),
-        })
-    );
+    assert_eq!(anchor.ts, expected_ts);
 }
 
 #[tokio::test]

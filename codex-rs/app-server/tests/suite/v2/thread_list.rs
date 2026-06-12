@@ -1774,34 +1774,34 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_list_backwards_cursor_includes_same_timestamp_rows_for_forward_sync() -> Result<()>
-{
+async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
 
-    let _id_old = create_fake_rollout(
+    let id_old = create_fake_rollout(
         codex_home.path(),
-        "2025-02-02T00-00-00",
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let id_watermark = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T11-00-00",
+        "2025-02-01T11:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T10-00-00", &id_old).as_path(),
         "2025-02-02T00:00:00Z",
-        "Hello",
-        Some("mock_provider"),
-        /*git_info*/ None,
     )?;
-    let id_watermark_a = create_fake_rollout(
-        codex_home.path(),
-        "2025-02-03T00-00-00",
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T11-00-00", &id_watermark).as_path(),
         "2025-02-03T00:00:00Z",
-        "Hello",
-        Some("mock_provider"),
-        /*git_info*/ None,
-    )?;
-    let id_watermark_b = create_fake_rollout(
-        codex_home.path(),
-        "2025-02-03T00-00-00",
-        "2025-02-03T00:00:00Z",
-        "Hello",
-        Some("mock_provider"),
-        /*git_info*/ None,
     )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
@@ -1815,7 +1815,7 @@ async fn thread_list_backwards_cursor_includes_same_timestamp_rows_for_forward_s
             .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
                 cursor: None,
                 limit: Some(1),
-                sort_key: Some(ThreadSortKey::CreatedAt),
+                sort_key: Some(ThreadSortKey::UpdatedAt),
                 sort_direction: Some(SortDirection::Desc),
                 model_providers: Some(vec!["mock_provider".to_string()]),
                 source_kinds: None,
@@ -1833,21 +1833,24 @@ async fn thread_list_backwards_cursor_includes_same_timestamp_rows_for_forward_s
         .await??;
         to_response::<ThreadListResponse>(resp)?
     };
-    let ids_page1: Vec<_> = page1.iter().map(|thread| thread.id.clone()).collect();
-    let mut watermark_ids = vec![id_watermark_a, id_watermark_b];
-    watermark_ids.sort();
-    assert_eq!(ids_page1, vec![watermark_ids[1].clone()]);
+    let ids_page1: Vec<_> = page1.iter().map(|thread| thread.id.as_str()).collect();
+    assert_eq!(ids_page1, vec![id_watermark.as_str()]);
     let backwards_cursor = backwards_cursor.expect("expected backwardsCursor on first page");
     assert_eq!(backwards_cursor, "2025-02-02T23:59:59.999Z");
 
     let id_new = create_fake_rollout(
         codex_home.path(),
-        "2025-02-04T00-00-00",
-        "2025-02-04T00:00:00Z",
+        "2025-02-01T12-00-00",
+        "2025-02-01T12:00:00Z",
         "Hello",
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T12-00-00", &id_new).as_path(),
+        "2025-02-04T00:00:00Z",
+    )?;
+
     let ThreadListResponse {
         data: delta_page, ..
     } = {
@@ -1855,7 +1858,7 @@ async fn thread_list_backwards_cursor_includes_same_timestamp_rows_for_forward_s
             .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
                 cursor: Some(backwards_cursor),
                 limit: Some(10),
-                sort_key: Some(ThreadSortKey::CreatedAt),
+                sort_key: Some(ThreadSortKey::UpdatedAt),
                 sort_direction: Some(SortDirection::Asc),
                 model_providers: Some(vec!["mock_provider".to_string()]),
                 source_kinds: None,
@@ -1873,9 +1876,8 @@ async fn thread_list_backwards_cursor_includes_same_timestamp_rows_for_forward_s
         .await??;
         to_response::<ThreadListResponse>(resp)?
     };
-    let ids_delta: Vec<_> = delta_page.iter().map(|thread| thread.id.clone()).collect();
-    watermark_ids.push(id_new);
-    assert_eq!(ids_delta, watermark_ids);
+    let ids_delta: Vec<_> = delta_page.iter().map(|thread| thread.id.as_str()).collect();
+    assert_eq!(ids_delta, vec![id_watermark.as_str(), id_new.as_str()]);
 
     Ok(())
 }
