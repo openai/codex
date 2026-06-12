@@ -811,6 +811,9 @@ mod tests {
         .expect("config layer stack");
 
         let rendered = render_stack_to_text(&stack);
+        #[cfg(not(windows))]
+        insta::assert_snapshot!("debug_config_requirement_sources", rendered.as_str());
+
         let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
         assert!(rendered.contains(&format!(
             "allowed_approval_policies: on-request (source: {requirements_source})"
