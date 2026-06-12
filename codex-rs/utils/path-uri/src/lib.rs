@@ -17,6 +17,12 @@ use thiserror::Error;
 use ts_rs::TS;
 use url::Url;
 
+mod native_path_string;
+
+pub use native_path_string::NativePathString;
+pub use native_path_string::NativePathStringError;
+pub use native_path_string::PathConvention;
+
 pub const FILE_SCHEME: &str = "file";
 const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";
 
@@ -115,6 +121,10 @@ impl PathUri {
     /// `file://server/share/file.rs` has the path `/share/file.rs`.
     pub fn encoded_path(&self) -> &str {
         self.0.path()
+    }
+
+    fn is_opaque_fallback(&self) -> bool {
+        decode_bad_path_uri(&self.0).is_some()
     }
 
     /// Returns the decoded final URI path segment, or `None` for the URI root
