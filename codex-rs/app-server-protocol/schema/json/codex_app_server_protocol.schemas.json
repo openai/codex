@@ -12536,6 +12536,12 @@
             },
             "type": "array"
           },
+          "shareUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "skills": {
             "items": {
               "$ref": "#/definitions/v2/SkillSummary"
