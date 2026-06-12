@@ -22,8 +22,8 @@ pub fn cloud_config_bundle_loader(
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
     let (loader, publisher) = CloudConfigBundleLoader::pending();
-    // Intentionally detach the task that owns startup and refresh. Publishing
-    // stops the lifecycle if this loader and all clones were dropped.
+    // This task owns startup and background refresh, and exits once every
+    // associated loader has been dropped.
     drop(tokio::spawn(async move {
         let result = service.load_startup_bundle().await;
         let (initial_bundle, refresh_in) = match result {
