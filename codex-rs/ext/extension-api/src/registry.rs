@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use codex_protocol::protocol::ReviewDecision;
-
 use crate::ApprovalReviewContributor;
+use crate::ApprovalReviewError;
+use crate::ApprovalReviewInput;
+use crate::ApprovalReviewOutcome;
 use crate::ConfigContributor;
 use crate::ContextContributor;
-use crate::ExtensionData;
 use crate::ExtensionEventSink;
 use crate::McpServerContributor;
 use crate::NoopExtensionEventSink;
@@ -190,24 +190,22 @@ impl<C: Sync> ExtensionRegistry<C> {
         &self.token_usage_contributors
     }
 
-    /// Claims the first rendered approval-review prompt accepted by an
-    /// installed contributor.
+    /// Returns the first non-abstaining approval-review contribution.
+    ///
+    /// Contributors run in registration order. Errors stop dispatch so the
+    /// host can fail closed instead of silently falling through.
     pub async fn approval_review(
         &self,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-        prompt: &str,
-    ) -> Option<ReviewDecision> {
+        input: ApprovalReviewInput<'_>,
+    ) -> Result<ApprovalReviewOutcome, ApprovalReviewError> {
         for contributor in &self.approval_review_contributors {
-            if let Some(decision) = contributor
-                .contribute(session_store, thread_store, prompt)
-                .await
-            {
-                return Some(decision);
+            match contributor.review(input).await? {
+                ApprovalReviewOutcome::Abstain => {}
+                outcome @ ApprovalReviewOutcome::Decision(_) => return Ok(outcome),
             }
         }
 
-        None
+        Ok(ApprovalReviewOutcome::Abstain)
     }
 
     /// Returns the registered prompt contributors.

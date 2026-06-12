@@ -2,6 +2,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use codex_extension_api::ApprovalReviewContributor;
+use codex_extension_api::ApprovalReviewError;
+use codex_extension_api::ApprovalReviewInput;
+use codex_extension_api::ApprovalReviewOutcome;
+use codex_extension_api::ApprovalReviewSource;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
@@ -21,8 +25,11 @@ use codex_extension_api::TurnInputContributor;
 use codex_extension_api::TurnItemContributor;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::empty_extension_registry;
+use codex_protocol::approvals::GuardianAssessmentAction;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::items::HookPromptItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
@@ -92,15 +99,15 @@ impl TurnItemContributor for AllContributors {
 }
 
 impl ApprovalReviewContributor for AllContributors {
-    fn contribute<'a>(
+    fn review<'a>(
         &'a self,
-        _session_store: &'a ExtensionData,
-        _thread_store: &'a ExtensionData,
-        _prompt: &'a str,
-    ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
+        _input: ApprovalReviewInput<'a>,
+    ) -> ExtensionFuture<'a, Result<ApprovalReviewOutcome, ApprovalReviewError>> {
         Box::pin(async move {
             let _self = self;
-            Some(ReviewDecision::ApprovedForSession)
+            Ok(ApprovalReviewOutcome::Decision(
+                ReviewDecision::ApprovedForSession,
+            ))
         })
     }
 }
@@ -132,13 +139,17 @@ async fn build_round_trips_every_contributor_category() {
     assert_eq!(registry.turn_item_contributors().len(), 1);
     assert_eq!(
         registry
-            .approval_review(
+            .approval_review(approval_review_input(
                 &ExtensionData::new("session"),
                 &ExtensionData::new("thread"),
-                "review this",
-            )
+                &ExtensionData::new("turn"),
+                &test_action(),
+                &AskForApproval::OnRequest,
+            ))
             .await,
-        Some(ReviewDecision::ApprovedForSession)
+        Ok(ApprovalReviewOutcome::Decision(
+            ReviewDecision::ApprovedForSession
+        ))
     );
 }
 
@@ -226,39 +237,85 @@ async fn contributors_preserve_registration_order() {
     );
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 struct ApprovalCall {
     contributor: &'static str,
     session_id: String,
     thread_id: String,
+    turn_store_id: String,
+    review_id: String,
+    turn_id: String,
+    target_item_id: Option<String>,
     prompt: String,
+    action: GuardianAssessmentAction,
+    reviewer: ApprovalsReviewer,
+    approval_policy: AskForApproval,
+    retry_reason: Option<String>,
+    source: ApprovalReviewSource,
 }
 
 struct RecordingApprovalContributor {
     name: &'static str,
-    decision: Option<ReviewDecision>,
+    result: Result<ApprovalReviewOutcome, ApprovalReviewError>,
     calls: Arc<Mutex<Vec<ApprovalCall>>>,
 }
 
 impl ApprovalReviewContributor for RecordingApprovalContributor {
-    fn contribute<'a>(
+    fn review<'a>(
         &'a self,
-        session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
-        prompt: &'a str,
-    ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
+        input: ApprovalReviewInput<'a>,
+    ) -> ExtensionFuture<'a, Result<ApprovalReviewOutcome, ApprovalReviewError>> {
         Box::pin(async move {
             self.calls
                 .lock()
                 .unwrap_or_else(|error| panic!("approval calls lock poisoned: {error}"))
                 .push(ApprovalCall {
                     contributor: self.name,
-                    session_id: session_store.level_id().to_string(),
-                    thread_id: thread_store.level_id().to_string(),
-                    prompt: prompt.to_string(),
+                    session_id: input.session_store.level_id().to_string(),
+                    thread_id: input.thread_store.level_id().to_string(),
+                    turn_store_id: input.turn_store.level_id().to_string(),
+                    review_id: input.review_id.to_string(),
+                    turn_id: input.turn_id.to_string(),
+                    target_item_id: input.target_item_id.map(str::to_string),
+                    prompt: input.prompt.to_string(),
+                    action: input.action.clone(),
+                    reviewer: input.reviewer,
+                    approval_policy: input.approval_policy.clone(),
+                    retry_reason: input.retry_reason.map(str::to_string),
+                    source: input.source,
                 });
-            self.decision.clone()
+            self.result.clone()
         })
+    }
+}
+
+fn test_action() -> GuardianAssessmentAction {
+    GuardianAssessmentAction::RequestPermissions {
+        reason: Some("run delegated command".to_string()),
+        permissions: Default::default(),
+    }
+}
+
+fn approval_review_input<'a>(
+    session_store: &'a ExtensionData,
+    thread_store: &'a ExtensionData,
+    turn_store: &'a ExtensionData,
+    action: &'a GuardianAssessmentAction,
+    approval_policy: &'a AskForApproval,
+) -> ApprovalReviewInput<'a> {
+    ApprovalReviewInput {
+        session_store,
+        thread_store,
+        turn_store,
+        review_id: "review-1",
+        turn_id: "turn-1",
+        target_item_id: Some("item-1"),
+        prompt: "allow delegated command?",
+        action,
+        reviewer: ApprovalsReviewer::AutoReview,
+        approval_policy,
+        retry_reason: Some("initial review timed out"),
+        source: ApprovalReviewSource::DelegatedSubagent,
     }
 }
 
@@ -266,44 +323,109 @@ impl ApprovalReviewContributor for RecordingApprovalContributor {
 async fn approval_review_returns_first_claim_and_short_circuits() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mut builder = ExtensionRegistryBuilder::<()>::new();
-    for (name, decision) in [
-        ("first", None),
-        ("second", Some(ReviewDecision::Approved)),
-        ("third", Some(ReviewDecision::Denied)),
+    for (name, result) in [
+        ("first", Ok(ApprovalReviewOutcome::Abstain)),
+        (
+            "second",
+            Ok(ApprovalReviewOutcome::Decision(ReviewDecision::Approved)),
+        ),
+        (
+            "third",
+            Ok(ApprovalReviewOutcome::Decision(ReviewDecision::Denied)),
+        ),
     ] {
         builder.approval_review_contributor(Arc::new(RecordingApprovalContributor {
             name,
-            decision,
+            result,
             calls: Arc::clone(&calls),
         }));
     }
     let registry = builder.build();
+    let session_store = ExtensionData::new("session-1");
+    let thread_store = ExtensionData::new("thread-1");
+    let turn_store = ExtensionData::new("turn-store-1");
+    let action = test_action();
+    let approval_policy = AskForApproval::OnRequest;
 
     let decision = registry
-        .approval_review(
-            &ExtensionData::new("session-1"),
-            &ExtensionData::new("thread-1"),
-            "allow command?",
-        )
+        .approval_review(approval_review_input(
+            &session_store,
+            &thread_store,
+            &turn_store,
+            &action,
+            &approval_policy,
+        ))
         .await;
 
-    assert_eq!(decision, Some(ReviewDecision::Approved));
+    assert_eq!(
+        decision,
+        Ok(ApprovalReviewOutcome::Decision(ReviewDecision::Approved))
+    );
+    let expected_call = |contributor| ApprovalCall {
+        contributor,
+        session_id: "session-1".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_store_id: "turn-store-1".to_string(),
+        review_id: "review-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        target_item_id: Some("item-1".to_string()),
+        prompt: "allow delegated command?".to_string(),
+        action: action.clone(),
+        reviewer: ApprovalsReviewer::AutoReview,
+        approval_policy: AskForApproval::OnRequest,
+        retry_reason: Some("initial review timed out".to_string()),
+        source: ApprovalReviewSource::DelegatedSubagent,
+    };
     assert_eq!(
         calls.lock().expect("approval calls lock").as_slice(),
-        [
-            ApprovalCall {
-                contributor: "first",
-                session_id: "session-1".to_string(),
-                thread_id: "thread-1".to_string(),
-                prompt: "allow command?".to_string(),
-            },
-            ApprovalCall {
-                contributor: "second",
-                session_id: "session-1".to_string(),
-                thread_id: "thread-1".to_string(),
-                prompt: "allow command?".to_string(),
-            },
-        ]
+        [expected_call("first"), expected_call("second")]
+    );
+}
+
+#[tokio::test]
+async fn approval_review_error_stops_dispatch() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut builder = ExtensionRegistryBuilder::<()>::new();
+    for (name, result) in [
+        ("first", Ok(ApprovalReviewOutcome::Abstain)),
+        ("second", Err(ApprovalReviewError::new("review failed"))),
+        (
+            "third",
+            Ok(ApprovalReviewOutcome::Decision(ReviewDecision::Approved)),
+        ),
+    ] {
+        builder.approval_review_contributor(Arc::new(RecordingApprovalContributor {
+            name,
+            result,
+            calls: Arc::clone(&calls),
+        }));
+    }
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let turn_store = ExtensionData::new("turn");
+    let action = test_action();
+    let approval_policy = AskForApproval::OnRequest;
+
+    let result = registry
+        .approval_review(approval_review_input(
+            &session_store,
+            &thread_store,
+            &turn_store,
+            &action,
+            &approval_policy,
+        ))
+        .await;
+
+    assert_eq!(result, Err(ApprovalReviewError::new("review failed")));
+    assert_eq!(
+        calls
+            .lock()
+            .expect("approval calls lock")
+            .iter()
+            .map(|call| call.contributor)
+            .collect::<Vec<_>>(),
+        ["first", "second"]
     );
 }
 
@@ -352,16 +474,23 @@ fn custom_event_sink_survives_registry_build() {
 #[tokio::test]
 async fn empty_registry_does_not_claim_approval_review() {
     let registry = empty_extension_registry::<()>();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let turn_store = ExtensionData::new("turn");
+    let action = test_action();
+    let approval_policy = AskForApproval::OnRequest;
 
     assert_eq!(
         registry
-            .approval_review(
-                &ExtensionData::new("session"),
-                &ExtensionData::new("thread"),
-                "unclaimed",
-            )
+            .approval_review(approval_review_input(
+                &session_store,
+                &thread_store,
+                &turn_store,
+                &action,
+                &approval_policy,
+            ))
             .await,
-        None
+        Ok(ApprovalReviewOutcome::Abstain)
     );
 }
 

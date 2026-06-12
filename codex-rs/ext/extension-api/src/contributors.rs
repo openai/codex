@@ -4,11 +4,13 @@ use std::sync::Arc;
 
 use codex_context_fragments::ContextualUserFragment;
 use codex_protocol::items::TurnItem;
-use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
 
+use crate::ApprovalReviewError;
+use crate::ApprovalReviewInput;
+use crate::ApprovalReviewOutcome;
 use crate::ExtensionData;
 
 mod mcp;
@@ -228,14 +230,16 @@ pub trait ToolLifecycleContributor: Send + Sync {
     }
 }
 
-/// Extension contribution that can claim rendered approval-review prompts.
+/// Extension contribution that can review structured approval requests.
+///
+/// Implementations should return [`ApprovalReviewOutcome::Abstain`] for
+/// requests they do not own. A claimed decision is authoritative, while an
+/// error must be treated as fail-closed by the host.
 pub trait ApprovalReviewContributor: Send + Sync {
-    fn contribute<'a>(
+    fn review<'a>(
         &'a self,
-        session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
-        prompt: &'a str,
-    ) -> ExtensionFuture<'a, Option<ReviewDecision>>;
+        input: ApprovalReviewInput<'a>,
+    ) -> ExtensionFuture<'a, Result<ApprovalReviewOutcome, ApprovalReviewError>>;
 }
 
 /// Ordered post-processing contribution for one parsed turn item.
