@@ -166,7 +166,11 @@ pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<(
     let version_file = version_filepath(config);
     let mut info = match read_version_info(&version_file) {
         Ok(info) => info,
-        Err(_) => return Ok(()),
+        Err(_) => VersionInfo {
+            latest_version: version.to_string(),
+            last_checked_at: Utc::now(),
+            dismissed_version: None,
+        },
     };
     info.dismissed_version = Some(version.to_string());
     let json_line = format!("{}\n", serde_json::to_string(&info)?);
@@ -176,3 +180,7 @@ pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<(
     tokio::fs::write(version_file, json_line).await?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "updates_tests.rs"]
+mod tests;
