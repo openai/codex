@@ -10489,10 +10489,8 @@ experimental_thread_config_endpoint = "http://127.0.0.1:8061"
 #[tokio::test]
 async fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
-        r#"
-experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
+        r#"experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
 experimental_realtime_webrtc_call_base_url = "http://127.0.0.1:8082/v1"
-experimental_realtime_webrtc_call_path = "realtime"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -10505,11 +10503,6 @@ experimental_realtime_webrtc_call_path = "realtime"
         cfg.experimental_realtime_webrtc_call_base_url.as_deref(),
         Some("http://127.0.0.1:8082/v1")
     );
-    assert_eq!(
-        cfg.experimental_realtime_webrtc_call_path.as_deref(),
-        Some("realtime")
-    );
-
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
         cfg,
@@ -10525,10 +10518,6 @@ experimental_realtime_webrtc_call_path = "realtime"
     assert_eq!(
         config.experimental_realtime_webrtc_call_base_url.as_deref(),
         Some("http://127.0.0.1:8082/v1")
-    );
-    assert_eq!(
-        config.experimental_realtime_webrtc_call_path.as_deref(),
-        Some("realtime")
     );
     Ok(())
 }

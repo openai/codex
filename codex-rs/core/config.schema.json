@@ -4502,10 +4502,6 @@
       "description": "Experimental / do not use. Overrides only the WebRTC realtime call creation base URL. This is separate from `experimental_realtime_ws_base_url` because WebRTC call creation is HTTP, while sideband control is websocket.",
       "type": "string"
     },
-    "experimental_realtime_webrtc_call_path": {
-      "description": "Experimental / do not use. Overrides only the WebRTC realtime call creation endpoint path. Defaults to `realtime/calls`.",
-      "type": "string"
-    },
     "experimental_realtime_ws_backend_prompt": {
       "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport instructions (the `Op::RealtimeConversation` `/ws` session.update instructions) without changing normal prompts.",
       "type": "string"

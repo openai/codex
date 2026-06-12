@@ -137,24 +137,6 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
         architecture: RealtimeConversationArchitecture,
         extra_headers: HeaderMap,
     ) -> Result<RealtimeCallResponse, ApiError> {
-        self.create_with_session_architecture_path_and_headers(
-            sdp,
-            session_config,
-            architecture,
-            extra_headers,
-            Self::path(),
-        )
-        .await
-    }
-
-    pub async fn create_with_session_architecture_path_and_headers(
-        &self,
-        sdp: String,
-        session_config: RealtimeSessionConfig,
-        architecture: RealtimeConversationArchitecture,
-        extra_headers: HeaderMap,
-        path: &str,
-    ) -> Result<RealtimeCallResponse, ApiError> {
         trace!(target: "codex_api::realtime_websocket::wire", "realtime call request SDP: {sdp}");
         // WebRTC can begin inference as soon as the peer connection comes up, so the initial
         // session payload is sent with call creation. The sideband WebSocket still sends its normal
@@ -172,9 +154,13 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime call: {err}")))?;
             let resp = self
                 .session
-                .execute_with(Method::POST, path, extra_headers, Some(body), |req| {
-                    configure_realtime_call_request(req, architecture)
-                })
+                .execute_with(
+                    Method::POST,
+                    Self::path(),
+                    extra_headers,
+                    Some(body),
+                    |req| configure_realtime_call_request(req, architecture),
+                )
                 .await?;
             let sdp = decode_sdp_response(resp.body.as_ref())?;
             let call_id = decode_call_id_from_location(&resp.headers)?;
@@ -201,7 +187,7 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
             .session
             .execute_with(
                 Method::POST,
-                path,
+                Self::path(),
                 extra_headers,
                 /*body*/ None,
                 |req| {
@@ -571,42 +557,6 @@ mod tests {
         assert_eq!(
             request.url,
             "https://api.openai.com/v1/realtime/calls?intent=quicksilver&architecture=avas"
-        );
-    }
-
-    #[tokio::test]
-    async fn sends_session_call_to_custom_path() {
-        let transport = CapturingTransport::with_location("/v1/realtime/rtc_local_test");
-        let client = RealtimeCallClient::new(
-            transport.clone(),
-            provider("http://127.0.0.1:8082/v1"),
-            Arc::new(DummyAuth),
-        );
-
-        let response = client
-            .create_with_session_architecture_path_and_headers(
-                "v=offer\r\n".to_string(),
-                realtime_session_config("sess-api"),
-                RealtimeConversationArchitecture::Avas,
-                HeaderMap::new(),
-                "realtime",
-            )
-            .await
-            .expect("request should succeed");
-
-        assert_eq!(
-            response,
-            RealtimeCallResponse {
-                sdp: "v=0\r\n".to_string(),
-                call_id: "rtc_local_test".to_string(),
-            }
-        );
-
-        let request = transport.last_request.lock().unwrap().clone().unwrap();
-        assert_eq!(request.method, Method::POST);
-        assert_eq!(
-            request.url,
-            "http://127.0.0.1:8082/v1/realtime?intent=quicksilver&architecture=avas"
         );
     }
 

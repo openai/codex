@@ -751,13 +751,13 @@ async fn conversation_webrtc_start_uses_avas_architecture_query() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_webrtc_start_uses_configured_call_endpoint_for_avas() -> Result<()> {
+async fn conversation_webrtc_start_uses_configured_call_base_url_for_avas() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let capture = RealtimeCallRequestCapture::new();
     Mock::given(method("POST"))
-        .and(path_regex(".*/realtime$"))
+        .and(path_regex(".*/realtime/calls$"))
         .and(capture.clone())
         .respond_with(
             ResponseTemplate::new(200)
@@ -786,7 +786,6 @@ async fn conversation_webrtc_start_uses_configured_call_endpoint_for_avas() -> R
         config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
         config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
         config.experimental_realtime_webrtc_call_base_url = Some(realtime_call_base_url);
-        config.experimental_realtime_webrtc_call_path = Some("realtime".to_string());
         config.realtime.version = RealtimeWsVersion::V1;
     });
     let test = builder.build(&server).await?;
@@ -816,7 +815,7 @@ async fn conversation_webrtc_start_uses_configured_call_endpoint_for_avas() -> R
     assert_eq!(created.sdp, "v=answer\r\n");
 
     let request = capture.single_request();
-    assert_eq!(request.url.path(), "/v1/realtime");
+    assert_eq!(request.url.path(), "/v1/realtime/calls");
     assert_eq!(
         request.url.query(),
         Some("intent=quicksilver&architecture=avas")

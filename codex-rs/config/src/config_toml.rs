@@ -376,9 +376,6 @@ pub struct ConfigToml {
     /// creation base URL. This is separate from `experimental_realtime_ws_base_url`
     /// because WebRTC call creation is HTTP, while sideband control is websocket.
     pub experimental_realtime_webrtc_call_base_url: Option<String>,
-    /// Experimental / do not use. Overrides only the WebRTC realtime call
-    /// creation endpoint path. Defaults to `realtime/calls`.
-    pub experimental_realtime_webrtc_call_path: Option<String>,
     /// Experimental / do not use. Selects the realtime websocket model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
