@@ -178,6 +178,7 @@ mod tests {
     use codex_extension_api::ApprovalReviewError;
     use codex_extension_api::ApprovalReviewInput;
     use codex_extension_api::ApprovalReviewOutcome;
+    use codex_extension_api::ApprovalReviewRequest;
     use codex_extension_api::ApprovalReviewRunner;
     use codex_extension_api::ApprovalReviewSource;
     use codex_extension_api::ExtensionData;
@@ -218,6 +219,12 @@ mod tests {
             reason: Some("run command".to_string()),
             permissions: Default::default(),
         };
+        let request = ApprovalReviewRequest::RequestPermissions {
+            id: "request".to_string(),
+            turn_id: "turn".to_string(),
+            reason: Some("run command".to_string()),
+            permissions: Default::default(),
+        };
         let approval_policy = AskForApproval::OnRequest;
         let runner = RecordingApprovalRunner(AtomicUsize::new(0));
         let input = |reviewer, approval_policy| ApprovalReviewInput {
@@ -227,6 +234,7 @@ mod tests {
             review_id: "review",
             turn_id: "turn",
             target_item_id: None,
+            request: &request,
             prompt: "review command",
             action: &action,
             reviewer,

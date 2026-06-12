@@ -1,6 +1,9 @@
 use std::path::Path;
 
 use codex_analytics::GuardianReviewedAction;
+use codex_extension_api::ApprovalReviewMcpAnnotations as GuardianMcpAnnotations;
+use codex_extension_api::ApprovalReviewNetworkAccessTrigger as GuardianNetworkAccessTrigger;
+use codex_extension_api::ApprovalReviewRequest as GuardianApprovalRequest;
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -12,95 +15,6 @@ use serde_json::Value;
 
 use super::GUARDIAN_MAX_ACTION_STRING_TOKENS;
 use super::prompt::guardian_truncate_text;
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum GuardianApprovalRequest {
-    Shell {
-        id: String,
-        command: Vec<String>,
-        cwd: AbsolutePathBuf,
-        sandbox_permissions: crate::sandboxing::SandboxPermissions,
-        additional_permissions: Option<AdditionalPermissionProfile>,
-        justification: Option<String>,
-    },
-    ExecCommand {
-        id: String,
-        command: Vec<String>,
-        cwd: AbsolutePathBuf,
-        sandbox_permissions: crate::sandboxing::SandboxPermissions,
-        additional_permissions: Option<AdditionalPermissionProfile>,
-        justification: Option<String>,
-        tty: bool,
-    },
-    #[cfg(unix)]
-    Execve {
-        id: String,
-        source: GuardianCommandSource,
-        program: String,
-        argv: Vec<String>,
-        cwd: AbsolutePathBuf,
-        additional_permissions: Option<AdditionalPermissionProfile>,
-    },
-    ApplyPatch {
-        id: String,
-        cwd: AbsolutePathBuf,
-        files: Vec<AbsolutePathBuf>,
-        patch: String,
-    },
-    NetworkAccess {
-        id: String,
-        turn_id: String,
-        target: String,
-        host: String,
-        protocol: NetworkApprovalProtocol,
-        port: u16,
-        trigger: Option<GuardianNetworkAccessTrigger>,
-    },
-    McpToolCall {
-        id: String,
-        server: String,
-        tool_name: String,
-        arguments: Option<Value>,
-        connector_id: Option<String>,
-        connector_name: Option<String>,
-        connector_description: Option<String>,
-        tool_title: Option<String>,
-        tool_description: Option<String>,
-        annotations: Option<GuardianMcpAnnotations>,
-    },
-    RequestPermissions {
-        id: String,
-        turn_id: String,
-        reason: Option<String>,
-        permissions: RequestPermissionProfile,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct GuardianNetworkAccessTrigger {
-    pub(crate) call_id: String,
-    pub(crate) tool_name: String,
-    pub(crate) command: Vec<String>,
-    pub(crate) cwd: AbsolutePathBuf,
-    pub(crate) sandbox_permissions: crate::sandboxing::SandboxPermissions,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) additional_permissions: Option<AdditionalPermissionProfile>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) justification: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) tty: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct GuardianMcpAnnotations {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) destructive_hint: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) open_world_hint: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) read_only_hint: Option<bool>,
-}
 
 #[derive(Serialize)]
 struct CommandApprovalAction<'a> {

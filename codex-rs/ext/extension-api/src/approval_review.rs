@@ -6,6 +6,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
+use crate::ApprovalReviewRequest;
 use crate::ExtensionData;
 use crate::ExtensionFuture;
 
@@ -37,6 +38,7 @@ pub struct ApprovalReviewInput<'a> {
     pub review_id: &'a str,
     pub turn_id: &'a str,
     pub target_item_id: Option<&'a str>,
+    pub request: &'a ApprovalReviewRequest,
     /// Bounded review prompt rendered by the host.
     ///
     /// The action is useful assessment metadata but does not yet carry all

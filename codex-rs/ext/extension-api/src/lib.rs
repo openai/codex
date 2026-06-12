@@ -1,4 +1,5 @@
 mod approval_review;
+mod approval_review_request;
 mod capabilities;
 mod contributors;
 mod registry;
@@ -10,6 +11,9 @@ pub use approval_review::ApprovalReviewInput;
 pub use approval_review::ApprovalReviewOutcome;
 pub use approval_review::ApprovalReviewRunner;
 pub use approval_review::ApprovalReviewSource;
+pub use approval_review_request::ApprovalReviewMcpAnnotations;
+pub use approval_review_request::ApprovalReviewNetworkAccessTrigger;
+pub use approval_review_request::ApprovalReviewRequest;
 pub use capabilities::AgentSpawnFuture;
 pub use capabilities::AgentSpawner;
 pub use capabilities::ExtensionEventSink;

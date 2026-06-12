@@ -5,6 +5,7 @@ use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ApprovalReviewError;
 use codex_extension_api::ApprovalReviewInput;
 use codex_extension_api::ApprovalReviewOutcome;
+use codex_extension_api::ApprovalReviewRequest;
 use codex_extension_api::ApprovalReviewRunner;
 use codex_extension_api::ApprovalReviewSource;
 use codex_extension_api::ConfigContributor;
@@ -145,6 +146,7 @@ async fn build_round_trips_every_contributor_category() {
                 &ExtensionData::new("thread"),
                 &ExtensionData::new("turn"),
                 &test_action(),
+                &test_request(),
                 &AskForApproval::OnRequest,
             ))
             .await,
@@ -249,6 +251,7 @@ struct ApprovalCall {
     target_item_id: Option<String>,
     prompt: String,
     action: GuardianAssessmentAction,
+    request: ApprovalReviewRequest,
     reviewer: ApprovalsReviewer,
     approval_policy: AskForApproval,
     retry_reason: Option<String>,
@@ -290,6 +293,7 @@ impl ApprovalReviewContributor for RecordingApprovalContributor {
                     target_item_id: input.target_item_id.map(str::to_string),
                     prompt: input.prompt.to_string(),
                     action: input.action.clone(),
+                    request: input.request.clone(),
                     reviewer: input.reviewer,
                     approval_policy: *input.approval_policy,
                     retry_reason: input.retry_reason.map(str::to_string),
@@ -307,11 +311,21 @@ fn test_action() -> GuardianAssessmentAction {
     }
 }
 
+fn test_request() -> ApprovalReviewRequest {
+    ApprovalReviewRequest::RequestPermissions {
+        id: "request-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        reason: Some("run delegated command".to_string()),
+        permissions: Default::default(),
+    }
+}
+
 fn approval_review_input<'a>(
     session_store: &'a ExtensionData,
     thread_store: &'a ExtensionData,
     turn_store: &'a ExtensionData,
     action: &'a GuardianAssessmentAction,
+    request: &'a ApprovalReviewRequest,
     approval_policy: &'a AskForApproval,
 ) -> ApprovalReviewInput<'a> {
     static RUNNER: UnusedApprovalRunner = UnusedApprovalRunner;
@@ -322,6 +336,7 @@ fn approval_review_input<'a>(
         review_id: "review-1",
         turn_id: "turn-1",
         target_item_id: Some("item-1"),
+        request,
         prompt: "allow delegated command?",
         action,
         reviewer: ApprovalsReviewer::AutoReview,
@@ -358,6 +373,7 @@ async fn approval_review_returns_first_claim_and_short_circuits() {
     let thread_store = ExtensionData::new("thread-1");
     let turn_store = ExtensionData::new("turn-store-1");
     let action = test_action();
+    let request = test_request();
     let approval_policy = AskForApproval::OnRequest;
 
     let decision = registry
@@ -366,6 +382,7 @@ async fn approval_review_returns_first_claim_and_short_circuits() {
             &thread_store,
             &turn_store,
             &action,
+            &request,
             &approval_policy,
         ))
         .await;
@@ -384,6 +401,7 @@ async fn approval_review_returns_first_claim_and_short_circuits() {
         target_item_id: Some("item-1".to_string()),
         prompt: "allow delegated command?".to_string(),
         action: action.clone(),
+        request: request.clone(),
         reviewer: ApprovalsReviewer::AutoReview,
         approval_policy: AskForApproval::OnRequest,
         retry_reason: Some("initial review timed out".to_string()),
@@ -418,6 +436,7 @@ async fn approval_review_error_stops_dispatch() {
     let thread_store = ExtensionData::new("thread");
     let turn_store = ExtensionData::new("turn");
     let action = test_action();
+    let request = test_request();
     let approval_policy = AskForApproval::OnRequest;
 
     let result = registry
@@ -426,6 +445,7 @@ async fn approval_review_error_stops_dispatch() {
             &thread_store,
             &turn_store,
             &action,
+            &request,
             &approval_policy,
         ))
         .await;
@@ -491,6 +511,7 @@ async fn empty_registry_does_not_claim_approval_review() {
     let thread_store = ExtensionData::new("thread");
     let turn_store = ExtensionData::new("turn");
     let action = test_action();
+    let request = test_request();
     let approval_policy = AskForApproval::OnRequest;
 
     assert_eq!(
@@ -500,6 +521,7 @@ async fn empty_registry_does_not_claim_approval_review() {
                 &thread_store,
                 &turn_store,
                 &action,
+                &request,
                 &approval_policy,
             ))
             .await,

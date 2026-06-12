@@ -2926,6 +2926,8 @@ dependencies = [
  "codex-tools",
  "codex-utils-absolute-path",
  "pretty_assertions",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
