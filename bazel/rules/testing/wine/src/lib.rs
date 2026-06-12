@@ -174,19 +174,28 @@ impl WineRuntimePaths {
 
 impl WineProcesses {
     async fn shutdown(&mut self) -> Result<()> {
-        let kill_result = match self.child.try_wait() {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => self
-                .child
-                .start_kill()
-                .context("kill Windows process running under Wine"),
-            Err(error) => Err(error).context("check Windows process status"),
+        let (kill_result, check_exit_status) = match self.child.try_wait() {
+            Ok(Some(_)) => (Ok(()), true),
+            Ok(None) => (
+                self.child
+                    .start_kill()
+                    .context("kill Windows process running under Wine"),
+                false,
+            ),
+            Err(error) => (Err(error).context("check Windows process status"), false),
         };
         let wait_result = self
             .child
             .wait()
             .await
-            .context("wait for Windows process running under Wine");
+            .context("wait for Windows process running under Wine")
+            .and_then(|status| {
+                anyhow::ensure!(
+                    !check_exit_status || status.success(),
+                    "Windows process exited with {status}"
+                );
+                Ok(())
+            });
         let wineserver_result = async {
             let mut command = TokioCommand::from(self.stop_wineserver_command());
             let status = command.status().await.context("stop isolated wineserver")?;

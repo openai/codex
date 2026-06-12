@@ -41,23 +41,8 @@ wine_rust_test(
     windows_binaries = {
         "wine-smoke": ":windows-smoke",
     },
-    deps = ["@crates//:pretty_assertions"],
-)
-
-wine_rust_test(
-    name = "wine-smoke-test",
-    timeout = "short",
-    srcs = ["tests/smoke.rs"],
-    crate_name = "wine_smoke_test",
-    crate_root = "tests/smoke.rs",
-    windows_binaries = {
-        "wine-smoke": ":windows-smoke",
-    },
     deps = [
-        ":wine_test_support",
-        "//codex-rs/utils/cargo-bin",
-        "@crates//:anyhow",
+        "@crates//:futures",
         "@crates//:pretty_assertions",
-        "@crates//:tokio",
     ],
 )

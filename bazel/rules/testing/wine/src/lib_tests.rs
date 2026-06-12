@@ -1,9 +1,13 @@
+use std::any::Any;
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -37,17 +41,21 @@ fn prefix_path(process: &WineTestProcess) -> PathBuf {
 fn assert_prefix_removed(prefix: &Path) {
     assert!(
         !prefix.exists(),
-        "Wine prefix was not removed: {}",
+        "Wine prefix remains: {}",
         prefix.display()
     );
 }
 
-struct PrefixRemovedOnDrop(PathBuf);
+fn assert_panic_message(panic: Box<dyn Any + Send>, expected: &str) {
+    assert_eq!(panic.downcast_ref::<&str>(), Some(&expected));
+}
 
-impl Drop for PrefixRemovedOnDrop {
-    fn drop(&mut self) {
-        assert_prefix_removed(&self.0);
-    }
+async fn assert_future_panics<T>(future: impl Future<Output = T>, expected: &str) {
+    let panic = match AssertUnwindSafe(future).catch_unwind().await {
+        Ok(_) => panic!("future should panic"),
+        Err(panic) => panic,
+    };
+    assert_panic_message(panic, expected);
 }
 
 async fn process_with_failing_wineserver_stop() -> Result<WineTestProcess> {
@@ -66,52 +74,66 @@ async fn process_with_failing_wineserver_stop() -> Result<WineTestProcess> {
 }
 
 #[tokio::test]
-#[should_panic(expected = "WineTestProcess dropped without async teardown")]
-async fn dropping_without_teardown_panics() {
-    let process = waiting_smoke_process()
-        .await
-        .expect("start Windows smoke process");
-    drop(process);
+async fn dropping_without_teardown_panics() -> Result<()> {
+    let process = waiting_smoke_process().await?;
+    let prefix = prefix_path(&process);
+    assert_future_panics(
+        async move { drop(process) },
+        "WineTestProcess dropped without async teardown",
+    )
+    .await;
+    assert_prefix_removed(&prefix);
+    Ok(())
 }
 
 #[tokio::test]
-#[should_panic(expected = "sentinel panic")]
-async fn dropping_while_panicking_does_not_panic_again() {
-    let _process = waiting_smoke_process()
-        .await
-        .expect("start Windows smoke process");
-    panic!("sentinel panic");
+async fn dropping_while_panicking_does_not_panic_again() -> Result<()> {
+    let process = waiting_smoke_process().await?;
+    let prefix = prefix_path(&process);
+    assert_future_panics(
+        async move {
+            let _process = process;
+            panic!("sentinel panic");
+        },
+        "sentinel panic",
+    )
+    .await;
+    assert_prefix_removed(&prefix);
+    Ok(())
 }
 
 #[tokio::test]
 async fn async_teardown_disarms_drop_bomb() -> Result<()> {
     let process = waiting_smoke_process().await?;
     let prefix = prefix_path(&process);
-
     process.shutdown().await?;
-
     assert_prefix_removed(&prefix);
     Ok(())
 }
 
 #[tokio::test]
-#[should_panic(expected = "Wine process stdout has already been taken")]
-async fn take_stdout_panics_when_called_twice() {
-    let mut process = waiting_smoke_process()
-        .await
-        .expect("start Windows smoke process");
-    process.take_stdout();
+async fn take_stdout_panics_when_called_twice() -> Result<()> {
+    let mut process = waiting_smoke_process().await?;
+    let prefix = prefix_path(&process);
+    assert_future_panics(
+        async {
+            process.take_stdout();
+        },
+        "Wine process stdout has already been taken",
+    )
+    .await;
+    process.shutdown().await?;
+    assert_prefix_removed(&prefix);
+    Ok(())
 }
 
 #[tokio::test]
 async fn scope_returns_value_and_tears_down() -> Result<()> {
     let process = waiting_smoke_process().await?;
     let prefix = prefix_path(&process);
-
     let value = process
         .scope(async { Ok::<_, anyhow::Error>("scope value") })
         .await?;
-
     assert_eq!(value, "scope value");
     assert_prefix_removed(&prefix);
     Ok(())
@@ -133,26 +155,39 @@ async fn scope_returns_body_error_and_tears_down() -> Result<()> {
 }
 
 #[tokio::test]
-#[should_panic(expected = "scope panic")]
-async fn scope_panic_preserves_panic_and_tears_down() {
-    let process = waiting_smoke_process()
-        .await
-        .expect("start Windows smoke process");
-    let _prefix_removed = PrefixRemovedOnDrop(prefix_path(&process));
-    let _ = process.scope::<()>(async { panic!("scope panic") }).await;
+async fn scope_panic_preserves_panic_and_tears_down() -> Result<()> {
+    let process = waiting_smoke_process().await?;
+    let prefix = prefix_path(&process);
+
+    assert_future_panics(
+        process.scope::<()>(async { panic!("scope panic") }),
+        "scope panic",
+    )
+    .await;
+    assert_prefix_removed(&prefix);
+    Ok(())
 }
 
 #[tokio::test]
-async fn scope_returns_teardown_error() -> Result<()> {
-    let process = process_with_failing_wineserver_stop().await?;
+async fn shutdown_reports_nonzero_process_exit() -> Result<()> {
+    let executable = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;
+    let mut process = WineTestCommand::new(executable).arg("--fail").spawn()?;
     let prefix = prefix_path(&process);
+    let status = process
+        .processes
+        .as_mut()
+        .expect("Wine process guard")
+        .child
+        .wait()
+        .await?;
+    assert!(
+        !status.success(),
+        "Windows smoke process unexpectedly passed"
+    );
 
-    let error = process
-        .scope(async { Ok::<_, anyhow::Error>(()) })
-        .await
-        .expect_err("scope teardown should fail");
+    let error = process.shutdown().await.expect_err("shutdown should fail");
 
-    assert_eq!(error.to_string(), "stop isolated wineserver");
+    assert!(error.to_string().starts_with("Windows process exited with"));
     assert_prefix_removed(&prefix);
     Ok(())
 }

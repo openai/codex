@@ -18,30 +18,22 @@ def wine_rust_test(
         **kwargs):
     """Defines an x86-64 Linux Rust test with a pinned Wine runtime.
 
-    Values in `windows_binaries` must be executable targets. Each target is
-    transitioned to the GNU/LLVM Windows platform, where every Rust target in
-    its dependency graph receives the repository's Windows linker flags. The
-    test itself stays on x86-64 Linux.
+    Each `windows_binaries` executable is transitioned to GNU/LLVM Windows;
+    every Rust dependency receives the repository's Windows linker flags while
+    the test stays on x86-64 Linux. Its environment-variable contract is:
 
-    The generated test has this environment-variable contract:
-
-    * Each `windows_binaries` entry contributes a
-      `CARGO_BIN_EXE_<binary_name>` variable for its transitioned executable.
-    * `CARGO_BIN_EXE_wine` and `CARGO_BIN_EXE_wineserver` identify the matching
-      Wine host executables.
+    * Each entry contributes `CARGO_BIN_EXE_<binary_name>` for its executable.
+    * `CARGO_BIN_EXE_wine` and `CARGO_BIN_EXE_wineserver` identify Wine tools.
     * `CARGO_BIN_EXE_wine-runtime-marker` identifies a file whose parent is the
       Wine DLL directory to use as `WINEDLLPATH`.
 
-    These values are Bazel runfile locations, not necessarily filesystem paths.
-    Rust tests should resolve the Windows binary with
-    `codex_utils_cargo_bin::cargo_bin`. The reusable
-    `//bazel/rules/testing/wine:wine_test_support` library resolves the three
-    fixed Wine runtime names and starts each process in an isolated prefix.
+    These are Bazel runfile locations. Resolve binaries with
+    `codex_utils_cargo_bin::cargo_bin`; `:wine_test_support` resolves the fixed
+    runtime names and starts each process in an isolated prefix.
 
     Args:
       name: Name of the generated Linux `rust_test`.
-      windows_binaries: Map from `CARGO_BIN_EXE_*` suffixes to executable
-        targets that should be built for Windows.
+      windows_binaries: Map from `CARGO_BIN_EXE_*` suffixes to Windows targets.
       data: Additional runtime data for the Linux test.
       target_compatible_with: Additional compatibility constraints.
       **kwargs: Remaining attributes forwarded to `rust_test`.
