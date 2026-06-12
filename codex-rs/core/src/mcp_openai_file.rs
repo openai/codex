@@ -3,7 +3,8 @@
 //! Strategy:
 //! - Inspect `_meta["openai/fileParams"]` to discover which tool arguments are
 //!   file inputs.
-//! - At tool execution time, upload those local files to OpenAI file storage
+//! - At tool execution time, read those files from the primary environment,
+//!   upload them to OpenAI file storage,
 //!   and rewrite only the declared arguments into the provided-file payload
 //!   shape expected by the downstream Apps tool.
 //!
@@ -12,8 +13,9 @@
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use codex_api::upload_local_file;
+use codex_api::upload_openai_file;
 use codex_login::CodexAuth;
+use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
 
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
@@ -62,13 +64,13 @@ async fn rewrite_argument_value_for_openai_files(
     value: &JsonValue,
 ) -> Result<Option<JsonValue>, String> {
     match value {
-        JsonValue::String(path_or_file_ref) => {
-            let rewritten = build_uploaded_local_argument_value(
+        JsonValue::String(file_path) => {
+            let rewritten = build_uploaded_argument_value(
                 turn_context,
                 auth,
                 field_name,
                 /*index*/ None,
-                path_or_file_ref,
+                file_path,
             )
             .await?;
             Ok(Some(rewritten))
@@ -76,15 +78,15 @@ async fn rewrite_argument_value_for_openai_files(
         JsonValue::Array(values) => {
             let mut rewritten_values = Vec::with_capacity(values.len());
             for (index, item) in values.iter().enumerate() {
-                let Some(path_or_file_ref) = item.as_str() else {
+                let Some(file_path) = item.as_str() else {
                     return Ok(None);
                 };
-                let rewritten = build_uploaded_local_argument_value(
+                let rewritten = build_uploaded_argument_value(
                     turn_context,
                     auth,
                     field_name,
                     Some(index),
-                    path_or_file_ref,
+                    file_path,
                 )
                 .await?;
                 rewritten_values.push(rewritten);
@@ -95,38 +97,68 @@ async fn rewrite_argument_value_for_openai_files(
     }
 }
 
-async fn build_uploaded_local_argument_value(
+async fn build_uploaded_argument_value(
     turn_context: &TurnContext,
     auth: Option<&CodexAuth>,
     field_name: &str,
     index: Option<usize>,
     file_path: &str,
 ) -> Result<JsonValue, String> {
-    #[allow(deprecated)]
-    let resolved_path = turn_context.resolve_path(Some(file_path.to_string()));
-    let Some(auth) = auth else {
-        return Err(
-            "ChatGPT auth is required to upload local files for Codex Apps tools".to_string(),
-        );
-    };
-    if !auth.uses_codex_backend() {
-        return Err(
-            "ChatGPT auth is required to upload local files for Codex Apps tools".to_string(),
-        );
-    }
-    let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
-    let uploaded = upload_local_file(
-        turn_context.config.chatgpt_base_url.trim_end_matches('/'),
-        upload_auth.as_ref(),
-        &resolved_path,
-    )
-    .await
-    .map_err(|error| match index {
+    let contextualize_error = |error: String| match index {
         Some(index) => {
             format!("failed to upload `{file_path}` for `{field_name}[{index}]`: {error}")
         }
         None => format!("failed to upload `{file_path}` for `{field_name}`: {error}"),
+    };
+    let Some(auth) = auth else {
+        return Err("ChatGPT auth is required to upload files for Codex Apps tools".to_string());
+    };
+    if !auth.uses_codex_backend() {
+        return Err("ChatGPT auth is required to upload files for Codex Apps tools".to_string());
+    }
+    let Some(turn_environment) = turn_context.environments.primary() else {
+        return Err(contextualize_error(
+            "no primary turn environment is available".to_string(),
+        ));
+    };
+    let resolved_path = turn_environment.cwd.join(file_path);
+    let path_uri = PathUri::from_abs_path(&resolved_path).map_err(|error| {
+        contextualize_error(format!(
+            "unable to resolve `{}`: {error}",
+            resolved_path.display()
+        ))
     })?;
+    let sandbox = turn_context
+        .file_system_sandbox_context(/*additional_permissions*/ None, &turn_environment.cwd);
+    let fs = turn_environment.environment.get_filesystem();
+    let metadata = fs
+        .get_metadata(&path_uri, Some(&sandbox))
+        .await
+        .map_err(|error| contextualize_error(error.to_string()))?;
+    if !metadata.is_file {
+        return Err(contextualize_error(format!(
+            "path `{}` is not a file",
+            resolved_path.display()
+        )));
+    }
+    let contents = fs
+        .read_file(&path_uri, Some(&sandbox))
+        .await
+        .map_err(|error| contextualize_error(error.to_string()))?;
+    let file_name = resolved_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
+    let uploaded = upload_openai_file(
+        turn_context.config.chatgpt_base_url.trim_end_matches('/'),
+        upload_auth.as_ref(),
+        file_name,
+        contents,
+    )
+    .await
+    .map_err(|error| contextualize_error(error.to_string()))?;
     Ok(serde_json::json!({
         "download_url": uploaded.download_url,
         "file_id": uploaded.file_id,
@@ -143,8 +175,20 @@ mod tests {
     use crate::session::tests::make_session_and_context;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
     use std::sync::Arc;
     use tempfile::tempdir;
+
+    fn set_primary_environment_cwd(turn_context: &mut TurnContext, cwd: &Path) {
+        let cwd = AbsolutePathBuf::try_from(cwd).expect("absolute path");
+        turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
+        turn_context
+            .environments
+            .turn_environments
+            .first_mut()
+            .expect("primary environment")
+            .cwd = cwd;
+    }
 
     #[tokio::test]
     async fn openai_file_argument_rewrite_requires_declared_file_params() {
@@ -166,7 +210,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_uploaded_local_argument_value_uploads_local_file_path() {
+    async fn build_uploaded_argument_value_uploads_environment_file() {
         use wiremock::Mock;
         use wiremock::MockServer;
         use wiremock::ResponseTemplate;
@@ -217,16 +261,13 @@ mod tests {
         tokio::fs::write(&local_path, b"hello")
             .await
             .expect("write local file");
-        #[allow(deprecated)]
-        {
-            turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
-        }
+        set_primary_environment_cwd(&mut turn_context, dir.path());
 
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());
         turn_context.config = Arc::new(config);
 
-        let rewritten = build_uploaded_local_argument_value(
+        let rewritten = build_uploaded_argument_value(
             &turn_context,
             Some(&auth),
             "file",
@@ -301,10 +342,7 @@ mod tests {
         tokio::fs::write(&local_path, b"hello")
             .await
             .expect("write local file");
-        #[allow(deprecated)]
-        {
-            turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
-        }
+        set_primary_environment_cwd(&mut turn_context, dir.path());
 
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());
@@ -418,10 +456,7 @@ mod tests {
         tokio::fs::write(dir.path().join("two.csv"), b"two")
             .await
             .expect("write second local file");
-        #[allow(deprecated)]
-        {
-            turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
-        }
+        set_primary_environment_cwd(&mut turn_context, dir.path());
 
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());

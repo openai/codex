@@ -7,6 +7,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_utils_path_uri::PathUri;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::CALENDAR_EXTRACT_TEXT_TOOL_NAME;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_EXTRACT_TEXT_TOOL as DOCUMENT_EXTRACT_HOOK_MATCHER;
@@ -83,7 +84,7 @@ fn read_post_tool_use_hook_inputs(home: &Path) -> Result<Vec<Value>> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Result<()> {
+async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() -> Result<()> {
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
 
@@ -150,11 +151,16 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
             write_post_tool_use_hook(home)
                 .expect("failed to write apps file post tool use hook fixture");
         })
+        .with_workspace_setup(|cwd, fs| async move {
+            let path = PathUri::from_abs_path(&cwd.join("report.txt"))?;
+            fs.write_file(&path, b"hello world".to_vec(), /*sandbox*/ None)
+                .await?;
+            Ok(())
+        })
         .with_config(move |config| {
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
-    tokio::fs::write(test.cwd.path().join("report.txt"), b"hello world").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Extract the report text with the app tool.",
@@ -175,7 +181,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
         extract_tool.pointer("/parameters/properties/file"),
         Some(&json!({
             "type": "string",
-            "description": "Document file payload. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+            "description": "Document file payload. This parameter expects a file path in the primary environment. Relative paths are resolved against its working directory."
         }))
     );
 

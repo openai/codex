@@ -65,7 +65,7 @@ pub use crate::endpoint::ResponsesWebsocketProbe;
 pub use crate::endpoint::SearchClient;
 pub use crate::endpoint::session_update_session_json;
 pub use crate::error::ApiError;
-pub use crate::files::upload_local_file;
+pub use crate::files::upload_openai_file;
 pub use crate::images::ImageBackground;
 pub use crate::images::ImageData;
 pub use crate::images::ImageEditRequest;
