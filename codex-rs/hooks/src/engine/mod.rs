@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+pub(crate) mod async_command;
 pub(crate) mod command_runner;
 pub(crate) mod discovery;
 pub(crate) mod dispatcher;
