@@ -40,7 +40,7 @@ pub(crate) struct TurnEnvironment {
     pub(crate) environment_id: String,
     pub(crate) environment: Arc<Environment>,
     pub(crate) cwd: AbsolutePathBuf,
-    pub(crate) shell: Option<String>,
+    pub(crate) shell: Option<shell::Shell>,
 }
 
 impl TurnEnvironment {
@@ -590,8 +590,6 @@ impl Session {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    let turn_environments =
-                        self.resolve_turn_environments(next.environment_selections())?;
                     let previous_cwd = state.session_configuration.cwd().clone();
                     let previous_permission_profile =
                         state.session_configuration.permission_profile();
@@ -608,7 +606,6 @@ impl Session {
                     state.session_configuration = next.clone();
                     Ok((
                         next,
-                        turn_environments,
                         permission_profile_changed,
                         previous_cwd,
                         codex_home,
@@ -623,7 +620,6 @@ impl Session {
 
         let (
             session_configuration,
-            turn_environments,
             permission_profile_changed,
             previous_cwd,
             codex_home,
@@ -664,19 +660,8 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
-                turn_environments,
             )
             .await)
-    }
-
-    fn resolve_turn_environments(
-        &self,
-        environments: &[TurnEnvironmentSelection],
-    ) -> CodexResult<ResolvedTurnEnvironments> {
-        crate::environment_selection::resolve_environment_selections(
-            self.services.environment_manager.as_ref(),
-            environments,
-        )
     }
 
     async fn new_turn_from_configuration(
@@ -684,13 +669,11 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-        turn_environments: ResolvedTurnEnvironments,
     ) -> Arc<TurnContext> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
             final_output_json_schema,
-            turn_environments,
             TurnMultiAgentRuntime::ResolveAndStore,
         )
         .await
@@ -700,13 +683,11 @@ impl Session {
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
-        turn_environments: ResolvedTurnEnvironments,
     ) -> Arc<TurnContext> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
-            turn_environments,
             TurnMultiAgentRuntime::Preview,
         )
         .await
@@ -717,9 +698,17 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-        turn_environments: ResolvedTurnEnvironments,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
+        let turn_environments = crate::environment_selection::resolve_environment_selections(
+            self.services.environment_manager.as_ref(),
+            session_configuration.environment_selections(),
+        )
+        .await
+        .unwrap_or_else(|err| {
+            warn!("failed to resolve turn environments: {err}");
+            ResolvedTurnEnvironments::default()
+        });
         let primary_turn_environment = turn_environments.primary().cloned();
         let cwd = primary_turn_environment
             .as_ref()
@@ -832,13 +821,11 @@ impl Session {
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
-        let (session_configuration, turn_environments) =
-            self.default_turn_configuration_and_environments().await;
+        let session_configuration = self.default_turn_configuration().await;
         self.new_turn_from_configuration(
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
-            turn_environments,
         )
         .await
     }
@@ -847,31 +834,13 @@ impl Session {
         &self,
         sub_id: String,
     ) -> Arc<TurnContext> {
-        let (session_configuration, turn_environments) =
-            self.default_turn_configuration_and_environments().await;
-        self.new_startup_prewarm_turn_from_configuration(
-            sub_id,
-            session_configuration,
-            turn_environments,
-        )
-        .await
+        let session_configuration = self.default_turn_configuration().await;
+        self.new_startup_prewarm_turn_from_configuration(sub_id, session_configuration)
+            .await
     }
 
-    async fn default_turn_configuration_and_environments(
-        &self,
-    ) -> (SessionConfiguration, ResolvedTurnEnvironments) {
-        let session_configuration = {
-            let state = self.state.lock().await;
-            state.session_configuration.clone()
-        };
-        let turn_environments =
-            match self.resolve_turn_environments(session_configuration.environment_selections()) {
-                Ok(turn_environments) => turn_environments,
-                Err(err) => {
-                    warn!("failed to resolve stored session environments: {err}");
-                    ResolvedTurnEnvironments::default()
-                }
-            };
-        (session_configuration, turn_environments)
+    async fn default_turn_configuration(&self) -> SessionConfiguration {
+        let state = self.state.lock().await;
+        state.session_configuration.clone()
     }
 }

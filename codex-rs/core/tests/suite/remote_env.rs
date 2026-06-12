@@ -37,6 +37,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -177,6 +178,42 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
             /*sandbox*/ None,
         )
         .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_test_env_exposes_bash_shell_to_model() -> Result<()> {
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let test = test_codex().build_with_remote_env(&server).await?;
+
+    test.submit_turn("report remote environment").await?;
+
+    let request = response_mock.single_request();
+    let environment_context = request
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.starts_with("<environment_context>"))
+        .context("environment context should be model visible")?;
+    assert_eq!(
+        environment_context
+            .lines()
+            .find(|line| line.trim_start().starts_with("<shell>")),
+        Some("  <shell>bash</shell>"),
+    );
 
     Ok(())
 }

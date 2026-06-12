@@ -1,4 +1,5 @@
 use crate::shell_snapshot::ShellSnapshot;
+use codex_exec_server::ShellInfo;
 use codex_shell_command::shell_detect::DetectedShell;
 use serde::Deserialize;
 use serde::Serialize;
@@ -82,6 +83,25 @@ impl From<DetectedShell> for Shell {
             shell_path: detected.shell_path,
             shell_snapshot: empty_shell_snapshot_receiver(),
         }
+    }
+}
+
+impl Shell {
+    pub(crate) fn from_environment_shell_info(shell_info: ShellInfo) -> anyhow::Result<Self> {
+        let shell_type = match shell_info.name.as_str() {
+            "zsh" => ShellType::Zsh,
+            "bash" => ShellType::Bash,
+            "powershell" => ShellType::PowerShell,
+            "sh" => ShellType::Sh,
+            "cmd" => ShellType::Cmd,
+            name => anyhow::bail!("unknown environment shell `{name}`"),
+        };
+
+        Ok(Self {
+            shell_type,
+            shell_path: PathBuf::from(shell_info.path),
+            shell_snapshot: empty_shell_snapshot_receiver(),
+        })
     }
 }
 

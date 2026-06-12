@@ -444,6 +444,7 @@ async fn warm_plugins_and_skills_for_session_init(
         environment_manager.as_ref(),
         &environments,
     )
+    .await
     .ok()
     .and_then(|resolved| resolved.primary_filesystem());
     let plugins_input = config.plugins_config_input();
@@ -1117,6 +1118,7 @@ impl Session {
                 sess.services.environment_manager.as_ref(),
                 session_configuration.environment_selections(),
             )
+            .await
             .map_err(|err| {
                 CodexErr::InvalidRequest(err.to_string().replace(
                     "unknown turn environment id",
