@@ -138,6 +138,7 @@ where
         &self,
         session_store: &ExtensionData,
         _thread_store: &ExtensionData,
+        _turn_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
         if !self.providers.has_orchestrator_provider() {
             return Vec::new();

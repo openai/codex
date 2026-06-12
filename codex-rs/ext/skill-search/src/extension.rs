@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use codex_core::config::Config;
-use codex_core::skills::SkillLoadOutcome;
+use codex_core_skills::HostLoadedSkills;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
@@ -54,10 +54,15 @@ impl ContextContributor for SkillSearchExtension {
 }
 
 impl ThreadLifecycleContributor<Config> for SkillSearchExtension {
-    fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
-        input
-            .thread_store
-            .insert(SkillSearchExtensionConfig::from_config(input.config));
+    fn on_thread_start<'a>(
+        &'a self,
+        input: ThreadStartInput<'a, Config>,
+    ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            input
+                .thread_store
+                .insert(SkillSearchExtensionConfig::from_config(input.config));
+        })
     }
 }
 
@@ -88,9 +93,9 @@ impl ToolContributor for SkillSearchExtension {
         }
 
         let skills = turn_store
-            .get::<SkillLoadOutcome>()
-            .map_or_else(Vec::new, |outcome| {
-                outcome.allowed_skills_for_implicit_invocation()
+            .get::<HostLoadedSkills>()
+            .map_or_else(Vec::new, |skills| {
+                skills.outcome().allowed_skills_for_implicit_invocation()
             });
         let tool = turn_store.get_or_init(|| SkillSearchTool::new(skills));
         vec![tool]

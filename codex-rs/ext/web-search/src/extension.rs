@@ -111,6 +111,7 @@ impl ToolContributor for WebSearchExtension {
         &self,
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
+        _turn_store: &ExtensionData,
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
         let Some(config) = thread_store.get::<WebSearchExtensionConfig>() else {
             return Vec::new();

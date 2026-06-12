@@ -99,14 +99,13 @@ struct SkillSearchArgs {
     limit: Option<usize>,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolCall> for SkillSearchTool {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(SKILL_SEARCH_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(ToolSpec::Function(ResponsesApiTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Function(ResponsesApiTool {
             name: SKILL_SEARCH_TOOL_NAME.to_string(),
             description: "Search available Codex skills by relevance and return plain-text matches with their descriptions and SKILL.md paths.".to_string(),
             strict: false,
@@ -128,31 +127,33 @@ impl ToolExecutor<ToolCall> for SkillSearchTool {
                 Some(false.into()),
             ),
             output_schema: None,
-        }))
+        })
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 
-    async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        let args = parse_args(&call)?;
-        let query = args.query.trim();
-        if query.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "query must not be empty".to_string(),
-            ));
-        }
-        let limit = args.limit.unwrap_or(DEFAULT_SKILL_SEARCH_LIMIT);
-        if limit == 0 {
-            return Err(FunctionCallError::RespondToModel(
-                "limit must be greater than zero".to_string(),
-            ));
-        }
+    fn handle(&self, call: ToolCall) -> codex_extension_api::ToolExecutorFuture<'_> {
+        Box::pin(async move {
+            let args = parse_args(&call)?;
+            let query = args.query.trim();
+            if query.is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "query must not be empty".to_string(),
+                ));
+            }
+            let limit = args.limit.unwrap_or(DEFAULT_SKILL_SEARCH_LIMIT);
+            if limit == 0 {
+                return Err(FunctionCallError::RespondToModel(
+                    "limit must be greater than zero".to_string(),
+                ));
+            }
 
-        Ok(Box::new(PlainTextToolOutput {
-            text: self.search(query, limit),
-        }))
+            Ok(Box::new(PlainTextToolOutput {
+                text: self.search(query, limit),
+            }) as Box<dyn ToolOutput>)
+        })
     }
 }
 
@@ -194,9 +195,14 @@ impl ToolOutput for PlainTextToolOutput {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use codex_core::skills::SkillPolicy;
+    use codex_extension_api::ConversationHistory;
+    use codex_extension_api::NoopTurnItemEmitter;
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::protocol::SkillScope;
+    use codex_protocol::protocol::TruncationPolicy;
     use codex_tools::ToolPayload;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
@@ -224,8 +230,14 @@ mod tests {
 
     fn call(arguments: serde_json::Value) -> ToolCall {
         ToolCall {
+            turn_id: "turn-skill-search".to_string(),
             call_id: "call-skill-search".to_string(),
             tool_name: ToolName::plain(SKILL_SEARCH_TOOL_NAME),
+            model: "gpt-test".to_string(),
+            truncation_policy: TruncationPolicy::Bytes(1024),
+            conversation_history: ConversationHistory::default(),
+            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+            environments: Vec::new(),
             payload: ToolPayload::Function {
                 arguments: arguments.to_string(),
             },

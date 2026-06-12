@@ -13,9 +13,9 @@ doctest = false
 workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
 bm25 = { workspace = true }
 codex-core = { workspace = true }
+codex-core-skills = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
 codex-protocol = { workspace = true }
