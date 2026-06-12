@@ -42,6 +42,12 @@ use crate::relay_proto::relay_message_frame;
 use crate::server::ConnectionProcessor;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
+const MAX_ACTIVE_NOISE_RELAY_STREAMS: usize = 128;
+const MAX_FAILED_NOISE_HANDSHAKES: usize = 8;
+const MAX_HARNESS_KEY_AUTHORIZATION_BYTES: usize = 4096;
+const MAX_PENDING_HANDSHAKE_VALIDATIONS: usize = 32;
+const HARNESS_KEY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum RelayFrameBodyKind {
     Data,
@@ -365,12 +371,6 @@ where
         transport: JsonRpcTransport::Plain,
     }
 }
-
-const MAX_ACTIVE_NOISE_RELAY_STREAMS: usize = 128;
-const MAX_FAILED_NOISE_HANDSHAKES: usize = 8;
-const MAX_HARNESS_KEY_AUTHORIZATION_BYTES: usize = 4096;
-const MAX_PENDING_HANDSHAKE_VALIDATIONS: usize = 32;
-const HARNESS_KEY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Validates that a Noise-authenticated harness public key is authorized.
 ///
