@@ -772,10 +772,9 @@ fn agent_result_edge_falls_back_to_child_thread_without_result_message() -> anyh
     let temp = TempDir::new()?;
     let writer = create_started_agent_writer(&temp)?;
 
-    // The child thread and turn exist, but there is intentionally no completed
-    // assistant message for this turn. Failed child tasks can still notify the
-    // parent through AgentStatus, so the result edge must not require a final
-    // transcript item from the child.
+    // The child received its task but produced no assistant output. Failed
+    // child tasks can still notify the parent through AgentStatus, so the
+    // inbound task must not be mistaken for the child's result.
     start_thread(
         &writer,
         "019d0000-0000-7000-8000-000000000002",
@@ -785,6 +784,18 @@ fn agent_result_edge_falls_back_to_child_thread_without_result_message() -> anyh
         &writer,
         "019d0000-0000-7000-8000-000000000002",
         "turn-child-1",
+    )?;
+    append_inference_request(
+        &writer,
+        "019d0000-0000-7000-8000-000000000002",
+        "turn-child-1",
+        "inference-child-1",
+        vec![json!({
+            "type": "agent_message",
+            "author": "/root",
+            "recipient": "/root/child",
+            "content": [{"type": "input_text", "text": "do the task"}]
+        })],
     )?;
 
     let notification = r#"<subagent_notification>{"agent_path":"/root/child","status":{"failed":"boom"}}</subagent_notification>"#;

@@ -707,6 +707,7 @@ impl TraceReducer {
                     && item.codex_turn_id.as_deref() == Some(codex_turn_id)
                     && item.role == ConversationRole::Assistant
                     && item.kind == ConversationItemKind::Message
+                    && item.agent_message.is_none()
             })
             .max_by_key(|item| item.first_seen_at_unix_ms)
             .map(|item| item.item_id.clone())

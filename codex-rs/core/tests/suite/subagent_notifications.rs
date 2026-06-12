@@ -6,7 +6,6 @@ use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -1143,20 +1142,19 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()>
     )
     .await;
     let notification = "<subagent_notification>\n{\"agent_path\":\"/root/worker\",\"status\":{\"completed\":\"child done\"}}\n</subagent_notification>";
-    // Keep the parent turn active if it starts before the completion arrives. The follow-up
-    // request then proves that live mailbox delivery records the typed agent message.
-    mount_response_once_match(
+    // If the child is still running when the parent turn starts, wait_agent blocks
+    // until mailbox delivery. The follow-up request must then contain that delivery.
+    mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
             body_contains(req, TURN_2_NO_WAIT_PROMPT)
                 && !body_contains(req, "<subagent_notification>")
         },
-        sse_response(sse(vec![
+        sse(vec![
             ev_response_created("resp-parent-3"),
-            ev_function_call("list-agents-call", "list_agents", "{}"),
+            ev_function_call("wait-agent-call", "wait_agent", "{}"),
             ev_completed("resp-parent-3"),
-        ]))
-        .set_delay(Duration::from_secs(1)),
+        ]),
     )
     .await;
     let agent_request = mount_sse_once_match(
@@ -1189,18 +1187,6 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()>
 
     test.submit_turn(TURN_1_PROMPT).await?;
     let _ = wait_for_requests(&child_request).await?;
-    let spawned_id = ThreadId::from_string(&wait_for_spawned_thread_id(&test).await?)?;
-    let child_thread = test.thread_manager.get_thread(spawned_id).await?;
-    let deadline = Instant::now() + Duration::from_secs(6);
-    loop {
-        if matches!(child_thread.agent_status().await, AgentStatus::Completed(_)) {
-            break;
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for child completion");
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
     test.submit_turn(TURN_2_NO_WAIT_PROMPT).await?;
 
     let request = wait_for_requests(&agent_request)
