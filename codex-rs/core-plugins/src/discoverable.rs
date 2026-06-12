@@ -88,17 +88,14 @@ impl PluginsManager {
             return Ok(Vec::new());
         }
 
-        let marketplaces = async {
-            self.list_marketplaces_for_config(
+        let marketplaces = self
+            .list_marketplaces_for_config(
                 &input.plugins,
                 &[],
                 /*include_openai_curated*/ !input.plugins.remote_plugin_enabled,
             )
-        }
-        .instrument(info_span!("discoverable_plugins.list_marketplaces"))
-        .await
-        .context("failed to list plugin marketplaces for tool suggestions")?
-        .marketplaces;
+            .context("failed to list plugin marketplaces for tool suggestions")?
+            .marketplaces;
         let mut installed_app_connector_ids = self
             .plugins_for_config(&input.plugins)
             .await
