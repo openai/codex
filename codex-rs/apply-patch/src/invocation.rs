@@ -37,6 +37,12 @@ enum ApplyPatchShell {
     Cmd,
 }
 
+struct ExtractedApplyPatch {
+    body: String,
+    workdir: Option<String>,
+    preserve_crlf: bool,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum MaybeApplyPatch {
     Body(ApplyPatchArgs),
@@ -97,7 +103,7 @@ fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
 fn extract_apply_patch_from_shell(
     shell: ApplyPatchShell,
     script: &str,
-) -> std::result::Result<(String, Option<String>), ExtractHeredocError> {
+) -> std::result::Result<ExtractedApplyPatch, ExtractHeredocError> {
     match shell {
         ApplyPatchShell::Unix | ApplyPatchShell::PowerShell | ApplyPatchShell::Cmd => {
             extract_apply_patch_from_bash(script)
@@ -117,21 +123,31 @@ fn maybe_parse_apply_patch_with_options(
     match argv {
         // Direct invocation: apply_patch <patch>
         [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => {
-            match parse_patch_with_options(body, options) {
-                Ok(source) => MaybeApplyPatch::Body(source),
-                Err(e) => MaybeApplyPatch::PatchParseError(e),
-            }
+            parse_apply_patch_body(body, /*workdir*/ None, options)
         }
-        // Shell heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
+        // Direct invocation: apply_patch --preserve-crlf <patch>
+        [cmd, flag, body]
+            if APPLY_PATCH_COMMANDS.contains(&cmd.as_str())
+                && flag == crate::APPLY_PATCH_PRESERVE_CRLF_ARG =>
+        {
+            parse_apply_patch_body(
+                body,
+                /*workdir*/ None,
+                ApplyPatchOptions::preserve_crlf(),
+            )
+        }
+        // Shell heredoc form: (optional `cd <path> &&`) apply_patch
+        // (optional `--preserve-crlf`) <<'EOF' ...
         _ => match parse_shell_script(argv) {
             Some((shell, script)) => match extract_apply_patch_from_shell(shell, script) {
-                Ok((body, workdir)) => match parse_patch_with_options(&body, options) {
-                    Ok(mut source) => {
-                        source.workdir = workdir;
-                        MaybeApplyPatch::Body(source)
-                    }
-                    Err(e) => MaybeApplyPatch::PatchParseError(e),
-                },
+                Ok(extracted) => {
+                    let options = if extracted.preserve_crlf {
+                        ApplyPatchOptions::preserve_crlf()
+                    } else {
+                        options
+                    };
+                    parse_apply_patch_body(&extracted.body, extracted.workdir, options)
+                }
                 Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch) => {
                     MaybeApplyPatch::NotApplyPatch
                 }
@@ -139,6 +155,20 @@ fn maybe_parse_apply_patch_with_options(
             },
             None => MaybeApplyPatch::NotApplyPatch,
         },
+    }
+}
+
+fn parse_apply_patch_body(
+    body: &str,
+    workdir: Option<String>,
+    options: ApplyPatchOptions,
+) -> MaybeApplyPatch {
+    match parse_patch_with_options(body, options) {
+        Ok(mut source) => {
+            source.workdir = workdir;
+            MaybeApplyPatch::Body(source)
+        }
+        Err(e) => MaybeApplyPatch::PatchParseError(e),
     }
 }
 
@@ -278,7 +308,9 @@ pub async fn verify_apply_patch_args(
 ///
 /// Supported top‑level forms (must be the only top‑level statement):
 /// - `apply_patch <<'EOF'\n...\nEOF`
+/// - `apply_patch --preserve-crlf <<'EOF'\n...\nEOF`
 /// - `cd <path> && apply_patch <<'EOF'\n...\nEOF`
+/// - `cd <path> && apply_patch --preserve-crlf <<'EOF'\n...\nEOF`
 ///
 /// Notes about matching:
 /// - Parsed with Tree‑sitter Bash and a strict query that uses anchors so the
@@ -290,12 +322,12 @@ pub async fn verify_apply_patch_args(
 ///   or `applypatch`.
 /// - Preceding or trailing commands (e.g., `echo ...;` or `... && echo done`) do not match.
 ///
-/// Returns `(heredoc_body, Some(path))` when the `cd` variant matches, or
-/// `(heredoc_body, None)` for the direct form. Errors are returned if the script
-/// cannot be parsed or does not match the allowed patterns.
+/// Returns the heredoc body, optional `cd` path, and whether CRLF preservation
+/// was requested. Errors are returned if the script cannot be parsed or does
+/// not match the allowed patterns.
 fn extract_apply_patch_from_bash(
     src: &str,
-) -> std::result::Result<(String, Option<String>), ExtractHeredocError> {
+) -> std::result::Result<ExtractedApplyPatch, ExtractHeredocError> {
     // This function uses a Tree-sitter query to recognize one of two
     // whole-script forms, each expressed as a single top-level statement:
     //
@@ -327,7 +359,8 @@ fn extract_apply_patch_from_bash(
               program
                 . (redirected_statement
                     body: (command
-                            name: (command_name (word) @apply_name) .)
+                            name: (command_name (word) @apply_name)
+                            argument: (word)? @apply_arg .)
                     (#any-of? @apply_name "apply_patch" "applypatch")
                     redirect: (heredoc_redirect
                                 . (heredoc_start)
@@ -349,7 +382,8 @@ fn extract_apply_patch_from_bash(
                                 ] .)
                             "&&"
                             . (command
-                                name: (command_name (word) @apply_name))
+                                name: (command_name (word) @apply_name)
+                                argument: (word)? @apply_arg .)
                             .)
                     (#eq? @cd_name "cd")
                     (#any-of? @apply_name "apply_patch" "applypatch")
@@ -381,6 +415,8 @@ fn extract_apply_patch_from_bash(
     while let Some(m) = matches.next() {
         let mut heredoc_text: Option<String> = None;
         let mut cd_path: Option<String> = None;
+        let mut preserve_crlf = false;
+        let mut invalid_apply_arg = false;
 
         for capture in m.captures.iter() {
             let name = APPLY_PATCH_QUERY.capture_names()[capture.index as usize];
@@ -413,12 +449,30 @@ fn extract_apply_patch_from_bash(
                         .unwrap_or(raw);
                     cd_path = Some(trimmed.to_string());
                 }
+                "apply_arg" => {
+                    let arg = capture
+                        .node
+                        .utf8_text(bytes)
+                        .map_err(ExtractHeredocError::HeredocNotUtf8)?;
+                    if arg == crate::APPLY_PATCH_PRESERVE_CRLF_ARG {
+                        preserve_crlf = true;
+                    } else {
+                        invalid_apply_arg = true;
+                    }
+                }
                 _ => {}
             }
         }
 
+        if invalid_apply_arg {
+            continue;
+        }
         if let Some(heredoc) = heredoc_text {
-            return Ok((heredoc, cd_path));
+            return Ok(ExtractedApplyPatch {
+                body: heredoc,
+                workdir: cd_path,
+                preserve_crlf,
+            });
         }
     }
 
@@ -570,6 +624,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_literal_with_preserve_crlf_flag() {
+        let args = strs_to_strings(&[
+            "apply_patch",
+            crate::APPLY_PATCH_PRESERVE_CRLF_ARG,
+            "*** Begin Patch\r\n*** Add File: foo\r\n+hi\r\n*** End Patch\r\n",
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\r\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_literal_applypatch() {
         let args = strs_to_strings(&[
             "applypatch",
@@ -597,6 +673,31 @@ mod tests {
     #[tokio::test]
     async fn test_heredoc() {
         assert_match(&heredoc_script(""), /*expected_workdir*/ None);
+    }
+
+    #[tokio::test]
+    async fn test_heredoc_with_preserve_crlf_flag() {
+        let script = "apply_patch --preserve-crlf <<'PATCH'\n*** Begin Patch\r\n*** Add File: foo\r\n+hi\r\n*** End Patch\r\nPATCH";
+        let args = args_bash(script);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
+                assert_eq!(workdir, None);
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\r\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+
+        assert_match(
+            "cd foo && apply_patch --preserve-crlf <<'PATCH'\n*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch\nPATCH",
+            Some("foo"),
+        );
     }
 
     #[tokio::test]
