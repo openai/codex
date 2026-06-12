@@ -31,6 +31,7 @@ pub use client::http_client::HttpResponseBodyStream;
 pub use client::http_client::ReqwestHttpClient;
 pub use client_api::ExecServerClientConnectOptions;
 pub use client_api::HttpClient;
+pub use client_api::NoiseRendezvousConnectArgs;
 pub use client_api::NoiseRendezvousConnectBundle;
 pub use client_api::NoiseRendezvousConnectProvider;
 pub use client_api::RemoteExecServerConnectArgs;

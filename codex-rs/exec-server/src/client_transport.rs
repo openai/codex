@@ -108,7 +108,7 @@ impl ExecServerClient {
     /// Connect to one exec-server through an authenticated rendezvous stream.
     /// The executor key is pinned before JSON-RPC starts; the websocket carries
     /// only ciphertext after that.
-    pub(crate) async fn connect_noise_rendezvous(
+    pub async fn connect_noise_rendezvous(
         args: NoiseRendezvousConnectArgs,
     ) -> Result<Self, ExecServerError> {
         ensure_rustls_crypto_provider();
