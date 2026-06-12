@@ -5,6 +5,7 @@ use tokio::process::Command;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
 use crate::engine::HookListEntry;
+use crate::engine::PendingAsyncHookDelivery;
 use crate::events::compact::PostCompactRequest;
 use crate::events::compact::PreCompactOutcome;
 use crate::events::compact::PreCompactRequest;
@@ -79,6 +80,20 @@ impl Hooks {
             after_agent,
             engine,
         }
+    }
+
+    pub fn reconfigured(&self, config: HooksConfig) -> Self {
+        let mut reconfigured = Self::new(config);
+        reconfigured.engine.preserve_runtime_from(&self.engine);
+        reconfigured
+    }
+
+    pub fn pending_async_delivery(&self) -> PendingAsyncHookDelivery {
+        self.engine.pending_async_delivery()
+    }
+
+    pub async fn shutdown(&self) {
+        self.engine.shutdown().await;
     }
 
     pub fn startup_warnings(&self) -> &[String] {

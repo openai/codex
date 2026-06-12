@@ -18,12 +18,11 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
-use crate::hook_runtime::inspect_pending_input;
-use crate::hook_runtime::record_additional_contexts;
-use crate::hook_runtime::record_pending_input;
+use crate::hook_runtime::run_initial_user_prompt_submit_hooks_and_record_inputs;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
+use crate::hook_runtime::run_user_prompt_submit_hooks_and_record_inputs;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
@@ -147,6 +146,7 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Option<String>> {
+    let pending_async_output = sess.hooks().pending_async_delivery();
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
@@ -187,7 +187,14 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
     let mut can_drain_pending_input = input.is_empty();
-    if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
+    if run_initial_user_prompt_submit_hooks_and_record_inputs(
+        &sess,
+        &turn_context,
+        &input,
+        pending_async_output,
+    )
+    .await
+    {
         return Ok(None);
     }
 
@@ -232,7 +239,9 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        if run_hooks_and_record_inputs(&sess, &turn_context, &pending_input).await {
+        if run_user_prompt_submit_hooks_and_record_inputs(&sess, &turn_context, &pending_input)
+            .await
+        {
             break;
         }
 
@@ -476,35 +485,6 @@ async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, Pat
         display_roots.push((turn_environment.environment_id.clone(), root));
     }
     display_roots
-}
-
-#[instrument(level = "trace", skip_all)]
-async fn run_hooks_and_record_inputs(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    input: &[TurnInput],
-) -> bool {
-    let mut blocked_input = false;
-    let mut accepted_user_input = false;
-    for input_item in input {
-        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
-        if hook_outcome.should_stop {
-            blocked_input = true;
-            record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
-        } else {
-            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
-                accepted_user_input = true;
-            }
-            record_pending_input(
-                sess,
-                turn_context,
-                input_item.clone(),
-                hook_outcome.additional_contexts,
-            )
-            .await;
-        }
-    }
-    blocked_input && !accepted_user_input
 }
 
 #[instrument(level = "trace", skip_all)]

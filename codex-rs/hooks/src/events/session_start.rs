@@ -10,10 +10,10 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
-use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
+use crate::engine::dispatcher::CommandHookExecutor;
 use crate::engine::output_parser;
 use crate::schema::NullableString;
 use crate::schema::SessionStartCommandInput;
@@ -95,19 +95,16 @@ pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     request: &SessionStartRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    dispatcher::preview_handlers(
         handlers,
         request.target.event_name(),
         Some(request.target.matcher_input()),
     )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
 }
 
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
+    executor: &CommandHookExecutor,
     request: SessionStartRequest,
     turn_id: Option<String>,
 ) -> SessionStartOutcome {
@@ -180,15 +177,16 @@ pub(crate) async fn run(
         }
     };
 
-    let results = dispatcher::execute_handlers(
-        shell,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        turn_id,
-        parse_completed,
-    )
-    .await;
+    let results = executor
+        .execute(
+            matched,
+            input_json,
+            request.cwd.as_path(),
+            turn_id,
+            request.session_id,
+            parse_completed,
+        )
+        .await;
 
     let should_stop = results.iter().any(|result| result.data.should_stop);
     let stop_reason = results
@@ -523,6 +521,7 @@ mod tests {
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             env: std::collections::HashMap::new(),
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         }
     }
 

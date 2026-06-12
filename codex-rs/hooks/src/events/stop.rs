@@ -11,10 +11,10 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
-use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
+use crate::engine::dispatcher::CommandHookExecutor;
 use crate::engine::output_parser;
 use crate::schema::NullableString;
 use crate::schema::StopCommandInput;
@@ -82,19 +82,16 @@ pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     request: &StopRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    dispatcher::preview_handlers(
         handlers,
         request.target.event_name(),
         request.target.matcher_input(),
     )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
 }
 
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
+    executor: &CommandHookExecutor,
     request: StopRequest,
 ) -> StopOutcome {
     let matched = dispatcher::select_handlers(
@@ -177,15 +174,16 @@ pub(crate) async fn run(
         }
     };
 
-    let results = dispatcher::execute_handlers(
-        shell,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
-        parse_completed,
-    )
-    .await;
+    let results = executor
+        .execute(
+            matched,
+            input_json,
+            request.cwd.as_path(),
+            Some(request.turn_id),
+            request.session_id,
+            parse_completed,
+        )
+        .await;
 
     let aggregate = aggregate_results(results.iter().map(|result| &result.data));
 
@@ -639,6 +637,7 @@ mod tests {
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             env: std::collections::HashMap::new(),
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         }
     }
 

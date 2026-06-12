@@ -16,10 +16,10 @@
 use std::path::PathBuf;
 
 use super::common;
-use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
+use crate::engine::dispatcher::CommandHookExecutor;
 use crate::engine::output_parser;
 use crate::schema::PermissionRequestCommandInput;
 use crate::schema::SubagentCommandInputFields;
@@ -69,24 +69,19 @@ pub(crate) fn preview(
     request: &PermissionRequestRequest,
 ) -> Vec<HookRunSummary> {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
-    dispatcher::select_handlers_for_matcher_inputs(
+    dispatcher::preview_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PermissionRequest,
         &matcher_inputs,
     )
     .into_iter()
-    .map(|handler| {
-        common::hook_run_for_tool_use(
-            dispatcher::running_summary(&handler),
-            &request.run_id_suffix,
-        )
-    })
+    .map(|run| common::hook_run_for_tool_use(run, &request.run_id_suffix))
     .collect()
 }
 
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
+    executor: &CommandHookExecutor,
     request: PermissionRequestRequest,
 ) -> PermissionRequestOutcome {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
@@ -118,15 +113,16 @@ pub(crate) async fn run(
         }
     };
 
-    let results = dispatcher::execute_handlers(
-        shell,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id.clone()),
-        parse_completed,
-    )
-    .await;
+    let results = executor
+        .execute(
+            matched,
+            input_json,
+            request.cwd.as_path(),
+            Some(request.turn_id.clone()),
+            request.session_id,
+            parse_completed,
+        )
+        .await;
 
     // Preserve the most specific matching allow, but treat any deny as final so
     // broader policy layers cannot accidentally overrule a more specific block.

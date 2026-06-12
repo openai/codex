@@ -16,7 +16,6 @@ use super::dispatcher::hook_handler_type_label;
 use super::dispatcher::hook_scope_label;
 use super::dispatcher::hook_source_label;
 use super::dispatcher::scope_for_event;
-use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookHandlerType;
 
 #[derive(Debug)]
@@ -37,7 +36,7 @@ pub(crate) struct CommandRunResult {
     fields(
         hook.event_name = hook_event_name_label(handler.event_name),
         hook.handler_type = hook_handler_type_label(HookHandlerType::Command),
-        hook.execution_mode = hook_execution_mode_label(HookExecutionMode::Sync),
+        hook.execution_mode = hook_execution_mode_label(handler.execution_mode),
         hook.scope = hook_scope_label(scope_for_event(handler.event_name)),
         hook.source = hook_source_label(handler.source),
         hook.display_order = handler.display_order,
