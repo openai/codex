@@ -98,10 +98,12 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
         })
     );
 
-    assert_eq!(
-        cache.load(Some("user-12345"), Some("account-12345")).await,
-        Ok(cache_file.signed_payload)
-    );
+    let loaded_cache = cache
+        .load(Some("user-12345"), Some("account-12345"))
+        .await
+        .expect("load cache");
+    assert_eq!(loaded_cache.signed_payload, cache_file.signed_payload);
+    assert!(loaded_cache.refresh_in <= CLOUD_CONFIG_BUNDLE_CACHE_TTL);
 }
 
 #[tokio::test]
@@ -207,6 +209,25 @@ async fn load_rejects_cache_older_than_ttl_even_when_expiry_is_later() {
         cache.load(Some("user-12345"), Some("account-12345")).await,
         Err(CacheLoadStatus::CacheExpired)
     );
+}
+
+#[tokio::test]
+async fn load_uses_ttl_cap_for_refresh_delay() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = create_test_cache(codex_home.path());
+    let now = Utc::now();
+    let mut signed_payload = valid_signed_payload();
+    signed_payload.cached_at = now - ChronoDuration::minutes(5);
+    signed_payload.expires_at = now + ChronoDuration::minutes(30);
+    write_cache_file(&cache, &signed_cache_file(signed_payload));
+
+    let loaded_cache = cache
+        .load(Some("user-12345"), Some("account-12345"))
+        .await
+        .expect("load cache");
+
+    assert!(loaded_cache.refresh_in <= Duration::from_secs(10 * 60));
+    assert!(loaded_cache.refresh_in >= Duration::from_secs(10 * 60 - 5));
 }
 
 #[tokio::test]

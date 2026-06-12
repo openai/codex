@@ -1,4 +1,11 @@
 use super::*;
+use crate::CloudConfigBundle;
+use crate::CloudConfigBundleLoader;
+use crate::CloudConfigFragment;
+use crate::CloudConfigTomlBundle;
+use crate::CloudRequirementsFragment;
+use crate::CloudRequirementsTomlBundle;
+use crate::ConfigRequirementsToml;
 use codex_file_system::CopyOptions;
 use codex_file_system::CreateDirectoryOptions;
 use codex_file_system::ExecutorFileSystemFuture;
@@ -88,6 +95,77 @@ impl ExecutorFileSystem for TestFileSystem {
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { unimplemented!("test filesystem only supports reads") })
     }
+}
+
+#[tokio::test]
+async fn refreshed_cloud_bundle_applies_to_future_layer_loads() {
+    let tmp = tempdir().expect("tempdir");
+    let bundle = |suffix: &str, model: &str, approval_policy: &str| CloudConfigBundle {
+        config_toml: CloudConfigTomlBundle {
+            enterprise_managed: vec![CloudConfigFragment {
+                id: format!("cfg_{suffix}"),
+                name: format!("Config {suffix}"),
+                contents: format!("model = \"{model}\""),
+            }],
+        },
+        requirements_toml: CloudRequirementsTomlBundle {
+            enterprise_managed: vec![CloudRequirementsFragment {
+                id: format!("req_{suffix}"),
+                name: format!("Requirements {suffix}"),
+                contents: format!("allowed_approval_policies = [\"{approval_policy}\"]"),
+            }],
+        },
+    };
+    let initial_bundle = bundle("initial", "initial-model", "never");
+    let refreshed_bundle = bundle("refreshed", "refreshed-model", "on-request");
+    let (loader, publisher) = CloudConfigBundleLoader::pending();
+    assert!(publisher.publish(Ok(Some(initial_bundle))));
+    let mut loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    loader_overrides.managed_config_path = Some(tmp.path().join("managed_config.toml"));
+    loader_overrides.system_config_path = Some(tmp.path().join("system-config.toml"));
+    loader_overrides.system_requirements_path = Some(tmp.path().join("requirements.toml"));
+    let load_layers = || {
+        load_config_layers_state(
+            &TestFileSystem,
+            tmp.path(),
+            /*cwd*/ None,
+            &[],
+            ConfigLoadOptions {
+                loader_overrides: loader_overrides.clone(),
+                strict_config: false,
+                cloud_config_bundle: loader.clone(),
+            },
+            &crate::NoopThreadConfigLoader,
+        )
+    };
+
+    let initial_layers = load_layers().await.expect("load initial layers");
+    assert_eq!(
+        initial_layers.effective_config(),
+        toml::from_str("model = \"initial-model\"").expect("expected initial config")
+    );
+    assert_eq!(
+        initial_layers.requirements_toml(),
+        &ConfigRequirementsToml {
+            allowed_approval_policies: Some(vec![AskForApproval::Never]),
+            ..Default::default()
+        }
+    );
+
+    assert!(publisher.publish(Ok(Some(refreshed_bundle))));
+
+    let refreshed_layers = load_layers().await.expect("load refreshed layers");
+    assert_eq!(
+        refreshed_layers.effective_config(),
+        toml::from_str("model = \"refreshed-model\"").expect("expected refreshed config")
+    );
+    assert_eq!(
+        refreshed_layers.requirements_toml(),
+        &ConfigRequirementsToml {
+            allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+            ..Default::default()
+        }
+    );
 }
 
 #[tokio::test]

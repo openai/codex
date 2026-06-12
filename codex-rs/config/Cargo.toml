@@ -26,7 +26,6 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 dunce = { workspace = true }
-futures = { workspace = true, features = ["alloc", "std"] }
 gethostname = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 multimap = { workspace = true }
@@ -38,7 +37,7 @@ serde_json = { workspace = true }
 serde_path_to_error = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "sync"] }
 toml = { workspace = true, features = ["preserve_order"] }
 toml_edit = { workspace = true }
 tonic = { workspace = true }

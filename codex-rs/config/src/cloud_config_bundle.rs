@@ -12,14 +12,11 @@ use crate::cloud_config_layers::CloudConfigLayerError;
 use crate::cloud_config_layers::cloud_config_layers_from_fragments_strict;
 use crate::cloud_config_layers_from_fragments;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use futures::future::BoxFuture;
-use futures::future::FutureExt;
-use futures::future::Shared;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;
-use std::future::Future;
 use thiserror::Error;
+use tokio::sync::watch;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CloudConfigBundle {
@@ -177,23 +174,86 @@ impl CloudConfigBundleLoadError {
 
 #[derive(Clone)]
 pub struct CloudConfigBundleLoader {
-    fut: Shared<BoxFuture<'static, Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>>>,
+    state: watch::Receiver<CloudConfigBundleState>,
+}
+
+#[derive(Clone, Debug)]
+enum CloudConfigBundleState {
+    Pending,
+    Ready(Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>),
+}
+
+/// Publishes results to a [`CloudConfigBundleLoader`].
+#[derive(Debug)]
+pub struct CloudConfigBundlePublisher {
+    state: watch::Sender<CloudConfigBundleState>,
 }
 
 impl CloudConfigBundleLoader {
-    pub fn new<F>(fut: F) -> Self
-    where
-        F: Future<Output = Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>>
-            + Send
-            + 'static,
-    {
-        Self {
-            fut: fut.boxed().shared(),
-        }
+    /// Creates a loader that immediately returns the supplied result.
+    pub fn from_result(
+        result: Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>,
+    ) -> Self {
+        let (_publisher, state) = watch::channel(CloudConfigBundleState::Ready(result));
+        Self { state }
+    }
+
+    /// Creates a pending loader and its publisher.
+    pub fn pending() -> (Self, CloudConfigBundlePublisher) {
+        let (publisher, state) = watch::channel(CloudConfigBundleState::Pending);
+        (
+            Self { state },
+            CloudConfigBundlePublisher { state: publisher },
+        )
     }
 
     pub async fn get(&self) -> Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError> {
-        self.fut.clone().await
+        let mut state = self.state.clone();
+        loop {
+            let result = match &*state.borrow_and_update() {
+                CloudConfigBundleState::Pending => None,
+                CloudConfigBundleState::Ready(result) => Some(result.clone()),
+            };
+            if let Some(result) = result {
+                return result;
+            }
+            if state.changed().await.is_err() {
+                return Err(CloudConfigBundleLoadError::new(
+                    CloudConfigBundleLoadErrorCode::Internal,
+                    /*status_code*/ None,
+                    "cloud config bundle lifecycle ended before startup completed",
+                ));
+            }
+        }
+    }
+}
+
+impl CloudConfigBundlePublisher {
+    /// Waits until every associated loader and clone has been dropped.
+    pub async fn closed(&self) {
+        self.state.closed().await;
+    }
+
+    /// Publishes the latest load result.
+    ///
+    /// An error resolves a pending loader, but does not replace a result that
+    /// was already published. Successful results always replace the current
+    /// value. Returns `false` if every associated loader was dropped.
+    pub fn publish(
+        &self,
+        result: Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>,
+    ) -> bool {
+        if self.state.is_closed() {
+            return false;
+        }
+        self.state.send_if_modified(move |state| {
+            if matches!(state, CloudConfigBundleState::Ready(_)) && result.is_err() {
+                return false;
+            }
+            *state = CloudConfigBundleState::Ready(result);
+            true
+        });
+        !self.state.is_closed()
     }
 }
 
@@ -205,7 +265,7 @@ impl fmt::Debug for CloudConfigBundleLoader {
 
 impl Default for CloudConfigBundleLoader {
     fn default() -> Self {
-        Self::new(async { Ok(None) })
+        Self::from_result(Ok(None))
     }
 }
 

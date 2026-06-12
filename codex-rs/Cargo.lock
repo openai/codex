@@ -2509,7 +2509,6 @@ dependencies = [
  "core-foundation 0.9.4",
  "dns-lookup",
  "dunce",
- "futures",
  "gethostname",
  "indexmap 2.14.0",
  "libc",

@@ -2171,13 +2171,13 @@ async fn load_config_layers_fails_when_cloud_config_bundle_loader_fails() -> any
         Some(cwd),
         &[] as &[(String, TomlValue)],
         ConfigLoadOptions {
-            cloud_config_bundle: CloudConfigBundleLoader::new(async {
-                Err(CloudConfigBundleLoadError::new(
+            cloud_config_bundle: CloudConfigBundleLoader::from_result(Err(
+                CloudConfigBundleLoadError::new(
                     codex_config::CloudConfigBundleLoadErrorCode::RequestFailed,
                     /*status_code*/ None,
                     "cloud config bundle failed",
-                ))
-            }),
+                ),
+            )),
             ..Default::default()
         },
         &codex_config::NoopThreadConfigLoader,

@@ -16,6 +16,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_backend_client::ConfigBundleResponse;
 use codex_backend_client::DeliveredTomlFragment;
 use codex_config::AbsolutePathBuf;
+use codex_config::CloudConfigBundleLoader;
+use codex_config::CloudConfigBundlePublisher;
 use codex_config::CloudConfigFragment;
 use codex_config::CloudConfigTomlBundle;
 use codex_config::CloudRequirementsFragment;
@@ -193,6 +195,19 @@ fn test_bundle() -> CloudConfigBundle {
         requirements_toml: CloudRequirementsTomlBundle {
             enterprise_managed: vec![test_requirements_fragment()],
         },
+    }
+}
+
+fn pending_loader() -> (CloudConfigBundleLoader, CloudConfigBundlePublisher) {
+    let (loader, publisher) = CloudConfigBundleLoader::pending();
+    assert!(publisher.publish(Ok(None)));
+    (loader, publisher)
+}
+
+fn expect_active(load: Result<StartupLoad, CloudConfigBundleLoadError>) -> LoadedBundle {
+    match load.expect("startup load should succeed") {
+        StartupLoad::Active(loaded) => loaded,
+        StartupLoad::Inactive => panic!("startup load should be active"),
     }
 }
 
@@ -397,7 +412,10 @@ async fn get_bundle_skips_non_chatgpt_auth() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert_eq!(service.load_startup_bundle().await, Ok(None));
+    assert_eq!(
+        service.load_startup_bundle().await,
+        Ok(StartupLoad::Inactive)
+    );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
 }
 
@@ -412,7 +430,10 @@ async fn get_bundle_skips_individual_plan() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert_eq!(service.load_startup_bundle().await, Ok(None));
+    assert_eq!(
+        service.load_startup_bundle().await,
+        Ok(StartupLoad::Inactive)
+    );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
 }
 
@@ -437,8 +458,8 @@ async fn get_bundle_allows_eligible_workspace_plans_and_writes_cache() {
         );
 
         assert_eq!(
-            service.load_startup_bundle().await,
-            Ok(Some(bundle)),
+            expect_active(service.load_startup_bundle().await).bundle,
+            Some(bundle),
             "plan_type: {plan_type}"
         );
         assert_eq!(
@@ -467,7 +488,10 @@ async fn get_bundle_skips_team_like_usage_based_plan() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert_eq!(service.load_startup_bundle().await, Ok(None));
+    assert_eq!(
+        service.load_startup_bundle().await,
+        Ok(StartupLoad::Inactive)
+    );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
 }
 
@@ -520,8 +544,8 @@ async fn get_bundle_ignores_invalid_cache_and_refetches() {
     );
 
     assert_eq!(
-        service.load_startup_bundle().await,
-        Ok(Some(replacement_bundle.clone()))
+        expect_active(service.load_startup_bundle().await).bundle,
+        Some(replacement_bundle.clone())
     );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     assert_eq!(
@@ -529,6 +553,7 @@ async fn get_bundle_ignores_invalid_cache_and_refetches() {
             .load(Some("user-12345"), Some("account-12345"))
             .await
             .expect("load refreshed cache")
+            .signed_payload
             .bundle,
         replacement_bundle
     );
@@ -545,7 +570,15 @@ async fn get_bundle_empty_response_is_success_and_cached() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert_eq!(service.load_startup_bundle().await, Ok(None));
+    let loaded = service
+        .load_startup_bundle()
+        .await
+        .expect("empty response should be an active startup load");
+    let StartupLoad::Active(LoadedBundle { bundle, refresh_in }) = loaded else {
+        panic!("eligible auth should keep cloud config refresh active");
+    };
+    assert_eq!(bundle, None);
+    assert!(refresh_in > Duration::ZERO);
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     assert!(
         codex_home
@@ -556,7 +589,7 @@ async fn get_bundle_empty_response_is_success_and_cached() {
 }
 
 #[tokio::test]
-async fn get_bundle_surfaces_cache_lock_failure() {
+async fn get_bundle_fetches_and_caches_when_cache_lock_fails() {
     let codex_home = tempdir().expect("tempdir");
     std::fs::create_dir(
         codex_home
@@ -572,12 +605,16 @@ async fn get_bundle_surfaces_cache_lock_failure() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    let err = service
-        .load_startup_bundle()
-        .await
-        .expect_err("cache lock failure should fail startup");
-    assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::Internal);
-    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
+    let loaded = expect_active(service.load_startup_bundle().await);
+    assert_eq!(loaded.bundle, Some(test_bundle()));
+    assert!(loaded.refresh_in > CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_RETRY_INTERVAL);
+    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+    assert!(
+        codex_home
+            .path()
+            .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
+            .exists()
+    );
 }
 
 #[tokio::test]
@@ -590,7 +627,7 @@ async fn get_bundle_refetches_cache_older_than_ttl() {
         codex_home.path().to_path_buf(),
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
-    let _ = prime_service.load_startup_bundle().await;
+    expect_active(prime_service.load_startup_bundle().await);
     shift_cache_timestamps(
         &create_test_cache(codex_home.path()),
         -chrono::Duration::from_std(CLOUD_CONFIG_BUNDLE_CACHE_TTL + Duration::from_secs(1))
@@ -605,7 +642,10 @@ async fn get_bundle_refetches_cache_older_than_ttl() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert_eq!(service.load_startup_bundle().await, Ok(Some(bundle)));
+    assert_eq!(
+        expect_active(service.load_startup_bundle().await).bundle,
+        Some(bundle)
+    );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
 }
 
@@ -619,7 +659,7 @@ async fn get_bundle_ignores_cache_for_different_auth_identity() {
         codex_home.path().to_path_buf(),
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
-    let _ = prime_service.load_startup_bundle().await;
+    expect_active(prime_service.load_startup_bundle().await);
 
     let replacement_bundle = CloudConfigBundle {
         config_toml: CloudConfigTomlBundle::default(),
@@ -643,8 +683,8 @@ async fn get_bundle_ignores_cache_for_different_auth_identity() {
     );
 
     assert_eq!(
-        service.load_startup_bundle().await,
-        Ok(Some(replacement_bundle))
+        expect_active(service.load_startup_bundle().await).bundle,
+        Some(replacement_bundle)
     );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
 }
@@ -658,7 +698,7 @@ async fn get_bundle_times_out() {
         codex_home.path().to_path_buf(),
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
-    let handle = tokio::spawn(async move { service.load_startup_bundle_with_timeout().await });
+    let handle = tokio::spawn(async move { service.load_startup_bundle().await });
     tokio::time::advance(CLOUD_CONFIG_BUNDLE_TIMEOUT + Duration::from_millis(1)).await;
 
     let result = handle.await.expect("cloud config bundle task");
@@ -687,7 +727,10 @@ async fn get_bundle_retries_until_success() {
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(1)).await;
 
-    assert_eq!(handle.await.expect("bundle task"), Ok(Some(test_bundle())));
+    assert_eq!(
+        expect_active(handle.await.expect("bundle task")).bundle,
+        Some(test_bundle())
+    );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
 }
 
@@ -744,7 +787,10 @@ async fn get_bundle_recovers_after_unauthorized_reload() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert_eq!(service.load_startup_bundle().await, Ok(Some(test_bundle())));
+    assert_eq!(
+        expect_active(service.load_startup_bundle().await).bundle,
+        Some(test_bundle())
+    );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
 }
 
@@ -799,13 +845,17 @@ async fn get_bundle_recovers_after_unauthorized_reload_updates_cache_identity() 
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert_eq!(service.load_startup_bundle().await, Ok(Some(test_bundle())));
+    assert_eq!(
+        expect_active(service.load_startup_bundle().await).bundle,
+        Some(test_bundle())
+    );
     let cache = create_test_cache(codex_home.path());
     assert_eq!(
         cache
             .load(Some("user-99999"), Some("account-12345"))
             .await
             .expect("load cache")
+            .signed_payload
             .bundle,
         test_bundle()
     );
@@ -940,7 +990,7 @@ async fn get_bundle_does_not_use_cache_when_auth_identity_is_incomplete() {
         codex_home.path().to_path_buf(),
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
-    let _ = prime_service.load_startup_bundle().await;
+    expect_active(prime_service.load_startup_bundle().await);
 
     let replacement_bundle = CloudConfigBundle {
         config_toml: CloudConfigTomlBundle::default(),
@@ -968,8 +1018,8 @@ async fn get_bundle_does_not_use_cache_when_auth_identity_is_incomplete() {
     );
 
     assert_eq!(
-        service.load_startup_bundle().await,
-        Ok(Some(replacement_bundle))
+        expect_active(service.load_startup_bundle().await).bundle,
+        Some(replacement_bundle)
     );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
 }
@@ -1015,8 +1065,8 @@ async fn refresh_skips_remote_fetch_when_shared_cache_was_refreshed_recently() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
     assert_eq!(
-        prime_service.load_startup_bundle().await,
-        Ok(Some(test_bundle()))
+        expect_active(prime_service.load_startup_bundle().await).bundle,
+        Some(test_bundle())
     );
 
     let fetcher = Arc::new(SequenceBundleClient::new(vec![Err(request_error())]));
@@ -1027,8 +1077,93 @@ async fn refresh_skips_remote_fetch_when_shared_cache_was_refreshed_recently() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert!(service.refresh_cache_once().await);
+    let (loader, publisher) = pending_loader();
+    let CacheRefreshSchedule::ContinueAfter(refresh_in) =
+        service.refresh_cache_once(&publisher).await
+    else {
+        panic!("refresh should remain scheduled");
+    };
+    assert!(refresh_in > CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_RETRY_INTERVAL);
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
+    assert_eq!(loader.get().await, Ok(Some(test_bundle())));
+}
+
+#[tokio::test(start_paused = true)]
+async fn background_refresh_stops_when_loader_is_dropped() {
+    let codex_home = tempdir().expect("tempdir");
+    let fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
+    let service = CloudConfigBundleService::new(
+        auth_manager_with_plan("business").await,
+        fetcher.clone(),
+        codex_home.path().to_path_buf(),
+        CLOUD_CONFIG_BUNDLE_TIMEOUT,
+    );
+    let (loader, publisher) = pending_loader();
+    let refresh_task = tokio::spawn(async move {
+        service
+            .refresh_cache_in_background(CLOUD_CONFIG_BUNDLE_CACHE_TTL, publisher)
+            .await;
+    });
+
+    drop(loader);
+    tokio::time::timeout(Duration::from_secs(1), refresh_task)
+        .await
+        .expect("loader drop should stop refresh")
+        .expect("refresh task");
+    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn refresh_failure_uses_retry_interval() {
+    let codex_home = tempdir().expect("tempdir");
+    let fetcher = Arc::new(SequenceBundleClient::new(vec![
+        Err(request_error());
+        CLOUD_CONFIG_BUNDLE_MAX_ATTEMPTS
+    ]));
+    let service = CloudConfigBundleService::new(
+        auth_manager_with_plan("business").await,
+        fetcher.clone(),
+        codex_home.path().to_path_buf(),
+        CLOUD_CONFIG_BUNDLE_TIMEOUT,
+    );
+
+    let (_loader, publisher) = pending_loader();
+    let refresh = tokio::spawn(async move { service.refresh_cache_once(&publisher).await });
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        refresh.await.expect("refresh task"),
+        CacheRefreshSchedule::ContinueAfter(CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_RETRY_INTERVAL)
+    );
+    assert_eq!(
+        fetcher.request_count.load(Ordering::SeqCst),
+        CLOUD_CONFIG_BUNDLE_MAX_ATTEMPTS
+    );
+}
+
+#[tokio::test]
+async fn startup_uses_retry_interval_when_cache_write_fails() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = create_test_cache(codex_home.path());
+    std::fs::create_dir(cache.path()).expect("create directory at cache path");
+    let fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
+    let service = CloudConfigBundleService::new(
+        auth_manager_with_plan("business").await,
+        fetcher.clone(),
+        codex_home.path().to_path_buf(),
+        CLOUD_CONFIG_BUNDLE_TIMEOUT,
+    );
+
+    assert_eq!(
+        service.load_startup_bundle().await,
+        Ok(StartupLoad::Active(LoadedBundle {
+            bundle: Some(test_bundle()),
+            refresh_in: CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_RETRY_INTERVAL,
+        }))
+    );
+    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1053,8 +1188,13 @@ async fn refresh_fetches_remote_when_cache_timestamp_is_in_future() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert!(service.refresh_cache_once().await);
+    let (loader, publisher) = pending_loader();
+    assert!(matches!(
+        service.refresh_cache_once(&publisher).await,
+        CacheRefreshSchedule::ContinueAfter(_)
+    ));
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+    assert_eq!(loader.get().await, Ok(Some(test_bundle())));
 }
 
 #[tokio::test]
@@ -1082,18 +1222,18 @@ async fn concurrent_startups_make_one_remote_request() {
     fetcher.release_request.notify_one();
 
     assert_eq!(
-        first_load.await.expect("first load task"),
-        Ok(Some(test_bundle()))
+        expect_active(first_load.await.expect("first load task")).bundle,
+        Some(test_bundle())
     );
     assert_eq!(
-        second_load.await.expect("second load task"),
-        Ok(Some(test_bundle()))
+        expect_active(second_load.await.expect("second load task")).bundle,
+        Some(test_bundle())
     );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
-async fn refresh_skips_remote_fetch_when_cache_lock_fails() {
+async fn refresh_fetches_and_caches_when_cache_lock_fails() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
     cache
@@ -1124,8 +1264,24 @@ async fn refresh_skips_remote_fetch_when_cache_lock_fails() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert!(service.refresh_cache_once().await);
-    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
+    let (loader, publisher) = pending_loader();
+    let CacheRefreshSchedule::ContinueAfter(refresh_in) =
+        service.refresh_cache_once(&publisher).await
+    else {
+        panic!("refresh should remain scheduled");
+    };
+    assert!(refresh_in > CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_RETRY_INTERVAL);
+    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+    assert_eq!(loader.get().await, Ok(Some(test_bundle())));
+    assert_eq!(
+        cache
+            .load(Some("user-12345"), Some("account-12345"))
+            .await
+            .expect("load refreshed cache")
+            .signed_payload
+            .bundle,
+        test_bundle()
+    );
 }
 
 #[tokio::test]
@@ -1152,20 +1308,28 @@ async fn refresh_from_remote_updates_stale_cached_bundle() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
 
-    assert_eq!(service.load_startup_bundle().await, Ok(Some(test_bundle())));
+    assert_eq!(
+        expect_active(service.load_startup_bundle().await).bundle,
+        Some(test_bundle())
+    );
     shift_cache_timestamps(
         &create_test_cache(codex_home.path()),
         -chrono::Duration::from_std(CLOUD_CONFIG_BUNDLE_CACHE_TTL + Duration::from_secs(1))
             .expect("cache age should fit chrono duration"),
     );
-    assert!(service.refresh_cache_once().await);
+    let (loader, publisher) = pending_loader();
+    assert!(matches!(
+        service.refresh_cache_once(&publisher).await,
+        CacheRefreshSchedule::ContinueAfter(_)
+    ));
 
     let cache = create_test_cache(codex_home.path());
-    let signed_payload = cache
+    let loaded_cache = cache
         .load(Some("user-12345"), Some("account-12345"))
         .await
         .expect("load cache");
-    assert_eq!(signed_payload.bundle, replacement_bundle);
+    assert_eq!(loaded_cache.signed_payload.bundle, replacement_bundle);
+    assert_eq!(loader.get().await, Ok(Some(replacement_bundle)));
 }
 
 #[test]

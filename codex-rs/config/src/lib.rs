@@ -37,6 +37,7 @@ pub use cloud_config_bundle::CloudConfigBundleLayers;
 pub use cloud_config_bundle::CloudConfigBundleLoadError;
 pub use cloud_config_bundle::CloudConfigBundleLoadErrorCode;
 pub use cloud_config_bundle::CloudConfigBundleLoader;
+pub use cloud_config_bundle::CloudConfigBundlePublisher;
 pub use cloud_config_bundle::CloudConfigTomlBundle;
 pub use cloud_config_bundle::CloudRequirementsFragment;
 pub use cloud_config_bundle::CloudRequirementsTomlBundle;
