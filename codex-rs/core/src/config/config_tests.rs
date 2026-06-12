@@ -4354,8 +4354,13 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
         Some(&http_mcp("https://sample.example/mcp"))
     );
     assert_eq!(
-        mcp_config.mcp_server_catalog.plugin_ids_by_server_name(),
-        HashMap::from([("sample".to_string(), "sample@test".to_string())])
+        mcp_config
+            .mcp_server_catalog
+            .plugin_attributions_by_server_name(),
+        HashMap::from([(
+            "sample".to_string(),
+            McpPluginAttribution::new("sample@test".to_string(), "sample".to_string()),
+        )])
     );
 
     Ok(())
@@ -4413,7 +4418,7 @@ enabled = true
     assert!(
         mcp_config
             .mcp_server_catalog
-            .plugin_ids_by_server_name()
+            .plugin_attributions_by_server_name()
             .is_empty()
     );
 
@@ -4421,7 +4426,7 @@ enabled = true
 }
 
 #[tokio::test]
-async fn to_mcp_config_applies_plugin_mcp_cloud_config_bundle() -> anyhow::Result<()> {
+async fn selected_plugin_wins_after_discovered_plugin_requirements() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let plugin_root = codex_home
         .path()
@@ -4492,6 +4497,36 @@ url = "https://sample.example/mcp"
                     name: "Base requirements".to_string(),
                 },
             })
+        ))
+    );
+
+    let selected = http_mcp("https://selected.example/mcp");
+    let mcp_config = config
+        .to_mcp_config_with_plugin_registrations(
+            &plugins_manager,
+            [McpServerRegistration::from_selected_plugin(
+                "unlisted".to_string(),
+                McpPluginAttribution::new(
+                    "selected-root".to_string(),
+                    "Selected Plugin".to_string(),
+                ),
+                /*selection_order*/ 0,
+                selected.clone(),
+            )],
+        )
+        .await;
+
+    assert_eq!(
+        mcp_config
+            .mcp_server_catalog
+            .server("unlisted")
+            .map(|server| (server.source().clone(), server.config().clone())),
+        Some((
+            codex_mcp::McpServerSource::SelectedPlugin(McpPluginAttribution::new(
+                "selected-root".to_string(),
+                "Selected Plugin".to_string(),
+            )),
+            selected,
         ))
     );
     Ok(())

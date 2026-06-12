@@ -447,8 +447,12 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                     &selected_root.location;
                 server.environment_id = environment_id.clone();
                 server.enabled = false;
-                vec![codex_extension_api::McpServerContribution::Set {
-                    name: selected_root.id,
+                let plugin_id = selected_root.id;
+                vec![codex_extension_api::McpServerContribution::SelectedPlugin {
+                    name: plugin_id.clone(),
+                    plugin_display_name: plugin_id.clone(),
+                    plugin_id,
+                    selection_order: 0,
                     config: Box::new(server),
                 }]
             })

@@ -32,6 +32,10 @@ impl<M> LoadedPlugin<M> {
     pub fn is_active(&self) -> bool {
         self.enabled && self.error.is_none()
     }
+
+    pub fn display_name(&self) -> &str {
+        self.manifest_name.as_deref().unwrap_or(&self.config_name)
+    }
 }
 
 fn plugin_capability_summary_from_loaded<M>(
@@ -46,10 +50,7 @@ fn plugin_capability_summary_from_loaded<M>(
 
     let summary = PluginCapabilitySummary {
         config_name: plugin.config_name.clone(),
-        display_name: plugin
-            .manifest_name
-            .clone()
-            .unwrap_or_else(|| plugin.config_name.clone()),
+        display_name: plugin.display_name().to_string(),
         description: prompt_safe_plugin_description(plugin.manifest_description.as_deref()),
         has_skills: plugin.has_enabled_skills,
         mcp_server_names,

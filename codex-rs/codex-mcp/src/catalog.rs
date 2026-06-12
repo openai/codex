@@ -5,18 +5,52 @@ use std::collections::HashMap;
 
 use codex_config::McpServerConfig;
 
+/// Plugin identity retained with an MCP registration for tool attribution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpPluginAttribution {
+    plugin_id: String,
+    display_name: String,
+}
+
+impl McpPluginAttribution {
+    pub fn new(plugin_id: String, display_name: String) -> Self {
+        Self {
+            plugin_id,
+            display_name,
+        }
+    }
+
+    pub fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+}
+
 /// The component that declared an MCP server registration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpServerSource {
-    Plugin { plugin_id: String },
+    Plugin(McpPluginAttribution),
+    SelectedPlugin(McpPluginAttribution),
     Config,
     Compatibility { id: String },
     Extension { id: String },
 }
 
+impl McpServerSource {
+    fn disabled_registration_is_name_veto(&self) -> bool {
+        // A selected package's policy applies to its registration, not to a higher runtime source
+        // that happens to use the same logical server name.
+        !matches!(self, Self::SelectedPlugin(_))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum RegistrationPrecedence {
     Plugin(Reverse<usize>),
+    SelectedPlugin(Reverse<usize>),
     Config,
     Compatibility,
     Extension(usize),
@@ -26,9 +60,10 @@ impl RegistrationPrecedence {
     fn tier(self) -> u8 {
         match self {
             Self::Plugin(_) => 0,
-            Self::Config => 1,
-            Self::Compatibility => 2,
-            Self::Extension(_) => 3,
+            Self::SelectedPlugin(_) => 1,
+            Self::Config => 2,
+            Self::Compatibility => 3,
+            Self::Extension(_) => 4,
         }
     }
 }
@@ -54,15 +89,30 @@ impl McpServerRegistration {
 
     pub fn from_plugin(
         name: String,
-        plugin_id: String,
+        attribution: McpPluginAttribution,
         plugin_order: usize,
         config: McpServerConfig,
     ) -> Self {
         Self::new(
             name,
-            McpServerSource::Plugin { plugin_id },
+            McpServerSource::Plugin(attribution),
             config,
             RegistrationPrecedence::Plugin(Reverse(plugin_order)),
+        )
+    }
+
+    /// Registers a thread-selected plugin above discovered plugins and below config.
+    pub fn from_selected_plugin(
+        name: String,
+        attribution: McpPluginAttribution,
+        selection_order: usize,
+        config: McpServerConfig,
+    ) -> Self {
+        Self::new(
+            name,
+            McpServerSource::SelectedPlugin(attribution),
+            config,
+            RegistrationPrecedence::SelectedPlugin(Reverse(selection_order)),
         )
     }
 
@@ -236,10 +286,14 @@ impl McpCatalogBuilder {
             .filter_map(|(name, action)| match action {
                 CatalogAction::Register(registration) => {
                     let mut registration = *registration;
-                    // Effective disabled winners remain name-scoped vetoes for later overlays.
+                    let persist_disabled_name =
+                        registration.source.disabled_registration_is_name_veto();
                     if !registration.config.enabled || disabled_server_names.contains(&name) {
                         registration.config.enabled = false;
-                        disabled_server_names.insert(name.clone());
+                        if persist_disabled_name {
+                            // Preserve legacy disabled winners across later runtime overlays.
+                            disabled_server_names.insert(name.clone());
+                        }
                     }
                     Some((
                         name,
@@ -311,11 +365,15 @@ impl ResolvedMcpCatalog {
             .collect()
     }
 
-    pub fn plugin_ids_by_server_name(&self) -> HashMap<String, String> {
+    /// Returns package attribution for each winning plugin-owned server.
+    pub fn plugin_attributions_by_server_name(&self) -> HashMap<String, McpPluginAttribution> {
         self.servers
             .iter()
             .filter_map(|(name, server)| match server.source() {
-                McpServerSource::Plugin { plugin_id } => Some((name.clone(), plugin_id.clone())),
+                McpServerSource::Plugin(attribution)
+                | McpServerSource::SelectedPlugin(attribution) => {
+                    Some((name.clone(), attribution.clone()))
+                }
                 McpServerSource::Config
                 | McpServerSource::Compatibility { .. }
                 | McpServerSource::Extension { .. } => None,
