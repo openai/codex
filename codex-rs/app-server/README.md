@@ -86,12 +86,12 @@ Clients must send a single `initialize` request per transport connection before 
 
 `initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
 
-Clients that render OpenAI extended MCP forms set
+Clients that handle OpenAI extended MCP forms, including a fallback for
+unsupported field types, set
 `initialize.params.capabilities.mcpServerOpenAiFormElicitation` to `true`.
-App-server then advertises the downstream `openai/form` MCP extension with the
-`openai/file` field type for threads started, resumed, or forked by that
-connection. Clients that cannot render these forms omit the field or set it to
-`false`.
+App-server then advertises the downstream `openai/form` MCP extension for
+threads started, resumed, or forked by that connection. Clients that cannot
+handle the request envelope omit the field or set it to `false`.
 
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
@@ -1477,7 +1477,8 @@ Order of messages:
 `turnId` is best-effort. When the elicitation is correlated with an active turn, the request includes that turn id; otherwise it is `null`.
 
 For `openai/form`, app-server forwards `requestedSchema` as opaque JSON. The
-client owns validation and rendering of the `openai/file` field type.
+client owns validation and rendering of supported field types and must return a
+valid `decline` or `cancel` response when it cannot render a form.
 
 For MCP tool approval elicitations, form request `meta` includes
 `codex_approval_kind: "mcp_tool_call"` and may include `persist: "session"`,

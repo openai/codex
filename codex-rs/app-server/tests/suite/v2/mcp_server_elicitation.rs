@@ -467,9 +467,7 @@ impl ServerHandler for ElicitationAppsMcpServer {
                 .and_then(|extensions| extensions.get("openai/form"))
                 .cloned()
                 .map(Value::Object),
-            Some(json!({
-                "fieldTypes": ["openai/file"]
-            }))
+            Some(json!({}))
         );
         let result = context
             .peer

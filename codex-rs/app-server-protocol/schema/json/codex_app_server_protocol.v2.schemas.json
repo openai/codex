@@ -7426,7 +7426,6 @@
           "type": "boolean"
         },
         "mcpServerOpenAiFormElicitation": {
-          "default": false,
           "description": "Allow downstream MCP servers to request OpenAI extended form elicitations.",
           "type": "boolean"
         },

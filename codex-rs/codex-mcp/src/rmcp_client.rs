@@ -565,10 +565,7 @@ fn mcp_initialize_request_params(
         OpenAiFormElicitationCapability::Supported => {
             capabilities.extensions = Some(BTreeMap::from([(
                 OPENAI_FORM_CAPABILITY.to_string(),
-                JsonObject::from_iter([(
-                    "fieldTypes".to_string(),
-                    serde_json::json!(["openai/file"]),
-                )]),
+                JsonObject::new(),
             )]));
         }
     }
@@ -714,10 +711,7 @@ mod tests {
             supported.capabilities.extensions,
             Some(BTreeMap::from([(
                 OPENAI_FORM_CAPABILITY.to_string(),
-                JsonObject::from_iter([(
-                    "fieldTypes".to_string(),
-                    serde_json::json!(["openai/file"]),
-                )]),
+                JsonObject::new(),
             )]))
         );
     }
