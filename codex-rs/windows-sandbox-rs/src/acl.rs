@@ -492,28 +492,8 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn current_user_cleanup_access_grants_delete_rights() -> Result<()> {
-        let temp_dir = tempfile::TempDir::new()?;
-        let request_dir = temp_dir.path().join("wrapper-requests");
-        std::fs::create_dir(&request_dir)?;
-
-        ensure_current_user_cleanup_access(&request_dir)?;
-
-        let real_user = std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
-        let real_user_sid = resolve_sid(&real_user)?;
-        assert!(path_mask_allows(
-            &request_dir,
-            &[real_user_sid.as_ptr() as *mut c_void],
-            DELETE | FILE_DELETE_CHILD,
-            /*require_all_bits*/ true,
-        )?);
-        Ok(())
-    }
-}
+#[path = "acl_tests.rs"]
+mod tests;
 
 /// Adds a deny ACE to prevent write/append/delete for the given SID on the target path.
 ///

@@ -30,7 +30,8 @@ use crate::rpc::invalid_request;
 
 const FS_HELPER_ENV_ALLOWLIST: &[&str] = &["PATH", "TMPDIR", "TMP", "TEMP"];
 #[cfg(target_os = "windows")]
-const WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST: &[&str] = &["USERNAME", "USERPROFILE"];
+#[path = "fs_sandbox_windows.rs"]
+mod windows;
 #[cfg(debug_assertions)]
 const FS_HELPER_BAZEL_BWRAP_ENV_ALLOWLIST: &[&str] = &[
     "CARGO_BIN_EXE_bwrap",
@@ -169,7 +170,7 @@ impl FileSystemSandboxRunner {
         #[cfg(target_os = "windows")]
         if command.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
             let request_file =
-                wrap_windows_sandbox_command(&mut command, &helper_paths.windows_wrapper)?;
+                windows::wrap_sandbox_exec_request(&mut command, &helper_paths.windows_wrapper)?;
             return Ok(PreparedFsHelperCommand::with_windows_wrapper_request_file(
                 command,
                 request_file,
@@ -188,7 +189,7 @@ struct FsHelperLaunchPaths {
 struct PreparedFsHelperCommand {
     request: SandboxExecRequest,
     #[cfg(target_os = "windows")]
-    _windows_wrapper_request_file: Option<WindowsSandboxWrapperRequestFile>,
+    _windows_wrapper_request_file: Option<windows::WindowsSandboxWrapperRequestFile>,
 }
 
 impl PreparedFsHelperCommand {
@@ -203,7 +204,7 @@ impl PreparedFsHelperCommand {
     #[cfg(target_os = "windows")]
     fn with_windows_wrapper_request_file(
         request: SandboxExecRequest,
-        request_file: WindowsSandboxWrapperRequestFile,
+        request_file: windows::WindowsSandboxWrapperRequestFile,
     ) -> Self {
         Self {
             request,
@@ -421,132 +422,6 @@ fn spawn_child_command(
     command.spawn().map_err(io_error)
 }
 
-#[cfg(target_os = "windows")]
-fn wrap_windows_sandbox_command(
-    request: &mut SandboxExecRequest,
-    helper: &AbsolutePathBuf,
-) -> Result<WindowsSandboxWrapperRequestFile, JSONRPCErrorError> {
-    let codex_home = codex_utils_home_dir::find_codex_home().map_err(|err| {
-        internal_error(format!(
-            "windows fs sandbox helper failed to resolve CODEX_HOME: {err}"
-        ))
-    })?;
-    let sandboxed_env = request.env.clone();
-    let wrapper_request =
-        codex_windows_sandbox::create_windows_sandbox_wrapper_request_for_permission_profile(
-            std::mem::take(&mut request.command),
-            request.cwd.clone(),
-            sandboxed_env,
-            request.permission_profile.clone(),
-            request.windows_sandbox_level,
-            request.windows_sandbox_private_desktop,
-            codex_home.to_path_buf(),
-        );
-    let request_file =
-        WindowsSandboxWrapperRequestFile::create(codex_home.as_path(), &wrapper_request)?;
-    let mut args = codex_windows_sandbox::create_windows_sandbox_command_args_for_request_file(
-        request_file.path.as_path(),
-    );
-    request.command = Vec::with_capacity(1 + args.len());
-    request
-        .command
-        .push(helper.as_path().to_string_lossy().into_owned());
-    request.command.append(&mut args);
-    request.sandbox = codex_sandboxing::SandboxType::None;
-    request.arg0 = None;
-    add_windows_wrapper_setup_env(&mut request.env);
-    Ok(request_file)
-}
-
-#[cfg(target_os = "windows")]
-fn add_windows_wrapper_setup_env(env: &mut HashMap<String, String>) {
-    add_windows_wrapper_setup_env_from_vars(env, std::env::vars_os());
-}
-
-#[cfg(target_os = "windows")]
-fn add_windows_wrapper_setup_env_from_vars(
-    env: &mut HashMap<String, String>,
-    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
-) {
-    for (key, value) in vars {
-        let key = key.to_string_lossy().into_owned();
-        if !WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST
-            .iter()
-            .any(|allowed| key.eq_ignore_ascii_case(allowed))
-        {
-            continue;
-        }
-        if env
-            .keys()
-            .any(|existing| existing.eq_ignore_ascii_case(&key))
-        {
-            continue;
-        }
-        env.insert(key, value.to_string_lossy().into_owned());
-    }
-}
-
-#[cfg(target_os = "windows")]
-struct WindowsSandboxWrapperRequestFile {
-    path: std::path::PathBuf,
-}
-
-#[cfg(target_os = "windows")]
-impl WindowsSandboxWrapperRequestFile {
-    fn create(
-        codex_home: &std::path::Path,
-        request: &codex_windows_sandbox::WindowsSandboxWrapperRequest,
-    ) -> Result<Self, JSONRPCErrorError> {
-        let request_dir = windows_sandbox_wrapper_request_dir(codex_home);
-        std::fs::create_dir_all(&request_dir).map_err(|err| {
-            internal_error(format!(
-                "failed to create windows fs sandbox wrapper request dir {}: {err}",
-                request_dir.display()
-            ))
-        })?;
-        codex_windows_sandbox::ensure_current_user_cleanup_access(&request_dir).map_err(|err| {
-            internal_error(format!(
-                "failed to grant cleanup access to windows fs sandbox wrapper request dir {}: {err}",
-                request_dir.display()
-            ))
-        })?;
-        let path = request_dir.join(format!(
-            "fs-helper-wrapper-request-{}.json",
-            uuid::Uuid::new_v4()
-        ));
-        let request_json = serde_json::to_vec(request).map_err(json_error)?;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|err| {
-                internal_error(format!(
-                    "failed to create windows fs sandbox wrapper request file {}: {err}",
-                    path.display()
-                ))
-            })?;
-        std::io::Write::write_all(&mut file, &request_json).map_err(|err| {
-            internal_error(format!(
-                "failed to write windows fs sandbox wrapper request file {}: {err}",
-                path.display()
-            ))
-        })?;
-        Ok(Self { path })
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn windows_sandbox_wrapper_request_dir(codex_home: &std::path::Path) -> std::path::PathBuf {
-    codex_windows_sandbox::sandbox_secrets_dir(codex_home).join("wrapper-requests")
-}
-
-#[cfg(target_os = "windows")]
-impl Drop for WindowsSandboxWrapperRequestFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
 fn io_error(err: std::io::Error) -> JSONRPCErrorError {
     internal_error(err.to_string())
 }
@@ -577,15 +452,11 @@ mod tests {
     use super::FileSystemSandboxRunner;
     use super::FsHelperLaunchPaths;
     use super::add_helper_runtime_permissions;
-    #[cfg(target_os = "windows")]
-    use super::add_windows_wrapper_setup_env_from_vars;
     use super::helper_env;
     use super::helper_env_from_vars;
     use super::helper_env_key_is_allowed;
     use super::helper_read_roots;
     use super::sandbox_cwd;
-    #[cfg(target_os = "windows")]
-    use super::windows_sandbox_wrapper_request_dir;
 
     #[test]
     fn helper_permissions_enable_minimal_reads_for_restricted_profile() {
@@ -723,43 +594,6 @@ mod tests {
             env,
             HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())])
         );
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn windows_wrapper_setup_env_preserves_only_setup_identity() {
-        let mut env = HashMap::from([("PATH".to_string(), r"C:\Windows\System32".to_string())]);
-
-        add_windows_wrapper_setup_env_from_vars(
-            &mut env,
-            [
-                ("USERNAME", "alice"),
-                ("USERPROFILE", r"C:\Users\alice"),
-                ("OPENAI_API_KEY", "secret"),
-            ]
-            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
-        );
-
-        assert_eq!(
-            env,
-            HashMap::from([
-                ("PATH".to_string(), r"C:\Windows\System32".to_string()),
-                ("USERNAME".to_string(), "alice".to_string()),
-                ("USERPROFILE".to_string(), r"C:\Users\alice".to_string()),
-            ])
-        );
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn windows_wrapper_request_dir_uses_sandbox_secrets() {
-        let codex_home = std::env::temp_dir().join("codex-home");
-        let sandbox_dir = codex_windows_sandbox::sandbox_dir(&codex_home);
-        let secrets_dir = codex_windows_sandbox::sandbox_secrets_dir(&codex_home);
-        let request_dir = windows_sandbox_wrapper_request_dir(&codex_home);
-
-        assert!(!request_dir.starts_with(sandbox_dir));
-        assert!(request_dir.starts_with(secrets_dir));
     }
 
     #[test]

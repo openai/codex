@@ -305,7 +305,7 @@ async fn elevated_fs_helper_rejects_unenforceable_reopened_writable_descendant()
 #[serial(codex_home)]
 async fn elevated_fs_helper_allows_writable_path_when_setup_is_available() -> Result<()> {
     if !process_is_elevated() {
-        eprintln!("skipping elevated fs-helper test: test process is not elevated");
+        eprintln!("skipping elevated fs-helper write: test process is not elevated");
         return Ok(());
     }
 
