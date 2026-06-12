@@ -83,8 +83,8 @@ impl InternalModelContextFragment {
         }
 
         let body = body_and_close.strip_suffix(CONTEXT_END_MARKER)?;
-        let body = body.strip_prefix('\n').unwrap_or(body);
-        let body = body.strip_suffix('\n').unwrap_or(body);
+        let body = body.strip_prefix('\n')?;
+        let body = body.strip_suffix('\n')?;
 
         Some(Self::new(
             InternalContextSource(source.to_string()),

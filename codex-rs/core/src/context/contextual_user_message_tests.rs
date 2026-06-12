@@ -85,6 +85,36 @@ fn parses_canonical_internal_model_context_fragment() {
 }
 
 #[test]
+fn rejects_internal_model_context_without_leading_wrapper_newline() {
+    assert_eq!(
+        InternalModelContextFragment::parse_canonical(
+            "<codex_internal_context source=\"goal\">body\n</codex_internal_context>"
+        ),
+        None
+    );
+}
+
+#[test]
+fn rejects_internal_model_context_without_trailing_wrapper_newline() {
+    assert_eq!(
+        InternalModelContextFragment::parse_canonical(
+            "<codex_internal_context source=\"extension\">\nbody</codex_internal_context>"
+        ),
+        None
+    );
+}
+
+#[test]
+fn rejects_internal_model_context_without_wrapper_newlines() {
+    assert_eq!(
+        InternalModelContextFragment::parse_canonical(
+            "<codex_internal_context source=\"goal\">body</codex_internal_context>"
+        ),
+        None
+    );
+}
+
+#[test]
 fn detects_legacy_goal_context_fragment() {
     assert!(is_contextual_user_fragment(&ContentItem::InputText {
         text: "<goal_context>\nContinue working toward the active thread goal.\n</goal_context>"
