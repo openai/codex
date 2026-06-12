@@ -19,6 +19,7 @@ use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::context::UserInstructions as ContextUserInstructions;
 use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::util::error_or_panic;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
@@ -51,20 +52,22 @@ pub(crate) async fn load_project_instructions(
     environments: &ResolvedTurnEnvironments,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
-    let primary_environment = environments.primary();
+    if let Some(primary_environment) = environments.primary()
+        && primary_environment.cwd != config.cwd
+    {
+        error_or_panic(format!(
+            "primary environment cwd `{}` does not match config cwd `{}`",
+            primary_environment.cwd.display(),
+            config.cwd.display()
+        ));
+    }
     for turn_environment in &environments.turn_environments {
-        // Preserve whether each source belongs to the primary even when the primary contributes
-        // no instructions. Secondary-only instructions must still use the labeled layout rather
-        // than the legacy wrapper, which would falsely attribute them to the primary cwd.
-        let is_primary =
-            primary_environment.is_some_and(|primary| std::ptr::eq(primary, turn_environment));
         let filesystem = turn_environment.environment.get_filesystem();
         match read_agents_md(
             config,
             filesystem.as_ref(),
             &turn_environment.environment_id,
             &turn_environment.cwd,
-            is_primary,
         )
         .await
         {
@@ -100,7 +103,6 @@ async fn read_agents_md(
     fs: &dyn ExecutorFileSystem,
     environment_id: &str,
     cwd: &AbsolutePathBuf,
-    is_primary: bool,
 ) -> io::Result<Option<LoadedAgentsMd>> {
     let max_total = config.project_doc_max_bytes;
 
@@ -157,7 +159,6 @@ async fn read_agents_md(
                     source_path: p,
                     environment_id: environment_id.to_string(),
                     cwd: cwd.clone(),
-                    is_primary,
                 },
             });
             remaining = remaining.saturating_sub(data.len() as u64);
@@ -339,7 +340,7 @@ impl LoadedAgentsMd {
 
     /// Returns the concatenated model-visible instruction text.
     pub fn text(&self) -> String {
-        if self.uses_environment_labels() {
+        if self.has_multiple_project_environments() {
             self.environment_labeled_text()
         } else {
             self.legacy_text()
@@ -377,7 +378,7 @@ impl LoadedAgentsMd {
     fn environment_labeled_text(&self) -> String {
         let mut output = String::new();
         let mut has_previous = false;
-        let mut previous_environment: Option<(&str, &AbsolutePathBuf, bool)> = None;
+        let mut previous_environment: Option<(&str, &AbsolutePathBuf)> = None;
         if let Some(instructions) = &self.user_instructions {
             output.push_str(&instructions.text);
             has_previous = true;
@@ -387,7 +388,6 @@ impl LoadedAgentsMd {
                 InstructionProvenance::Project {
                     environment_id,
                     cwd,
-                    is_primary,
                     ..
                 } => {
                     if has_previous {
@@ -396,7 +396,7 @@ impl LoadedAgentsMd {
                     // One environment can contribute several hierarchical AGENTS.md files from
                     // its project root through its cwd. Label that environment once for the
                     // complete group rather than repeating the label before every file.
-                    let environment = (environment_id.as_str(), cwd, *is_primary);
+                    let environment = (environment_id.as_str(), cwd);
                     if previous_environment != Some(environment) {
                         output.push_str(&format!(
                             "for `{}` with root {}\n\n",
@@ -422,13 +422,12 @@ impl LoadedAgentsMd {
 
     /// Returns the complete model-visible contextual user fragment.
     pub(crate) fn render(&self) -> String {
-        // The legacy wrapper attributes the complete fragment to the primary cwd. Once a
-        // non-primary environment contributes, the body labels every environment itself, so the
-        // outer cwd must be omitted to avoid falsely attributing secondary instructions to it.
-        let directory = if self.uses_environment_labels() {
+        // One contributing project environment retains the legacy cwd wrapper. With two or more,
+        // the body labels every contributing environment itself, so the outer cwd is omitted.
+        let directory = if self.has_multiple_project_environments() {
             None
         } else {
-            self.primary_project_cwd()
+            self.single_project_cwd()
                 .map(|cwd| cwd.to_string_lossy().into_owned())
         };
         ContextUserInstructions {
@@ -455,31 +454,28 @@ impl LoadedAgentsMd {
             )
     }
 
-    fn uses_environment_labels(&self) -> bool {
+    fn has_multiple_project_environments(&self) -> bool {
+        let mut first_environment_id = None;
         self.entries.iter().any(|entry| {
-            matches!(
-                &entry.provenance,
-                InstructionProvenance::Project {
-                    is_primary: false,
-                    ..
+            let InstructionProvenance::Project { environment_id, .. } = &entry.provenance else {
+                return false;
+            };
+            match first_environment_id {
+                Some(first_environment_id) => first_environment_id != environment_id,
+                None => {
+                    first_environment_id = Some(environment_id);
+                    false
                 }
-            )
+            }
         })
     }
 
-    fn primary_project_cwd(&self) -> Option<&AbsolutePathBuf> {
+    fn single_project_cwd(&self) -> Option<&AbsolutePathBuf> {
         self.entries
             .iter()
             .find_map(|entry| match &entry.provenance {
-                InstructionProvenance::Project {
-                    cwd,
-                    is_primary: true,
-                    ..
-                } => Some(cwd),
-                InstructionProvenance::Project {
-                    is_primary: false, ..
-                }
-                | InstructionProvenance::Internal => None,
+                InstructionProvenance::Project { cwd, .. } => Some(cwd),
+                InstructionProvenance::Internal => None,
             })
     }
 }
@@ -502,7 +498,6 @@ enum InstructionProvenance {
         source_path: AbsolutePathBuf,
         environment_id: String,
         cwd: AbsolutePathBuf,
-        is_primary: bool,
     },
 
     /// Instructions without a file source, including internally defined guidance.

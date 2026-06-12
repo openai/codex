@@ -271,15 +271,11 @@ fn resolved_local_environments<const N: usize>(
     }
 }
 
-fn primary_project_provenance(
-    path: AbsolutePathBuf,
-    cwd: AbsolutePathBuf,
-) -> InstructionProvenance {
+fn project_provenance(path: AbsolutePathBuf, cwd: AbsolutePathBuf) -> InstructionProvenance {
     InstructionProvenance::Project {
         source_path: path,
         environment_id: "local".to_string(),
         cwd,
-        is_primary: true,
     }
 }
 
@@ -502,17 +498,14 @@ async fn total_byte_limit_truncates_later_project_docs() {
         entries: vec![
             InstructionEntry {
                 contents: "root".to_string(),
-                provenance: primary_project_provenance(
+                provenance: project_provenance(
                     repo.path().join("AGENTS.md").abs(),
                     config.cwd.clone(),
                 ),
             },
             InstructionEntry {
                 contents: "abc".to_string(),
-                provenance: primary_project_provenance(
-                    config.cwd.join("AGENTS.md"),
-                    config.cwd.clone(),
-                ),
+                provenance: project_provenance(config.cwd.join("AGENTS.md"), config.cwd.clone()),
             },
         ],
     };
@@ -533,15 +526,9 @@ async fn read_agents_md_propagates_metadata_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(
-        &mut config.config,
-        &fs,
-        "local",
-        &cwd,
-        /*is_primary*/ true,
-    )
-    .await
-    .expect_err("metadata error");
+    let err = read_agents_md(&mut config.config, &fs, "local", &cwd)
+        .await
+        .expect_err("metadata error");
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -557,15 +544,9 @@ async fn read_agents_md_propagates_read_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(
-        &mut config.config,
-        &fs,
-        "local",
-        &cwd,
-        /*is_primary*/ true,
-    )
-    .await
-    .expect_err("read error");
+    let err = read_agents_md(&mut config.config, &fs, "local", &cwd)
+        .await
+        .expect_err("read error");
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -581,15 +562,9 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
     };
 
     let cwd = config.cwd.clone();
-    let loaded = read_agents_md(
-        &mut config.config,
-        &fs,
-        "local",
-        &cwd,
-        /*is_primary*/ true,
-    )
-    .await
-    .expect("removed file is recoverable");
+    let loaded = read_agents_md(&mut config.config, &fs, "local", &cwd)
+        .await
+        .expect("removed file is recoverable");
 
     assert_eq!(loaded, None);
 }
@@ -652,6 +627,18 @@ async fn merges_existing_instructions_with_agents_md() {
     let expected = format!("{INSTRUCTIONS}{AGENTS_MD_SEPARATOR}{}", "proj doc");
 
     assert_eq!(res, expected);
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+#[should_panic(expected = "primary environment cwd")]
+async fn primary_environment_cwd_must_match_config_cwd() {
+    let primary = tempfile::tempdir().expect("primary tempdir");
+    let mismatched = tempfile::tempdir().expect("mismatched tempdir");
+    let mut config = make_config(&primary, /*limit*/ 4096, /*instructions*/ None).await;
+    let environments = resolved_local_environments([("primary", mismatched.abs())]);
+
+    let _ = load_project_instructions(&mut config.config, None, &environments).await;
 }
 
 #[tokio::test]
@@ -718,7 +705,7 @@ secondary doc"#,
 }
 
 #[tokio::test]
-async fn secondary_only_project_doc_uses_labeled_layout() {
+async fn secondary_only_project_doc_uses_single_contributor_layout() {
     let primary = tempfile::tempdir().expect("primary tempdir");
     let secondary = tempfile::tempdir().expect("secondary tempdir");
     fs::write(secondary.path().join("AGENTS.md"), "secondary doc").unwrap();
@@ -732,15 +719,14 @@ async fn secondary_only_project_doc_uses_labeled_layout() {
     let loaded = load_project_instructions(&mut config.config, user_instructions, &environments)
         .await
         .expect("instructions expected");
-    let inner = format!(
-        "global instructions\n\nfor `secondary` with root {}\n\nsecondary doc",
+    let inner = format!("global instructions{AGENTS_MD_SEPARATOR}secondary doc");
+
+    assert_eq!(loaded.legacy_text(), inner);
+    assert_eq!(loaded.text(), inner);
+    let expected_fragment = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\n{inner}\n</INSTRUCTIONS>",
         secondary.path().display()
     );
-
-    assert_eq!(loaded.environment_labeled_text(), inner);
-    assert_eq!(loaded.text(), inner);
-    let expected_fragment =
-        format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{inner}\n</INSTRUCTIONS>");
     assert_eq!(loaded.render(), expected_fragment);
 }
 
@@ -937,11 +923,11 @@ async fn concatenates_root_and_cwd_docs() {
         entries: vec![
             InstructionEntry {
                 contents: "root doc".to_string(),
-                provenance: primary_project_provenance(root_agents.clone(), cfg.cwd.clone()),
+                provenance: project_provenance(root_agents.clone(), cfg.cwd.clone()),
             },
             InstructionEntry {
                 contents: "crate doc".to_string(),
-                provenance: primary_project_provenance(crate_agents.clone(), cfg.cwd.clone()),
+                provenance: project_provenance(crate_agents.clone(), cfg.cwd.clone()),
             },
         ],
     };
@@ -1101,7 +1087,7 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
         }),
         entries: vec![InstructionEntry {
             contents: "project doc".to_string(),
-            provenance: primary_project_provenance(project_agents.clone(), cfg.cwd.clone()),
+            provenance: project_provenance(project_agents.clone(), cfg.cwd.clone()),
         }],
     };
     assert_eq!(loaded, expected);
@@ -1141,7 +1127,7 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
         entries: vec![
             InstructionEntry {
                 contents: "project doc".to_string(),
-                provenance: primary_project_provenance(project_agents.clone(), cfg.cwd.clone()),
+                provenance: project_provenance(project_agents.clone(), cfg.cwd.clone()),
             },
             InstructionEntry {
                 contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
