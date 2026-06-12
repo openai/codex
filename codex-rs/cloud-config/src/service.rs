@@ -84,12 +84,6 @@ enum CacheRefreshSchedule {
     ContinueAfter(Duration),
 }
 
-#[derive(Clone, Copy)]
-enum BundleFetchTrigger {
-    Startup,
-    Refresh,
-}
-
 enum UnauthorizedRecoveryAction {
     RetrySameAttempt,
     RetryNextAttempt,
@@ -137,7 +131,7 @@ where
                 return Ok(StartupLoad::Inactive);
             }
 
-            self.load_bundle(auth, BundleFetchTrigger::Startup)
+            self.load_bundle(auth, "startup")
                 .await
                 .map(StartupLoad::Active)
         })
@@ -234,7 +228,7 @@ where
     async fn load_bundle(
         &self,
         auth: CodexAuth,
-        trigger: BundleFetchTrigger,
+        trigger: &'static str,
     ) -> Result<LoadedBundle, CloudConfigBundleLoadError> {
         loop {
             if let Some(loaded) = self.load_valid_cached_bundle(&auth).await {
@@ -274,12 +268,8 @@ where
     async fn fetch_remote_bundle_and_update_cache_with_retries(
         &self,
         mut auth: CodexAuth,
-        trigger: BundleFetchTrigger,
+        trigger: &'static str,
     ) -> Result<LoadedBundle, CloudConfigBundleLoadError> {
-        let trigger_name = match trigger {
-            BundleFetchTrigger::Startup => "startup",
-            BundleFetchTrigger::Refresh => "refresh",
-        };
         let mut attempt = 1;
         let mut last_status_code: Option<u16> = None;
         let mut auth_recovery = self.auth_manager.unauthorized_recovery();
@@ -288,7 +278,7 @@ where
             match self.client.get_bundle(&auth).await {
                 Ok(bundle) => {
                     return self
-                        .validate_and_cache_remote_bundle(&auth, trigger_name, attempt, bundle)
+                        .validate_and_cache_remote_bundle(&auth, trigger, attempt, bundle)
                         .await;
                 }
                 Err(BundleRequestError::Retryable(status)) => {
@@ -296,7 +286,7 @@ where
                     // and consume the next retry-budget position.
                     last_status_code = status.status_code();
                     if self
-                        .retry_after_request_failure(trigger_name, attempt, status)
+                        .retry_after_request_failure(trigger, attempt, status)
                         .await
                     {
                         attempt += 1;
@@ -315,7 +305,7 @@ where
                         .handle_unauthorized(
                             &mut auth,
                             &mut auth_recovery,
-                            trigger_name,
+                            trigger,
                             attempt,
                             status_code,
                             &message,
@@ -335,7 +325,7 @@ where
         }
 
         emit_fetch_final_metric(
-            trigger_name,
+            trigger,
             "error",
             "request_retry_exhausted",
             CLOUD_CONFIG_BUNDLE_MAX_ATTEMPTS,
@@ -557,7 +547,7 @@ where
             return CacheRefreshSchedule::Stop;
         }
 
-        match self.load_bundle(auth, BundleFetchTrigger::Refresh).await {
+        match self.load_bundle(auth, "refresh").await {
             Ok(loaded) => {
                 emit_load_metric("refresh", "success", loaded.bundle.as_ref());
                 if !publisher.publish(Ok(loaded.bundle)) {
