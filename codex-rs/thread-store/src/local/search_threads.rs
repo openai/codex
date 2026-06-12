@@ -50,6 +50,7 @@ pub(super) async fn search_threads(
     let sort_key = match params.sort_key {
         ThreadSortKey::CreatedAt => codex_rollout::ThreadSortKey::CreatedAt,
         ThreadSortKey::UpdatedAt => codex_rollout::ThreadSortKey::UpdatedAt,
+        ThreadSortKey::RecencyAt => codex_rollout::ThreadSortKey::RecencyAt,
     };
     let sort_direction = match params.sort_direction {
         SortDirection::Asc => codex_rollout::SortDirection::Asc,
@@ -177,6 +178,12 @@ fn cursor_from_thread_search_item(
             .item
             .updated_at
             .as_deref()
+            .or(item.item.created_at.as_deref())?,
+        ThreadSortKey::RecencyAt => item
+            .item
+            .recency_at
+            .as_deref()
+            .or(item.item.updated_at.as_deref())
             .or(item.item.created_at.as_deref())?,
     };
     parse_cursor(timestamp)

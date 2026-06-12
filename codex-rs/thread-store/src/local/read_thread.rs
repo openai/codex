@@ -55,6 +55,7 @@ pub(super) async fn read_thread(
             && (params.include_archived || rollout_thread.archived_at.is_none())
             && !rollout_thread.preview.is_empty()
         {
+            rollout_thread.recency_at = thread.recency_at;
             if thread.name.is_some() {
                 rollout_thread.name = thread.name;
             }
@@ -340,6 +341,7 @@ async fn stored_thread_from_sqlite_metadata(
         reasoning_effort: metadata.reasoning_effort,
         created_at: metadata.created_at,
         updated_at: metadata.updated_at,
+        recency_at: metadata.recency_at,
         archived_at: metadata.archived_at,
         cwd: metadata.cwd,
         cli_version: metadata.cli_version,
@@ -406,6 +408,7 @@ fn stored_thread_from_meta_line(
         reasoning_effort: None,
         created_at,
         updated_at,
+        recency_at: updated_at,
         archived_at: archived.then_some(updated_at),
         cwd: meta_line.meta.cwd,
         cli_version: meta_line.meta.cli_version,

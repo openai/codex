@@ -1,6 +1,7 @@
 use super::*;
 use crate::SortDirection;
 use codex_protocol::protocol::SessionSource;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
 impl StateRuntime {
@@ -12,6 +13,7 @@ SELECT
     threads.rollout_path,
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
+    threads.recency_at_ms AS recency_at,
     threads.source,
     threads.thread_source,
     threads.agent_nickname,
@@ -477,6 +479,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
         metadata: &crate::ThreadMetadata,
     ) -> anyhow::Result<bool> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
+        let recency_at = self.allocate_thread_recency_at(metadata.recency_at)?;
         let preview = metadata_preview(metadata);
         let result = sqlx::query(
             r#"
@@ -485,8 +488,10 @@ INSERT INTO threads (
     rollout_path,
     created_at,
     updated_at,
+    recency_at,
     created_at_ms,
     updated_at_ms,
+    recency_at_ms,
     source,
     thread_source,
     agent_nickname,
@@ -509,7 +514,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -517,8 +522,10 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.rollout_path.display().to_string())
         .bind(datetime_to_epoch_seconds(metadata.created_at))
         .bind(datetime_to_epoch_seconds(updated_at))
+        .bind(datetime_to_epoch_seconds(recency_at))
         .bind(datetime_to_epoch_millis(metadata.created_at))
         .bind(datetime_to_epoch_millis(updated_at))
+        .bind(datetime_to_epoch_millis(recency_at))
         .bind(metadata.source.as_str())
         .bind(
             metadata
@@ -600,6 +607,32 @@ ON CONFLICT(id) DO NOTHING
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn touch_thread_recency_at(
+        &self,
+        thread_id: ThreadId,
+        recency_at: DateTime<Utc>,
+    ) -> anyhow::Result<bool> {
+        let recency_at = self.allocate_thread_recency_at(recency_at)?;
+        let recency_at_seconds = datetime_to_epoch_seconds(recency_at);
+        let recency_at_millis = datetime_to_epoch_millis(recency_at);
+        let result = sqlx::query(
+            r#"
+UPDATE threads
+SET
+    recency_at = MAX(?, MAX(?, recency_at_ms + 1) / 1000),
+    recency_at_ms = MAX(?, recency_at_ms + 1)
+WHERE id = ?
+            "#,
+        )
+        .bind(recency_at_seconds)
+        .bind(recency_at_millis)
+        .bind(recency_at_millis)
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Allocate a persisted `updated_at` value for thread-list cursor ordering.
     ///
     /// We keep a process-local high-water mark so hot rollout writes can get unique,
@@ -610,42 +643,56 @@ ON CONFLICT(id) DO NOTHING
         &self,
         updated_at: DateTime<Utc>,
     ) -> anyhow::Result<DateTime<Utc>> {
-        let candidate = datetime_to_epoch_millis(updated_at);
-        let allocated = loop {
-            let current = self.thread_updated_at_millis.load(Ordering::Relaxed);
-
-            // New wall-clock time: advance the process-local high-water mark and use it as-is.
-            if candidate > current {
-                if self
-                    .thread_updated_at_millis
-                    .compare_exchange(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    break candidate;
-                }
-                continue;
-            }
-
-            // Older timestamps come from backfill/repair paths that preserve rollout mtimes.
-            // Do not drag historical rows forward just because this process has seen newer writes.
-            if candidate.saturating_add(1000) <= current {
-                break candidate;
-            }
-
-            // Same hot one-second bucket as the current high-water mark. Allocate the next
-            // millisecond so updated_at remains unique and cursor-orderable inside the process.
-            let bumped = current.saturating_add(1);
-            if self
-                .thread_updated_at_millis
-                .compare_exchange(current, bumped, Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok()
-            {
-                break bumped;
-            }
-        };
-        epoch_millis_to_datetime(allocated)
+        allocate_thread_timestamp(self.thread_updated_at_millis.as_ref(), updated_at)
     }
 
+    fn allocate_thread_recency_at(
+        &self,
+        recency_at: DateTime<Utc>,
+    ) -> anyhow::Result<DateTime<Utc>> {
+        allocate_thread_timestamp(self.thread_recency_at_millis.as_ref(), recency_at)
+    }
+}
+
+fn allocate_thread_timestamp(
+    high_water_mark: &AtomicI64,
+    timestamp: DateTime<Utc>,
+) -> anyhow::Result<DateTime<Utc>> {
+    let candidate = datetime_to_epoch_millis(timestamp);
+    let allocated = loop {
+        let current = high_water_mark.load(Ordering::Relaxed);
+
+        // New wall-clock time: advance the process-local high-water mark and use it as-is.
+        if candidate > current {
+            if high_water_mark
+                .compare_exchange(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break candidate;
+            }
+            continue;
+        }
+
+        // Older timestamps come from backfill/repair paths that preserve rollout mtimes.
+        // Do not drag historical rows forward just because this process has seen newer writes.
+        if candidate.saturating_add(1000) <= current {
+            break candidate;
+        }
+
+        // Same hot one-second bucket as the current high-water mark. Allocate the next
+        // millisecond so the timestamp remains unique and cursor-orderable inside the process.
+        let bumped = current.saturating_add(1);
+        if high_water_mark
+            .compare_exchange(current, bumped, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            break bumped;
+        }
+    };
+    epoch_millis_to_datetime(allocated)
+}
+
+impl StateRuntime {
     pub async fn update_thread_git_info(
         &self,
         thread_id: ThreadId,
@@ -681,6 +728,7 @@ WHERE id = ?
         creation_memory_mode: Option<&str>,
     ) -> anyhow::Result<()> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
+        let insert_recency_at = self.allocate_thread_recency_at(metadata.recency_at)?;
         let preview = metadata_preview(metadata);
         // Backfill/reconcile callers merge existing git info before upserting, but that
         // read/modify/write is not atomic. Preserve non-null SQLite git fields here so
@@ -692,8 +740,10 @@ INSERT INTO threads (
     rollout_path,
     created_at,
     updated_at,
+    recency_at,
     created_at_ms,
     updated_at_ms,
+    recency_at_ms,
     source,
     thread_source,
     agent_nickname,
@@ -716,13 +766,15 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
+    recency_at = threads.recency_at,
     created_at_ms = excluded.created_at_ms,
     updated_at_ms = excluded.updated_at_ms,
+    recency_at_ms = threads.recency_at_ms,
     source = excluded.source,
     thread_source = excluded.thread_source,
     agent_nickname = excluded.agent_nickname,
@@ -750,8 +802,10 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.rollout_path.display().to_string())
         .bind(datetime_to_epoch_seconds(metadata.created_at))
         .bind(datetime_to_epoch_seconds(updated_at))
+        .bind(datetime_to_epoch_seconds(insert_recency_at))
         .bind(datetime_to_epoch_millis(metadata.created_at))
         .bind(datetime_to_epoch_millis(updated_at))
+        .bind(datetime_to_epoch_millis(insert_recency_at))
         .bind(metadata.source.as_str())
         .bind(
             metadata
@@ -1050,6 +1104,7 @@ SELECT
     threads.rollout_path,
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
+    threads.recency_at_ms AS recency_at,
     threads.source,
     threads.thread_source,
     threads.agent_nickname,
@@ -1167,6 +1222,7 @@ pub(super) fn push_thread_filters<'a>(
         let column = match sort_key {
             SortKey::CreatedAt => "threads.created_at_ms",
             SortKey::UpdatedAt => "threads.updated_at_ms",
+            SortKey::RecencyAt => "threads.recency_at_ms",
         };
         let operator = match sort_direction {
             SortDirection::Asc => ">",
@@ -1202,6 +1258,7 @@ pub(super) fn push_thread_order_and_limit(
     let order_column = match sort_key {
         SortKey::CreatedAt => "threads.created_at_ms",
         SortKey::UpdatedAt => "threads.updated_at_ms",
+        SortKey::RecencyAt => "threads.recency_at_ms",
     };
     let order_direction = match sort_direction {
         SortDirection::Asc => "ASC",
@@ -1674,6 +1731,11 @@ mod tests {
                 SortKey::UpdatedAt,
                 "idx_threads_visible_updated_at_ms",
                 "idx_threads_archived_cwd_updated_at_ms",
+            ),
+            (
+                SortKey::RecencyAt,
+                "idx_threads_visible_recency_at_ms",
+                "idx_threads_archived_cwd_recency_at_ms",
             ),
         ] {
             for (cwd_filters, anchor, expected_index, expect_temp_sort) in [
@@ -2157,6 +2219,142 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn touch_thread_recency_at_is_monotonic_and_survives_stale_upsert() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000792").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        let original_recency_at = metadata.recency_at;
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial upsert should succeed");
+
+        let touched_at =
+            DateTime::<Utc>::from_timestamp_millis(1_700_001_111_123).expect("timestamp");
+        assert!(
+            runtime
+                .touch_thread_recency_at(thread_id, touched_at)
+                .await
+                .expect("touch should succeed")
+        );
+
+        metadata.updated_at =
+            DateTime::<Utc>::from_timestamp_millis(1_700_001_222_456).expect("timestamp");
+        metadata.title = "updated metadata".to_string();
+        assert_eq!(metadata.recency_at, original_recency_at);
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("stale metadata upsert should succeed");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.recency_at, touched_at);
+        assert_eq!(persisted.updated_at, metadata.updated_at);
+        assert_eq!(persisted.title, "updated metadata");
+
+        assert!(
+            runtime
+                .touch_thread_recency_at(thread_id, original_recency_at)
+                .await
+                .expect("older touch should succeed")
+        );
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(
+            datetime_to_epoch_millis(persisted.recency_at),
+            datetime_to_epoch_millis(touched_at) + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn list_threads_orders_and_pages_by_recency_at() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let older_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000793").expect("valid thread id");
+        let newer_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000794").expect("valid thread id");
+        let older_recency =
+            DateTime::<Utc>::from_timestamp_millis(1_700_001_000_123).expect("timestamp");
+        let newer_recency =
+            DateTime::<Utc>::from_timestamp_millis(1_700_002_000_456).expect("timestamp");
+
+        for (thread_id, recency_at) in [(older_id, older_recency), (newer_id, newer_recency)] {
+            let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+            metadata.recency_at = recency_at;
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("thread insert should succeed");
+        }
+
+        let first_page = runtime
+            .list_threads(
+                /*page_size*/ 1,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: None,
+                    anchor: None,
+                    sort_key: SortKey::RecencyAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("list should succeed");
+        assert_eq!(
+            first_page
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![newer_id]
+        );
+        assert_eq!(first_page.next_anchor, Some(Anchor { ts: newer_recency }));
+
+        let second_page = runtime
+            .list_threads(
+                /*page_size*/ 1,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: None,
+                    anchor: first_page.next_anchor.as_ref(),
+                    sort_key: SortKey::RecencyAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("second list should succeed");
+        assert_eq!(
+            second_page
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![older_id]
+        );
+        assert_eq!(second_page.next_anchor, None);
+    }
+
+    #[tokio::test]
     async fn thread_updated_at_uses_unique_epoch_millis_and_reads_legacy_seconds() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
@@ -2172,8 +2370,10 @@ mod tests {
             DateTime::<Utc>::from_timestamp_millis(1_700_001_111_123).expect("timestamp millis");
         let mut first = test_thread_metadata(&codex_home, first_id, codex_home.clone());
         first.updated_at = updated_at;
+        first.recency_at = updated_at;
         let mut second = test_thread_metadata(&codex_home, second_id, codex_home.clone());
         second.updated_at = updated_at;
+        second.recency_at = updated_at;
 
         runtime
             .upsert_thread(&first)
@@ -2200,6 +2400,14 @@ mod tests {
         );
         assert_eq!(
             datetime_to_epoch_millis(second.updated_at),
+            1_700_001_111_124
+        );
+        assert_eq!(
+            datetime_to_epoch_millis(first.recency_at),
+            1_700_001_111_123
+        );
+        assert_eq!(
+            datetime_to_epoch_millis(second.recency_at),
             1_700_001_111_124
         );
         let second_row: (i64, i64, Option<i64>, Option<i64>) = sqlx::query_as(

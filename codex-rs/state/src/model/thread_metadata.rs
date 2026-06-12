@@ -18,6 +18,8 @@ pub enum SortKey {
     CreatedAt,
     /// Sort by the thread's last update timestamp.
     UpdatedAt,
+    /// Sort by the thread's product recency timestamp.
+    RecencyAt,
 }
 
 /// Sort direction to use when listing threads.
@@ -67,6 +69,8 @@ pub struct ThreadMetadata {
     pub created_at: DateTime<Utc>,
     /// The last update timestamp.
     pub updated_at: DateTime<Utc>,
+    /// The product recency timestamp.
+    pub recency_at: DateTime<Utc>,
     /// The session source (stringified enum).
     pub source: String,
     /// Optional analytics source classification for this thread.
@@ -120,6 +124,8 @@ pub struct ThreadMetadataBuilder {
     pub created_at: DateTime<Utc>,
     /// The last update timestamp, if known.
     pub updated_at: Option<DateTime<Utc>>,
+    /// The product recency timestamp, if known.
+    pub recency_at: Option<DateTime<Utc>>,
     /// The session source.
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
@@ -163,6 +169,7 @@ impl ThreadMetadataBuilder {
             rollout_path,
             created_at,
             updated_at: None,
+            recency_at: None,
             source,
             thread_source: None,
             agent_nickname: None,
@@ -190,11 +197,16 @@ impl ThreadMetadataBuilder {
             .updated_at
             .map(canonicalize_datetime)
             .unwrap_or(created_at);
+        let recency_at = self
+            .recency_at
+            .map(canonicalize_datetime)
+            .unwrap_or(updated_at);
         ThreadMetadata {
             id: self.id,
             rollout_path: self.rollout_path.clone(),
             created_at,
             updated_at,
+            recency_at,
             source,
             thread_source: self.thread_source.clone(),
             agent_nickname: self.agent_nickname.clone(),
@@ -340,6 +352,7 @@ pub(crate) struct ThreadRow {
     rollout_path: String,
     created_at: i64,
     updated_at: i64,
+    recency_at: i64,
     source: String,
     thread_source: Option<String>,
     agent_nickname: Option<String>,
@@ -369,6 +382,7 @@ impl ThreadRow {
             rollout_path: row.try_get("rollout_path")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
+            recency_at: row.try_get("recency_at")?,
             source: row.try_get("source")?,
             thread_source: row.try_get("thread_source")?,
             agent_nickname: row.try_get("agent_nickname")?,
@@ -402,6 +416,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             rollout_path,
             created_at,
             updated_at,
+            recency_at,
             source,
             thread_source,
             agent_nickname,
@@ -432,6 +447,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             rollout_path: PathBuf::from(rollout_path),
             created_at: epoch_millis_to_datetime(created_at)?,
             updated_at: epoch_millis_to_datetime(updated_at)?,
+            recency_at: epoch_millis_to_datetime(recency_at)?,
             source,
             thread_source,
             agent_nickname,
@@ -461,6 +477,7 @@ pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Opti
     let ts = match sort_key {
         SortKey::CreatedAt => item.created_at,
         SortKey::UpdatedAt => item.updated_at,
+        SortKey::RecencyAt => item.recency_at,
     };
     Some(Anchor { ts })
 }
@@ -519,6 +536,7 @@ mod tests {
             rollout_path: "/tmp/rollout-123.jsonl".to_string(),
             created_at: 1_700_000_000,
             updated_at: 1_700_000_100,
+            recency_at: 1_700_000_100,
             source: "cli".to_string(),
             thread_source: None,
             agent_nickname: None,
@@ -549,6 +567,7 @@ mod tests {
             rollout_path: PathBuf::from("/tmp/rollout-123.jsonl"),
             created_at: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp"),
             updated_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
+            recency_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
             source: "cli".to_string(),
             thread_source: None,
             agent_nickname: None,

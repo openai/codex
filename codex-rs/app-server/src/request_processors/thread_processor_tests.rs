@@ -464,6 +464,7 @@ mod thread_processor_behavior_tests {
             reasoning_effort: None,
             created_at: created_at.with_timezone(&Utc),
             updated_at: updated_at.with_timezone(&Utc),
+            recency_at: updated_at.with_timezone(&Utc),
             archived_at: None,
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
