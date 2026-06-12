@@ -728,7 +728,10 @@ async fn load_plugin(
     // packaged or selected without rewriting plugin files.
     let (hook_sources, hook_load_warnings) = if is_app_bundled_internal_candidate(&loaded_plugin_id)
     {
-        match internal_hook_loader.load(&loaded_plugin_id, &plugin_data_root) {
+        match internal_hook_loader
+            .load(&loaded_plugin_id, &plugin_data_root)
+            .await
+        {
             Ok(hook_sources) => (hook_sources, Vec::new()),
             Err(error) => {
                 warn!(

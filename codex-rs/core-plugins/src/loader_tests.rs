@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_bundled_internal::AppBundledInternalHookError;
+use crate::app_bundled_internal::AppBundledInternalHookLoadFuture;
 use crate::app_bundled_internal::AppBundledInternalHookLoader;
 use crate::manifest::load_plugin_manifest;
 use crate::test_support::write_file;
@@ -230,18 +231,20 @@ enum TestInternalHookResult {
 struct TestInternalHookLoader(TestInternalHookResult);
 
 impl AppBundledInternalHookLoader for TestInternalHookLoader {
-    fn load(
-        &self,
-        _plugin_id: &PluginId,
-        _plugin_data_root: &AbsolutePathBuf,
-    ) -> Result<Vec<PluginHookSource>, AppBundledInternalHookError> {
-        match &self.0 {
-            TestInternalHookResult::Sources(sources) => Ok(sources.clone()),
-            TestInternalHookResult::Failure => Err(AppBundledInternalHookError {
-                stage: "test verification",
-                message: "test distribution verification failed".to_string(),
-            }),
-        }
+    fn load<'a>(
+        &'a self,
+        _plugin_id: &'a PluginId,
+        _plugin_data_root: &'a AbsolutePathBuf,
+    ) -> AppBundledInternalHookLoadFuture<'a> {
+        Box::pin(async move {
+            match &self.0 {
+                TestInternalHookResult::Sources(sources) => Ok(sources.clone()),
+                TestInternalHookResult::Failure => Err(AppBundledInternalHookError {
+                    stage: "test verification",
+                    message: "test distribution verification failed".to_string(),
+                }),
+            }
+        })
     }
 }
 

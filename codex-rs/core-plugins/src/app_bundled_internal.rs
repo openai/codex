@@ -1,6 +1,8 @@
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
+use std::pin::Pin;
 
 use codex_config::HookHandlerConfig;
 use codex_desktop_distribution::VerifiedDesktopDistribution;
@@ -23,25 +25,45 @@ const COMPUTER_USE_PLUGIN_NAME: &str = "computer-use";
 const COMPUTER_USE_EXECUTABLE: &str = "Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient";
 const COMPUTER_USE_STOP_SUFFIX: &str = " codex-stop-hook";
 
+pub(crate) type AppBundledInternalHookLoadFuture<'a> = Pin<
+    Box<
+        dyn Future<Output = Result<Vec<PluginHookSource>, AppBundledInternalHookError>> + Send + 'a,
+    >,
+>;
+
 pub(crate) trait AppBundledInternalHookLoader: Send + Sync {
-    fn load(
-        &self,
-        plugin_id: &PluginId,
-        plugin_data_root: &AbsolutePathBuf,
-    ) -> Result<Vec<PluginHookSource>, AppBundledInternalHookError>;
+    fn load<'a>(
+        &'a self,
+        plugin_id: &'a PluginId,
+        plugin_data_root: &'a AbsolutePathBuf,
+    ) -> AppBundledInternalHookLoadFuture<'a>;
 }
 
 pub(crate) struct DesktopAppBundledInternalHookLoader;
 
 impl AppBundledInternalHookLoader for DesktopAppBundledInternalHookLoader {
-    fn load(
-        &self,
-        plugin_id: &PluginId,
-        plugin_data_root: &AbsolutePathBuf,
-    ) -> Result<Vec<PluginHookSource>, AppBundledInternalHookError> {
-        let distribution = locate_current_or_installed_distribution()
-            .map_err(|error| AppBundledInternalHookError::new(error.stage(), error.to_string()))?;
-        load_from_authenticated_resources(&distribution, plugin_id, plugin_data_root)
+    fn load<'a>(
+        &'a self,
+        plugin_id: &'a PluginId,
+        plugin_data_root: &'a AbsolutePathBuf,
+    ) -> AppBundledInternalHookLoadFuture<'a> {
+        let plugin_id = plugin_id.clone();
+        let plugin_data_root = plugin_data_root.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let distribution = locate_current_or_installed_distribution().map_err(|error| {
+                    AppBundledInternalHookError::new(error.stage(), error.to_string())
+                })?;
+                load_from_authenticated_resources(&distribution, &plugin_id, &plugin_data_root)
+            })
+            .await
+            .map_err(|error| {
+                AppBundledInternalHookError::new(
+                    "verification worker",
+                    format!("Desktop distribution verification worker failed: {error}"),
+                )
+            })?
+        })
     }
 }
 
