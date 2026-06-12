@@ -94,6 +94,9 @@ pub struct SandboxCommand {
 }
 
 /// A host-native launch request produced after [`SandboxManager::transform`] validates URI inputs.
+/// Build this only at the execution boundary: in exec-server, or in its logical equivalent within
+/// app-server. Orchestration and transport code should retain [`PathUri`] values and defer
+/// conversion to native paths until this request is created.
 #[derive(Debug)]
 pub struct SandboxExecRequest {
     pub command: Vec<String>,
