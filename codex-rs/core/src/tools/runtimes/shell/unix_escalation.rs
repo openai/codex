@@ -999,13 +999,16 @@ impl CoreShellCommandExecutor {
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("prepared command must not be empty"))?;
         let sandbox_manager = SandboxManager::new();
-        let sandbox = sandbox_manager.select_initial(
+        let mut sandbox = sandbox_manager.select_initial(
             &file_system_sandbox_policy,
             network_sandbox_policy,
             SandboxablePreference::Auto,
             self.windows_sandbox_level,
             self.network.is_some(),
         );
+        if self.use_legacy_landlock && sandbox == SandboxType::LinuxBubblewrap {
+            sandbox = SandboxType::LinuxLegacyLandlock;
+        }
         let cwd = PathUri::from_abs_path(workdir);
         let sandbox_policy_cwd = PathUri::from_abs_path(&self.sandbox_policy_cwd);
         let command = SandboxCommand {
@@ -1029,7 +1032,6 @@ impl CoreShellCommandExecutor {
             network: self.network.as_ref(),
             sandbox_policy_cwd: &sandbox_policy_cwd,
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_deref(),
-            use_legacy_landlock: self.use_legacy_landlock,
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: false,
         })?;

@@ -21,9 +21,9 @@ const SANDBOX_DENIED_KEYWORDS: [(FileSystemSandboxViolationReason, &str); 7] = [
         FileSystemSandboxViolationReason::ReadOnlyFileSystem,
         "read-only file system",
     ),
-    (FileSystemSandboxViolationReason::Seccomp, "seccomp"),
-    (FileSystemSandboxViolationReason::Sandbox, "sandbox"),
-    (FileSystemSandboxViolationReason::Landlock, "landlock"),
+    (FileSystemSandboxViolationReason::PolicyDenied, "seccomp"),
+    (FileSystemSandboxViolationReason::PolicyDenied, "sandbox"),
+    (FileSystemSandboxViolationReason::PolicyDenied, "landlock"),
     (
         FileSystemSandboxViolationReason::FailedToWriteFile,
         "failed to write file",
@@ -43,10 +43,32 @@ pub enum SandboxViolationEvent {
     Network(NetworkSandboxViolation),
 }
 
+/// Enforcement backend that observed a sandbox violation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SandboxViolationBackend {
+    Bubblewrap,
+    LegacyLandlock,
+    ManagedNetworkProxy,
+    Seatbelt,
+    WindowsSandbox,
+}
+
+impl SandboxViolationBackend {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => "bubblewrap",
+            Self::LegacyLandlock => "legacy_landlock",
+            Self::ManagedNetworkProxy => "managed_network_proxy",
+            Self::Seatbelt => "seatbelt",
+            Self::WindowsSandbox => "windows_sandbox",
+        }
+    }
+}
+
 /// A filesystem sandbox denial inferred from a sandboxed process result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileSystemSandboxViolation {
-    pub sandbox_type: SandboxType,
+    pub backend: SandboxViolationBackend,
     pub reason: FileSystemSandboxViolationReason,
     pub path: Option<String>,
     pub output_snippet: String,
@@ -58,9 +80,7 @@ pub enum FileSystemSandboxViolationReason {
     OperationNotPermitted,
     PermissionDenied,
     ReadOnlyFileSystem,
-    Seccomp,
-    Sandbox,
-    Landlock,
+    PolicyDenied,
     FailedToWriteFile,
     SignalSyscall,
 }
@@ -71,9 +91,7 @@ impl FileSystemSandboxViolationReason {
             Self::OperationNotPermitted => "operation_not_permitted",
             Self::PermissionDenied => "permission_denied",
             Self::ReadOnlyFileSystem => "read_only_file_system",
-            Self::Seccomp => "seccomp",
-            Self::Sandbox => "sandbox",
-            Self::Landlock => "landlock",
+            Self::PolicyDenied => "policy_denied",
             Self::FailedToWriteFile => "failed_to_write_file",
             Self::SignalSyscall => "sigsys",
         }
@@ -83,6 +101,7 @@ impl FileSystemSandboxViolationReason {
 /// A network sandbox denial reported by the managed network proxy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetworkSandboxViolation {
+    pub backend: SandboxViolationBackend,
     pub host: String,
     pub reason: String,
     pub client: Option<String>,
@@ -98,6 +117,7 @@ pub struct NetworkSandboxViolation {
 impl NetworkSandboxViolation {
     pub fn from_blocked_request(blocked: &BlockedRequest) -> Self {
         Self {
+            backend: SandboxViolationBackend::ManagedNetworkProxy,
             host: blocked.host.clone(),
             reason: blocked.reason.clone(),
             client: blocked.client.clone(),
@@ -117,13 +137,20 @@ fn classify_filesystem_sandbox_violation(
     sandbox_type: SandboxType,
     exec_output: &ExecToolCallOutput,
 ) -> Option<FileSystemSandboxViolation> {
-    if sandbox_type == SandboxType::None || exec_output.exit_code == 0 {
+    if exec_output.exit_code == 0 {
         return None;
     }
+    let backend = match sandbox_type {
+        SandboxType::None => return None,
+        SandboxType::MacosSeatbelt => SandboxViolationBackend::Seatbelt,
+        SandboxType::LinuxBubblewrap => SandboxViolationBackend::Bubblewrap,
+        SandboxType::LinuxLegacyLandlock => SandboxViolationBackend::LegacyLandlock,
+        SandboxType::WindowsRestrictedToken => SandboxViolationBackend::WindowsSandbox,
+    };
 
     if let Some(reason) = filesystem_reason_from_output(exec_output) {
         return Some(FileSystemSandboxViolation {
-            sandbox_type,
+            backend,
             reason,
             path: extract_denied_path(exec_output),
             output_snippet: output_snippet(exec_output),
@@ -136,11 +163,13 @@ fn classify_filesystem_sandbox_violation(
 
     #[cfg(unix)]
     {
-        if sandbox_type == SandboxType::LinuxSeccomp
-            && exec_output.exit_code == EXIT_CODE_SIGNAL_BASE + libc::SIGSYS
+        if matches!(
+            sandbox_type,
+            SandboxType::LinuxBubblewrap | SandboxType::LinuxLegacyLandlock
+        ) && exec_output.exit_code == EXIT_CODE_SIGNAL_BASE + libc::SIGSYS
         {
             return Some(FileSystemSandboxViolation {
-                sandbox_type,
+                backend,
                 reason: FileSystemSandboxViolationReason::SignalSyscall,
                 path: None,
                 output_snippet: output_snippet(exec_output),
@@ -174,15 +203,16 @@ pub fn record_sandbox_violation(event: &SandboxViolationEvent) {
         SandboxViolationEvent::FileSystem(violation) => {
             let path = violation.path.as_deref().unwrap_or("unknown");
             warn!(
-                "recorded sandbox violation: resource=filesystem sandbox={} reason={} path={}",
-                violation.sandbox_type.as_metric_tag(),
+                "recorded sandbox violation: resource=filesystem backend={} reason={} path={}",
+                violation.backend.as_str(),
                 violation.reason.as_str(),
                 path
             );
         }
         SandboxViolationEvent::Network(violation) => {
             warn!(
-                "recorded sandbox violation: resource=network protocol={} host={} port={:?} reason={} method={:?} mode={:?} client={:?} decision={:?} source={:?}",
+                "recorded sandbox violation: resource=network backend={} protocol={} host={} port={:?} reason={} method={:?} mode={:?} client={:?} decision={:?} source={:?}",
+                violation.backend.as_str(),
                 violation.protocol,
                 violation.host,
                 violation.port,
