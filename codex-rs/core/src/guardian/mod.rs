@@ -33,6 +33,7 @@ pub(crate) use review::guardian_rejection_message;
 pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::new_guardian_review_id;
+pub(crate) use review::prewarm_guardian_review_session;
 #[cfg(test)]
 pub(crate) use review::record_guardian_denial_for_test;
 pub(crate) use review::review_approval_request;

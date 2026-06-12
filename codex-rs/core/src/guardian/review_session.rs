@@ -30,6 +30,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use tracing::warn;
 
 use crate::codex_delegate::run_codex_thread_interactive;
@@ -84,6 +85,12 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) deadline: tokio::time::Instant,
 }
 
+pub(crate) struct GuardianReviewSessionPrewarmParams {
+    pub(crate) parent_session: Arc<Session>,
+    pub(crate) parent_turn: Arc<TurnContext>,
+    pub(crate) spawn_config: Config,
+}
+
 #[derive(Default)]
 pub(crate) struct GuardianReviewSessionManager {
     state: Arc<Mutex<GuardianReviewSessionState>>,
@@ -92,7 +99,13 @@ pub(crate) struct GuardianReviewSessionManager {
 #[derive(Default)]
 struct GuardianReviewSessionState {
     trunk: Option<Arc<GuardianReviewSession>>,
+    prewarm: Option<GuardianReviewSessionPrewarm>,
     ephemeral_reviews: Vec<Arc<GuardianReviewSession>>,
+}
+
+struct GuardianReviewSessionPrewarm {
+    reuse_key: GuardianReviewSessionReuseKey,
+    cancel_token: CancellationToken,
 }
 
 struct GuardianReviewSession {
@@ -297,19 +310,141 @@ impl GuardianReviewSessionManager {
     }
 
     pub(crate) async fn shutdown(&self) {
-        let (review_session, ephemeral_reviews) = {
+        let (review_session, prewarm, ephemeral_reviews) = {
             let mut state = self.state.lock().await;
             (
                 state.trunk.take(),
+                state.prewarm.take(),
                 std::mem::take(&mut state.ephemeral_reviews),
             )
         };
+        if let Some(prewarm) = prewarm {
+            prewarm.cancel_token.cancel();
+        }
         if let Some(review_session) = review_session {
             review_session.shutdown().await;
         }
         for review_session in ephemeral_reviews {
             review_session.shutdown().await;
         }
+    }
+
+    pub(super) async fn prewarm_trunk(&self, params: GuardianReviewSessionPrewarmParams) {
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &params.spawn_config,
+            params.parent_session.user_instructions().await,
+        );
+        let cancel_token = CancellationToken::new();
+        let mut stale_trunk_to_shutdown = None;
+        let mut stale_prewarm_to_cancel = None;
+        let mut should_schedule_prewarm = true;
+
+        {
+            let mut state = self.state.lock().await;
+            if let Some(prewarm) = state.prewarm.as_ref() {
+                if prewarm.reuse_key == reuse_key {
+                    return;
+                }
+                stale_prewarm_to_cancel = state.prewarm.take();
+            }
+
+            if let Some(trunk) = state.trunk.as_ref() {
+                if trunk.reuse_key == reuse_key {
+                    should_schedule_prewarm = false;
+                }
+                if should_schedule_prewarm && trunk.review_lock.try_acquire().is_ok() {
+                    stale_trunk_to_shutdown = state.trunk.take();
+                } else if should_schedule_prewarm {
+                    info!("guardian trunk prewarm skipped because a stale trunk is currently busy");
+                    should_schedule_prewarm = false;
+                }
+            }
+
+            if should_schedule_prewarm {
+                state.prewarm = Some(GuardianReviewSessionPrewarm {
+                    reuse_key: reuse_key.clone(),
+                    cancel_token: cancel_token.clone(),
+                });
+            }
+        }
+
+        if let Some(prewarm) = stale_prewarm_to_cancel {
+            info!("cancelling stale guardian trunk prewarm before scheduling a replacement");
+            prewarm.cancel_token.cancel();
+        }
+        if let Some(review_session) = stale_trunk_to_shutdown {
+            review_session.shutdown_in_background();
+        }
+        if !should_schedule_prewarm {
+            return;
+        }
+
+        let state = Arc::clone(&self.state);
+        drop(tokio::spawn(async move {
+            let spawned_session = spawn_guardian_review_session(
+                Arc::clone(&params.parent_session),
+                Arc::clone(&params.parent_turn),
+                params.spawn_config,
+                reuse_key.clone(),
+                cancel_token.clone(),
+                /*fork_snapshot*/ None,
+            )
+            .await;
+            let review_session = match spawned_session {
+                Ok(review_session) => Arc::new(review_session),
+                Err(err) => {
+                    if !cancel_token.is_cancelled() {
+                        warn!("guardian trunk prewarm failed: {err:#}");
+                    }
+                    let mut state = state.lock().await;
+                    if state
+                        .prewarm
+                        .as_ref()
+                        .is_some_and(|prewarm| prewarm.reuse_key == reuse_key)
+                    {
+                        state.prewarm = None;
+                    }
+                    return;
+                }
+            };
+
+            let mut spawned_session_to_shutdown = Some(review_session);
+            let mut stale_trunk_to_shutdown = None;
+            let installed = {
+                let mut state = state.lock().await;
+                if !state
+                    .prewarm
+                    .as_ref()
+                    .is_some_and(|prewarm| prewarm.reuse_key == reuse_key)
+                {
+                    false
+                } else {
+                    state.prewarm = None;
+                    if let Some(trunk) = state.trunk.as_ref()
+                        && trunk.reuse_key != reuse_key
+                        && trunk.review_lock.try_acquire().is_ok()
+                    {
+                        stale_trunk_to_shutdown = state.trunk.take();
+                    }
+                    if state.trunk.is_none() {
+                        state.trunk = spawned_session_to_shutdown.take();
+                        true
+                    } else {
+                        false
+                    }
+                }
+            };
+
+            if installed {
+                info!("guardian trunk prewarm installed");
+            }
+            if let Some(review_session) = stale_trunk_to_shutdown {
+                review_session.shutdown_in_background();
+            }
+            if let Some(review_session) = spawned_session_to_shutdown {
+                review_session.shutdown().await;
+            }
+        }));
     }
 
     #[expect(
@@ -335,6 +470,14 @@ impl GuardianReviewSessionManager {
         .await
         {
             Ok(mut state) => {
+                if let Some(prewarm) = state.prewarm.as_ref()
+                    && prewarm.reuse_key != next_reuse_key
+                {
+                    info!("cancelling stale guardian trunk prewarm before review");
+                    if let Some(prewarm) = state.prewarm.take() {
+                        prewarm.cancel_token.cancel();
+                    }
+                }
                 if let Some(trunk) = state.trunk.as_ref()
                     && trunk.reuse_key != next_reuse_key
                     && trunk.review_lock.try_acquire().is_ok()
@@ -343,13 +486,20 @@ impl GuardianReviewSessionManager {
                 }
 
                 if state.trunk.is_none() {
+                    if let Some(prewarm) = state.prewarm.take() {
+                        info!(
+                            "guardian trunk prewarm was not ready before review; falling back to lazy spawn"
+                        );
+                        prewarm.cancel_token.cancel();
+                    }
                     let spawn_cancel_token = CancellationToken::new();
                     let review_session = match run_before_review_deadline_with_cancel(
                         deadline,
                         params.external_cancel.as_ref(),
                         &spawn_cancel_token,
                         Box::pin(spawn_guardian_review_session(
-                            &params,
+                            Arc::clone(&params.parent_session),
+                            Arc::clone(&params.parent_turn),
                             params.spawn_config.clone(),
                             next_reuse_key.clone(),
                             spawn_cancel_token.clone(),
@@ -559,7 +709,8 @@ impl GuardianReviewSessionManager {
             params.external_cancel.as_ref(),
             &spawn_cancel_token,
             Box::pin(spawn_guardian_review_session(
-                &params,
+                Arc::clone(&params.parent_session),
+                Arc::clone(&params.parent_turn),
                 fork_config,
                 reuse_key,
                 spawn_cancel_token.clone(),
@@ -600,7 +751,8 @@ impl GuardianReviewSessionManager {
 }
 
 async fn spawn_guardian_review_session(
-    params: &GuardianReviewSessionParams,
+    parent_session: Arc<Session>,
+    parent_turn: Arc<TurnContext>,
     spawn_config: Config,
     reuse_key: GuardianReviewSessionReuseKey,
     cancel_token: CancellationToken,
@@ -616,10 +768,10 @@ async fn spawn_guardian_review_session(
     };
     let codex = Box::pin(run_codex_thread_interactive(
         spawn_config,
-        params.parent_session.services.auth_manager.clone(),
-        params.parent_session.services.models_manager.clone(),
-        Arc::clone(&params.parent_session),
-        Arc::clone(&params.parent_turn),
+        parent_session.services.auth_manager.clone(),
+        parent_session.services.models_manager.clone(),
+        Arc::clone(&parent_session),
+        Arc::clone(&parent_turn),
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
@@ -1072,6 +1224,7 @@ mod tests {
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::TurnCompleteEvent;
+    use pretty_assertions::assert_eq;
 
     async fn test_review_session() -> (
         GuardianReviewSession,
@@ -1257,6 +1410,75 @@ mod tests {
                 /*parent_thread_id*/ None
             )
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_pending_trunk_prewarm() {
+        let parent_config = crate::config::test_config().await;
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &parent_config,
+            /*user_instructions*/ None,
+        );
+        let cancel_token = CancellationToken::new();
+        let manager = GuardianReviewSessionManager {
+            state: Arc::new(Mutex::new(GuardianReviewSessionState {
+                trunk: None,
+                prewarm: Some(GuardianReviewSessionPrewarm {
+                    reuse_key,
+                    cancel_token: cancel_token.clone(),
+                }),
+                ephemeral_reviews: Vec::new(),
+            })),
+        };
+
+        manager.shutdown().await;
+
+        assert!(cancel_token.is_cancelled());
+        assert!(manager.state.lock().await.prewarm.is_none());
+    }
+
+    #[tokio::test]
+    async fn prewarm_trunk_skips_existing_matching_trunk_and_cancels_stale_prewarm() {
+        let params = test_review_params().await;
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &params.spawn_config,
+            params.parent_session.user_instructions().await,
+        );
+        let mut stale_spawn_config = params.spawn_config.clone();
+        stale_spawn_config.model = Some("different-guardian-model".to_string());
+        let stale_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &stale_spawn_config,
+            params.parent_session.user_instructions().await,
+        );
+        let stale_cancel_token = CancellationToken::new();
+        let (mut review_session, _tx_event, _rx_sub) = test_review_session().await;
+        review_session.reuse_key = reuse_key;
+        let manager = GuardianReviewSessionManager {
+            state: Arc::new(Mutex::new(GuardianReviewSessionState {
+                trunk: Some(Arc::new(review_session)),
+                prewarm: Some(GuardianReviewSessionPrewarm {
+                    reuse_key: stale_reuse_key,
+                    cancel_token: stale_cancel_token.clone(),
+                }),
+                ephemeral_reviews: Vec::new(),
+            })),
+        };
+
+        manager
+            .prewarm_trunk(GuardianReviewSessionPrewarmParams {
+                parent_session: Arc::clone(&params.parent_session),
+                parent_turn: Arc::clone(&params.parent_turn),
+                spawn_config: params.spawn_config,
+            })
+            .await;
+
+        assert!(stale_cancel_token.is_cancelled());
+        {
+            let state = manager.state.lock().await;
+            assert!(state.prewarm.is_none());
+            assert!(state.trunk.is_some());
+        }
+        manager.shutdown().await;
     }
 
     #[tokio::test]
@@ -1525,6 +1747,7 @@ mod tests {
         let manager = GuardianReviewSessionManager {
             state: Arc::new(Mutex::new(GuardianReviewSessionState {
                 trunk: Some(Arc::new(review_session)),
+                prewarm: None,
                 ephemeral_reviews: Vec::new(),
             })),
         };

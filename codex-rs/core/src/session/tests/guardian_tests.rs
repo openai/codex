@@ -43,6 +43,7 @@ use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -66,6 +67,19 @@ where
         }
         other => panic!("expected function output, got {other:?}"),
     }
+}
+
+async fn wait_for_guardian_trunk_rollout_path(session: &Session) -> PathBuf {
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(path) = session.guardian_review_session.trunk_rollout_path().await {
+                return path;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("guardian trunk prewarm should complete")
 }
 
 #[tokio::test]
@@ -165,6 +179,111 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     assert_eq!(guardian_request.path(), "/v1/responses");
     assert!(guardian_request.body_contains_text("request_permissions"));
     assert!(guardian_request.body_contains_text("need network"));
+}
+
+#[tokio::test]
+async fn prewarmed_guardian_trunk_is_reused_by_first_review() {
+    let server = start_mock_server().await;
+    let guardian_request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message(
+                "msg-guardian",
+                &serde_json::json!({
+                    "risk_level": "low",
+                    "user_authorization": "high",
+                    "outcome": "allow",
+                    "rationale": "The request grants narrowly scoped network access for this turn.",
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
+    let (mut session, mut turn_context_raw) = make_session_and_context().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    turn_context_raw
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("test setup should allow updating approval policy");
+    turn_context_raw
+        .features
+        .enable(Feature::GuardianApproval)
+        .expect("test setup should allow enabling guardian approvals");
+    let mut config = (*turn_context_raw.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    let config = Arc::new(config);
+    let models_manager = models_manager_with_provider(
+        config.codex_home.to_path_buf(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    );
+    session.services.models_manager = models_manager;
+    turn_context_raw.config = Arc::clone(&config);
+    turn_context_raw.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context_raw.auth_manager.clone(),
+    );
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context_raw);
+
+    crate::guardian::prewarm_guardian_review_session(
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+    )
+    .await;
+    let prewarmed_trunk_rollout_path = wait_for_guardian_trunk_rollout_path(&session).await;
+
+    let requested_permissions = RequestPermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        ..RequestPermissionProfile::default()
+    };
+    let environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .selection();
+    let response = timeout(
+        Duration::from_secs(45),
+        session.request_permissions_for_environment(
+            &turn_context,
+            "perm-call-prewarmed".to_string(),
+            RequestPermissionsArgs {
+                environment_id: None,
+                reason: Some("need network".to_string()),
+                permissions: requested_permissions.clone(),
+            },
+            environment,
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("request_permissions should not wait for a client approval");
+
+    assert_eq!(
+        response,
+        Some(RequestPermissionsResponse {
+            permissions: requested_permissions.clone(),
+            scope: PermissionGrantScope::Turn,
+            strict_auto_review: false,
+        })
+    );
+    assert_eq!(
+        wait_for_guardian_trunk_rollout_path(&session).await,
+        prewarmed_trunk_rollout_path
+    );
+
+    let guardian_request = guardian_request_log.single_request();
+    assert_eq!(guardian_request.path(), "/v1/responses");
+    assert!(guardian_request.body_contains_text("request_permissions"));
+    assert!(guardian_request.body_contains_text("need network"));
+    session.guardian_review_session.shutdown().await;
 }
 
 #[tokio::test]

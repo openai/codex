@@ -23,7 +23,9 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
+use crate::config::Config;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -46,6 +48,7 @@ use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
 use super::review_session::GuardianReviewSessionOutcome;
 use super::review_session::GuardianReviewSessionParams;
+use super::review_session::GuardianReviewSessionPrewarmParams;
 use super::review_session::build_guardian_review_session_config;
 
 const GUARDIAN_REJECTION_INSTRUCTIONS: &str = concat!(
@@ -665,40 +668,19 @@ pub(crate) fn spawn_approval_request_review(
     rx
 }
 
-/// Runs the guardian in a locked-down reusable review session.
-///
-/// The guardian itself should not mutate state or trigger further approvals, so
-/// it is pinned to a read-only sandbox with `approval_policy = never` and
-/// nonessential agent features disabled. When the cached trunk session is idle,
-/// later approvals append onto that same guardian conversation to preserve a
-/// stable prompt-cache key. If the trunk is already busy, the review runs in an
-/// ephemeral fork from the last committed trunk rollout so parallel approvals
-/// do not block each other or mutate the cached thread. The trunk is recreated
-/// when the effective review-session config changes, and any future compaction
-/// must continue to preserve the guardian policy as exact top-level developer
-/// context. It may still reuse the parent's managed-network allowlist for
-/// read-only checks, but it intentionally runs without inherited exec-policy
-/// rules.
-async fn run_guardian_review_session_before_deadline(
-    session: Arc<Session>,
-    turn: Arc<TurnContext>,
-    request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
-    schema: serde_json::Value,
-    external_cancel: Option<CancellationToken>,
-    deadline: Instant,
-) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+struct GuardianReviewSessionSetup {
+    spawn_config: Config,
+    model: String,
+    reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+}
+
+async fn guardian_review_session_setup(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+) -> anyhow::Result<GuardianReviewSessionSetup> {
     let network_proxy = session.services.network_proxy.load_full();
     let live_network_config = match network_proxy.as_ref() {
-        Some(network_proxy) => match network_proxy.proxy().current_cfg().await {
-            Ok(config) => Some(config),
-            Err(err) => {
-                return (
-                    GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
-                    GuardianReviewAnalyticsResult::without_session(),
-                );
-            }
-        },
+        Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
         None => None,
     };
     let available_models = session
@@ -745,14 +727,67 @@ async fn run_guardian_review_session_before_deadline(
             reasoning_effort,
         )
     };
-    let guardian_config = build_guardian_review_session_config(
+    let spawn_config = build_guardian_review_session_config(
         turn.config.as_ref(),
-        live_network_config.clone(),
+        live_network_config,
         guardian_model.as_str(),
         guardian_reasoning_effort.clone(),
-    );
-    let guardian_config = match guardian_config {
-        Ok(config) => config,
+    )?;
+
+    Ok(GuardianReviewSessionSetup {
+        spawn_config,
+        model: guardian_model,
+        reasoning_effort: guardian_reasoning_effort,
+    })
+}
+
+pub(crate) async fn prewarm_guardian_review_session(session: Arc<Session>, turn: Arc<TurnContext>) {
+    if !routes_approval_to_guardian(turn.as_ref()) {
+        return;
+    }
+
+    let setup = match guardian_review_session_setup(&session, &turn).await {
+        Ok(setup) => setup,
+        Err(err) => {
+            warn!("guardian trunk prewarm setup failed: {err:#}");
+            return;
+        }
+    };
+    session
+        .guardian_review_session
+        .prewarm_trunk(GuardianReviewSessionPrewarmParams {
+            parent_session: Arc::clone(&session),
+            parent_turn: turn,
+            spawn_config: setup.spawn_config,
+        })
+        .await;
+}
+
+/// Runs the guardian in a locked-down reusable review session.
+///
+/// The guardian itself should not mutate state or trigger further approvals, so
+/// it is pinned to a read-only sandbox with `approval_policy = never` and
+/// nonessential agent features disabled. When the cached trunk session is idle,
+/// later approvals append onto that same guardian conversation to preserve a
+/// stable prompt-cache key. If the trunk is already busy, the review runs in an
+/// ephemeral fork from the last committed trunk rollout so parallel approvals
+/// do not block each other or mutate the cached thread. The trunk is recreated
+/// when the effective review-session config changes, and any future compaction
+/// must continue to preserve the guardian policy as exact top-level developer
+/// context. It may still reuse the parent's managed-network allowlist for
+/// read-only checks, but it intentionally runs without inherited exec-policy
+/// rules.
+async fn run_guardian_review_session_before_deadline(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    schema: serde_json::Value,
+    external_cancel: Option<CancellationToken>,
+    deadline: Instant,
+) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+    let setup = match guardian_review_session_setup(&session, &turn).await {
+        Ok(setup) => setup,
         Err(err) => {
             return (
                 GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
@@ -767,12 +802,12 @@ async fn run_guardian_review_session_before_deadline(
             .run_review(GuardianReviewSessionParams {
                 parent_session: Arc::clone(&session),
                 parent_turn: turn.clone(),
-                spawn_config: guardian_config,
+                spawn_config: setup.spawn_config,
                 request,
                 retry_reason,
                 schema,
-                model: guardian_model,
-                reasoning_effort: guardian_reasoning_effort,
+                model: setup.model,
+                reasoning_effort: setup.reasoning_effort,
                 reasoning_summary: turn.reasoning_summary,
                 personality: turn.personality,
                 external_cancel,
