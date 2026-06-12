@@ -1,5 +1,6 @@
 # What: teach `rules_rs` that `windows-gnullvm` is a distinct Windows exec ABI.
-# Scope: platform/toolchain naming and constraints only; no Cargo target changes.
+# Scope: platform/toolchain naming, constraints, and host-tool selection; no
+# Cargo target changes.
 
 diff --git a/rs/experimental/miri/private/declare_toolchains.bzl b/rs/experimental/miri/private/declare_toolchains.bzl
 index e0c4f8b..cec29ec 100644
@@ -209,7 +210,7 @@ index 554dd26..f79b73f 100644
 
  _DEFAULT_RUSTC_VERSION = "1.92.0"
  _DEFAULT_EDITION = "2021"
-@@ -302,7 +302,7 @@ def _toolchains_impl(mctx):
+@@ -302,20 +302,25 @@ def _toolchains_impl(mctx):
          for triple in SUPPORTED_EXEC_TRIPLES:
              exec_triple = _parse_triple(triple)
 
@@ -218,6 +219,25 @@ index 554dd26..f79b73f 100644
              rustc_name = "rustc_{}_{}".format(triple_suffix, version_key)
 
              rustc_repository(
+                 name = rustc_name,
+                 triple = triple,
+                 version = base_version,
+                 iso_date = iso_date,
+                 sha256 = _sha_for("rustc", base_version, iso_date, exec_triple),
+             )
+
+             if version in rust_versions:
+                 cargo_name = "cargo_{}_{}".format(triple_suffix, version_key)
+-                if exec_triple.arch == host_arch and exec_triple.system == host_os:
++                # Keep extension-time host tools on the native Windows ABI.
++                if (
++                    exec_triple.arch == host_arch and
++                    exec_triple.system == host_os and
++                    (exec_triple.system != "windows" or exec_triple.abi == "msvc")
++                ):
+                     host_cargo_repos[version] = cargo_name
+                     host_rustc_repos[version] = rustc_name
+
 @@ -363,7 +363,7 @@ def _toolchains_impl(mctx):
 
          for triple in SUPPORTED_EXEC_TRIPLES:
