@@ -3226,6 +3226,7 @@ text(JSON.stringify(tool));
         serde_json::json!({
             "name": "mcp__rmcp__echo",
             "description": concat!(
+                "Use these tools to exercise the rmcp test server.\n\n",
                 "Echo back the provided message and include environment data.\n\n",
                 "exec tool declaration:\n",
                 "```ts\n",
@@ -3397,7 +3398,8 @@ text(
             .get("description")
             .and_then(Value::as_str)
             .is_some_and(|description| {
-                description.contains("A hidden dynamic tool.")
+                description.contains("Codex app tools.")
+                    && description.contains("A hidden dynamic tool.")
                     && description.contains("declare const tools:")
                     && description.contains("codex_app__hidden_dynamic_tool(args:")
             })
