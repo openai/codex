@@ -525,6 +525,8 @@ impl ModelClient {
         session_config: ApiRealtimeSessionConfig,
         architecture: RealtimeConversationArchitecture,
         mut extra_headers: ApiHeaderMap,
+        api_provider_override: Option<ApiProvider>,
+        path_override: Option<&str>,
     ) -> Result<RealtimeWebrtcCallStart> {
         // Create the media call over HTTP first, then retain matching auth so realtime can attach
         // the server-side control WebSocket to the call id from that HTTP response.
@@ -537,16 +539,17 @@ impl ModelClient {
             client_setup.api_auth.as_ref(),
         ));
         let transport = ReqwestTransport::new(build_reqwest_client());
-        let response =
-            ApiRealtimeCallClient::new(transport, client_setup.api_provider, client_setup.api_auth)
-                .create_with_session_architecture_and_headers(
-                    sdp,
-                    session_config,
-                    architecture,
-                    extra_headers,
-                )
-                .await
-                .map_err(map_api_error)?;
+        let api_provider = api_provider_override.unwrap_or(client_setup.api_provider);
+        let response = ApiRealtimeCallClient::new(transport, api_provider, client_setup.api_auth)
+            .create_with_session_architecture_path_and_headers(
+                sdp,
+                session_config,
+                architecture,
+                extra_headers,
+                path_override.unwrap_or("realtime/calls"),
+            )
+            .await
+            .map_err(map_api_error)?;
         Ok(RealtimeWebrtcCallStart {
             sdp: response.sdp,
             call_id: response.call_id,

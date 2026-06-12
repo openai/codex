@@ -235,6 +235,8 @@ struct RealtimeStart {
     api_provider: ApiProvider,
     architecture: RealtimeConversationArchitecture,
     extra_headers: Option<HeaderMap>,
+    realtime_call_api_provider: Option<ApiProvider>,
+    realtime_call_path: Option<String>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
     sdp: Option<String>,
@@ -288,6 +290,8 @@ impl RealtimeConversationManager {
             api_provider,
             architecture,
             extra_headers,
+            realtime_call_api_provider,
+            realtime_call_path,
             session_config,
             model_client,
             sdp,
@@ -323,6 +327,8 @@ impl RealtimeConversationManager {
                     session_config.clone(),
                     architecture,
                     extra_headers.unwrap_or_default(),
+                    realtime_call_api_provider,
+                    realtime_call_path.as_deref(),
                 )
                 .await?;
             let task = spawn_webrtc_sideband_input_task(RealtimeWebrtcSidebandInputTask {
@@ -619,6 +625,8 @@ struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     architecture: RealtimeConversationArchitecture,
     extra_headers: Option<HeaderMap>,
+    realtime_call_api_provider: Option<ApiProvider>,
+    realtime_call_path: Option<String>,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
@@ -644,6 +652,14 @@ async fn prepare_realtime_start(
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
     }
+    let realtime_call_api_provider =
+        if let Some(realtime_call_base_url) = &config.experimental_realtime_webrtc_call_base_url {
+            let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
+            api_provider.base_url = realtime_call_base_url.clone();
+            Some(api_provider)
+        } else {
+            None
+        };
     let version = params.version.unwrap_or(config.realtime.version);
     let architecture = params.architecture.unwrap_or(config.realtime.architecture);
     validate_realtime_architecture(
@@ -684,6 +700,8 @@ async fn prepare_realtime_start(
         api_provider,
         architecture,
         extra_headers,
+        realtime_call_api_provider,
+        realtime_call_path: config.experimental_realtime_webrtc_call_path.clone(),
         requested_realtime_session_id,
         version,
         session_config,
@@ -828,6 +846,8 @@ async fn handle_start_inner(
         api_provider,
         architecture,
         extra_headers,
+        realtime_call_api_provider,
+        realtime_call_path,
         requested_realtime_session_id,
         version,
         session_config,
@@ -842,6 +862,8 @@ async fn handle_start_inner(
         api_provider,
         architecture,
         extra_headers,
+        realtime_call_api_provider,
+        realtime_call_path,
         session_config,
         model_client: sess.services.model_client.clone(),
         sdp,

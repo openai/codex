@@ -10491,6 +10491,8 @@ async fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::
     let cfg: ConfigToml = toml::from_str(
         r#"
 experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
+experimental_realtime_webrtc_call_base_url = "http://127.0.0.1:8082/v1"
+experimental_realtime_webrtc_call_path = "realtime"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -10498,6 +10500,14 @@ experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
     assert_eq!(
         cfg.experimental_realtime_ws_base_url.as_deref(),
         Some("http://127.0.0.1:8011")
+    );
+    assert_eq!(
+        cfg.experimental_realtime_webrtc_call_base_url.as_deref(),
+        Some("http://127.0.0.1:8082/v1")
+    );
+    assert_eq!(
+        cfg.experimental_realtime_webrtc_call_path.as_deref(),
+        Some("realtime")
     );
 
     let codex_home = TempDir::new()?;
@@ -10511,6 +10521,14 @@ experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
     assert_eq!(
         config.experimental_realtime_ws_base_url.as_deref(),
         Some("http://127.0.0.1:8011")
+    );
+    assert_eq!(
+        config.experimental_realtime_webrtc_call_base_url.as_deref(),
+        Some("http://127.0.0.1:8082/v1")
+    );
+    assert_eq!(
+        config.experimental_realtime_webrtc_call_path.as_deref(),
+        Some("realtime")
     );
     Ok(())
 }

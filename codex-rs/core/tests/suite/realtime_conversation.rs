@@ -751,6 +751,105 @@ async fn conversation_webrtc_start_uses_avas_architecture_query() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_webrtc_start_uses_configured_call_endpoint_for_avas() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let capture = RealtimeCallRequestCapture::new();
+    Mock::given(method("POST"))
+        .and(path_regex(".*/realtime$"))
+        .and(capture.clone())
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Location", "/v1/realtime/rtc_local_avas_test")
+                .set_body_string("v=answer\r\n"),
+        )
+        .mount(&server)
+        .await;
+    let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![json!({
+                "type": "session.updated",
+                "session": { "id": "sess_webrtc", "instructions": "backend prompt" }
+            })],
+            vec![],
+        ],
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: false,
+    }])
+    .await;
+
+    let realtime_ws_base_url = realtime_server.uri().to_string();
+    let realtime_call_base_url = format!("{}/v1", server.uri());
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+        config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+        config.experimental_realtime_webrtc_call_base_url = Some(realtime_call_base_url);
+        config.experimental_realtime_webrtc_call_path = Some("realtime".to_string());
+        config.realtime.version = RealtimeWsVersion::V1;
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            architecture: Some(RealtimeConversationArchitecture::Avas),
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: Some(ConversationStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
+            version: None,
+            voice: None,
+        }))
+        .await?;
+
+    let created = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationSdp(created) => Some(Ok(created.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation call create failed: {err:?}"));
+    assert_eq!(created.sdp, "v=answer\r\n");
+
+    let request = capture.single_request();
+    assert_eq!(request.url.path(), "/v1/realtime");
+    assert_eq!(
+        request.url.query(),
+        Some("intent=quicksilver&architecture=avas")
+    );
+
+    let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload:
+                RealtimeEvent::SessionUpdated {
+                    realtime_session_id,
+                    ..
+                },
+        }) => Some(realtime_session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_updated, "sess_webrtc");
+    let handshake = realtime_server.single_handshake();
+    assert_eq!(
+        handshake.uri(),
+        "/v1/realtime?intent=quicksilver&call_id=rtc_local_avas_test"
+    );
+    assert_eq!(
+        handshake.header("authorization").as_deref(),
+        Some("Bearer dummy")
+    );
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
