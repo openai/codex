@@ -83,9 +83,13 @@ impl StreamingPatchParser {
 
     fn handle_hunk_headers_and_end_patch(&mut self, trimmed: &str) -> Result<bool, ParseError> {
         if matches!(self.state.mode, StreamingParserMode::StartedPatch)
-            && self.state.environment_id.is_none()
             && let Some(environment_id) = trimmed.strip_prefix(ENVIRONMENT_ID_MARKER)
         {
+            if self.state.environment_id.is_some() {
+                return Err(InvalidPatchError(
+                    "apply_patch environment_id cannot be specified more than once".to_string(),
+                ));
+            }
             let environment_id = environment_id.trim();
             if environment_id.is_empty() {
                 return Err(InvalidPatchError(
@@ -494,6 +498,16 @@ mod tests {
             }])
         );
         assert_eq!(parser.environment_id(), Some("remote"));
+
+        let mut parser = StreamingPatchParser::default();
+        assert_eq!(
+            parser.push_delta(
+                "*** Begin Patch\n*** Environment ID: first\n*** Environment ID: second\n",
+            ),
+            Err(InvalidPatchError(
+                "apply_patch environment_id cannot be specified more than once".to_string(),
+            ))
+        );
 
         let mut parser = StreamingPatchParser::default();
         assert_eq!(
