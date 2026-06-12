@@ -177,8 +177,6 @@ impl<'a> SlashInput<'a> {
                 service_tier_commands_enabled: self.command_flags.service_tier_commands_enabled,
                 goal_command_enabled: self.command_flags.goal_command_enabled,
                 personality_command_enabled: self.command_flags.personality_command_enabled,
-                realtime_conversation_enabled: self.command_flags.realtime_conversation_enabled,
-                audio_device_selection_enabled: self.command_flags.audio_device_selection_enabled,
                 windows_degraded_sandbox_active: self.command_flags.allow_elevate_sandbox,
                 side_conversation_active: self.command_flags.side_conversation_active,
             },

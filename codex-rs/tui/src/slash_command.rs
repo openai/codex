@@ -67,8 +67,6 @@ pub enum SlashCommand {
     Stop,
     Clear,
     Personality,
-    Realtime,
-    Settings,
     TestApproval,
     #[strum(serialize = "subagents")]
     MultiAgents,
@@ -120,8 +118,6 @@ impl SlashCommand {
                 "include current selection, open files, and other context from your IDE"
             }
             SlashCommand::Personality => "choose a communication style for Codex",
-            SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
-            SlashCommand::Settings => "configure realtime microphone/speaker",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
@@ -239,8 +235,6 @@ impl SlashCommand {
             | SlashCommand::Btw => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
-            SlashCommand::Realtime => true,
-            SlashCommand::Settings => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
             SlashCommand::Theme | SlashCommand::Pets => false,
         }

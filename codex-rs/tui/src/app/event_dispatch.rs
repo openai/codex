@@ -798,18 +798,6 @@ impl App {
                 self.sync_active_thread_personality_setting(app_server, personality)
                     .await;
             }
-            AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
-                self.chat_widget.open_realtime_audio_device_selection(kind);
-            }
-            AppEvent::RealtimeWebrtcOfferCreated { result } => {
-                self.chat_widget.on_realtime_webrtc_offer_created(result);
-            }
-            AppEvent::RealtimeWebrtcEvent(event) => {
-                self.chat_widget.on_realtime_webrtc_event(event);
-            }
-            AppEvent::RealtimeWebrtcLocalAudioLevel(peak) => {
-                self.chat_widget.on_realtime_webrtc_local_audio_level(peak);
-            }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
@@ -1442,56 +1430,6 @@ impl App {
                     }
                 }
             }
-            AppEvent::PersistRealtimeAudioDeviceSelection { kind, name } => {
-                let builder = match kind {
-                    RealtimeAudioDeviceKind::Microphone => {
-                        ConfigEditsBuilder::for_config(&self.config)
-                            .set_realtime_microphone(name.as_deref())
-                    }
-                    RealtimeAudioDeviceKind::Speaker => {
-                        ConfigEditsBuilder::for_config(&self.config)
-                            .set_realtime_speaker(name.as_deref())
-                    }
-                };
-
-                match builder.apply().await {
-                    Ok(()) => {
-                        match kind {
-                            RealtimeAudioDeviceKind::Microphone => {
-                                self.config.realtime_audio.microphone = name.clone();
-                            }
-                            RealtimeAudioDeviceKind::Speaker => {
-                                self.config.realtime_audio.speaker = name.clone();
-                            }
-                        }
-                        self.chat_widget
-                            .set_realtime_audio_device(kind, name.clone());
-
-                        if self.chat_widget.realtime_conversation_is_live() {
-                            self.chat_widget.open_realtime_audio_restart_prompt(kind);
-                        } else {
-                            let selection = name.unwrap_or_else(|| "System default".to_string());
-                            self.chat_widget.add_info_message(
-                                format!("Realtime {} set to {selection}", kind.noun()),
-                                /*hint*/ None,
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            error = %err,
-                            "failed to persist realtime audio selection"
-                        );
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save realtime {}: {err}",
-                            kind.noun()
-                        ));
-                    }
-                }
-            }
-            AppEvent::RestartRealtimeAudioDevice { kind } => {
-                self.chat_widget.restart_realtime_audio_device(kind);
-            }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 let mut config = self.config.clone();
                 if !self.try_set_approval_policy_on_config(
@@ -1943,18 +1881,6 @@ impl App {
                     ));
                 }
             },
-            #[cfg(not(target_os = "linux"))]
-            AppEvent::UpdateRecordingMeter { id, text } => {
-                // Update in place to preserve the element id for subsequent frames.
-                let updated = self.chat_widget.update_recording_meter_in_place(&id, &text);
-                if updated
-                    || self
-                        .chat_widget
-                        .stop_realtime_conversation_for_deleted_meter(&id)
-                {
-                    tui.frame_requester().schedule_frame();
-                }
-            }
             AppEvent::StatusLineSetup {
                 items,
                 use_theme_colors,
