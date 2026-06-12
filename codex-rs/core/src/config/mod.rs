@@ -36,7 +36,6 @@ use codex_config::permissions_toml::PermissionsToml;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
-use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
@@ -138,6 +137,7 @@ use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
 pub(crate) mod agent_roles;
+mod auth_keyring;
 pub mod edit;
 mod managed_features;
 mod network_proxy_spec;
@@ -146,6 +146,7 @@ mod permissions;
 mod resolved_permission_profile;
 #[cfg(test)]
 mod schema;
+pub use auth_keyring::resolve_bootstrap_auth_keyring_backend_kind;
 pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
@@ -1368,12 +1369,6 @@ impl Config {
         workspace_roots
     }
 
-    pub fn auth_keyring_backend_kind(&self) -> AuthKeyringBackendKind {
-        auth_keyring_backend_kind_from_secret_auth_storage(
-            self.features.enabled(Feature::SecretAuthStorage),
-        )
-    }
-
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
         ModelsManagerConfig {
             model_context_window: self.model_context_window,
@@ -1697,45 +1692,6 @@ pub async fn load_config_toml_with_layer_stack(
         config_toml: cfg,
         config_layer_stack,
     })
-}
-
-/// Resolve the auth keyring backend from a partially loaded bootstrap config.
-///
-/// This is intended for startup paths that must read auth before managed cloud
-/// requirements can be loaded and before a full [`Config`] exists.
-pub fn resolve_bootstrap_auth_keyring_backend_kind(
-    bootstrap_config: &ConfigTomlLoadResult,
-) -> std::io::Result<AuthKeyringBackendKind> {
-    let config_toml = &bootstrap_config.config_toml;
-    let features = Features::from_sources(
-        FeatureConfigSource {
-            features: config_toml.features.as_ref(),
-            experimental_use_unified_exec_tool: config_toml.experimental_use_unified_exec_tool,
-        },
-        FeatureConfigSource::default(),
-        FeatureOverrides::default(),
-    );
-    let managed_features = ManagedFeatures::from_configured(
-        features,
-        bootstrap_config
-            .config_layer_stack
-            .requirements()
-            .feature_requirements
-            .clone(),
-    )?;
-    Ok(auth_keyring_backend_kind_from_secret_auth_storage(
-        managed_features.enabled(Feature::SecretAuthStorage),
-    ))
-}
-
-fn auth_keyring_backend_kind_from_secret_auth_storage(
-    secret_auth_storage_enabled: bool,
-) -> AuthKeyringBackendKind {
-    if secret_auth_storage_enabled {
-        AuthKeyringBackendKind::Secrets
-    } else {
-        AuthKeyringBackendKind::Direct
-    }
 }
 
 pub fn deserialize_config_toml_with_base(
